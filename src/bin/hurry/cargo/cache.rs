@@ -17,6 +17,7 @@ use rusqlite_migration::Migrations;
 use tracing::{instrument, trace};
 
 pub struct WorkspaceCache {
+    pub workspace_cache_path: PathBuf,
     pub workspace_target_path: PathBuf,
     pub cas_path: PathBuf,
     pub metadb: Connection,
@@ -92,6 +93,7 @@ impl WorkspaceCache {
             .context("could not migrate workspace cache state")?;
 
         Ok(Self {
+            workspace_cache_path,
             workspace_target_path: target_cache_path,
             metadb,
             cas_path,

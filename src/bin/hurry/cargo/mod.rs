@@ -130,20 +130,28 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                     .into();
                 // TODO: Improve performance here? `blake3` provides both
                 // streaming and parallel APIs.
-                let target_b3sum = {
-                    let target_bytes = fs::read(target_path)
-                        .context(format!("could not read artifact {}", target_path.display()))?;
-                    blake3::hash(&target_bytes).to_hex().to_string()
-                };
+                let target_bytes = fs::read(target_path)
+                    .context(format!("could not read artifact {}", target_path.display()))?;
+                let target_b3sum = blake3::hash(&target_bytes).to_hex().to_string();
+                trace!(?target_path, ?target_mtime, ?target_b3sum, "read artifact");
+
                 let target_file_id = match check_artifact
                     .query_row((&target_b3sum,), |row| row.get::<_, i64>(0))
                     .optional()
                     .context("could not check artifact")?
                 {
                     Some(rid) => rid,
-                    None => insert_artifact
-                        .query_row((&target_b3sum,), |row| row.get::<_, i64>(0))
-                        .context("could not insert artifact")?,
+                    None => {
+                        // For build artifacts that are new, save them to the
+                        // CAS.
+                        fs::write(workspace_cache.cas_path.join(&target_b3sum), &target_bytes)
+                            .context("could not save artifact to CAS")?;
+
+                        // Record the build artifact.
+                        insert_artifact
+                            .query_row((&target_b3sum,), |row| row.get::<_, i64>(0))
+                            .context("could not insert artifact")?
+                    }
                 };
                 // TODO: If paths don't often change, should we optimize this
                 // with delta encoding or something similar?
@@ -152,7 +160,7 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                         invocation_id,
                         target_file_id,
                         target_path
-                            .strip_prefix(&workspace_cache.workspace_target_path)
+                            .strip_prefix(&workspace_cache.workspace_cache_path)
                             .unwrap()
                             .display()
                             .to_string(),
@@ -172,24 +180,6 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
         // TODO: Retry closing more times?
         Err((_, e)) => Err(e).context("could not close database")?,
     }
-
-    // Open and parse the git repository.
-    // let repo =
-    //     Repository::open(&workspace_path).context("could not open workspace git repository")?;
-
-    // // Identify the current HEAD of the repository.
-    // let head = repo
-    //     .head()
-    //     .context("could not identify current HEAD of git repository")?;
-    // trace!(kind = ?head.kind(), name = ?head.name());
-
-    // The cache has an "active" reference, a set of target folders, and a CAS
-    // of compiled artifacts indexed by a SQLite database. If the current git
-    // reference is different from the cache's active reference, we should
-    // restore the cache of the active reference if one exists.
-
-    // Snapshot the state of the cache post-build to be the new state for the
-    // active reference.
 
     Ok(exit_status)
 }

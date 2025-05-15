@@ -9,7 +9,6 @@ anyhow = "1.0"
 tokio = { version = "1.37", features = ["full"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-git2 = "0.20.2"
 homedir = "0.3.4"
 blake3 = "1.8.2"
 rusqlite = { version = "0.35.0", features = ["bundled", "time"] }
