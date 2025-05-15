@@ -58,14 +58,14 @@ async fn main() {
             // TODO: Technically, we should parse the argv properly in case
             // this string is passed as some sort of configuration flag value.
             if argv.contains(&"build".to_string()) {
-                match cargo::build(argv) {
-                    Ok(_) => {}
-                    Err(e) => panic!("hurry cargo build failed: {}", e),
+                match cargo::build(&argv).await {
+                    Ok(exit_status) => std::process::exit(exit_status.code().unwrap_or(1)),
+                    Err(e) => panic!("hurry cargo build failed: {:?}", e),
                 }
             } else {
-                match cargo::exec(argv).await {
-                    Ok(_) => {}
-                    Err(e) => panic!("hurry cargo command failed: {}", e),
+                match cargo::exec(&argv).await {
+                    Ok(exit_status) => std::process::exit(exit_status.code().unwrap_or(1)),
+                    Err(e) => panic!("hurry cargo {} failed: {:?}", argv.join(" "), e),
                 }
             }
         }

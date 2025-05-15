@@ -23,7 +23,6 @@ Each `<workspace_path>` is the BLAKE3 hash of the absolute path to the workspace
 
 - `invocation`, which tracks invocations of `hurry`.
   - `invocation_id`
-  - `command_type` (either `build` or `clean`)
   - `argv`
   - `start_time`
   - `end_time`
@@ -35,18 +34,24 @@ Each `<workspace_path>` is the BLAKE3 hash of the absolute path to the workspace
   - `source_file_id`
   - `path`
   - `mtime`
-- `object`, which tracks compiled artifacts stored in the CAS.
-  - `object_id`
+- `artifact`, which tracks compiled artifacts stored in the CAS.
+  - `artifact_id`
   - `b3sum`
-- `invocation_object`, which tracks the objects that were emitted after an invocation.
+- `invocation_artifact`, which tracks the artifacts that were emitted after an invocation.
   - `invocation_id`
-  - `object_id`
+  - `artifact_id`
   - `path`
   - `mtime`
 
 ## Branch-specific `target` caches
 
-When `hurry cargo build` is run:
+
+
+### Future work
+
+You can imagine a version of this design that's git-agnostic, and works to restore caches whenever a previous cache could be valid.
+
+Here's a sketch. When `hurry cargo build` is run:
 
 1. Record a new invocation $I$.
 2. Check every source file in the workspace to see whether its `(path, b3sum)` matches a file from a previous invocation. While doing so, record the source file (including its mtime) into $I$.
@@ -54,4 +59,4 @@ When `hurry cargo build` is run:
    1. Restore the mtimes of every source file to their recorded mtimes from before running build $I_0$.
    2. Restore the `target` cache from the CAS to the recorded state after running build $I_0$.
 4. Shell out to `cargo build`.
-5. Record every object in `target` into $I$, saving them into the CAS.
+5. Record every artifact in `target` into $I$, saving them into the CAS.
