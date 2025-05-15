@@ -283,7 +283,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hypersonic"
+name = "hurry"
 version = "0.1.0"
 dependencies = [
  "anyhow",
