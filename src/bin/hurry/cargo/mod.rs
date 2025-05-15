@@ -1,14 +1,18 @@
-use std::{fs, process::ExitStatus};
+use std::{
+    collections::HashSet,
+    fs::{self, File},
+    process::ExitStatus,
+};
 
 use anyhow::Context;
 use rusqlite::OptionalExtension;
 use time::OffsetDateTime;
-use tracing::{instrument, trace};
+use tracing::{debug, instrument, trace};
 use walkdir::WalkDir;
 
 mod cache;
 
-#[instrument]
+#[instrument(level = "debug")]
 pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
     // Get current working directory.
     let workspace_path = std::env::current_dir().context("could not get current directory")?;
@@ -25,16 +29,16 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
         .metadb
         .transaction()
         .context("could not start cache transaction")?;
-    let exit_status = {
-        let invocation_id = tx
-            .query_row(
-                "INSERT INTO invocation (argv, start_time) VALUES (?1, ?2) RETURNING invocation_id",
-                (argv.join(" "), OffsetDateTime::now_utc()),
-                |row| row.get::<_, i64>(0),
-            )
-            .context("could not record hurry invocation in cache")?;
-        trace!(?invocation_id, "recorded invocation");
+    let invocation_id = tx
+        .query_row(
+            "INSERT INTO invocation (argv, start_time) VALUES (?1, ?2) RETURNING invocation_id",
+            (argv.join(" "), OffsetDateTime::now_utc()),
+            |row| row.get::<_, i64>(0),
+        )
+        .context("could not record hurry invocation in cache")?;
+    debug!(?invocation_id, "recorded invocation");
 
+    let exit_status = {
         // Record the source files used in this invocation.
         //
         // FIXME: Relying on the source files to be in `src/` is a convention.
@@ -46,7 +50,19 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
         // here?
         let check_source_file = &mut tx
             .prepare("SELECT source_file_id FROM source_file WHERE b3sum = ?1")
-            .context("could not prepare source file check")?;
+            .context("could not prepare source file seen check")?;
+        let source_file_invocations = &mut tx
+            .prepare(r#"
+                SELECT
+                    invocation.invocation_id
+                FROM source_file
+                JOIN invocation_source_file ON source_file.source_file_id = invocation_source_file.source_file_id
+                JOIN invocation ON invocation.invocation_id = invocation_source_file.invocation_id
+                WHERE
+                    invocation_source_file.path = ?1
+                    AND source_file.b3sum = ?2
+            "#)
+            .context("could not prepare source file candidate check")?;
         let insert_source_file = &mut tx
             .prepare(
                 "INSERT INTO source_file (b3sum) VALUES (?1) ON CONFLICT DO NOTHING RETURNING source_file_id",
@@ -57,10 +73,20 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                 "INSERT INTO invocation_source_file (invocation_id, source_file_id, path, mtime) VALUES (?1, ?2, ?3, ?4)",
             )
             .context("could not prepare source file invocation insert")?;
+
+        // Record the source files used in this invocation.
+        let mut cached_invocation_id_candidates = HashSet::new();
+        let mut candidates_populated = false;
+
         for entry in WalkDir::new(workspace_path.join("src")) {
             let entry = entry.context("could not walk source directory")?;
             if entry.file_type().is_file() {
-                let source_path = entry.path();
+                let source_path = entry.path().to_path_buf();
+                let source_path_relative = source_path
+                    .strip_prefix(&workspace_path)
+                    .unwrap()
+                    .display()
+                    .to_string();
                 let source_mtime: OffsetDateTime = entry
                     .metadata()
                     .context("could not get file metadata")?
@@ -69,35 +95,145 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                     .into();
                 // TODO: Improve performance here? `blake3` provides both
                 // streaming and parallel APIs.
-                let source_b3sum = {
+                let source_b3sum_hash = {
                     let source_bytes =
-                        fs::read(source_path).context("could not read source file")?;
-                    blake3::hash(&source_bytes).to_hex().to_string()
+                        fs::read(&source_path).context("could not read source file")?;
+                    blake3::hash(&source_bytes)
                 };
+                let source_b3sum = source_b3sum_hash.as_bytes().to_owned();
+                debug!(
+                    ?source_path,
+                    ?source_mtime,
+                    source_b3sum = ?source_b3sum_hash.to_hex().to_string(),
+                    "read source file",
+                );
+
                 let source_file_id = match check_source_file
                     .query_row((&source_b3sum,), |row| row.get::<_, i64>(0))
                     .optional()
-                    .context("could not check source file")?
+                    .context("could not check source file seen")?
                 {
-                    Some(rid) => rid,
-                    None => insert_source_file
-                        .query_row((&source_b3sum,), |row| row.get::<_, i64>(0))
-                        .context("could not insert source file")?,
+                    Some(rid) => {
+                        // If this source file has been seen before, check
+                        // whether any of its cached invocations are compatible
+                        // with the cached invocations of other source files.
+                        let file_candidate_invocation_ids = source_file_invocations
+                            .query_map((&source_path_relative, &source_b3sum), |row| {
+                                row.get::<_, i64>(0)
+                            })
+                            .context("could not load source file invocations")?
+                            .collect::<Result<Vec<i64>, _>>()
+                            .context("could not read source file invocations")?
+                            .into_iter()
+                            .collect::<HashSet<_>>();
+                        debug!(
+                            ?file_candidate_invocation_ids,
+                            "cached invocations containing this source file",
+                        );
+                        if !candidates_populated {
+                            cached_invocation_id_candidates = file_candidate_invocation_ids;
+                            candidates_populated = true;
+                        } else if !cached_invocation_id_candidates.is_empty() {
+                            cached_invocation_id_candidates = cached_invocation_id_candidates
+                                .intersection(&file_candidate_invocation_ids)
+                                .copied()
+                                .collect();
+                        }
+                        debug!(
+                            ?cached_invocation_id_candidates,
+                            "remaining cached invocations after checking source file",
+                        );
+
+                        rid
+                    }
+                    None => {
+                        // If this source file has never been seen before,
+                        // record it into the database. Then clear the set of
+                        // cached invocations, because there's no way we have a
+                        // cached invocation.
+                        candidates_populated = true;
+                        cached_invocation_id_candidates.clear();
+
+                        insert_source_file
+                            .query_row((&source_b3sum,), |row| row.get::<_, i64>(0))
+                            .context("could not insert source file")?
+                    }
                 };
                 // TODO: If paths don't often change, should we optimize this
                 // with delta encoding or something similar?
                 insert_invocation_source_file
                     .execute((
-                        invocation_id,
-                        source_file_id,
-                        source_path
-                            .strip_prefix(&workspace_path)
-                            .unwrap()
-                            .display()
-                            .to_string(),
-                        source_mtime,
+                        &invocation_id,
+                        &source_file_id,
+                        &source_path_relative,
+                        &source_mtime,
                     ))
                     .context("could not record source file invocation")?;
+            }
+        }
+
+        // If we can, swap in a cached invocation.
+        if !cached_invocation_id_candidates.is_empty() {
+            let latest_cached_invocation_id =
+                cached_invocation_id_candidates.into_iter().max().unwrap();
+            debug!(
+                ?latest_cached_invocation_id,
+                "swapping in cached invocation",
+            );
+
+            // Modify source file mtimes.
+            let invocation_source_files = &mut tx
+                .prepare("SELECT path, mtime FROM invocation_source_file WHERE invocation_id = ?1")
+                .context("could not prepare source file mtimes query")?;
+            for source_file in invocation_source_files
+                .query_map((&latest_cached_invocation_id,), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, OffsetDateTime>(1)?))
+                })
+                .context("could not load source file mtimes")?
+            {
+                let (path, mtime) = source_file.context("could not load cached source file")?;
+                let path = workspace_path.join(&path);
+                debug!(?path, ?mtime, "setting source file mtime");
+                let file = File::open(&path).context("could not open source file")?;
+                file.set_modified(mtime.into())
+                    .context("could not restore source file mtime")?;
+            }
+
+            // Swap in built artifact cache.
+            let invocation_artifacts = &mut tx
+                .prepare(
+                    r#"
+                    SELECT
+                        invocation_artifact.path,
+                        invocation_artifact.mtime,
+                        LOWER(HEX(artifact.b3sum)) AS b3sum
+                    FROM invocation_artifact
+                    JOIN artifact ON artifact.artifact_id = invocation_artifact.artifact_id
+                    WHERE invocation_artifact.invocation_id = ?1"#,
+                )
+                .context("could not prepare artifact metadata query")?;
+            for artifact in invocation_artifacts
+                .query_map((&latest_cached_invocation_id,), |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, OffsetDateTime>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .context("could not load cached artifact metadata")?
+            {
+                let (path, mtime, b3sum_hex) =
+                    artifact.context("could not load cached artifact metadata")?;
+                let path = workspace_path.join(&path);
+                debug!(?path, ?mtime, b3sum = ?b3sum_hex, "restoring cached artifact");
+                // TODO: Is there optimization here to avoid copying files that
+                // we know don't need to change? We could remember hashes from
+                // the first pass, or re-hash them on this pass.
+                fs::copy(workspace_cache.cas_path.join(&b3sum_hex), &path)
+                    .context("could not restore cached artifact")?;
+                let file = File::open(&path).context("could not open restored artifact")?;
+                file.set_modified(mtime.into())
+                    .context("could not restore artifact mtime")?;
             }
         }
 
@@ -132,8 +268,15 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                 // streaming and parallel APIs.
                 let target_bytes = fs::read(target_path)
                     .context(format!("could not read artifact {}", target_path.display()))?;
-                let target_b3sum = blake3::hash(&target_bytes).to_hex().to_string();
-                trace!(?target_path, ?target_mtime, ?target_b3sum, "read artifact");
+                let target_b3sum_hash = blake3::hash(&target_bytes);
+                let target_b3sum = target_b3sum_hash.as_bytes().to_owned();
+                let target_b3sum_hex = target_b3sum_hash.to_hex().to_string();
+                trace!(
+                    ?target_path,
+                    ?target_mtime,
+                    target_b3sum = ?target_b3sum_hex,
+                    "read artifact"
+                );
 
                 let target_file_id = match check_artifact
                     .query_row((&target_b3sum,), |row| row.get::<_, i64>(0))
@@ -144,8 +287,11 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                     None => {
                         // For build artifacts that are new, save them to the
                         // CAS.
-                        fs::write(workspace_cache.cas_path.join(&target_b3sum), &target_bytes)
-                            .context("could not save artifact to CAS")?;
+                        fs::write(
+                            workspace_cache.cas_path.join(&target_b3sum_hex),
+                            &target_bytes,
+                        )
+                        .context("could not save artifact to CAS")?;
 
                         // Record the build artifact.
                         insert_artifact
@@ -174,6 +320,11 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
     };
 
     // Finalize database interactions.
+    tx.execute(
+        "UPDATE invocation SET end_time = ?1 WHERE invocation_id = ?2",
+        (OffsetDateTime::now_utc(), invocation_id),
+    )
+    .context("could not set invocation end time")?;
     tx.commit().context("could not commit cache transaction")?;
     match workspace_cache.metadb.close() {
         Ok(_) => {}
@@ -184,7 +335,7 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
     Ok(exit_status)
 }
 
-#[instrument]
+#[instrument(level = "debug")]
 pub async fn exec(argv: &[String]) -> anyhow::Result<ExitStatus> {
     let mut cmd = std::process::Command::new("cargo");
     cmd.args(argv);

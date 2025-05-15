@@ -7,12 +7,12 @@ CREATE TABLE invocation (
 
 CREATE TABLE source_file (
     source_file_id    INTEGER PRIMARY KEY,
-    b3sum             TEXT NOT NULL UNIQUE
+    b3sum             BLOB UNIQUE
 ) STRICT;
 
 CREATE TABLE artifact (
     artifact_id       INTEGER PRIMARY KEY,
-    b3sum             TEXT NOT NULL UNIQUE
+    b3sum             BLOB UNIQUE
 ) STRICT;
 
 CREATE TABLE invocation_source_file (
