@@ -134,6 +134,7 @@ fn ensure_symlink(original: &PathBuf, link: &PathBuf) -> anyhow::Result<()> {
                 // generated the artifacts in `target/`. (We normally have this
                 // guarantee because we are wrapping an invocation of `cargo
                 // build`).
+                fs::remove_dir_all(&original).context("could not overwrite link target")?;
                 fs::rename(&link, &original).context("could not move link to target")?;
             } else {
                 return Err(anyhow::anyhow!(

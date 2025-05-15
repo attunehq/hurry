@@ -46,6 +46,8 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
         // loader to understand the actual module inclusion logic. We may also
         // need to intercept or replicate cargo's extern flag-passing behavior.
         //
+        // TODO: Add support for multi-crate workspaces.
+        //
         // TODO: Should we parallelize this? Will `jwalk` improve performance
         // here?
         let check_source_file = &mut tx
@@ -222,15 +224,24 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                 })
                 .context("could not load cached artifact metadata")?
             {
-                let (path, mtime, b3sum_hex) =
-                    artifact.context("could not load cached artifact metadata")?;
-                let path = workspace_path.join(&path);
-                debug!(?path, ?mtime, b3sum = ?b3sum_hex, "restoring cached artifact");
                 // TODO: Is there optimization here to avoid copying files that
                 // we know don't need to change? We could remember hashes from
                 // the first pass, or re-hash them on this pass.
-                fs::copy(workspace_cache.cas_path.join(&b3sum_hex), &path)
-                    .context("could not restore cached artifact")?;
+                let (path, mtime, b3sum_hex) =
+                    artifact.context("could not load cached artifact metadata")?;
+                let path = workspace_cache.workspace_cache_path.join(&path);
+                debug!(?path, ?mtime, b3sum = ?b3sum_hex, "restoring cached artifact");
+
+                if !fs::exists(&path).context("could not check restored artifact path")? {
+                    fs::create_dir_all(&path.parent().unwrap())
+                        .context("could not create path to restored artifact")?;
+                }
+                let artifact_cas_path = workspace_cache.cas_path.join(&b3sum_hex);
+                fs::copy(&artifact_cas_path, &path).context(format!(
+                    "could not restore cached artifact from {:?} to {:?}",
+                    artifact_cas_path.display(),
+                    path.display()
+                ))?;
                 let file = File::open(&path).context("could not open restored artifact")?;
                 file.set_modified(mtime.into())
                     .context("could not restore artifact mtime")?;
