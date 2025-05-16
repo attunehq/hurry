@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::Context;
+use cargo_manifest::Manifest;
 use rusqlite::OptionalExtension;
 use time::OffsetDateTime;
 use tracing::{debug, instrument, trace};
@@ -23,11 +24,32 @@ enum WorkspaceKind {
     MultiCrate { members: Vec<PathBuf> },
 }
 
+struct CargoManifest {
+    workspace: Option<CargoManifestWorkspace>,
+}
+
+struct CargoManifestWorkspace {
+    members: Vec<String>,
+    exclude: Vec<String>,
+}
+
 impl Workspace {
     fn open<P>(dir: P) -> anyhow::Result<Self>
     where
         P: AsRef<Path>,
     {
+        let mut current_path = dir.as_ref().to_path_buf();
+        loop {
+            let manifest_path = current_path.join("Cargo.toml");
+            if manifest_path.exists() {
+                let manifest = Manifest::from_path(&manifest_path);
+
+                break;
+            }
+            if !current_path.pop() {
+                return Err(anyhow::anyhow!("could not find Cargo.toml"));
+            }
+        }
         todo!()
     }
 
@@ -39,6 +61,10 @@ impl Workspace {
                 .map(|member| self.root.join(member).join("src"))
                 .flat_map(|src| WalkDir::new(src).into_iter()),
         }
+    }
+
+    fn output_dir(&self) -> PathBuf {
+        self.root.join("target")
     }
 }
 
