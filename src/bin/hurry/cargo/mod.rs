@@ -1,60 +1,27 @@
 use std::{
     collections::HashSet,
     fs::{self, File},
-    path::{Path, PathBuf},
     process::ExitStatus,
 };
 
 use anyhow::Context;
-use cargo_toml::Manifest;
 use rusqlite::OptionalExtension;
 use time::OffsetDateTime;
 use tracing::{debug, instrument, trace};
 use walkdir::WalkDir;
 
 mod cache;
-
-struct Workspace {
-    manifest: Manifest,
-}
-
-impl Workspace {
-    fn open(dir: impl AsRef<Path>) -> anyhow::Result<Self> {
-        // TODO: This should accept several options that are parsed out of the
-        // `cargo build` invocation, like `--manifest-path`, and the options
-        // needed to compute `output_dir`.
-
-        let manifest =
-            Manifest::from_path(dir.as_ref()).context("could not read cargo manifest")?;
-        Ok(Self { manifest })
-    }
-
-    // fn walk_src(&self) -> impl Iterator<Item = Result<walkdir::DirEntry, walkdir::Error>> {
-    //     let manifests = self
-    //         .metadata
-    //         .workspace_packages()
-    //         .iter()
-    //         .map(|p| p.manifest_path);
-    //     todo!()
-    // }
-
-    fn output_dir(&self) -> &Path {
-        // TODO: This can be configured via `--target-dir`, `build.target-dir`,
-        // `$CARGO_TARGET_DIR`, or `$CARGO_BUILD_TARGET_DIR`.
-        //
-        // See also:
-        // - https://doc.rust-lang.org/cargo/reference/build-cache.html
-        // - https://doc.rust-lang.org/cargo/reference/config.html#buildtarget-dir
-        todo!()
-        // &self.manifest.target_directory
-    }
-}
+mod workspace;
 
 #[instrument(level = "debug")]
 pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
     // Load the current workspace.
-    let workspace =
-        Workspace::open(std::env::current_dir().context("could not get current directory")?)?;
+    let workspace = workspace::Workspace::open()?;
+
+    // Change the working directory to the workspace root. This makes a lot of
+    // relative file path calculations nicer.
+    std::env::set_current_dir(&workspace.metadata.workspace_root)
+        .context("could not change working directory to workspace root")?;
 
     // Initialize the workspace cache.
     //
@@ -62,7 +29,7 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
     // from shelling out to `cargo build`.
     let mut workspace_cache = cache::WorkspaceCache::new(&workspace.metadata.workspace_root)
         .context("could not initialize workspace cache")?;
-    let workspace_path = workspace.metadata.workspace_root;
+    let workspace_path = &workspace.metadata.workspace_root;
 
     // Record this invocation.
     let tx = workspace_cache
@@ -81,15 +48,7 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
     let exit_status = {
         // Record the source files used in this invocation.
         //
-        // FIXME: Relying on the source files to be in `src/` is a convention.
-        // In theory, we should actually be shelling out to `rustc`'s crate
-        // loader to understand the actual module inclusion logic. We may also
-        // need to intercept or replicate cargo's extern flag-passing behavior.
-        //
-        // TODO: Add support for multi-crate workspaces.
-        //
-        // TODO: Should we parallelize this? Will `jwalk` improve performance
-        // here?
+        // TODO: Would parallelization improve performance here?
         let check_source_file = &mut tx
             .prepare("SELECT source_file_id FROM source_file WHERE b3sum = ?1")
             .context("could not prepare source file seen check")?;
@@ -120,98 +79,91 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
         let mut cached_invocation_id_candidates = HashSet::new();
         let mut candidates_populated = false;
 
-        for entry in WalkDir::new(workspace_path.join("src")) {
-            let entry = entry.context("could not walk source directory")?;
-            if entry.file_type().is_file() {
-                let source_path = entry.path().to_path_buf();
-                let source_path_relative = source_path
-                    .strip_prefix(&workspace_path)
-                    .unwrap()
-                    .display()
-                    .to_string();
-                let source_mtime: OffsetDateTime = entry
-                    .metadata()
-                    .context("could not get file metadata")?
-                    .modified()
-                    .context("could not get file mtime")?
-                    .into();
-                // TODO: Improve performance here? `blake3` provides both
-                // streaming and parallel APIs.
-                let source_b3sum_hash = {
-                    let source_bytes =
-                        fs::read(&source_path).context("could not read source file")?;
-                    blake3::hash(&source_bytes)
-                };
-                let source_b3sum = source_b3sum_hash.as_bytes().to_owned();
-                debug!(
-                    ?source_path,
-                    ?source_mtime,
-                    source_b3sum = ?source_b3sum_hash.to_hex().to_string(),
-                    "read source file",
-                );
+        for source_path in workspace.source_files() {
+            let source_path_relative = source_path
+                .strip_prefix(&workspace_path)
+                .unwrap()
+                .to_string();
+            let source_mtime: OffsetDateTime = fs::metadata(&source_path)
+                .context("could not get file metadata")?
+                .modified()
+                .context("could not get file mtime")?
+                .into();
+            // TODO: Improve performance here? `blake3` provides both
+            // streaming and parallel APIs.
+            let source_b3sum_hash = {
+                let source_bytes = fs::read(&source_path).context("could not read source file")?;
+                blake3::hash(&source_bytes)
+            };
+            let source_b3sum = source_b3sum_hash.as_bytes().to_owned();
+            debug!(
+                ?source_path,
+                ?source_mtime,
+                source_b3sum = ?source_b3sum_hash.to_hex().to_string(),
+                "read source file",
+            );
 
-                let source_file_id = match check_source_file
-                    .query_row((&source_b3sum,), |row| row.get::<_, i64>(0))
-                    .optional()
-                    .context("could not check source file seen")?
-                {
-                    Some(rid) => {
-                        // If this source file has been seen before, check
-                        // whether any of its cached invocations are compatible
-                        // with the cached invocations of other source files.
-                        let file_candidate_invocation_ids = source_file_invocations
-                            .query_map((&source_path_relative, &source_b3sum), |row| {
-                                row.get::<_, i64>(0)
-                            })
-                            .context("could not load source file invocations")?
-                            .collect::<Result<Vec<i64>, _>>()
-                            .context("could not read source file invocations")?
-                            .into_iter()
-                            .collect::<HashSet<_>>();
-                        debug!(
-                            ?file_candidate_invocation_ids,
-                            "cached invocations containing this source file",
-                        );
-                        if !candidates_populated {
-                            cached_invocation_id_candidates = file_candidate_invocation_ids;
-                            candidates_populated = true;
-                        } else if !cached_invocation_id_candidates.is_empty() {
-                            cached_invocation_id_candidates = cached_invocation_id_candidates
-                                .intersection(&file_candidate_invocation_ids)
-                                .copied()
-                                .collect();
-                        }
-                        debug!(
-                            ?cached_invocation_id_candidates,
-                            "remaining cached invocations after checking source file",
-                        );
-
-                        rid
-                    }
-                    None => {
-                        // If this source file has never been seen before,
-                        // record it into the database. Then clear the set of
-                        // cached invocations, because there's no way we have a
-                        // cached invocation.
+            let source_file_id = match check_source_file
+                .query_row((&source_b3sum,), |row| row.get::<_, i64>(0))
+                .optional()
+                .context("could not check source file seen")?
+            {
+                Some(rid) => {
+                    // If this source file has been seen before, check
+                    // whether any of its cached invocations are compatible
+                    // with the cached invocations of other source files.
+                    let file_candidate_invocation_ids = source_file_invocations
+                        .query_map((&source_path_relative, &source_b3sum), |row| {
+                            row.get::<_, i64>(0)
+                        })
+                        .context("could not load source file invocations")?
+                        .collect::<Result<Vec<i64>, _>>()
+                        .context("could not read source file invocations")?
+                        .into_iter()
+                        .collect::<HashSet<_>>();
+                    debug!(
+                        ?file_candidate_invocation_ids,
+                        "cached invocations containing this source file",
+                    );
+                    if !candidates_populated {
+                        cached_invocation_id_candidates = file_candidate_invocation_ids;
                         candidates_populated = true;
-                        cached_invocation_id_candidates.clear();
-
-                        insert_source_file
-                            .query_row((&source_b3sum,), |row| row.get::<_, i64>(0))
-                            .context("could not insert source file")?
+                    } else if !cached_invocation_id_candidates.is_empty() {
+                        cached_invocation_id_candidates = cached_invocation_id_candidates
+                            .intersection(&file_candidate_invocation_ids)
+                            .copied()
+                            .collect();
                     }
-                };
-                // TODO: If paths don't often change, should we optimize this
-                // with delta encoding or something similar?
-                insert_invocation_source_file
-                    .execute((
-                        &invocation_id,
-                        &source_file_id,
-                        &source_path_relative,
-                        &source_mtime,
-                    ))
-                    .context("could not record source file invocation")?;
-            }
+                    debug!(
+                        ?cached_invocation_id_candidates,
+                        "remaining cached invocations after checking source file",
+                    );
+
+                    rid
+                }
+                None => {
+                    // If this source file has never been seen before,
+                    // record it into the database. Then clear the set of
+                    // cached invocations, because there's no way we have a
+                    // cached invocation.
+                    candidates_populated = true;
+                    cached_invocation_id_candidates.clear();
+
+                    insert_source_file
+                        .query_row((&source_b3sum,), |row| row.get::<_, i64>(0))
+                        .context("could not insert source file")?
+                }
+            };
+            // TODO: If paths don't often change, should we optimize this
+            // with delta encoding or something similar?
+            insert_invocation_source_file
+                .execute((
+                    &invocation_id,
+                    &source_file_id,
+                    &source_path_relative,
+                    &source_mtime,
+                ))
+                .context("could not record source file invocation")?;
         }
 
         // If we can, swap in a cached invocation.
