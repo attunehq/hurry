@@ -26,8 +26,10 @@ enum Command {
         )]
         argv: Vec<String>,
     },
-    // /// Manage remote authentication
+    // TODO: /// Manage remote authentication
     // Auth,
+
+    // TODO: Manage user cache, including busting it when it gets into a corrupt or weird state.
 }
 
 #[tokio::main]

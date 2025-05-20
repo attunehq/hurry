@@ -80,6 +80,7 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
         let mut candidates_populated = false;
 
         for source_path in workspace.source_files() {
+            trace!(?source_path, "processing source file");
             let source_path_relative = source_path
                 .strip_prefix(&workspace_path)
                 .unwrap()
@@ -96,8 +97,8 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                 blake3::hash(&source_bytes)
             };
             let source_b3sum = source_b3sum_hash.as_bytes().to_owned();
-            debug!(
-                ?source_path,
+            trace!(
+                ?source_path_relative,
                 ?source_mtime,
                 source_b3sum = ?source_b3sum_hash.to_hex().to_string(),
                 "read source file",
@@ -121,7 +122,7 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                         .context("could not read source file invocations")?
                         .into_iter()
                         .collect::<HashSet<_>>();
-                    debug!(
+                    trace!(
                         ?file_candidate_invocation_ids,
                         "cached invocations containing this source file",
                     );
@@ -134,7 +135,7 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                             .copied()
                             .collect();
                     }
-                    debug!(
+                    trace!(
                         ?cached_invocation_id_candidates,
                         "remaining cached invocations after checking source file",
                     );
@@ -272,6 +273,8 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
         let exit_status = exec(&argv).await.context("could not execute build")?;
 
         // Record the build artifacts.
+        //
+        // FIXME: We should only record artifacts after _successful_ builds.
         let check_artifact = &mut tx
             .prepare("SELECT artifact_id FROM artifact WHERE b3sum = ?1")
             .context("could not prepare artifact check")?;
