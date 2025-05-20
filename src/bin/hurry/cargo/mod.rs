@@ -258,6 +258,7 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                         .context("could not create path to restored artifact")?;
                 }
                 let artifact_cas_path = workspace_cache.cas_path.join(&b3sum_hex);
+                // TODO: Restore executable bit.
                 fs::copy(&artifact_cas_path, &path).context(format!(
                     "could not restore cached artifact from {:?} to {:?}",
                     artifact_cas_path.display(),
@@ -335,6 +336,8 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                 };
                 // TODO: If paths don't often change, should we optimize this
                 // with delta encoding or something similar?
+                //
+                // TODO: Record executable bit.
                 insert_invocation_artifact
                     .execute((
                         invocation_id,

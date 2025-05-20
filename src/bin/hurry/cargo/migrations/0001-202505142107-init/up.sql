@@ -30,6 +30,7 @@ CREATE TABLE invocation_artifact (
     artifact_id       INTEGER NOT NULL,
     path              TEXT NOT NULL,
     mtime             TEXT NOT NULL, -- RFC 3339
+    executable        INTEGER NOT NULL, -- Boolean
     PRIMARY KEY (invocation_id, artifact_id, path),
     FOREIGN KEY (invocation_id) REFERENCES invocation(invocation_id),
     FOREIGN KEY (artifact_id) REFERENCES artifact(artifact_id)
