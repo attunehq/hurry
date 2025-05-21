@@ -45,10 +45,10 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
         .context("could not record hurry invocation in cache")?;
     debug!(?invocation_id, "recorded invocation");
 
-    let exit_status = {
-        // Record the source files used in this invocation.
-        //
-        // TODO: Would parallelization improve performance here?
+    // Record the source files used in this invocation.
+    //
+    // TODO: Would parallelization improve performance here?
+    let cached_invocation_id_candidates = {
         let check_source_file = &mut tx
             .prepare("SELECT source_file_id FROM source_file WHERE b3sum = ?1")
             .context("could not prepare source file seen check")?;
@@ -167,65 +167,68 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                 .context("could not record source file invocation")?;
         }
 
-        // If we can, swap in a cached invocation.
-        if !cached_invocation_id_candidates.is_empty() {
-            // We swap in the earliest cached invocation, because that one is
-            // guaranteed to be correct.
-            //
-            // Why are later cached invocations possibly incorrect? This happens
-            // because we record the SOURCE FILES before we do the cache swap,
-            // but we only record the BUILD ARTIFACTS after we have swapped and
-            // done the build.
-            //
-            // So if you were to touch a source file and then rebuild, we would:
-            //
-            //   1. Record the TOUCHED mtime (which is wrong and does not match
-            //      the
-            //   2. Restore the ORIGINAL source files and build cache.
-            //   3. Run the build.
-            //   4. Record the build cache (which is the same as the original
-            //      because of the cache hit).
-            //
-            // Notice that this causes a mismatch! We now have saved source
-            // files on the _touched_ mtime with built artifacts keyed for the
-            // _original_ mtime, so this follow-up cache is essentially tainted.
-            //
-            // Swapping in the earliest invocation is a workaround for this
-            // problem.
-            //
-            // TODO: To fix it in the long term, we can record some more
-            // metadata around whether we did a switch and around what the
-            // "canonical" build cache for a source file set is, so we don't
-            // need to worry about this anymore.
-            let earliest_cached_invocation_id =
-                cached_invocation_id_candidates.into_iter().min().unwrap();
-            debug!(
-                ?earliest_cached_invocation_id,
-                "swapping in cached invocation",
-            );
+        cached_invocation_id_candidates
+    };
 
-            // Modify source file mtimes.
-            let invocation_source_files = &mut tx
-                .prepare("SELECT path, mtime FROM invocation_source_file WHERE invocation_id = ?1")
-                .context("could not prepare source file mtimes query")?;
-            for source_file in invocation_source_files
-                .query_map((&earliest_cached_invocation_id,), |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, OffsetDateTime>(1)?))
-                })
-                .context("could not load source file mtimes")?
-            {
-                let (path, mtime) = source_file.context("could not load cached source file")?;
-                let path = workspace_path.join(&path);
-                debug!(?path, ?mtime, "setting source file mtime");
-                let file = File::open(&path).context("could not open source file")?;
-                file.set_modified(mtime.into())
-                    .context("could not restore source file mtime")?;
-            }
+    // If we can, swap in a cached invocation.
+    if !cached_invocation_id_candidates.is_empty() {
+        // We swap in the earliest cached invocation, because that one is
+        // guaranteed to be correct.
+        //
+        // Why are later cached invocations possibly incorrect? This happens
+        // because we record the SOURCE FILES before we do the cache swap,
+        // but we only record the BUILD ARTIFACTS after we have swapped and
+        // done the build.
+        //
+        // So if you were to touch a source file and then rebuild, we would:
+        //
+        //   1. Record the TOUCHED mtime (which is wrong and does not match
+        //      the
+        //   2. Restore the ORIGINAL source files and build cache.
+        //   3. Run the build.
+        //   4. Record the build cache (which is the same as the original
+        //      because of the cache hit).
+        //
+        // Notice that this causes a mismatch! We now have saved source
+        // files on the _touched_ mtime with built artifacts keyed for the
+        // _original_ mtime, so this follow-up cache is essentially tainted.
+        //
+        // Swapping in the earliest invocation is a workaround for this
+        // problem.
+        //
+        // TODO: To fix it in the long term, we can record some more
+        // metadata around whether we did a switch and around what the
+        // "canonical" build cache for a source file set is, so we don't
+        // need to worry about this anymore.
+        let earliest_cached_invocation_id =
+            cached_invocation_id_candidates.into_iter().min().unwrap();
+        debug!(
+            ?earliest_cached_invocation_id,
+            "swapping in cached invocation",
+        );
 
-            // Swap in built artifact cache.
-            let invocation_artifacts = &mut tx
-                .prepare(
-                    r#"
+        // Modify source file mtimes.
+        let invocation_source_files = &mut tx
+            .prepare("SELECT path, mtime FROM invocation_source_file WHERE invocation_id = ?1")
+            .context("could not prepare source file mtimes query")?;
+        for source_file in invocation_source_files
+            .query_map((&earliest_cached_invocation_id,), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, OffsetDateTime>(1)?))
+            })
+            .context("could not load source file mtimes")?
+        {
+            let (path, mtime) = source_file.context("could not load cached source file")?;
+            let path = workspace_path.join(&path);
+            debug!(?path, ?mtime, "setting source file mtime");
+            let file = File::open(&path).context("could not open source file")?;
+            file.set_modified(mtime.into())
+                .context("could not restore source file mtime")?;
+        }
+
+        // Swap in built artifact cache.
+        let invocation_artifacts = &mut tx
+            .prepare(
+                r#"
                     SELECT
                         invocation_artifact.path,
                         invocation_artifact.mtime,
@@ -233,57 +236,67 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                     FROM invocation_artifact
                     JOIN artifact ON artifact.artifact_id = invocation_artifact.artifact_id
                     WHERE invocation_artifact.invocation_id = ?1"#,
-                )
-                .context("could not prepare artifact metadata query")?;
-            for artifact in invocation_artifacts
-                .query_map((&earliest_cached_invocation_id,), |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, OffsetDateTime>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                })
-                .context("could not load cached artifact metadata")?
-            {
-                // TODO: Is there optimization here to avoid copying files that
-                // we know don't need to change? We could remember hashes from
-                // the first pass, or re-hash them on this pass.
-                let (path, mtime, b3sum_hex) =
-                    artifact.context("could not load cached artifact metadata")?;
-                let path = workspace_cache.workspace_cache_path.join(&path);
-                trace!(?path, ?mtime, b3sum = ?b3sum_hex, "restoring cached artifact");
+            )
+            .context("could not prepare artifact metadata query")?;
+        for artifact in invocation_artifacts
+            .query_map((&earliest_cached_invocation_id,), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, OffsetDateTime>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .context("could not load cached artifact metadata")?
+        {
+            // TODO: Is there optimization here to avoid copying files that
+            // we know don't need to change? We could remember hashes from
+            // the first pass, or re-hash them on this pass.
+            let (path, mtime, b3sum_hex) =
+                artifact.context("could not load cached artifact metadata")?;
+            let path = workspace_cache.workspace_cache_path.join(&path);
+            trace!(?path, ?mtime, b3sum = ?b3sum_hex, "restoring cached artifact");
 
-                if !fs::exists(&path).context("could not check restored artifact path")? {
-                    fs::create_dir_all(&path.parent().unwrap())
-                        .context("could not create path to restored artifact")?;
-                }
-                let artifact_cas_path = workspace_cache.cas_path.join(&b3sum_hex);
-                // TODO: Restore executable bit.
-                fs::copy(&artifact_cas_path, &path).context(format!(
-                    "could not restore cached artifact from {:?} to {:?}",
-                    artifact_cas_path.display(),
-                    path.display()
-                ))?;
-                let file = File::open(&path).context("could not open restored artifact")?;
-                file.set_modified(mtime.into())
-                    .context("could not restore artifact mtime")?;
+            if !fs::exists(&path).context("could not check restored artifact path")? {
+                fs::create_dir_all(&path.parent().unwrap())
+                    .context("could not create path to restored artifact")?;
             }
+            let artifact_cas_path = workspace_cache.cas_path.join(&b3sum_hex);
+            // TODO: Restore executable bit.
+            fs::copy(&artifact_cas_path, &path).context(format!(
+                "could not restore cached artifact from {:?} to {:?}",
+                artifact_cas_path.display(),
+                path.display()
+            ))?;
+            let file = File::open(&path).context("could not open restored artifact")?;
+            file.set_modified(mtime.into())
+                .context("could not restore artifact mtime")?;
         }
+    }
 
-        // Execute the build.
-        let exit_status = exec(&argv).await.context("could not execute build")?;
+    // Execute the build.
+    let exit_status = exec(&argv).await.context("could not execute build")?;
 
-        // Record the build artifacts.
-        //
-        // FIXME: We should only record artifacts after _successful_ builds.
+    // If the build wasn't successful, abort.
+    //
+    // TODO: We should add handling around the case where we swapped in a cache
+    // _and_ the build failed. This should never happen, but if it does happen,
+    // it indicates that the cache has been corrupted and should be cleared.
+    if !exit_status.success() {
+        tx.rollback()
+            .context("could not rollback cache transaction")?;
+        return Ok(exit_status);
+    }
+
+    // Record the build artifacts.
+    {
         let check_artifact = &mut tx
             .prepare("SELECT artifact_id FROM artifact WHERE b3sum = ?1")
             .context("could not prepare artifact check")?;
         let insert_artifact = &mut tx
-            .prepare(
-                "INSERT INTO artifact (b3sum) VALUES (?1) ON CONFLICT DO NOTHING RETURNING artifact_id",
-            )
-            .context("could not prepare artifact insert")?;
+        .prepare(
+            "INSERT INTO artifact (b3sum) VALUES (?1) ON CONFLICT DO NOTHING RETURNING artifact_id",
+        )
+        .context("could not prepare artifact insert")?;
         let insert_invocation_artifact = &mut tx
             .prepare(
                 "INSERT INTO invocation_artifact (invocation_id, artifact_id, path, mtime) VALUES (?1, ?2, ?3, ?4)",
@@ -352,9 +365,7 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                     .context("could not record artifact invocation")?;
             }
         }
-
-        exit_status
-    };
+    }
 
     // Finalize database interactions.
     tx.execute(
