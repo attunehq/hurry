@@ -80,13 +80,19 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
         let mut cached_invocation_id_candidates = HashSet::new();
         let mut candidates_populated = false;
 
-        for source_path in workspace.source_files() {
-            trace!(?source_path, "processing source file");
-            let source_path_relative = source_path
+        for entry in workspace.source_files() {
+            let entry = entry.context("could not walk target directory")?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let source_file_path = entry.path();
+            trace!(?source_file_path, "processing source file");
+            let source_path_relative = source_file_path
                 .strip_prefix(&workspace_path)
                 .unwrap()
-                .to_string();
-            let source_mtime: OffsetDateTime = fs::metadata(&source_path)
+                .to_string_lossy();
+            let source_mtime: OffsetDateTime = entry
+                .metadata()
                 .context("could not get file metadata")?
                 .modified()
                 .context("could not get file mtime")?
@@ -94,7 +100,8 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
             // TODO: Improve performance here? `blake3` provides both
             // streaming and parallel APIs.
             let source_b3sum_hash = {
-                let source_bytes = fs::read(&source_path).context("could not read source file")?;
+                let source_bytes =
+                    fs::read(source_file_path).context("could not read source file")?;
                 blake3::hash(&source_bytes)
             };
             let source_b3sum = source_b3sum_hash.as_bytes().to_owned();
@@ -312,67 +319,68 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
             .context("could not prepare artifact invocation insert")?;
         for entry in WalkDir::new(&workspace_cache.workspace_target_path) {
             let entry = entry.context("could not walk target directory")?;
-            if entry.file_type().is_file() {
-                let target_path = entry.path();
-                let target_metadata = entry
-                    .metadata()
-                    .context("could not get target file metadata")?;
-                let target_mtime: OffsetDateTime = target_metadata
-                    .modified()
-                    .context("could not get file mtime")?
-                    .into();
-                let target_executable = target_metadata.permissions().mode() & 0o111 != 0;
-                // TODO: Improve performance here? `blake3` provides both
-                // streaming and parallel APIs.
-                let target_bytes = fs::read(target_path)
-                    .context(format!("could not read artifact {}", target_path.display()))?;
-                let target_b3sum_hash = blake3::hash(&target_bytes);
-                let target_b3sum = target_b3sum_hash.as_bytes().to_owned();
-                let target_b3sum_hex = target_b3sum_hash.to_hex().to_string();
-                trace!(
-                    ?target_path,
-                    ?target_mtime,
-                    target_b3sum = ?target_b3sum_hex,
-                    "read artifact"
-                );
-
-                let target_file_id = match check_artifact
-                    .query_row((&target_b3sum,), |row| row.get::<_, i64>(0))
-                    .optional()
-                    .context("could not check artifact")?
-                {
-                    Some(rid) => rid,
-                    None => {
-                        // For build artifacts that are new, save them to the
-                        // CAS.
-                        fs::write(
-                            workspace_cache.cas_path.join(&target_b3sum_hex),
-                            &target_bytes,
-                        )
-                        .context("could not save artifact to CAS")?;
-
-                        // Record the build artifact.
-                        insert_artifact
-                            .query_row((&target_b3sum,), |row| row.get::<_, i64>(0))
-                            .context("could not insert artifact")?
-                    }
-                };
-                // TODO: If paths don't often change, should we optimize this
-                // with delta encoding or something similar?
-                insert_invocation_artifact
-                    .execute((
-                        invocation_id,
-                        target_file_id,
-                        target_path
-                            .strip_prefix(&workspace_cache.workspace_cache_path)
-                            .unwrap()
-                            .display()
-                            .to_string(),
-                        target_mtime,
-                        target_executable,
-                    ))
-                    .context("could not record artifact invocation")?;
+            if !entry.file_type().is_file() {
+                continue;
             }
+            let target_path = entry.path();
+            let target_metadata = entry
+                .metadata()
+                .context("could not get target file metadata")?;
+            let target_mtime: OffsetDateTime = target_metadata
+                .modified()
+                .context("could not get file mtime")?
+                .into();
+            let target_executable = target_metadata.permissions().mode() & 0o111 != 0;
+            // TODO: Improve performance here? `blake3` provides both
+            // streaming and parallel APIs.
+            let target_bytes = fs::read(target_path)
+                .context(format!("could not read artifact {}", target_path.display()))?;
+            let target_b3sum_hash = blake3::hash(&target_bytes);
+            let target_b3sum = target_b3sum_hash.as_bytes().to_owned();
+            let target_b3sum_hex = target_b3sum_hash.to_hex().to_string();
+            trace!(
+                ?target_path,
+                ?target_mtime,
+                target_b3sum = ?target_b3sum_hex,
+                "read artifact"
+            );
+
+            let target_file_id = match check_artifact
+                .query_row((&target_b3sum,), |row| row.get::<_, i64>(0))
+                .optional()
+                .context("could not check artifact")?
+            {
+                Some(rid) => rid,
+                None => {
+                    // For build artifacts that are new, save them to the
+                    // CAS.
+                    fs::write(
+                        workspace_cache.cas_path.join(&target_b3sum_hex),
+                        &target_bytes,
+                    )
+                    .context("could not save artifact to CAS")?;
+
+                    // Record the build artifact.
+                    insert_artifact
+                        .query_row((&target_b3sum,), |row| row.get::<_, i64>(0))
+                        .context("could not insert artifact")?
+                }
+            };
+            // TODO: If paths don't often change, should we optimize this
+            // with delta encoding or something similar?
+            insert_invocation_artifact
+                .execute((
+                    invocation_id,
+                    target_file_id,
+                    target_path
+                        .strip_prefix(&workspace_cache.workspace_cache_path)
+                        .unwrap()
+                        .display()
+                        .to_string(),
+                    target_mtime,
+                    target_executable,
+                ))
+                .context("could not record artifact invocation")?;
         }
     }
 

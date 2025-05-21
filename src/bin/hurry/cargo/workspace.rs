@@ -1,9 +1,8 @@
-use std::{io::BufRead, process::Command};
-
 use anyhow::Context;
 use camino::Utf8PathBuf;
 use cargo_metadata::Metadata;
 use tracing::{instrument, trace};
+use walkdir::WalkDir;
 
 #[derive(Debug)]
 pub struct Workspace {
@@ -33,46 +32,50 @@ impl Workspace {
     }
 
     #[instrument(level = "debug", skip(self))]
-    pub fn source_files(&self) -> impl Iterator<Item = Utf8PathBuf> {
+    pub fn source_files(&self) -> impl Iterator<Item = Result<walkdir::DirEntry, walkdir::Error>> {
         let packages = self.metadata.workspace_packages();
         trace!(?packages, "workspace packages");
         packages.into_iter().flat_map(|package| {
             trace!(?package, "getting source files of package");
+            // TODO: The technically correct way to calculate the source files
+            // of a target is to shell out to `rustc --emit=dep-info=-` with the
+            // correct `rustc` flags (e.g. the `--extern` flags, which are
+            // required to import macros defined in dependency crates which
+            // might be used to add more source files to the target) and the
+            // module root.
+            //
+            // Unfortunately, this is quite annoying:
+            // - We need to get the correct flags for `rustc`. I'm not totally
+            //   sure how to do this - I think we should be able to by parsing
+            //   the output messages from `cargo build`? Or maybe we should be
+            //   able to reconstruct them from `cargo metadata`? Or maybe we can
+            //   use `cargo rustc`?
+            // - Running `rustc` takes quite a long time. Maybe we can improve
+            //   this by using some background daemon / file change notification
+            //   trickery? Maybe we can run things in parallel?
+            //
+            // Instead, we approximate the source files in a module by taking
+            // all the files in the folder of the crate root source file. This
+            // is also the approximation that Cargo uses to determine "relevant"
+            // files.
+            //
+            // TODO: We have not yet implemented Cargo's approximation logic
+            // that handles things like `.gitignore`, `package.include`,
+            // `package.exclude`, etc.
+            //
+            // See also:
+            // - `dep-info` files:
+            //   https://doc.rust-lang.org/cargo/reference/build-cache.html#dep-info-files
+            // - `cargo build` output messages:
+            //   https://doc.rust-lang.org/cargo/reference/external-tools.html#json-messages
+            // - Cargo's source file discovery logic:
+            //   https://docs.rs/cargo/latest/cargo/sources/path/struct.PathSource.html#method.list_files
             package.targets.iter().flat_map(|target| {
                 let target_root = target.src_path.clone();
-                // TODO: Rather than shelling out to `rustc`, should we just
-                // mimic the logic? This is quite complicated (involves macro
-                // expansion, etc.) but might be faster.
-                //
-                // Alternatively, maybe we should do an approximation? For
-                // example, Cargo's own logic for determining "relevant" source
-                // files approximates by just looking in the directory. See:
-                // https://docs.rs/cargo/latest/cargo/sources/path/struct.PathSource.html#method.list_files
-                trace!(?target, "invoking rustc dep-info");
-                let dep_info = Command::new("rustc")
-                    .args(vec!["--emit=dep-info=-", target_root.as_str()])
-                    .output()
-                    .expect("could not run rustc crate source file loader")
-                    .stdout;
-                trace!(dep_info = ?String::from_utf8_lossy(&dep_info), "invoked rustc dep-info");
-                // TODO: How do we handle directory paths that have newlines and
-                // colons in them? I've tested what `rustc` does in this case
-                // and it doesn't seem to escape. So theoretically you could
-                // construct a crate source file that appears to be two
-                // different source files.
-                let parsed = dep_info
-                    .lines()
-                    .filter_map(|l| {
-                        let l = l.expect("could not read rustc dep-info");
-                        // Handle `# env-dep:` lines.
-                        if l.starts_with("# ") || l.is_empty() {
-                            return None;
-                        }
-                        Some(l.trim_end_matches(':').into())
-                    })
-                    .collect::<Vec<_>>();
-                trace!(?parsed, "parsed rustc dep-info");
-                parsed
+                let target_root_folder = target_root
+                    .parent()
+                    .expect("module root should be a file in a folder");
+                WalkDir::new(target_root_folder).into_iter()
             })
         })
     }
