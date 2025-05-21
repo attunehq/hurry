@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     fs::{self, File},
+    os::unix::fs::PermissionsExt,
     process::ExitStatus,
 };
 
@@ -232,6 +233,7 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                     SELECT
                         invocation_artifact.path,
                         invocation_artifact.mtime,
+                        invocation_artifact.executable,
                         LOWER(HEX(artifact.b3sum)) AS b3sum
                     FROM invocation_artifact
                     JOIN artifact ON artifact.artifact_id = invocation_artifact.artifact_id
@@ -243,15 +245,18 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, OffsetDateTime>(1)?,
-                    row.get::<_, String>(2)?,
+                    row.get::<_, bool>(2)?,
+                    row.get::<_, String>(3)?,
                 ))
             })
             .context("could not load cached artifact metadata")?
         {
-            // TODO: Is there optimization here to avoid copying files that
-            // we know don't need to change? We could remember hashes from
-            // the first pass, or re-hash them on this pass.
-            let (path, mtime, b3sum_hex) =
+            // TODO: Is there optimization here to avoid copying files that we
+            // know don't need to change? We could remember hashes from the
+            // first pass, or re-hash them on this pass. Or maybe we could try
+            // linking instead of copying? But then how do we prevent Cargo from
+            // overwriting things in our CAS? Maybe try NFS?
+            let (path, mtime, executable, b3sum_hex) =
                 artifact.context("could not load cached artifact metadata")?;
             let path = workspace_cache.workspace_cache_path.join(&path);
             trace!(?path, ?mtime, b3sum = ?b3sum_hex, "restoring cached artifact");
@@ -261,7 +266,6 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                     .context("could not create path to restored artifact")?;
             }
             let artifact_cas_path = workspace_cache.cas_path.join(&b3sum_hex);
-            // TODO: Restore executable bit.
             fs::copy(&artifact_cas_path, &path).context(format!(
                 "could not restore cached artifact from {:?} to {:?}",
                 artifact_cas_path.display(),
@@ -270,6 +274,10 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
             let file = File::open(&path).context("could not open restored artifact")?;
             file.set_modified(mtime.into())
                 .context("could not restore artifact mtime")?;
+            if executable {
+                file.set_permissions(fs::Permissions::from_mode(0o755))
+                    .context("could not restore artifact executable bit")?;
+            }
         }
     }
 
@@ -299,19 +307,21 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
         .context("could not prepare artifact insert")?;
         let insert_invocation_artifact = &mut tx
             .prepare(
-                "INSERT INTO invocation_artifact (invocation_id, artifact_id, path, mtime) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO invocation_artifact (invocation_id, artifact_id, path, mtime, executable) VALUES (?1, ?2, ?3, ?4, ?5)",
             )
             .context("could not prepare artifact invocation insert")?;
         for entry in WalkDir::new(&workspace_cache.workspace_target_path) {
             let entry = entry.context("could not walk target directory")?;
             if entry.file_type().is_file() {
                 let target_path = entry.path();
-                let target_mtime: OffsetDateTime = entry
+                let target_metadata = entry
                     .metadata()
-                    .context("could not get file metadata")?
+                    .context("could not get target file metadata")?;
+                let target_mtime: OffsetDateTime = target_metadata
                     .modified()
                     .context("could not get file mtime")?
                     .into();
+                let target_executable = target_metadata.permissions().mode() & 0o111 != 0;
                 // TODO: Improve performance here? `blake3` provides both
                 // streaming and parallel APIs.
                 let target_bytes = fs::read(target_path)
@@ -349,8 +359,6 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                 };
                 // TODO: If paths don't often change, should we optimize this
                 // with delta encoding or something similar?
-                //
-                // TODO: Record executable bit.
                 insert_invocation_artifact
                     .execute((
                         invocation_id,
@@ -361,6 +369,7 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                             .display()
                             .to_string(),
                         target_mtime,
+                        target_executable,
                     ))
                     .context("could not record artifact invocation")?;
             }
