@@ -35,6 +35,9 @@ impl Workspace {
         Ok(Self { metadata })
     }
 
+    // Note that this iterator may contain the same module (i.e. file) multiple
+    // times if it is included from multiple target root directories (e.g. if a
+    // module is contained in both a `library` and a `bin` target).
     #[instrument(level = "debug", skip(self))]
     pub fn source_files(&self) -> impl Iterator<Item = Result<walkdir::DirEntry, walkdir::Error>> {
         let packages = self.metadata.workspace_packages();

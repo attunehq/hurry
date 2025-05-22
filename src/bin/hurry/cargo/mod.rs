@@ -192,6 +192,12 @@ fn read_source_files(
     let mut cached_invocation_id_candidates = HashSet::new();
     let mut candidates_populated = false;
 
+    // The iterator returned by `source_files` may contain the same module (i.e.
+    // file) multiple times if it is included from multiple target root
+    // directories (e.g. if a module is contained in both a `library` and a
+    // `bin` target).
+    let mut seen = HashSet::new();
+
     // Record the source files used in this invocation.
     //
     // TODO: Would parallelization improve performance here?
@@ -202,6 +208,10 @@ fn read_source_files(
         }
 
         let source_file_path = entry.path();
+        if !seen.insert(source_file_path.to_path_buf()) {
+            continue;
+        }
+
         trace!(?source_file_path, "processing source file");
         let source_path_relative = source_file_path
             .strip_prefix(&workspace.metadata.workspace_root)
