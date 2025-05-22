@@ -15,6 +15,10 @@ impl Workspace {
         // TODO: Should these be parsed higher up and passed in?
         let mut args = std::env::args().skip_while(|val| !val.starts_with("--manifest-path"));
 
+        // TODO: Maybe we should just replicate this logic and perform it
+        // statically using filesystem operations instead of shelling out? This
+        // costs something on the order of 200ms, which is not _terrible_ but
+        // feels much slower than if we just did our own filesystem reads.
         let mut cmd = cargo_metadata::MetadataCommand::new();
         match args.next() {
             Some(ref p) if p == "--manifest-path" => {

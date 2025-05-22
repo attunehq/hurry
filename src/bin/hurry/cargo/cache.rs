@@ -14,11 +14,11 @@ use homedir::my_home;
 use include_dir::Dir;
 use rusqlite::Connection;
 use rusqlite_migration::Migrations;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, trace};
 
+#[derive(Debug)]
 pub struct WorkspaceCache {
     pub workspace_cache_path: PathBuf,
-    pub workspace_target_path: PathBuf,
     pub cas_path: PathBuf,
     pub metadb: Connection,
 }
@@ -33,14 +33,14 @@ impl WorkspaceCache {
         // Check whether the user cache exists, and create it if it
         // doesn't.
         let user_cache_path = &USER_CACHE_PATH;
-        debug!(?user_cache_path, "checking user cache");
+        trace!(?user_cache_path, "checking user cache");
         if !fs::exists(&**user_cache_path).context("could not read user hurry cache")? {
             fs::create_dir_all(&**user_cache_path).context("could not create user hurry cache")?;
         }
 
         // Check whether the CAS exists, and create it if it doesn't.
         let cas_path = user_cache_path.join("cas");
-        debug!(?cas_path, "checking CAS");
+        trace!(?cas_path, "checking CAS");
         if !fs::exists(&cas_path).context("could not read CAS")? {
             fs::create_dir_all(&cas_path).context("could not create CAS")?;
         }
@@ -56,7 +56,7 @@ impl WorkspaceCache {
             );
             path
         };
-        debug!(?workspace_cache_path, "checking workspace cache");
+        trace!(?workspace_cache_path, "checking workspace cache");
         if !fs::exists(&workspace_cache_path).context("could not read workspace hurry cache")? {
             fs::create_dir_all(&workspace_cache_path)
                 .context("could not create workspace hurry cache")?;
@@ -65,7 +65,7 @@ impl WorkspaceCache {
         // Check whether the workspace target cache exists, and create it if it
         // doesn't.
         let target_cache_path = workspace_cache_path.join("target");
-        debug!(?target_cache_path, "checking workspace target cache");
+        trace!(?target_cache_path, "checking workspace target cache");
         if !fs::exists(&target_cache_path).context("could not read workspace target cache")? {
             fs::create_dir_all(&target_cache_path)
                 .context("could not create workspace target cache")?;
@@ -80,22 +80,21 @@ impl WorkspaceCache {
         // file, but it's a broken symlink", which we need to handle
         // differently.
         let target_path = workspace_path.as_ref().join("target");
-        debug!(?target_path, "checking workspace target/");
+        trace!(?target_path, "checking workspace target/");
         ensure_symlink(&target_cache_path, &target_path)
             .context("could not symlink workspace target/ to cache")?;
 
         // Open the workspace metadata database and migrate it if necessary.
         let mut metadb = Connection::open(workspace_cache_path.join("meta.db"))
             .context("could not read workspace cache state")?;
-        debug!(pending_migrations = ?MIGRATIONS.pending_migrations(&mut metadb), "checking migrations");
+        trace!(pending_migrations = ?MIGRATIONS.pending_migrations(&mut metadb), "checking migrations");
         MIGRATIONS
             .to_latest(&mut metadb)
             .context("could not migrate workspace cache state")?;
 
         Ok(Self {
-            workspace_cache_path,
-            workspace_target_path: target_cache_path,
             metadb,
+            workspace_cache_path,
             cas_path,
         })
     }
@@ -110,7 +109,7 @@ static USER_CACHE_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
     path
 });
 
-#[instrument(level = "debug")]
+#[instrument(level = "trace")]
 fn ensure_symlink(original: &PathBuf, link: &PathBuf) -> anyhow::Result<()> {
     // NOTE: We call `fs::symlink_metadata` and match on explicit error
     // cases because `fs::exists` returns `Ok(false)` for broken symlinks
@@ -120,10 +119,10 @@ fn ensure_symlink(original: &PathBuf, link: &PathBuf) -> anyhow::Result<()> {
     let cache_metadata = fs::symlink_metadata(&link);
     match cache_metadata {
         Ok(metadata) => {
-            debug!(?metadata, "link metadata");
+            trace!(?metadata, "link metadata");
             if metadata.is_symlink() {
                 let target_symlink_path = fs::read_link(&link).context("could not read symlink")?;
-                debug!(?target_symlink_path, "symlink target");
+                trace!(?target_symlink_path, "symlink target");
                 if target_symlink_path == *original {
                     return Ok(());
                 } else {

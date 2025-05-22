@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use tracing::debug;
+use tracing::{debug, instrument};
 use tracing_subscriber::{
     fmt::format::FmtSpan, layer::SubscriberExt as _, util::SubscriberInitExt as _,
 };
@@ -30,9 +30,11 @@ enum Command {
     // Auth,
 
     // TODO: Manage user cache, including busting it when it gets into a corrupt or weird state.
+    // Cache,
 }
 
 #[tokio::main]
+#[instrument(level = "debug")]
 async fn main() {
     tracing_subscriber::registry()
         .with(
