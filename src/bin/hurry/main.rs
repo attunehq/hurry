@@ -1,7 +1,10 @@
+use std::process::ExitCode;
+
 use clap::{Parser, Subcommand};
 use tracing::{debug, instrument};
+use tracing_flame::FlameLayer;
 use tracing_subscriber::{
-    fmt::format::FmtSpan, layer::SubscriberExt as _, util::SubscriberInitExt as _,
+    Layer as _, fmt::format::FmtSpan, layer::SubscriberExt as _, util::SubscriberInitExt as _,
 };
 
 mod cargo;
@@ -12,6 +15,9 @@ mod cargo;
 struct Cli {
     #[command(subcommand)]
     command: Command,
+    /// Emit flamegraph profiling data
+    #[arg(short, long, hide(true))]
+    profile: Option<String>,
 }
 
 #[derive(Clone, Subcommand)]
@@ -35,7 +41,17 @@ enum Command {
 
 #[tokio::main]
 #[instrument(level = "debug")]
-async fn main() {
+async fn main() -> ExitCode {
+    // Parse command line arguments.
+    let cli = Cli::parse();
+
+    // Configure logging.
+    let (flame_layer, flame_guard) = if let Some(profile) = cli.profile {
+        let (flame_layer, _flame_guard) = FlameLayer::with_file(profile).unwrap();
+        (Some(flame_layer), Some(_flame_guard))
+    } else {
+        (None, None)
+    };
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
@@ -46,45 +62,43 @@ async fn main() {
                 .with_thread_ids(true)
                 .with_thread_names(true)
                 .with_writer(std::io::stderr)
-                .pretty(),
+                .pretty()
+                .with_filter(tracing_subscriber::EnvFilter::from_default_env()),
         )
-        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(flame_layer)
         .init();
 
-    let cli = Cli::parse();
+    // Execute the command.
     match cli.command {
         Command::Cargo { argv } => {
             debug!(?argv, "cargo");
-
-            // // Get the `--manifest-path` argument for `cargo {build,run}`.
-            // //
-            // // TODO: Should we do parsing this further up, and passing the flags
-            // // downwards?
-            // let mut args = std::env::args().skip_while(|val| !val.starts_with("--manifest-path"));
-            // let mut cmd = cargo_metadata::MetadataCommand::new();
-            // cmd.current_dir(dir);
-            // match args.next() {
-            //     Some(ref p) if p == "--manifest-path" => {
-            //         cmd.manifest_path(args.next().expect("--manifest-path should provide a value"));
-            //     }
-            //     Some(p) => {
-            //         cmd.manifest_path(p.trim_start_matches("--manifest-path="));
-            //     }
-            //     None => {}
-            // }
-            // let metadata = cmd.exec().context("could not get cargo metadata")?;
-            // Ok(Self { metadata });
 
             // TODO: Technically, we should parse the argv properly in case
             // this string is passed as some sort of configuration flag value.
             if argv.contains(&"build".to_string()) {
                 match cargo::build(&argv).await {
-                    Ok(exit_status) => std::process::exit(exit_status.code().unwrap_or(1)),
+                    Ok(exit_status) => {
+                        // Flush flamegraph data.
+                        if let Some(flame_guard) = flame_guard {
+                            flame_guard.flush().unwrap();
+                        }
+                        exit_status
+                            .code()
+                            .map_or(ExitCode::FAILURE, |c| ExitCode::from(c as u8))
+                    }
                     Err(e) => panic!("hurry cargo build failed: {:?}", e),
                 }
             } else {
                 match cargo::exec(&argv).await {
-                    Ok(exit_status) => std::process::exit(exit_status.code().unwrap_or(1)),
+                    Ok(exit_status) => {
+                        // Flush flamegraph data.
+                        if let Some(flame_guard) = flame_guard {
+                            flame_guard.flush().unwrap();
+                        }
+                        exit_status
+                            .code()
+                            .map_or(ExitCode::FAILURE, |c| ExitCode::from(c as u8))
+                    }
                     Err(e) => panic!("hurry cargo {} failed: {:?}", argv.join(" "), e),
                 }
             }

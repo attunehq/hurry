@@ -9,7 +9,7 @@ use std::{
 use anyhow::Context;
 use rusqlite::{OptionalExtension, Transaction};
 use time::OffsetDateTime;
-use tracing::{debug, debug_span, instrument, trace};
+use tracing::{debug, debug_span, instrument, trace, trace_span};
 use walkdir::WalkDir;
 use workspace::Workspace;
 
@@ -52,9 +52,10 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
     let matching_cached_invocations = read_source_files(&workspace, invocation_id, &mut tx)
         .context("could not read source files")?;
     debug!(?matching_cached_invocations, "matching invocations");
+    let restore_from_cache = !matching_cached_invocations.is_empty();
 
     // If we can, swap in a cached invocation.
-    if !matching_cached_invocations.is_empty() {
+    if restore_from_cache {
         // We swap in the earliest cached invocation, because that one is
         // guaranteed to be correct.
         //
@@ -100,17 +101,38 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
     let exit_status = exec(&argv).await.context("could not execute build")?;
 
     // If the build wasn't successful, abort.
-    //
-    // TODO: We should add handling around the case where we swapped in a cache
-    // _and_ the build failed. This should never happen, but if it does happen,
-    // it indicates that the cache has been corrupted and should be cleared.
     if !exit_status.success() {
+        // This should never happen, because when a build occurs after restoring
+        // from cache, it should always succeed (since it restores build
+        // artifacts from a previously successful build).
+        //
+        // If it does happen, it indicates that the cache has been corrupted and
+        // should be cleared.
+        if restore_from_cache {
+            // TODO: Clear the cache.
+        }
+
         tx.rollback()
-            .context("could not rollback cache transaction")?;
+            .context("could not rollback cache transaction after failed build")?;
         return Ok(exit_status);
     }
 
-    // Record the build artifacts.
+    // If a successful build occurred after restoring from cache, nothing more
+    // needs to be done. The cache already has the build artifacts, so we don't
+    // need to record this invocation.
+    if restore_from_cache {
+        tx.rollback()
+            .context("could not rollback cache transaction after cached build")?;
+
+        // TODO: Restoring from cache causes rust-analyzer's proc-macro server
+        // to segfault. So we kill the process here explicitly, so the whole
+        // rust-analyzer restarts.
+        return Ok(exit_status);
+    }
+
+    // Record build artifacts after a successful build if the build was not
+    // restored from cache (and therefore might contain novel artifacts that we
+    // need to cache for later invocations).
     record_build_artifacts(
         &workspace_cache.workspace_cache_path,
         &workspace_cache.cas_path,
@@ -293,14 +315,15 @@ fn restore_cache(
                 .context("could not load source file mtimes")?
             {
                 let (path, mtime) = source_file.context("could not load cached source file")?;
-                // TODO: What we're doing right now is currently a simplification, and
-                // assumes that all source files are within the workspace root. This may
-                // not be the cause for some files included via proc-macro, which we
-                // should be able to detect by reading the dep-info for each crate after
-                // a full build. To support those files, we'll need to support restoring
-                // mtimes even outside the workspace root, which means we'll have to
-                // figure out a way to save these in a relocatable format if we want to
-                // share caches between remote machines.
+                // TODO: What we're doing right now is currently a
+                // simplification, and assumes that all source files are within
+                // the workspace root. This may not be the cause for some files
+                // included via proc-macro, which we should be able to detect by
+                // reading the dep-info for each crate after a full build. To
+                // support those files, we'll need to support restoring mtimes
+                // even outside the workspace root, which means we'll have to
+                // figure out a way to save these in a relocatable format if we
+                // want to share caches between remote machines.
                 let path = workspace.metadata.workspace_root.join(&path);
                 trace!(?path, ?mtime, "setting source file mtime");
                 let file = File::open(&path).context("could not open source file")?;
@@ -339,11 +362,12 @@ fn restore_cache(
                 })
                 .context("could not load cached artifact metadata")?
             {
-                // TODO: Is there optimization here to avoid copying files that we know
-                // don't need to change? We could remember hashes from the first pass,
-                // or re-hash them on this pass. Or maybe we could try linking instead
-                // of copying? But then how do we prevent Cargo from overwriting things
-                // in our CAS? Maybe try NFS?
+                // TODO: Is there optimization here to avoid copying files that
+                // we know don't need to change? We could remember hashes from
+                // the first pass, or re-hash them on this pass. Or maybe we
+                // could try linking instead of copying? But then how do we
+                // prevent Cargo from overwriting things in our CAS? Maybe try
+                // NFS?
                 let (path, mtime, executable, b3sum_hex) =
                     artifact.context("could not load cached artifact metadata")?;
                 let path = workspace_cache_path.join(&path);
@@ -394,69 +418,83 @@ fn record_build_artifacts(
                 "INSERT INTO invocation_artifact (invocation_id, artifact_id, path, mtime, executable) VALUES (?1, ?2, ?3, ?4, ?5)",
             )
             .context("could not prepare artifact invocation insert")?;
-    // Here, we walk the target directory inside of the workspace cache
-    // because "target" in the local directory is a symlink.
+    // Here, we walk the target directory inside of the workspace cache because
+    // "target" in the local directory is a symlink.
     for entry in WalkDir::new(workspace_cache_path.join("target")) {
         let entry = entry.context("could not walk target directory")?;
         if !entry.file_type().is_file() {
             continue;
         }
-        let target_path = entry.path();
-        let target_metadata = entry
-            .metadata()
-            .context("could not get target file metadata")?;
-        let target_mtime: OffsetDateTime = target_metadata
-            .modified()
-            .context("could not get file mtime")?
-            .into();
-        let target_executable = target_metadata.permissions().mode() & 0o111 != 0;
-        // TODO: Improve performance here? `blake3` provides both
-        // streaming and parallel APIs.
-        let target_bytes = fs::read(target_path)
-            .context(format!("could not read artifact {}", target_path.display()))?;
-        let target_b3sum_hash = blake3::hash(&target_bytes);
-        let target_b3sum = target_b3sum_hash.as_bytes().to_owned();
-        let target_b3sum_hex = target_b3sum_hash.to_hex().to_string();
-        trace!(
-            ?target_path,
-            ?target_mtime,
-            target_b3sum = ?target_b3sum_hex,
-            "read artifact"
-        );
+        let artifact_path = entry.path();
+        trace_span!("handle_artifact", ?artifact_path)
+            .in_scope(|| -> anyhow::Result<()> {
+                let artifact_metadata = entry
+                    .metadata()
+                    .context("could not get artifact file metadata")?;
+                let artifact_mtime: OffsetDateTime = artifact_metadata
+                    .modified()
+                    .context("could not get file mtime")?
+                    .into();
+                let artifact_executable = artifact_metadata.permissions().mode() & 0o111 != 0;
+                // TODO: Improve performance here? `blake3` provides both
+                // streaming and parallel APIs.
+                let (artifact_bytes, artifact_b3sum) = trace_span!("read_artifact")
+                    .in_scope(|| -> anyhow::Result<_> {
+                        let artifact_bytes = fs::read(artifact_path).context(format!(
+                            "could not read artifact {}",
+                            artifact_path.display()
+                        ))?;
+                        let artifact_b3sum = blake3::hash(&artifact_bytes);
+                        Ok((artifact_bytes, artifact_b3sum))
+                    })
+                    .context("could not read artifact")?;
+                let artifact_b3sum_bytes = artifact_b3sum.as_bytes().to_owned();
+                let artifact_b3sum_hex = artifact_b3sum.to_hex().to_string();
 
-        let target_file_id = match check_artifact
-            .query_row((&target_b3sum,), |row| row.get::<_, i64>(0))
-            .optional()
-            .context("could not check artifact")?
-        {
-            Some(rid) => rid,
-            None => {
-                // For build artifacts that are new, save them to the
-                // CAS.
-                fs::write(cas_path.join(&target_b3sum_hex), &target_bytes)
-                    .context("could not save artifact to CAS")?;
+                let artifact_file_id = match check_artifact
+                    .query_row((&artifact_b3sum_bytes,), |row| row.get::<_, i64>(0))
+                    .optional()
+                    .context("could not check artifact")?
+                {
+                    Some(rid) => {
+                        trace!("artifact seen before");
+                        rid
+                    }
+                    None => {
+                        trace!("new artifact");
+                        trace_span!("save_artifact")
+                            .in_scope(|| -> anyhow::Result<i64> {
+                                // For build artifacts that are new, save them
+                                // to the CAS.
+                                fs::write(cas_path.join(&artifact_b3sum_hex), &artifact_bytes)
+                                    .context("could not save artifact to CAS")?;
 
-                // Record the build artifact.
-                insert_artifact
-                    .query_row((&target_b3sum,), |row| row.get::<_, i64>(0))
-                    .context("could not insert artifact")?
-            }
-        };
-        // TODO: If paths don't often change, should we optimize this
-        // with delta encoding or something similar?
-        insert_invocation_artifact
-            .execute((
-                invocation_id,
-                target_file_id,
-                target_path
-                    .strip_prefix(&workspace_cache_path)
-                    .unwrap()
-                    .display()
-                    .to_string(),
-                target_mtime,
-                target_executable,
-            ))
-            .context("could not record artifact invocation")?;
+                                // Record the build artifact.
+                                Ok(insert_artifact
+                                    .query_row((&artifact_b3sum_bytes,), |row| row.get::<_, i64>(0))
+                                    .context("could not insert artifact")?)
+                            })
+                            .context("could not save artifact")?
+                    }
+                };
+                // TODO: If paths don't often change, should we optimize this
+                // with delta encoding or something similar?
+                insert_invocation_artifact
+                    .execute((
+                        invocation_id,
+                        artifact_file_id,
+                        artifact_path
+                            .strip_prefix(&workspace_cache_path)
+                            .unwrap()
+                            .display()
+                            .to_string(),
+                        artifact_mtime,
+                        artifact_executable,
+                    ))
+                    .context("could not record artifact invocation")?;
+                Ok(())
+            })
+            .context("could not record build artifact")?;
     }
     Ok(())
 }
