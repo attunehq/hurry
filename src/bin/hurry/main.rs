@@ -11,8 +11,8 @@ mod cargo;
 
 #[derive(Parser)]
 #[command(name = "hurry")]
-#[command(about = "Really, really fast builds", long_about = None)]
-struct Cli {
+#[command(about = "Really, really fast builds")]
+struct HurryArgs {
     #[command(subcommand)]
     command: Command,
     /// Emit flamegraph profiling data
@@ -43,7 +43,7 @@ enum Command {
 #[instrument(level = "debug")]
 async fn main() -> ExitCode {
     // Parse command line arguments.
-    let cli = Cli::parse();
+    let cli = HurryArgs::parse();
 
     // Configure logging.
     let (flame_layer, flame_guard) = if let Some(profile) = cli.profile {
