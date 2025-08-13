@@ -18,7 +18,7 @@ mod cache;
 mod workspace;
 
 #[instrument(level = "debug")]
-pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
+pub fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
     // Load the current workspace.
     let workspace = workspace::Workspace::open()?;
 
@@ -99,7 +99,7 @@ pub async fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
     }
 
     // Execute the build.
-    let exit_status = exec(&argv).await.context("could not execute build")?;
+    let exit_status = exec(&argv).context("could not execute build")?;
 
     // If the build wasn't successful, abort.
     if !exit_status.success() {
@@ -527,7 +527,7 @@ fn record_build_artifacts(
 }
 
 #[instrument(level = "debug")]
-pub async fn exec(argv: &[String]) -> anyhow::Result<ExitStatus> {
+pub fn exec(argv: &[String]) -> anyhow::Result<ExitStatus> {
     let mut cmd = std::process::Command::new("cargo");
     cmd.args(argv);
     Ok(cmd

@@ -39,9 +39,8 @@ enum Command {
     // Cache,
 }
 
-#[tokio::main]
 #[instrument(level = "debug")]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     // Parse command line arguments.
     let cli = Cli::parse();
 
@@ -76,7 +75,7 @@ async fn main() -> ExitCode {
             // TODO: Technically, we should parse the argv properly in case
             // this string is passed as some sort of configuration flag value.
             if argv.contains(&"build".to_string()) {
-                match cargo::build(&argv).await {
+                match cargo::build(&argv) {
                     Ok(exit_status) => {
                         // Flush flamegraph data.
                         if let Some(flame_guard) = flame_guard {
@@ -89,7 +88,7 @@ async fn main() -> ExitCode {
                     Err(e) => panic!("hurry cargo build failed: {:?}", e),
                 }
             } else {
-                match cargo::exec(&argv).await {
+                match cargo::exec(&argv) {
                     Ok(exit_status) => {
                         // Flush flamegraph data.
                         if let Some(flame_guard) = flame_guard {
