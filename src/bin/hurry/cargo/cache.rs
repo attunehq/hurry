@@ -90,7 +90,7 @@ impl WorkspaceCache {
         // Open the workspace metadata database and migrate it if necessary.
         let mut metadb = Connection::open(workspace_cache_path.join("meta.db"))
             .context("could not read workspace cache state")?;
-        trace!(pending_migrations = ?MIGRATIONS.pending_migrations(&mut metadb), "checking migrations");
+        trace!(pending_migrations = ?MIGRATIONS.pending_migrations(&metadb), "checking migrations");
         MIGRATIONS
             .to_latest(&mut metadb)
             .context("could not migrate workspace cache state")?;
@@ -119,20 +119,20 @@ fn ensure_symlink(original: &PathBuf, link: &PathBuf) -> Result<()> {
     // and so cannot distinguish between "there is no file" and "there is a
     // file, but it's a broken symlink", which we need to handle
     // differently.
-    let cache_metadata = fs::symlink_metadata(&link);
+    let cache_metadata = fs::symlink_metadata(link);
     match cache_metadata {
         Ok(metadata) => {
             trace!(?metadata, "link metadata");
             if metadata.is_symlink() {
-                let target_symlink_path = fs::read_link(&link).context("could not read symlink")?;
+                let target_symlink_path = fs::read_link(link).context("could not read symlink")?;
                 trace!(?target_symlink_path, "symlink target");
                 if target_symlink_path == *original {
                     return Ok(());
                 } else {
-                    fs::remove_file(&link).context("could not remove stale symlink")?;
+                    fs::remove_file(link).context("could not remove stale symlink")?;
                 }
             } else if metadata.is_file() {
-                fs::remove_file(&link).context("could not remove file")?;
+                fs::remove_file(link).context("could not remove file")?;
             } else if metadata.is_dir() {
                 // TODO: If there already is a `target/` folder, should we index
                 // its contents? This might not be sound, since we don't have a
@@ -140,8 +140,8 @@ fn ensure_symlink(original: &PathBuf, link: &PathBuf) -> Result<()> {
                 // generated the artifacts in `target/`. (We normally have this
                 // guarantee because we are wrapping an invocation of `cargo
                 // build`).
-                fs::remove_dir_all(&original).context("could not overwrite link target")?;
-                fs::rename(&link, &original).context("could not move link to target")?;
+                fs::remove_dir_all(original).context("could not overwrite link target")?;
+                fs::rename(link, original).context("could not move link to target")?;
             } else {
                 bail!("file has unknown file type: {:?}", metadata.file_type());
             }
@@ -156,7 +156,7 @@ fn ensure_symlink(original: &PathBuf, link: &PathBuf) -> Result<()> {
 
     // If we're here, the workspace target/ cache does not exist, so we can create
     // a symlink.
-    symlink_dir(&original, &link).context("could not create symlink")?;
+    symlink_dir(original, link).context("could not create symlink")?;
 
     Ok(())
 }

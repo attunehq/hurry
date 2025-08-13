@@ -145,7 +145,7 @@ pub fn exec(options: Options) -> Result<()> {
         s.processes()
             .iter()
             .filter(|(_pid, p)| {
-                p.exe().map_or(false, |e| {
+                p.exe().is_some_and(|e| {
                     e.ends_with("rust-analyzer-proc-macro-srv") || e.ends_with("rust-analyzer")
                 })
             })
@@ -410,7 +410,7 @@ fn restore_cache(
                 trace!(?path, ?mtime, b3sum = ?b3sum_hex, "restoring cached artifact");
 
                 if !fs::exists(&path).context("could not check restored artifact path")? {
-                    fs::create_dir_all(&path.parent().unwrap())
+                    fs::create_dir_all(path.parent().unwrap())
                         .context("could not create path to restored artifact")?;
                 }
                 let artifact_cas_path = cas_path.join(&b3sum_hex);
@@ -506,9 +506,9 @@ fn record_build_artifacts(
                                     .context("could not save artifact to CAS")?;
 
                                 // Record the build artifact.
-                                Ok(insert_artifact
+                                insert_artifact
                                     .query_row((&artifact_b3sum_bytes,), |row| row.get::<_, i64>(0))
-                                    .context("could not insert artifact")?)
+                                    .context("could not insert artifact")
                             })
                             .context("could not save artifact")?
                     }
@@ -520,7 +520,7 @@ fn record_build_artifacts(
                         invocation_id,
                         artifact_file_id,
                         artifact_path
-                            .strip_prefix(&workspace_cache_path)
+                            .strip_prefix(workspace_cache_path)
                             .unwrap()
                             .display()
                             .to_string(),
