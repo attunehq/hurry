@@ -173,8 +173,7 @@ fn symlink_dir(original: &PathBuf, link: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-static MIGRATIONS_DIR: Dir =
-    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/bin/hurry/cargo/migrations");
+static MIGRATIONS_DIR: Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/migrations");
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =
     LazyLock::new(|| Migrations::from_directory(&MIGRATIONS_DIR).unwrap());
