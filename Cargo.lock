@@ -356,6 +356,7 @@ dependencies = [
  "time",
  "toml",
  "tracing",
+ "tracing-error",
  "tracing-flame",
  "tracing-subscriber",
  "walkdir",

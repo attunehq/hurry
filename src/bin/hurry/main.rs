@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use color_eyre::{Result, eyre::Context};
 use tracing::{instrument, level_filters::LevelFilter};
+use tracing_error::ErrorLayer;
 use tracing_flame::FlameLayer;
 use tracing_subscriber::{
     Layer as _, fmt::format::FmtSpan, layer::SubscriberExt as _, util::SubscriberInitExt as _,
@@ -36,6 +37,7 @@ enum Command {
 #[instrument]
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    color_eyre::install()?;
 
     let (flame_layer, flame_guard) = if let Some(profile) = cli.profile {
         FlameLayer::with_file(&profile)
@@ -62,6 +64,7 @@ fn main() -> Result<()> {
                 .with_filter(filter),
         )
         .with(flame_layer)
+        .with(ErrorLayer::default())
         .init();
 
     let result = match cli.command {
