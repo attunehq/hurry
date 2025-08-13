@@ -3,6 +3,13 @@ name = "hurry"
 version = "0.1.0"
 edition = "2024"
 
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "forbid"
+unused_imports = "forbid"
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 tracing = "0.1.41"
