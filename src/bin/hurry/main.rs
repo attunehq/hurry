@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use color_eyre::{Result, eyre::Context};
-use tracing::{debug, instrument, level_filters::LevelFilter};
+use tracing::{instrument, level_filters::LevelFilter};
 use tracing_flame::FlameLayer;
 use tracing_subscriber::{
     Layer as _, fmt::format::FmtSpan, layer::SubscriberExt as _, util::SubscriberInitExt as _,
@@ -24,15 +24,8 @@ struct Cli {
 #[derive(Clone, Subcommand)]
 enum Command {
     /// Fast `cargo` builds
-    #[command(dont_delimit_trailing_values = true)]
-    Cargo {
-        #[arg(
-            num_args = ..,
-            trailing_var_arg = true,
-            allow_hyphen_values = true,
-        )]
-        argv: Vec<String>,
-    },
+    #[clap(subcommand)]
+    Cargo(cargo::Command),
     // TODO: /// Manage remote authentication
     // Auth,
 
@@ -53,7 +46,7 @@ fn main() -> Result<()> {
     };
 
     let filter = tracing_subscriber::EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
+        .with_default_directive(LevelFilter::WARN.into())
         .from_env_lossy();
     tracing_subscriber::registry()
         .with(
@@ -72,21 +65,17 @@ fn main() -> Result<()> {
         .init();
 
     let result = match cli.command {
-        Command::Cargo { argv } => {
-            debug!(?argv, "cargo");
-
-            // TODO: Technically, we should parse the argv properly in case
-            // this string is passed as some sort of configuration flag value.
-            if argv.contains(&String::from("build")) {
-                cargo::build(&argv)
-            } else {
-                cargo::exec(&argv)
-            }
-        }
+        Command::Cargo(cmd) => match cmd {
+            cargo::Command::Build(opts) => cargo::build::exec(opts),
+            cargo::Command::Run(opts) => cargo::run::exec(opts),
+        },
     };
 
+    // TODO: Unsure if we need to keep this,
+    // the guard _should_ flush on drop.
     if let Some(flame_guard) = flame_guard {
         flame_guard.flush().context("flush flame_guard")?;
     }
+
     result
 }
