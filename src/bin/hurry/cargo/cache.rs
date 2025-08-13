@@ -9,7 +9,10 @@ use std::os::unix;
 #[cfg(target_family = "windows")]
 use std::os::windows;
 
-use anyhow::Context;
+use color_eyre::{
+    Result,
+    eyre::{Context, bail},
+};
 use homedir::my_home;
 use include_dir::Dir;
 use rusqlite::Connection;
@@ -24,8 +27,8 @@ pub struct WorkspaceCache {
 }
 
 impl WorkspaceCache {
-    #[instrument(level = "debug")]
-    pub fn new<P>(workspace_path: P) -> anyhow::Result<Self>
+    #[instrument]
+    pub fn new<P>(workspace_path: P) -> Result<Self>
     where
         P: AsRef<Path>,
         P: std::fmt::Debug,
@@ -110,7 +113,7 @@ static USER_CACHE_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
 });
 
 #[instrument(level = "trace")]
-fn ensure_symlink(original: &PathBuf, link: &PathBuf) -> anyhow::Result<()> {
+fn ensure_symlink(original: &PathBuf, link: &PathBuf) -> Result<()> {
     // NOTE: We call `fs::symlink_metadata` and match on explicit error
     // cases because `fs::exists` returns `Ok(false)` for broken symlinks
     // and so cannot distinguish between "there is no file" and "there is a
@@ -140,10 +143,7 @@ fn ensure_symlink(original: &PathBuf, link: &PathBuf) -> anyhow::Result<()> {
                 fs::remove_dir_all(&original).context("could not overwrite link target")?;
                 fs::rename(&link, &original).context("could not move link to target")?;
             } else {
-                return Err(anyhow::anyhow!(
-                    "file has unknown file type: {:?}",
-                    metadata.file_type()
-                ));
+                bail!("file has unknown file type: {:?}", metadata.file_type());
             }
         }
         Err(e) => {
@@ -162,13 +162,13 @@ fn ensure_symlink(original: &PathBuf, link: &PathBuf) -> anyhow::Result<()> {
 }
 
 #[cfg(target_family = "windows")]
-fn symlink_dir(original: &PathBuf, link: &PathBuf) -> anyhow::Result<()> {
+fn symlink_dir(original: &PathBuf, link: &PathBuf) -> Result<()> {
     windows::fs::symlink_dir(original, link)?;
     Ok(())
 }
 
 #[cfg(target_family = "unix")]
-fn symlink_dir(original: &PathBuf, link: &PathBuf) -> anyhow::Result<()> {
+fn symlink_dir(original: &PathBuf, link: &PathBuf) -> Result<()> {
     unix::fs::symlink(original, link)?;
     Ok(())
 }

@@ -1,7 +1,8 @@
-use std::process::ExitCode;
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use tracing::{debug, instrument};
+use color_eyre::{Result, eyre::Context};
+use tracing::{debug, instrument, level_filters::LevelFilter};
 use tracing_flame::FlameLayer;
 use tracing_subscriber::{
     Layer as _, fmt::format::FmtSpan, layer::SubscriberExt as _, util::SubscriberInitExt as _,
@@ -10,14 +11,14 @@ use tracing_subscriber::{
 mod cargo;
 
 #[derive(Parser)]
-#[command(name = "hurry")]
-#[command(about = "Really, really fast builds", long_about = None)]
+#[command(name = "hurry", about = "Really, really fast builds", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
+
     /// Emit flamegraph profiling data
     #[arg(short, long, hide(true))]
-    profile: Option<String>,
+    profile: Option<PathBuf>,
 }
 
 #[derive(Clone, Subcommand)]
@@ -39,18 +40,21 @@ enum Command {
     // Cache,
 }
 
-#[instrument(level = "debug")]
-fn main() -> ExitCode {
-    // Parse command line arguments.
+#[instrument]
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Configure logging.
     let (flame_layer, flame_guard) = if let Some(profile) = cli.profile {
-        let (flame_layer, _flame_guard) = FlameLayer::with_file(profile).unwrap();
-        (Some(flame_layer), Some(_flame_guard))
+        FlameLayer::with_file(&profile)
+            .with_context(|| format!("set up profiling to {profile:?}"))
+            .map(|(layer, guard)| (Some(layer), Some(guard)))?
     } else {
         (None, None)
     };
+
+    let filter = tracing_subscriber::EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
@@ -62,45 +66,27 @@ fn main() -> ExitCode {
                 .with_thread_names(true)
                 .with_writer(std::io::stderr)
                 .pretty()
-                .with_filter(tracing_subscriber::EnvFilter::from_default_env()),
+                .with_filter(filter),
         )
         .with(flame_layer)
         .init();
 
-    // Execute the command.
-    match cli.command {
+    let result = match cli.command {
         Command::Cargo { argv } => {
             debug!(?argv, "cargo");
 
             // TODO: Technically, we should parse the argv properly in case
             // this string is passed as some sort of configuration flag value.
-            if argv.contains(&"build".to_string()) {
-                match cargo::build(&argv) {
-                    Ok(exit_status) => {
-                        // Flush flamegraph data.
-                        if let Some(flame_guard) = flame_guard {
-                            flame_guard.flush().unwrap();
-                        }
-                        exit_status
-                            .code()
-                            .map_or(ExitCode::FAILURE, |c| ExitCode::from(c as u8))
-                    }
-                    Err(e) => panic!("hurry cargo build failed: {:?}", e),
-                }
+            if argv.contains(&String::from("build")) {
+                cargo::build(&argv)
             } else {
-                match cargo::exec(&argv) {
-                    Ok(exit_status) => {
-                        // Flush flamegraph data.
-                        if let Some(flame_guard) = flame_guard {
-                            flame_guard.flush().unwrap();
-                        }
-                        exit_status
-                            .code()
-                            .map_or(ExitCode::FAILURE, |c| ExitCode::from(c as u8))
-                    }
-                    Err(e) => panic!("hurry cargo {} failed: {:?}", argv.join(" "), e),
-                }
+                cargo::exec(&argv)
             }
         }
+    };
+
+    if let Some(flame_guard) = flame_guard {
+        flame_guard.flush().context("flush flame_guard")?;
     }
+    result
 }

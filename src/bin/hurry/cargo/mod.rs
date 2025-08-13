@@ -3,10 +3,12 @@ use std::{
     fs::{self, File},
     os::unix::fs::PermissionsExt,
     path::Path,
-    process::ExitStatus,
 };
 
-use anyhow::Context;
+use color_eyre::{
+    Result,
+    eyre::{Context, bail},
+};
 use rusqlite::{OptionalExtension, Transaction};
 use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use time::OffsetDateTime;
@@ -17,8 +19,8 @@ use workspace::Workspace;
 mod cache;
 mod workspace;
 
-#[instrument(level = "debug")]
-pub fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
+#[instrument]
+pub fn build(argv: &[String]) -> Result<()> {
     // Load the current workspace.
     let workspace = workspace::Workspace::open()?;
 
@@ -99,23 +101,23 @@ pub fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
     }
 
     // Execute the build.
-    let exit_status = exec(&argv).context("could not execute build")?;
+    match exec(&argv).context("could not execute build") {
+        Ok(()) => {}
+        Err(err) => {
+            // This should never happen, because when a build occurs after restoring
+            // from cache, it should always succeed (since it restores build
+            // artifacts from a previously successful build).
+            //
+            // If it does happen, it indicates that the cache has been corrupted and
+            // should be cleared.
+            if restore_from_cache {
+                // TODO: Clear the cache.
+            }
 
-    // If the build wasn't successful, abort.
-    if !exit_status.success() {
-        // This should never happen, because when a build occurs after restoring
-        // from cache, it should always succeed (since it restores build
-        // artifacts from a previously successful build).
-        //
-        // If it does happen, it indicates that the cache has been corrupted and
-        // should be cleared.
-        if restore_from_cache {
-            // TODO: Clear the cache.
+            tx.rollback()
+                .context("could not rollback cache transaction after failed build")?;
+            return Err(err);
         }
-
-        tx.rollback()
-            .context("could not rollback cache transaction after failed build")?;
-        return Ok(exit_status);
     }
 
     // If a successful build occurred after restoring from cache, nothing more
@@ -144,7 +146,7 @@ pub fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
                 p.kill();
             });
 
-        return Ok(exit_status);
+        return Ok(());
     }
 
     // Record build artifacts after a successful build if the build was not
@@ -173,15 +175,15 @@ pub fn build(argv: &[String]) -> anyhow::Result<ExitStatus> {
         }
     }
 
-    Ok(exit_status)
+    Ok(())
 }
 
-#[instrument(level = "debug", skip(workspace))]
+#[instrument(skip(workspace))]
 fn read_source_files(
     workspace: &Workspace,
     invocation_id: i64,
     tx: &mut Transaction,
-) -> anyhow::Result<HashSet<i64>> {
+) -> Result<HashSet<i64>> {
     // Prepare database statements.
     let check_source_file = &mut tx
         .prepare("SELECT source_file_id FROM source_file WHERE b3sum = ?1")
@@ -321,20 +323,20 @@ fn read_source_files(
     Ok(cached_invocation_id_candidates)
 }
 
-#[instrument(level = "debug", skip(workspace))]
+#[instrument(skip(workspace))]
 fn restore_cache(
     workspace: &Workspace,
     workspace_cache_path: &Path,
     cas_path: &Path,
     restore_invocation_id: i64,
     tx: &mut Transaction,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     // Restore source file mtimes to the cached mtimes.
     let invocation_source_files = &mut tx
         .prepare("SELECT path, mtime FROM invocation_source_file WHERE invocation_id = ?1")
         .context("could not prepare source file mtimes query")?;
     debug_span!("restore_source_file_mtimes")
-        .in_scope(|| -> anyhow::Result<()> {
+        .in_scope(|| -> Result<()> {
             for source_file in invocation_source_files
                 .query_map((&restore_invocation_id,), |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, OffsetDateTime>(1)?))
@@ -363,7 +365,7 @@ fn restore_cache(
 
     // Swap in built artifact cache.
     debug_span!("restore_built_artifacts")
-        .in_scope(|| -> anyhow::Result<()> {
+        .in_scope(|| -> Result<()> {
             let invocation_artifacts = &mut tx
                 .prepare(
                     r#"
@@ -424,13 +426,13 @@ fn restore_cache(
     Ok(())
 }
 
-#[instrument(level = "debug")]
+#[instrument]
 fn record_build_artifacts(
     workspace_cache_path: &Path,
     cas_path: &Path,
     invocation_id: i64,
     tx: &mut Transaction,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     // Record the build artifacts.
     let check_artifact = &mut tx
         .prepare("SELECT artifact_id FROM artifact WHERE b3sum = ?1")
@@ -454,7 +456,7 @@ fn record_build_artifacts(
         }
         let artifact_path = entry.path();
         trace_span!("handle_artifact", ?artifact_path)
-            .in_scope(|| -> anyhow::Result<()> {
+            .in_scope(|| -> Result<()> {
                 let artifact_metadata = entry
                     .metadata()
                     .context("could not get artifact file metadata")?;
@@ -466,7 +468,7 @@ fn record_build_artifacts(
                 // TODO: Improve performance here? `blake3` provides both
                 // streaming and parallel APIs.
                 let (artifact_bytes, artifact_b3sum) = trace_span!("read_artifact")
-                    .in_scope(|| -> anyhow::Result<_> {
+                    .in_scope(|| -> Result<_> {
                         let artifact_bytes = fs::read(artifact_path).context(format!(
                             "could not read artifact {}",
                             artifact_path.display()
@@ -490,7 +492,7 @@ fn record_build_artifacts(
                     None => {
                         trace!("new artifact");
                         trace_span!("save_artifact")
-                            .in_scope(|| -> anyhow::Result<i64> {
+                            .in_scope(|| -> Result<i64> {
                                 // For build artifacts that are new, save them
                                 // to the CAS.
                                 fs::write(cas_path.join(&artifact_b3sum_hex), &artifact_bytes)
@@ -526,13 +528,18 @@ fn record_build_artifacts(
     Ok(())
 }
 
-#[instrument(level = "debug")]
-pub fn exec(argv: &[String]) -> anyhow::Result<ExitStatus> {
+#[instrument]
+pub fn exec(argv: &[String]) -> Result<()> {
     let mut cmd = std::process::Command::new("cargo");
     cmd.args(argv);
-    Ok(cmd
+    let status = cmd
         .spawn()
         .context("could not spawn cargo")?
         .wait()
-        .context("could complete cargo execution")?)
+        .context("could complete cargo execution")?;
+    if status.success() {
+        Ok(())
+    } else {
+        bail!("cargo exited with status: {status}");
+    }
 }
