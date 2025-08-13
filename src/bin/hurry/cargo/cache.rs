@@ -112,7 +112,7 @@ static USER_CACHE_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
     path
 });
 
-#[instrument(level = "trace")]
+#[instrument]
 fn ensure_symlink(original: &PathBuf, link: &PathBuf) -> Result<()> {
     // NOTE: We call `fs::symlink_metadata` and match on explicit error
     // cases because `fs::exists` returns `Ok(false)` for broken symlinks

@@ -1,15 +1,16 @@
-use camino::Utf8PathBuf;
 use cargo_metadata::Metadata;
 use color_eyre::{Result, eyre::Context};
-use tracing::{instrument, trace};
+use tracing::{debug, instrument, trace};
 use walkdir::WalkDir;
 
+/// Parsed data about the current workspace.
 #[derive(Debug)]
 pub struct Workspace {
     pub metadata: Metadata,
 }
 
 impl Workspace {
+    /// Parse metadata about the current workspace.
     #[instrument]
     pub fn open() -> Result<Self> {
         // TODO: Should these be parsed higher up and passed in?
@@ -82,13 +83,13 @@ impl Workspace {
                 let target_root_folder = target_root
                     .parent()
                     .expect("module root should be a file in a folder");
+                debug!(
+                    ?target_root,
+                    ?target_root_folder,
+                    "adding target root to walk"
+                );
                 WalkDir::new(target_root_folder).into_iter()
             })
         })
-    }
-
-    #[instrument(skip(self))]
-    pub fn output_dir(&self) -> &Utf8PathBuf {
-        &self.metadata.target_directory
     }
 }
