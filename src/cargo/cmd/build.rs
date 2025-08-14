@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, FileTimes},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use clap::Args;
@@ -8,6 +8,7 @@ use color_eyre::{
     Result,
     eyre::{Context, OptionExt},
 };
+use dashmap::DashSet;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use tracing::{info, instrument, trace, warn};
 use walkdir::WalkDir;
@@ -137,6 +138,8 @@ fn cache_target_from_workspace(
 #[instrument]
 fn copy_dir(source: &Path, destination: &Path) -> Result<()> {
     info!(?source, ?destination, "copying directory recursively");
+    let created_parents = DashSet::<PathBuf, _>::with_hasher(ahash::RandomState::default());
+
     WalkDir::new(source)
         .into_iter()
         .par_bridge()
@@ -147,36 +150,59 @@ fn copy_dir(source: &Path, destination: &Path) -> Result<()> {
             let dst = destination.join(rel);
 
             // TODO: handle symlinks properly
-            if src.is_symlink() {
-                warn!(?src, "skipping symlink");
-            } else if entry.path().is_dir() {
-                // We do nothing here, because we already create parent directories
-                // when copying files.
-            } else {
-                // TODO: only create parents that haven't already been created.
-                let parent = dst.parent().ok_or_eyre("get parent directory")?;
-                trace!(?src, ?dst, ?parent, "create parent directory");
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("create parent directory {parent:?}"))?;
-
-                // TODO: only copy if the file content has changed.
-                trace!(?src, ?dst, "copy file");
-                fs::copy(src, &dst).with_context(|| format!("copy {src:?} to {dst:?}"))?;
-
-                trace!(?src, ?dst, "set metadata on destination");
-                let src_meta = entry.path().metadata().context("get source metadata")?;
-                let dst_meta = File::options().write(true).open(&dst)?;
-                let times = FileTimes::new()
-                    .set_accessed(src_meta.accessed()?)
-                    .set_modified(src_meta.modified()?);
-                dst_meta
-                    .set_times(times)
-                    .context("update destination file metadata")?;
-                dst_meta
-                    .sync_all()
-                    .context("sync destination file metadata")?;
+            if !src.is_file() {
+                if src.is_symlink() {
+                    warn!(?src, "skipping symlink");
+                }
+                return Ok(());
             }
+
+            // We use the `created_parents` dashset to ensure that we actually only create any given parent
+            // once per overall copy operation.
+            create_parents_of(&created_parents, destination, rel)
+                .with_context(|| format!("create parents of {rel:?}"))?;
+
+            // TODO: only copy if the file content has changed.
+            trace!(?src, ?dst, "copy file");
+            fs::copy(src, &dst).with_context(|| format!("copy {src:?} to {dst:?}"))?;
+
+            trace!(?src, ?dst, "set metadata on destination");
+            let src_meta = entry.path().metadata().context("get source metadata")?;
+            let dst_meta = File::options().write(true).open(&dst)?;
+            let times = FileTimes::new()
+                .set_accessed(src_meta.accessed()?)
+                .set_modified(src_meta.modified()?);
+            dst_meta
+                .set_times(times)
+                .context("update destination file metadata")?;
+            dst_meta
+                .sync_all()
+                .context("sync destination file metadata")?;
 
             Ok(())
         })
+}
+
+#[instrument(skip(created_parents))]
+fn create_parents_of(
+    created_parents: &DashSet<PathBuf, ahash::RandomState>,
+    destination_root: &Path,
+    file_rel: &Path,
+) -> Result<()> {
+    let parent_rel = file_rel.parent().ok_or_eyre("get parent directory")?;
+    if created_parents.contains(parent_rel) {
+        trace!(?parent_rel, "parent directory already exists");
+        return Ok(());
+    }
+
+    let parent = destination_root.join(parent_rel);
+    trace!(?parent, ?parent_rel, "create parent directory");
+    fs::create_dir_all(&parent).with_context(|| format!("create parent directory {parent:?}"))?;
+
+    // Since we're doing a `create_dir_all`, we know all the parent segments
+    // exist after creating this directory.
+    for segment in parent_rel.ancestors() {
+        created_parents.insert(segment.to_path_buf());
+    }
+    Ok(())
 }

@@ -19,3 +19,5 @@ rayon = "1.11.0"
 tap = "1.0.1"
 hex = "0.4.3"
 fslock = "0.2.1"
+dashmap = { version = "6.1.0", features = ["rayon"] }
+ahash = "0.8.12"
