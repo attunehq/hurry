@@ -16,11 +16,11 @@ use tracing::instrument;
 
 /// The workspace cache is unlocked.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct CacheUnlocked;
+pub struct Unlocked;
 
 /// The workspace cache is locked.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct CacheLocked;
+pub struct Locked;
 
 /// Represents a workspace cache.
 ///
@@ -63,7 +63,7 @@ pub struct WorkspaceCache<State> {
     pub cas: PathBuf,
 }
 
-impl WorkspaceCache<CacheUnlocked> {
+impl WorkspaceCache<Unlocked> {
     /// Construct a new cache instance for the given workspace path.
     #[instrument]
     pub fn new(workspace: impl AsRef<Path> + std::fmt::Debug) -> Result<Self> {
@@ -113,7 +113,7 @@ impl WorkspaceCache<CacheUnlocked> {
     /// all instances of `hurry`.
     //
     // TODO: make an intermediate type that we can just drop to unlock.
-    pub fn lock(mut self) -> Result<WorkspaceCache<CacheLocked>> {
+    pub fn lock(mut self) -> Result<WorkspaceCache<Locked>> {
         self.lock.lock().context("lock workspace cache")?;
         Ok(WorkspaceCache {
             private: PhantomData,
@@ -126,14 +126,14 @@ impl WorkspaceCache<CacheUnlocked> {
     }
 }
 
-impl WorkspaceCache<CacheLocked> {
+impl WorkspaceCache<Locked> {
     /// Unlock the workspace cache.
     ///
     /// ## Invariant
     ///
     /// An unlocked `WorkspaceCache` instance MUST be safe to use for
     /// all instances of `hurry`.
-    pub fn unlock(mut self) -> Result<WorkspaceCache<CacheUnlocked>> {
+    pub fn unlock(mut self) -> Result<WorkspaceCache<Unlocked>> {
         self.lock.unlock().context("unlock workspace cache")?;
         Ok(WorkspaceCache {
             private: PhantomData,

@@ -13,7 +13,7 @@ use tracing::{info, instrument, trace, warn};
 use walkdir::WalkDir;
 
 use crate::cargo::{
-    cache::{CacheLocked, WorkspaceCache},
+    cache::{Locked, WorkspaceCache},
     invoke,
     workspace::Workspace,
 };
@@ -66,16 +66,16 @@ pub fn exec(options: Options) -> Result<()> {
 fn exec_inner(
     options: Options,
     workspace: Workspace,
-    workspace_cache: &WorkspaceCache<CacheLocked>,
+    cache: &WorkspaceCache<Locked>,
 ) -> Result<()> {
     // If we have a `target` directory,
     // we currently assume that we have already built this lockfile
     // and restore it from the cache unconditionally.
-    let cache_exists = workspace_cache.target.exists();
+    let cache_exists = cache.target.exists();
     if cache_exists {
         info!("target directory exists, skipping build");
         info!("Restoring target directory from cache");
-        restore_target_from_cache(&workspace, workspace_cache)
+        restore_target_from_cache(&workspace, cache)
             .context("restore target directory from cache")?;
     }
 
@@ -92,9 +92,12 @@ fn exec_inner(
     // We don't _always_ cache because since we don't currently
     // cache based on first-party code changes so this would lead to
     // lots of unnecessary copies.
+    //
+    // TODO: watch and cache the target directory _as the build occurs_
+    // rather than having to copy it all at the end.
     if !cache_exists {
         info!("Caching built target directory");
-        cache_target_from_workspace(&workspace, workspace_cache)?;
+        cache_target_from_workspace(&workspace, cache)?;
     }
 
     Ok(())
@@ -108,7 +111,7 @@ fn exec_inner(
 #[instrument(skip_all)]
 fn restore_target_from_cache(
     workspace: &Workspace,
-    workspace_cache: &WorkspaceCache<CacheLocked>,
+    workspace_cache: &WorkspaceCache<Locked>,
 ) -> Result<()> {
     copy_dir(
         &workspace_cache.target,
@@ -120,7 +123,7 @@ fn restore_target_from_cache(
 #[instrument(skip_all)]
 fn cache_target_from_workspace(
     workspace: &Workspace,
-    workspace_cache: &WorkspaceCache<CacheLocked>,
+    workspace_cache: &WorkspaceCache<Locked>,
 ) -> Result<()> {
     copy_dir(
         workspace.metadata.target_directory.as_std_path(),
