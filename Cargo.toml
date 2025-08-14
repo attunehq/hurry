@@ -21,3 +21,8 @@ tracing-flame = "0.2.0"
 sysinfo = { version = "0.35.1", features = ["apple-sandbox"] }
 color-eyre = "0.6.5"
 tracing-error = "0.2.1"
+lockfile = "0.4.0"
+rayon = "1.11.0"
+tap = "1.0.1"
+hex = "0.4.3"
+fslock = "0.2.1"
