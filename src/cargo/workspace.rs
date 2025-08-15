@@ -1,17 +1,18 @@
-use anyhow::Context;
-use camino::Utf8PathBuf;
 use cargo_metadata::Metadata;
-use tracing::{instrument, trace};
+use color_eyre::{Result, eyre::Context};
+use tracing::{debug, instrument, trace};
 use walkdir::WalkDir;
 
+/// Parsed data about the current workspace.
 #[derive(Debug)]
 pub struct Workspace {
     pub metadata: Metadata,
 }
 
 impl Workspace {
-    #[instrument(level = "debug")]
-    pub fn open() -> anyhow::Result<Self> {
+    /// Parse metadata about the current workspace.
+    #[instrument]
+    pub fn open() -> Result<Self> {
         // TODO: Should these be parsed higher up and passed in?
         let mut args = std::env::args().skip_while(|val| !val.starts_with("--manifest-path"));
 
@@ -38,7 +39,7 @@ impl Workspace {
     // Note that this iterator may contain the same module (i.e. file) multiple
     // times if it is included from multiple target root directories (e.g. if a
     // module is contained in both a `library` and a `bin` target).
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(skip(self))]
     pub fn source_files(&self) -> impl Iterator<Item = Result<walkdir::DirEntry, walkdir::Error>> {
         let packages = self.metadata.workspace_packages();
         trace!(?packages, "workspace packages");
@@ -82,13 +83,13 @@ impl Workspace {
                 let target_root_folder = target_root
                     .parent()
                     .expect("module root should be a file in a folder");
+                debug!(
+                    ?target_root,
+                    ?target_root_folder,
+                    "adding target root to walk"
+                );
                 WalkDir::new(target_root_folder).into_iter()
             })
         })
-    }
-
-    #[instrument(level = "debug", skip(self))]
-    pub fn output_dir(&self) -> &Utf8PathBuf {
-        &self.metadata.target_directory
     }
 }
