@@ -5,9 +5,7 @@ use color_eyre::{Result, eyre::Context};
 use tracing::{instrument, level_filters::LevelFilter};
 use tracing_error::ErrorLayer;
 use tracing_flame::FlameLayer;
-use tracing_subscriber::{
-    Layer as _, fmt::format::FmtSpan, layer::SubscriberExt as _, util::SubscriberInitExt as _,
-};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod cargo;
 
@@ -47,24 +45,27 @@ fn main() -> Result<()> {
         (None, None)
     };
 
-    let filter = tracing_subscriber::EnvFilter::builder()
-        .with_default_directive(LevelFilter::WARN.into())
-        .from_env_lossy();
     tracing_subscriber::registry()
+        .with(ErrorLayer::default())
         .with(
-            tracing_subscriber::fmt::layer()
-                .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
-                .with_file(true)
-                .with_line_number(true)
-                .with_target(true)
-                .with_thread_ids(true)
-                .with_thread_names(true)
-                .with_writer(std::io::stderr)
-                .pretty()
-                .with_filter(filter),
+            tracing_tree::HierarchicalLayer::default()
+                .with_indent_lines(true)
+                .with_indent_amount(2)
+                .with_thread_ids(false)
+                .with_thread_names(false)
+                .with_verbose_exit(false)
+                .with_verbose_entry(false)
+                .with_deferred_spans(true)
+                .with_bracketed_fields(true)
+                .with_span_retrace(true)
+                .with_targets(false),
+        )
+        .with(
+            tracing_subscriber::EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
         )
         .with(flame_layer)
-        .with(ErrorLayer::default())
         .init();
 
     let result = match cli.command {
