@@ -1,179 +1,172 @@
 use std::{
-    fs,
+    fs::{self, File},
+    io::BufReader,
+    marker::PhantomData,
     path::{Path, PathBuf},
-    sync::LazyLock,
 };
-
-#[cfg(target_family = "unix")]
-use std::os::unix;
-#[cfg(target_family = "windows")]
-use std::os::windows;
 
 use color_eyre::{
     Result,
-    eyre::{Context, bail},
+    eyre::{Context, OptionExt},
 };
+use fslock::LockFile;
 use homedir::my_home;
-use include_dir::Dir;
-use rusqlite::Connection;
-use rusqlite_migration::Migrations;
-use tracing::{debug, instrument, trace};
+use tap::Pipe;
+use tracing::instrument;
 
+/// The workspace cache is unlocked.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Unlocked;
+
+/// The workspace cache is locked.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Locked;
+
+/// Represents a workspace cache.
+///
+/// ## Invariant
+///
+/// An unlocked `WorkspaceCache` instance MUST be safe to use for
+/// all instances of `hurry`.
+///
+/// Given this, you MUST lock the cache before using it.
 #[derive(Debug)]
-pub struct WorkspaceCache {
-    pub workspace_cache_path: PathBuf,
-    pub cas_path: PathBuf,
-    pub metadb: Connection,
+pub struct WorkspaceCache<State> {
+    /// Prevents instantiating the struct directly
+    /// outside of this module.
+    private: PhantomData<State>,
+
+    /// Locks the workspace cache.
+    lock: LockFile,
+
+    /// The root directory of the workspace cache.
+    ///
+    /// Validated to exist when `WorkspaceCache` is constructed.
+    pub root: PathBuf,
+
+    /// The `target` directory within the workspace cache.
+    ///
+    /// If this exists, it is a known-valid target directory
+    /// for the state of the workspace hash.
+    pub target: PathBuf,
+
+    /// The hash of the workspace cache.
+    pub hash: Vec<u8>,
+
+    /// Content-addressable shared storage directory.
+    ///
+    /// This is a shared directory for all builds,
+    /// but is stored in the cache just so that it doesn't have to be
+    /// recomputed every time we want to reference this path.
+    ///
+    /// Validated to exist when `WorkspaceCache` is constructed.
+    pub cas: PathBuf,
 }
 
-impl WorkspaceCache {
+impl WorkspaceCache<Unlocked> {
+    /// Construct a new cache instance for the given workspace path.
     #[instrument]
-    pub fn new<P>(workspace_path: P) -> Result<Self>
-    where
-        P: AsRef<Path>,
-        P: std::fmt::Debug,
-    {
-        // Check whether the user cache exists, and create it if it
-        // doesn't.
-        let user_cache_path = &USER_CACHE_PATH;
-        trace!(?user_cache_path, "checking user cache");
-        if !fs::exists(&**user_cache_path).context("could not read user hurry cache")? {
-            fs::create_dir_all(&**user_cache_path).context("could not create user hurry cache")?;
-        }
+    pub fn new(workspace: impl AsRef<Path> + std::fmt::Debug) -> Result<Self> {
+        let workspace = workspace.as_ref();
 
-        // Check whether the CAS exists, and create it if it doesn't.
-        let cas_path = user_cache_path.join("cas");
-        trace!(?cas_path, "checking CAS");
-        if !fs::exists(&cas_path).context("could not read CAS")? {
-            fs::create_dir_all(&cas_path).context("could not create CAS")?;
-        }
+        // Ensure user cache directory exists.
+        let cache_root = user_cache_path().context("get user cache path")?;
+        fs::create_dir_all(&cache_root).context("ensure user hurry cache exists")?;
 
-        // Check whether the workspace cache exists, and create it if it
-        // doesn't.
-        let workspace_cache_path = {
-            let mut path = user_cache_path.join("workspaces");
-            path.push(
-                blake3::hash(workspace_path.as_ref().as_os_str().as_encoded_bytes())
-                    .to_hex()
-                    .as_str(),
-            );
-            path
-        };
-        trace!(?workspace_cache_path, "checking workspace cache");
-        if !fs::exists(&workspace_cache_path).context("could not read workspace hurry cache")? {
-            fs::create_dir_all(&workspace_cache_path)
-                .context("could not create workspace hurry cache")?;
-        }
+        // Ensure CAS directory exists.
+        let cas = cache_root.join("cas");
+        fs::create_dir_all(&cas).context("ensure CAS exists")?;
 
-        // Check whether the workspace target cache exists, and create it if it
-        // doesn't.
-        let target_cache_path = workspace_cache_path.join("target");
-        trace!(?target_cache_path, "checking workspace target cache");
-        if !fs::exists(&target_cache_path).context("could not read workspace target cache")? {
-            fs::create_dir_all(&target_cache_path)
-                .context("could not create workspace target cache")?;
-        }
+        // Ensure workspace cache directory exists.
+        // We intentionally don't create the `target` directory if it doesn't exist;
+        // it needs to only exist if it's known to be valid.
+        let lockfile = workspace.join("Cargo.lock");
+        let lockfile_hash = hash_file_content(&lockfile).context("hash workspace lockfile")?;
+        let workspace_cache_root = cache_root.join("ws").join(hex::encode(&lockfile_hash));
+        let workspace_cache_target = workspace_cache_root.join("target");
+        fs::create_dir_all(&workspace_cache_root).context("ensure workspace cache exists")?;
 
-        // Check whether the workspace target/ is correctly linked to the
-        // workspace target cache, and create a symlink if it is not.
-        //
-        // NOTE: We call `fs::symlink_metadata` and match on explicit error
-        // cases because `fs::exists` returns `Ok(false)` for broken symlinks
-        // and so cannot distinguish between "there is no file" and "there is a
-        // file, but it's a broken symlink", which we need to handle
-        // differently.
-        let target_path = workspace_path.as_ref().join("target");
-        trace!(?target_path, "checking workspace target/");
-        ensure_symlink(&target_cache_path, &target_path)
-            .context("could not symlink workspace target/ to cache")?;
-
-        // Open the workspace metadata database and migrate it if necessary.
-        let mut metadb = Connection::open(workspace_cache_path.join("meta.db"))
-            .context("could not read workspace cache state")?;
-        trace!(pending_migrations = ?MIGRATIONS.pending_migrations(&metadb), "checking migrations");
-        MIGRATIONS
-            .to_latest(&mut metadb)
-            .context("could not migrate workspace cache state")?;
+        // Prevents concurrent access to the workspace cache
+        // from other `hurry` instances.
+        let lock = workspace_cache_root.join("lock");
+        let lock = LockFile::open(&lock).context("open workspace lockfile")?;
 
         Ok(Self {
-            metadb,
-            workspace_cache_path,
-            cas_path,
+            private: PhantomData,
+            root: workspace_cache_root,
+            target: workspace_cache_target,
+            hash: lockfile_hash,
+            cas,
+            lock,
+        })
+    }
+
+    /// Lock the workspace cache.
+    ///
+    /// Make sure to call `unlock` when you're done,
+    /// unless you're going to drop the `WorkspaceCache` instance entirely-
+    /// the lock will be released in that case.
+    ///
+    /// ## Invariant
+    ///
+    /// An unlocked `WorkspaceCache` instance MUST be safe to use for
+    /// all instances of `hurry`.
+    //
+    // TODO: make an intermediate type that we can just drop to unlock.
+    pub fn lock(mut self) -> Result<WorkspaceCache<Locked>> {
+        self.lock.lock().context("lock workspace cache")?;
+        Ok(WorkspaceCache {
+            private: PhantomData,
+            root: self.root,
+            target: self.target,
+            cas: self.cas,
+            lock: self.lock,
+            hash: self.hash,
         })
     }
 }
 
-static USER_CACHE_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
-    let mut path = my_home().unwrap().unwrap();
-    path.push(".cache");
-    path.push("hurry");
-    path.push("v1");
-    path.push("cargo");
-    path
-});
-
-#[instrument]
-fn ensure_symlink(original: &PathBuf, link: &PathBuf) -> Result<()> {
-    // NOTE: We call `fs::symlink_metadata` and match on explicit error
-    // cases because `fs::exists` returns `Ok(false)` for broken symlinks
-    // and so cannot distinguish between "there is no file" and "there is a
-    // file, but it's a broken symlink", which we need to handle
-    // differently.
-    let cache_metadata = fs::symlink_metadata(link);
-    match cache_metadata {
-        Ok(metadata) => {
-            trace!(?metadata, "link metadata");
-            if metadata.is_symlink() {
-                let target_symlink_path = fs::read_link(link).context("could not read symlink")?;
-                trace!(?target_symlink_path, "symlink target");
-                if target_symlink_path == *original {
-                    return Ok(());
-                } else {
-                    fs::remove_file(link).context("could not remove stale symlink")?;
-                }
-            } else if metadata.is_file() {
-                fs::remove_file(link).context("could not remove file")?;
-            } else if metadata.is_dir() {
-                // TODO: If there already is a `target/` folder, should we index
-                // its contents? This might not be sound, since we don't have a
-                // guarantee that the current `src/` are the files that
-                // generated the artifacts in `target/`. (We normally have this
-                // guarantee because we are wrapping an invocation of `cargo
-                // build`).
-                fs::remove_dir_all(original).context("could not overwrite link target")?;
-                fs::rename(link, original).context("could not move link to target")?;
-            } else {
-                bail!("file has unknown file type: {:?}", metadata.file_type());
-            }
-        }
-        Err(e) => {
-            debug!(read_error = ?e, "could not read file");
-            if e.kind() != std::io::ErrorKind::NotFound {
-                return Err(e).context("could not check whether file exists");
-            }
-        }
+impl WorkspaceCache<Locked> {
+    /// Unlock the workspace cache.
+    ///
+    /// ## Invariant
+    ///
+    /// An unlocked `WorkspaceCache` instance MUST be safe to use for
+    /// all instances of `hurry`.
+    pub fn unlock(mut self) -> Result<WorkspaceCache<Unlocked>> {
+        self.lock.unlock().context("unlock workspace cache")?;
+        Ok(WorkspaceCache {
+            private: PhantomData,
+            root: self.root,
+            target: self.target,
+            cas: self.cas,
+            lock: self.lock,
+            hash: self.hash,
+        })
     }
-
-    // If we're here, the workspace target/ cache does not exist, so we can create
-    // a symlink.
-    symlink_dir(original, link).context("could not create symlink")?;
-
-    Ok(())
 }
 
-#[cfg(target_family = "windows")]
-fn symlink_dir(original: &PathBuf, link: &PathBuf) -> Result<()> {
-    windows::fs::symlink_dir(original, link)?;
-    Ok(())
+fn hash_file_content(path: &PathBuf) -> Result<Vec<u8>> {
+    let mut hasher = blake3::Hasher::new();
+
+    let file = File::open(path).with_context(|| format!("open {path:?}"))?;
+    let mut reader = BufReader::new(file);
+
+    std::io::copy(&mut reader, &mut hasher)?;
+    Ok(hasher.finalize().as_bytes().to_vec())
 }
 
-#[cfg(target_family = "unix")]
-fn symlink_dir(original: &PathBuf, link: &PathBuf) -> Result<()> {
-    unix::fs::symlink(original, link)?;
-    Ok(())
+/// Determine the canonical cache path for the current user, if possible.
+///
+/// This can fail if the user has no home directory,
+/// or if the home directory cannot be accessed.
+fn user_cache_path() -> Result<PathBuf> {
+    my_home()
+        .context("get user home directory")?
+        .ok_or_eyre("user has no home directory")?
+        .join(".cache")
+        .join("hurry")
+        .join("v1")
+        .join("cargo")
+        .pipe(Ok)
 }
-
-static MIGRATIONS_DIR: Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/migrations");
-
-static MIGRATIONS: LazyLock<Migrations<'static>> =
-    LazyLock::new(|| Migrations::from_directory(&MIGRATIONS_DIR).unwrap());
