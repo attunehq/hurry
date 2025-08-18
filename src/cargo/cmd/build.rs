@@ -1,3 +1,9 @@
+//! Builds Cargo projects using an optimized cache.
+//!
+//! Reference:
+//! - `docs/DESIGN.md`
+//! - `docs/development/cargo.md`
+
 use std::{
     fs::{self, File},
     path::{Path, PathBuf},
@@ -15,10 +21,12 @@ use rayon::iter::{ParallelBridge, ParallelIterator};
 use tracing::{debug, info, instrument, trace, warn};
 use walkdir::WalkDir;
 
-use crate::cargo::{
-    cache::{Locked, WorkspaceCache},
-    invoke,
-    workspace::Workspace,
+use crate::{
+    cargo::{
+        invoke,
+        workspace::{Cache, Locked, Workspace},
+    },
+    hash_file_content,
 };
 
 /// Options for `cargo build`
@@ -36,29 +44,33 @@ pub struct Options {
 #[instrument]
 pub fn exec(options: Options) -> Result<()> {
     let start = Instant::now();
-    let workspace = Workspace::open().context("open workspace")?;
+    let workspace = Workspace::current().context("open workspace")?;
 
     // TODO: we need to separate various cargo flags in the cache
     // - Release vs debug builds
     // - Different sets of features
     // - Different targets (linux/x86_64 vs darwin/aarch64, etc)
     // - Probably more
-    let workspace_cache = WorkspaceCache::new(&workspace.metadata.workspace_root)
-        .context("create workspace cache")?;
-
-    // TODO: only lock if we need to write to the cache.
-    // Probably we need to move to a "staging area" and a "committed area"
-    // for the cache.
     //
-    // TODO: Only log that we're waiting on the lock if it takes longer than
-    // a certain amount of time.
-    info!("waiting on workspace cache lock");
-    let workspace_cache = workspace_cache.lock().context("lock workspace cache")?;
+    // TODO: we currently assume one cache key is good enough for the whole
+    // workspace, but this is definitely not correct. We'll need to heavily use
+    // the CAS to cache individual items from different workspaces. In reality,
+    // the "cache" as a concept may go away in favor of pure CAS
+    // (maybe separated by build tool).
+    let key = hash_file_content(workspace.dir().join("Cargo.lock"))
+        .with_context(|| format!("hash `Cargo.lock` inside {}", workspace.dir()))
+        .map(hex::encode)?;
+    let cache = workspace
+        .open_cache(&key)
+        .with_context(|| format!("open cache for key {key}"))?;
+    let cache = cache
+        .lock()
+        .with_context(|| format!("lock cache for key {key}"))?;
 
     // This is split into an inner function so that we can reliably
     // release the lock if it fails.
-    let result = exec_inner(start, options, workspace, &workspace_cache);
-    if let Err(err) = workspace_cache.unlock() {
+    let result = exec_inner(start, options, &workspace, &cache);
+    if let Err(err) = cache.unlock() {
         // This shouldn't happen, but if it does, we should warn users.
         // TODO: figure out a way to recover.
         warn!("unable to release workspace cache lock: {err:?}");
@@ -73,16 +85,13 @@ pub fn exec(options: Options) -> Result<()> {
 fn exec_inner(
     start: Instant,
     options: Options,
-    workspace: Workspace,
-    cache: &WorkspaceCache<Locked>,
+    workspace: &Workspace,
+    cache: &Cache<'_, Locked>,
 ) -> Result<()> {
-    // If we have a `target` directory,
-    // we currently assume that we have already built this lockfile
-    // and restore it from the cache unconditionally.
-    let cache_exists = cache.target.exists();
+    let cache_exists = !cache.is_empty().context("check if cache is empty")?;
     if cache_exists {
-        info!(?cache.target, "Restoring target directory from cache");
-        match restore_target_from_cache(&workspace, cache) {
+        info!(?cache, "Restoring target directory from cache");
+        match restore_target_from_cache(&workspace, &cache) {
             Ok(_) => info!(elapsed = ?start.elapsed(), "restored cache"),
             Err(err) => warn!(elapsed = ?start.elapsed(), ?err, "failed to restore cache"),
         }
@@ -93,7 +102,7 @@ fn exec_inner(
     // this is because we currently only cache based on lockfile hash;
     // if the first-party code has changed we'll need to rebuild.
     info!("Building target directory");
-    invoke("build", &options.argv).context("build with cargo")?;
+    invoke(&workspace, "build", &options.argv).context("build with cargo")?;
 
     // If we didn't have a cache, we cache the target directory
     // after the build finishes.
@@ -106,7 +115,7 @@ fn exec_inner(
     // rather than having to copy it all at the end.
     if !cache_exists {
         info!("Caching built target directory");
-        match cache_target_from_workspace(&workspace, cache) {
+        match cache_target_from_workspace(&workspace, &cache) {
             Ok(_) => info!(elapsed = ?start.elapsed(), "cached target directory"),
             Err(err) => warn!(elapsed = ?start.elapsed(), ?err, "failed to cache target directory"),
         }
@@ -121,26 +130,14 @@ fn exec_inner(
 // Implement with copy-on-write when possible;
 // otherwise fall back to a symlink.
 #[instrument(skip_all)]
-fn restore_target_from_cache(
-    workspace: &Workspace,
-    workspace_cache: &WorkspaceCache<Locked>,
-) -> Result<()> {
-    copy_dir(
-        &workspace_cache.target,
-        workspace.metadata.target_directory.as_std_path(),
-    )
+fn restore_target_from_cache(workspace: &Workspace, cache: &Cache<Locked>) -> Result<()> {
+    copy_dir(cache.root(), workspace.target())
 }
 
 /// Cache the target directory to the cache.
 #[instrument(skip_all)]
-fn cache_target_from_workspace(
-    workspace: &Workspace,
-    workspace_cache: &WorkspaceCache<Locked>,
-) -> Result<()> {
-    copy_dir(
-        workspace.metadata.target_directory.as_std_path(),
-        &workspace_cache.target,
-    )
+fn cache_target_from_workspace(workspace: &Workspace, cache: &Cache<Locked>) -> Result<()> {
+    copy_dir(workspace.target(), cache.root())
 }
 
 /// Recursively copy a directory in parallel.
@@ -155,7 +152,12 @@ fn cache_target_from_workspace(
 // - `fingerprint`: https://github.com/rust-lang/cargo/blob/bc89bffa5987d4af8f71011c7557119b39e44a65/src/cargo/core/compiler/fingerprint/mod.rs#L539-L613
 // - `cargo vendor`: https://doc.rust-lang.org/cargo/commands/cargo-vendor.html
 #[instrument]
-fn copy_dir(source: &Path, destination: &Path) -> Result<()> {
+fn copy_dir(
+    source: impl AsRef<Path> + std::fmt::Debug,
+    destination: impl AsRef<Path> + std::fmt::Debug,
+) -> Result<()> {
+    let source = source.as_ref();
+    let destination = destination.as_ref();
     debug!(?source, ?destination, "copying directory recursively");
 
     // We use this to ensure that we actually only create any given parent

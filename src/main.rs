@@ -1,13 +1,18 @@
-use std::path::PathBuf;
-
+use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
 use clap::{Parser, Subcommand};
-use color_eyre::{Result, eyre::Context};
+use color_eyre::{
+    Result,
+    eyre::{Context, OptionExt},
+};
+use homedir::my_home;
+use tap::{Pipe, TryConv};
 use tracing::{instrument, level_filters::LevelFilter};
 use tracing_error::ErrorLayer;
 use tracing_flame::FlameLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod cargo;
+mod cas;
 
 #[derive(Parser)]
 #[command(name = "hurry", about = "Really, really fast builds", version)]
@@ -17,7 +22,7 @@ struct Cli {
 
     /// Emit flamegraph profiling data
     #[arg(short, long, hide(true))]
-    profile: Option<PathBuf>,
+    profile: Option<Utf8PathBuf>,
 }
 
 #[derive(Clone, Subcommand)]
@@ -82,4 +87,31 @@ fn main() -> Result<()> {
     }
 
     result
+}
+
+/// Determine the canonical cache path for the current user, if possible.
+///
+/// This can fail if the user has no home directory,
+/// or if the home directory cannot be accessed.
+fn user_global_cache_path() -> Result<Utf8PathBuf> {
+    my_home()
+        .context("get user home directory")?
+        .ok_or_eyre("user has no home directory")?
+        .try_conv::<Utf8PathBuf>()
+        .context("user home directory is not utf8")?
+        .join(".cache")
+        .join("hurry")
+        .join("v2")
+        .pipe(Ok)
+}
+
+fn hash_file_content(path: impl AsRef<Utf8Path>) -> Result<Vec<u8>> {
+    let path = path.as_ref();
+    let mut hasher = blake3::Hasher::new();
+
+    let file = std::fs::File::open(path).with_context(|| format!("open {path:?}"))?;
+    let mut reader = std::io::BufReader::new(file);
+
+    std::io::copy(&mut reader, &mut hasher)?;
+    Ok(hasher.finalize().as_bytes().to_vec())
 }

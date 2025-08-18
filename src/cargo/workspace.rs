@@ -1,18 +1,43 @@
-use cargo_metadata::Metadata;
+use std::{marker::PhantomData, path::Path};
+
+use cargo_metadata::{
+    Metadata,
+    camino::{Utf8Path, Utf8PathBuf},
+};
 use color_eyre::{Result, eyre::Context};
+use fslock::LockFile;
 use tracing::{debug, instrument, trace};
 use walkdir::WalkDir;
 
-/// Parsed data about the current workspace.
+use crate::user_global_cache_path;
+
+/// The associated type's state is unlocked.
+/// Used for the typestate pattern.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Unlocked;
+
+/// The associated type's state is locked.
+/// Used for the typestate pattern.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Locked;
+
+/// A Cargo workspace.
+///
+/// Note that in Cargo, "workspace" projects are slightly different than
+/// standard projects; however for `hurry` they are not.
 #[derive(Debug)]
 pub struct Workspace {
-    pub metadata: Metadata,
+    metadata: Metadata,
 }
 
 impl Workspace {
     /// Parse metadata about the current workspace.
+    ///
+    /// "Current workspace" is discovered by parsing the arguments passed
+    /// to `hurry` and using `--manifest_path` if it is available;
+    /// if not then it uses the current working directory.
     #[instrument]
-    pub fn open() -> Result<Self> {
+    pub fn current() -> Result<Self> {
         // TODO: Should these be parsed higher up and passed in?
         let mut args = std::env::args().skip_while(|val| !val.starts_with("--manifest-path"));
 
@@ -34,6 +59,32 @@ impl Workspace {
         let metadata = cmd.exec().context("could not read cargo metadata")?;
         trace!(?metadata, "cargo metadata");
         Ok(Self { metadata })
+    }
+
+    /// The working directory for the workspace on disk.
+    pub fn dir(&self) -> &Utf8Path {
+        &self.metadata.workspace_root
+    }
+
+    /// The target directory.
+    pub fn target(&self) -> &Path {
+        self.metadata.target_directory.as_std_path()
+    }
+
+    /// Open the given named profile directory in the workspace.
+    pub fn open_profile(
+        &self,
+        profile: impl Into<String> + std::fmt::Debug,
+    ) -> Result<ProfileDir<Unlocked>> {
+        ProfileDir::open(self, profile)
+    }
+
+    /// Open the `hurry` cache for the given key.
+    pub fn open_cache(
+        &self,
+        key: impl AsRef<Utf8Path> + std::fmt::Debug,
+    ) -> Result<Cache<Unlocked>> {
+        Cache::open_default(self, key)
     }
 
     // Note that this iterator may contain the same module (i.e. file) multiple
@@ -91,5 +142,156 @@ impl Workspace {
                 WalkDir::new(target_root_folder).into_iter()
             })
         })
+    }
+}
+
+/// A profile directory inside a [`Workspace`].
+#[derive(Debug)]
+pub struct ProfileDir<'ws, State> {
+    state: PhantomData<State>,
+
+    /// The lockfile for the directory.
+    ///
+    /// The intention of this lock is to prevent multiple `hurry` _or `cargo`_
+    /// instances from mutating the state of the directory at the same time,
+    /// or from mutating it at the same time as another instance
+    /// is reading it.
+    ///
+    /// This lockfile uses the same name and implementation as `cargo` uses,
+    /// so a locked `ProfileDir` in `hurry` will block `cargo` and vice versa.
+    lock: LockFile,
+
+    /// The workspace in which this build profile is located.
+    pub workspace: &'ws Workspace,
+
+    /// The root of the directory.
+    ///
+    /// For example, if the workspace is at `/home/me/projects/foo`,
+    /// and the value of `profile` is `release`,
+    /// the value of `root` would be `/home/me/projects/foo/target/release`.
+    ///
+    /// Users should not rely on this though: use the actual value in this field.
+    pub root: Utf8PathBuf,
+
+    /// The profile to which this directory refers.
+    ///
+    /// By default, profiles are `release`, `debug`, `test`, and `bench`
+    /// although users can also define custom profiles, which is why
+    /// this value is an opaque string:
+    /// https://doc.rust-lang.org/cargo/reference/profiles.html#custom-profiles
+    pub profile: String,
+}
+
+impl<'ws> ProfileDir<'ws, Unlocked> {
+    /// Instantiate a new instance for the provided profile in the workspace.
+    #[instrument]
+    pub fn open(
+        workspace: &'ws Workspace,
+        profile: impl Into<String> + std::fmt::Debug,
+    ) -> Result<Self> {
+        let profile = profile.into();
+        let root = workspace.dir().join("target").join(&profile);
+
+        let lock = root.join(".cargo-lock");
+        let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;
+
+        Ok(Self {
+            state: PhantomData,
+            profile,
+            lock,
+            root,
+            workspace,
+        })
+    }
+}
+
+/// The `hurry` cache corresponding to a given [`Workspace`].
+#[derive(Debug)]
+pub struct Cache<'ws, State> {
+    state: PhantomData<State>,
+
+    /// Locks the workspace cache.
+    ///
+    /// The intention of this lock is to prevent multiple `hurry` instances
+    /// from mutating the state of the cache directory at the same time,
+    /// or from mutating it at the same time as another instance
+    /// is reading it.
+    lock: LockFile,
+
+    /// The root directory of the workspace cache.
+    root: Utf8PathBuf,
+
+    /// The workspace in the context of which this cache is referenced.
+    pub workspace: &'ws Workspace,
+}
+
+impl<'ws> Cache<'ws, Unlocked> {
+    /// Open the cache for the given workspace for the given cache key
+    /// in the default location for the user.
+    #[instrument]
+    pub fn open_default(
+        workspace: &'ws Workspace,
+        key: impl AsRef<Utf8Path> + std::fmt::Debug,
+    ) -> Result<Self> {
+        let root = user_global_cache_path()
+            .context("find user cache path")?
+            .join("cargo")
+            .join("ws")
+            .join(key);
+
+        std::fs::create_dir_all(&root).context("ensure directory exists")?;
+        let lock = root.join(".hurry-lock");
+        let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;
+
+        Ok(Self {
+            state: PhantomData,
+            root,
+            workspace,
+            lock,
+        })
+    }
+
+    /// Lock the cache.
+    pub fn lock(mut self) -> Result<Cache<'ws, Locked>> {
+        self.lock.lock().context("lock workspace cache")?;
+        Ok(Cache {
+            state: PhantomData,
+            root: self.root,
+            lock: self.lock,
+            workspace: self.workspace,
+        })
+    }
+}
+
+impl<'ws> Cache<'ws, Locked> {
+    /// Unlock the cache.
+    pub fn unlock(mut self) -> Result<Cache<'ws, Unlocked>> {
+        self.lock.unlock().context("unlock workspace cache")?;
+        Ok(Cache {
+            state: PhantomData,
+            root: self.root,
+            lock: self.lock,
+            workspace: self.workspace,
+        })
+    }
+
+    /// The root path of the cache.
+    ///
+    /// Users can only get this value if the cache is locked;
+    /// the intention here is to reduce the likelihood of mutating the content
+    /// of the cache without having the cache locked.
+    pub fn root(&self) -> &Utf8Path {
+        &self.root
+    }
+
+    /// Check whether the cache is empty (other than the lockfile).
+    pub fn is_empty(&self) -> Result<bool> {
+        for entry in std::fs::read_dir(&self.root).context("read cache directory")? {
+            let entry = entry.context("read entry")?;
+            if !entry.path().ends_with(".hurry-lock") {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 }
