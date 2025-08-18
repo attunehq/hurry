@@ -1,8 +1,9 @@
 use cargo_metadata::camino::Utf8PathBuf;
 use fslock::LockFile;
 
-use crate::user_global_cache_path;
 use color_eyre::{Result, eyre::Context};
+
+use crate::fs;
 
 /// The content-addressed storage area shared by all `hurry` cache instances.
 #[derive(Debug)]
@@ -28,7 +29,7 @@ pub struct Cas {
 impl Cas {
     /// Open an instance in the default location for the user.
     pub fn open_default() -> Result<Self> {
-        let root = user_global_cache_path()
+        let root = fs::user_global_cache_path()
             .context("find user cache path")?
             .join("cas");
 

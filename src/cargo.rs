@@ -11,7 +11,7 @@ mod workspace;
 
 pub use cmd::*;
 
-use crate::cargo::workspace::{Unlocked, Workspace};
+use crate::cargo::workspace::Workspace;
 
 /// Invoke a cargo subcommand with the given arguments.
 #[instrument(skip_all)]

@@ -9,7 +9,7 @@ use fslock::LockFile;
 use tracing::{debug, instrument, trace};
 use walkdir::WalkDir;
 
-use crate::user_global_cache_path;
+use crate::fs;
 
 /// The associated type's state is unlocked.
 /// Used for the typestate pattern.
@@ -75,7 +75,7 @@ impl Workspace {
     pub fn open_profile(
         &self,
         profile: impl Into<String> + std::fmt::Debug,
-    ) -> Result<ProfileDir<Unlocked>> {
+    ) -> Result<ProfileDir<'_, Unlocked>> {
         ProfileDir::open(self, profile)
     }
 
@@ -83,7 +83,7 @@ impl Workspace {
     pub fn open_cache(
         &self,
         key: impl AsRef<Utf8Path> + std::fmt::Debug,
-    ) -> Result<Cache<Unlocked>> {
+    ) -> Result<Cache<'_, Unlocked>> {
         Cache::open_default(self, key)
     }
 
@@ -233,7 +233,7 @@ impl<'ws> Cache<'ws, Unlocked> {
         workspace: &'ws Workspace,
         key: impl AsRef<Utf8Path> + std::fmt::Debug,
     ) -> Result<Self> {
-        let root = user_global_cache_path()
+        let root = fs::user_global_cache_path()
             .context("find user cache path")?
             .join("cargo")
             .join("ws")
