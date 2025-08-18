@@ -72,6 +72,18 @@ In order for `hurry` to integrate with `cargo`/`rust`, we need to understand how
   - Since this is our understanding of the baseline, all design decisions made in the product are based on this understanding.
 - Accelerate onboarding for new contributors by providing a centralized resource for learning about `cargo` and `rustc` builds.
 
+References:
+- [Cargo Book](https://doc.rust-lang.org/cargo/)
+- [Rustc Dev Guide](https://rustc-dev-guide.rust-lang.org/)
+- [Rust Compiler Documentation](https://doc.rust-lang.org/stable/nightly-rustc/index.html)
+- [Compiler section of the Rust Project Forge](https://forge.rust-lang.org/compiler/index.html)
+
+See also, although not strictly on topic:
+- [Rust Book](https://doc.rust-lang.org/book/)
+- [Rust Project Forge](https://forge.rust-lang.org/)
+- [Std Dev Guide](https://std-dev-guide.rust-lang.org/)
+- [Rust Nomicon](https://doc.rust-lang.org/stable/nomicon/)
+
 ### `target/` organization
 
 > **TODO**
@@ -79,9 +91,19 @@ In order for `hurry` to integrate with `cargo`/`rust`, we need to understand how
 
 ```
 # Source: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/layout/index.html
+#
 # Some of the comments and content below have been altered from the original
 # source to better reflect `hurry`-specific details or observed Rust compiler
 # behavior in rustc `1.88.0-aarch64-apple-darwin`.
+
+# Shared variables
+#
+# - `$pkgname`: The value of the `name` field in `Cargo.toml` for the crate.
+# - `$targetname`: The name of the compilation target, e.g. the name of the
+#   binary or library being built.
+# - `$meta`: The "metadata unit id" used to uniquely identify a "unit" in the
+#   build graph. A "unit" is an object that has enough information so that
+#   cargo knows how to build it, e.g. a dependency.
 
 # This is the root directory for all output, the top-level package
 # places all of its output here.
@@ -92,19 +114,12 @@ target/
     # - the host triple (e.g. `aarch64-apple-darwin`)
     # - the llvm version
     # - a bunch of details about the build environment, such as cpu features
-    #
-    # `hurry` will use this to hydrate the `manifest.json` file to find the
-    # closest match when a perfect cache hit isn't available.
-    #
-    # TODO: The original docs say this is "for performance";
-    # is the content reliable?
     .rustc-info.json
 
     # Marks the `target/` directory as a cache directory.
     #
     # Currently ignored by `hurry`: this seems useless; the content is
     # actually static and set by this "Cache Directory Tagging Specification".
-    #
     # Reference: https://bford.info/cachedir/
     CACHEDIR.TAG
 
@@ -128,29 +143,12 @@ target/
         # just reuse this file as well the same way `cargo` does.
         .cargo-lock
 
-        # Hidden directory that holds all of the fingerprint files for all
-        # packages.
+        # Holds all of the fingerprint files for all packages.
         .fingerprint/
 
-            # Each package is in a separate directory.
-            # Note that different target kinds have different filename prefixes.
-            #
-            # TODO: There are several kinds of this directory.
-            # Each shares a common `$pkgname` (e.g. `ahash`) with a unique `$META`.
-            # What are the names and conditions for these? How could we use them to cache?
-            # - Dep builds, which have the shape below
-            # - ???, which seem to be related to building the build script; contains:
-            #   - `build-script-build-script-build`
-            #   - `build-script-build-script-build.json`
-            #   - `dep-build-script-build-script-build`
-            #   - `invoked.timestamp`
-            # - ???, which seem to be related to _running_ the build script; contains:
-            #   - `run-build-script-build-script-build.json`
-            #   - `run-build-script-build-script-build`
-            #
-            # TODO: Where is `$META` coming from?
-            # TODO: Where is `$pkgname` coming from?
-            $pkgname-$META/
+            # The package shows up three times with different `$meta` values.
+            # This shape seems to be for the build of the crate.
+            $pkgname-$meta/
                 # The original docs said "_set_ of source filenames for this
                 # package", but from my observation I only see _one_ file.
                 # This is a binary, so it seems like this might be the compiled
@@ -181,9 +179,9 @@ target/
                 # TODO: How can we use this for caching/cache invalidation?
                 lib-$targetname.json
 
-            # The package shows up three times with different metadata hashes.
+            # The package shows up three times with different `$meta` values.
             # This shape seems to be for the output of the build script.
-            $pkgname-$META/
+            $pkgname-$meta/
 
                 # This contains a bunch of information about the configuration
                 # of the rust compiler at build time.
@@ -192,12 +190,13 @@ target/
                 run-build-script-build-script-build.json
 
                 # This file appears to contain a hash.
+                #
                 # TODO: Where is this hash generated? What does it mean?
                 run-build-script-build-script-build
 
-            # The package shows up three times with different metadata hashes.
+            # The package shows up three times with different `$meta` values.
             # This shape seems to be for the build of the build script.
-            $pkgname-$META/
+            $pkgname-$meta/
 
                 # This file appears to contain a hash.
                 # TODO: Where is this hash generated? What does it mean?
@@ -229,21 +228,18 @@ target/
         # the deal here? When did this change, or was it ever correct?
         deps/
 
-            # Files are named after the package name and metadata hash(?).
-            # The `$pkgname-$META` here appears to correspond to a directory
+            # The `$pkgname-$meta` here appears to correspond to a directory
             # inside the `.fingerprint` directory.
             #
-            # TODO: Where is `$META` coming from?
-            # TODO: Where is `$pkgname` coming from?
             # TODO: These `.d` files seem like they'll be really useful
             # for what we want to do with build caching.
-            $pkgname-$META.d
+            $pkgname-$meta.d
 
             # TODO: What is this? It appears to be an object file?
             # TODO: Where is this file generated?
             # TODO: How is `$???` generated?
             # TODO: Is the `0` significant?
-            $pkgname-$META.$pkgname.$???-cgu.0.rcgu.o
+            $pkgname-$meta.$pkgname.$???-cgu.0.rcgu.o
 
         # This is the location at which the output of all custom build
         # commands are rooted.
@@ -252,25 +248,22 @@ target/
             # Each package gets its own directory where its build script output
             # and the output of building the build script are placed.
             #
-            # The `$pkgname-$META` here appears to correspond to a directory
+            # The `$pkgname-$meta` here appears to correspond to a directory
             # inside the `.fingerprint` directory, but not the "Dep builds"
             # kind of directory inside `.fingerprint`- only the other two.
             #
-            # TODO: Where is `$META` coming from?
-            # TODO: Where is `$pkgname` coming from?
             # TODO: The original doc says "build script names may be changed by
             # user"; what effect does this have on the contents of these
             # directories and the contents of the corresponding `.fingerprint`
             # directories?
-            $pkgname-$META/
+            $pkgname-$meta/
                 # The build script executable.
                 #
                 # TODO: The original doc says "name may be changed by user",
                 # what does this mean? Would this file have a different name?
-                # TODO: Where is `$META` coming from?
-                build-script-build-$META
+                build-script-build-$meta
 
-                # Hard link to build-script-build-$META.
+                # Hard link to build-script-build-$meta.
                 #
                 # TODO: If the user changes the name of the build script,
                 # what happens to this file?
@@ -280,10 +273,9 @@ target/
                 #
                 # TODO: These `.d` files seem like they'll be really useful
                 # for what we want to do with build caching.
-                # TODO: Where is `$META` coming from?
                 # TODO: If the user changes the name of the build script,
                 # what happens to this file?
-                build-script-build-$META.d
+                build-script-build-$meta.d
 
             # The package shows up twice with two different metadata hashes.
             # This shape seems to be for the output of the build script.
@@ -292,7 +284,7 @@ target/
             # user"; what effect does this have on the contents of these
             # directories and the contents of the corresponding `.fingerprint`
             # directories?
-            $pkgname-$META/
+            $pkgname-$meta/
                 # Timestamp when the build script was last executed.
                 #
                 # This file has no meaningful content; check the `mtime`
@@ -358,14 +350,9 @@ target/
     package/
 
     # Experimental feature for generated build scripts.
-    # Currently ignored by `hurry`, but this seems like a potentially great
-    # thing for `hurry` to use to better cache e.g. build scripts.
+    # Currently ignored by `hurry`: this is an experimental and niche feature.
     #
-    # TODO: Docs?
-    # TODO: What kind of "experimental" is this?
-    # TODO: There's a bunch of other build script related stuff in the structure
-    # above; is this just _outdated_? My current implementation doesn't have
-    # this directory.
+    # https://github.com/rust-lang/rfcs/pull/2196
     .metabuild/
 ```
 
