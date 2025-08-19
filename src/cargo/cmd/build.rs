@@ -126,5 +126,19 @@ fn restore_target_from_cache(workspace: &Workspace, cache: &Cache<Locked>) -> Re
 /// Cache the target directory to the cache.
 #[instrument(skip_all)]
 fn cache_target_from_workspace(workspace: &Workspace, cache: &Cache<Locked>) -> Result<()> {
+    // TODO: support other profiles
+    let target = workspace
+        .open_profile("debug")
+        .context("open debug profile")?;
+
+    let target = target.lock().context("lock profile")?;
+    let units = target
+        .enumerate_buildunits()
+        .context("enumerate build units")?;
+    for unit in units {
+        
+        todo!()
+    }
+
     fs::copy_dir(workspace.target(), cache.root())
 }

@@ -1,11 +1,18 @@
-use std::{marker::PhantomData, path::Path};
+use std::{
+    collections::{HashMap, HashSet, hash_map::Entry},
+    marker::PhantomData,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use cargo_metadata::{
     Metadata,
     camino::{Utf8Path, Utf8PathBuf},
 };
 use color_eyre::{Result, eyre::Context};
+use derive_more::Display;
 use fslock::LockFile;
+use rayon::iter::{ParallelBridge, ParallelIterator};
 use tracing::{debug, instrument, trace};
 use walkdir::WalkDir;
 
@@ -203,6 +210,168 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
             workspace,
         })
     }
+
+    /// Lock the directory.
+    pub fn lock(mut self) -> Result<ProfileDir<'ws, Locked>> {
+        self.lock.lock().context("lock profile")?;
+        Ok(ProfileDir {
+            state: PhantomData,
+            profile: self.profile,
+            lock: self.lock,
+            root: self.root,
+            workspace: self.workspace,
+        })
+    }
+}
+
+impl<'ws> ProfileDir<'ws, Locked> {
+    /// Unlock the directory.
+    pub fn unlock(mut self) -> Result<ProfileDir<'ws, Unlocked>> {
+        self.lock.unlock().context("unlock profile")?;
+        Ok(ProfileDir {
+            state: PhantomData,
+            profile: self.profile,
+            lock: self.lock,
+            root: self.root,
+            workspace: self.workspace,
+        })
+    }
+
+    /// Enumerate build units in the target.
+    pub fn enumerate_buildunits(&self) -> Result<Vec<BuildUnit<'_>>> {
+        // TODO: parallelize this.
+        // The critical part here is that we retain the order of input files.
+        WalkDir::new(self.root.as_std_path()).into_iter().try_fold(
+            Vec::new(),
+            |mut acc, entry| -> Result<Vec<BuildUnit<'_>>> {
+                let entry = entry.context("walk file")?;
+
+                // Only `*.d` files are valid build units.
+                if !entry.path().ends_with(".d") {
+                    return Ok(acc);
+                }
+
+                let content = fs::read_buffered_utf8(entry.path()).context("read file")?;
+                let unit = BuildUnit::parse(self, content).context("parse build unit")?;
+                acc.extend(unit);
+                Ok(acc)
+            },
+        )
+    }
+}
+
+/// A build unit inside a workspace.
+///
+/// This is a `hurry`-specific term for a `.d` file inside the `target`
+/// directory; these files are a psuedo-makefile syntax that lists:
+/// - Output files (compiled artifacts)
+/// - Their input files (source code)
+///
+/// ## Example
+///
+/// For example here you can see that `libahash-d548a2253ff6e8a0.rlib`
+/// depends on several files, e.g. `ahash-0.8.12/src/lib.rs`;
+/// then later in the file you can see that `ahash-0.8.12/src/lib.rs`
+/// doesn't depend on anything else.
+///
+/// ```not_rust
+/// /Users/jess/projects/attune/target/release/deps/ahash-d548a2253ff6e8a0.d: /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/lib.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/convert.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/fallback_hash.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/operations.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/random_state.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/specialize.rs
+///
+/// /Users/jess/projects/attune/target/release/deps/libahash-d548a2253ff6e8a0.rlib: /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/lib.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/convert.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/fallback_hash.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/operations.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/random_state.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/specialize.rs
+///
+/// /Users/jess/projects/attune/target/release/deps/libahash-d548a2253ff6e8a0.rmeta: /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/lib.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/convert.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/fallback_hash.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/operations.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/random_state.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/specialize.rs
+///
+/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/lib.rs:
+/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/convert.rs:
+/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/fallback_hash.rs:
+/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/operations.rs:
+/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/random_state.rs:
+/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/specialize.rs:
+/// ```
+#[derive(Debug)]
+pub struct BuildUnit(BuildUnitOutput, Vec<BuildUnitInput>);
+
+impl BuildUnit {
+    /// Parse a file to create the instance in the provided profile.
+    #[instrument]
+    pub fn parse(
+        profile: &ProfileDir<'_, Locked>,
+        content: impl AsRef<str> + std::fmt::Debug,
+    ) -> Result<Vec<BuildUnit>> {
+        let content = content.as_ref();
+
+        // TODO: Parallelize this.
+        // The most important thing when it come to parallelization
+        // is ensuring that we emit each `Vec<BuildUnitInput>` in the same order
+        // as what is actually written in the file.
+        content
+            .lines()
+            .into_iter()
+            .filter_map(|line| {
+                let (output, inputs) = line.split_once(':')?;
+                let (output, inputs) = (output.trim(), inputs.trim());
+                let inputs = inputs.split_whitespace().collect::<Vec<_>>();
+                Some((output, inputs))
+            })
+            // Build units with empty inputs seem to be practice source files,
+            // which are not copied into the `deps/` directory anyway
+            // and therefore do not need to be considered.
+            .filter(|(_, inputs)| !inputs.is_empty())
+            .map(|(output, inputs)| {
+                let output = {
+                    let path = Utf8PathBuf::from_str(output).context("create output path")?;
+                    let hash = fs::hash_file_content(&path).context("hash output file")?;
+                    BuildUnitOutput { path, hash }
+                };
+                let inputs = inputs
+                    .into_iter()
+                    .map(|input| {
+                        let path = Utf8PathBuf::from_str(input)
+                            .with_context(|| format!("create input path from: {input}"))?;
+                        let hash = fs::hash_file_content(&path)
+                            .with_context(|| format!("hash input file: {path}"))?;
+                        Ok(BuildUnitInput(hash))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(BuildUnit(output, inputs))
+            })
+            .collect()
+    }
+
+    /// The output of the build unit.
+    pub fn output(&self) -> &BuildUnitOutput {
+        &self.0
+    }
+
+    /// The inputs of the build unit.
+    pub fn inputs(&self) -> &[BuildUnitInput] {
+        &self.1
+    }
+}
+
+/// An output file for the build unit.
+#[derive(Debug)]
+pub struct BuildUnitOutput {
+    /// The path on disk for the artifact.
+    /// This is a relative path to [`ProfileDir::root`].
+    path: Utf8PathBuf,
+
+    /// The Blake3 hash of the file's content on disk.
+    hash: Vec<u8>,
+}
+
+/// The Blake3 hash of the input file.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+pub struct BuildUnitInput {
+    /// The path on disk for the artifact.
+    ///
+    /// TODO: We need a stable way to refer to this path, but these can
+    /// exist in the user's cargo cache path so we need to gather
+    /// this information.
+    path: Utf8PathBuf,
+
+    /// The Blake3 hash of the file's content on disk.
+    hash: Vec<u8>,
 }
 
 /// The `hurry` cache corresponding to a given [`Workspace`].
