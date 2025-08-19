@@ -4,7 +4,6 @@
 //! make it maximally clear what we are using.
 
 use std::{
-    io::Read,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -36,14 +35,6 @@ pub fn user_global_cache_path() -> Result<Utf8PathBuf> {
         .join("hurry")
         .join("v2")
         .pipe(Ok)
-}
-
-/// Hash the contents of the file at the specified path using a Blake3 hash.
-#[instrument]
-pub fn hash_file_content(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Vec<u8>> {
-    let path = path.as_ref();
-    let file = std::fs::File::open(path).with_context(|| format!("open {path:?}"))?;
-    hash_read(file)
 }
 
 /// Recursively copy a directory in parallel.
@@ -305,42 +296,4 @@ pub fn read_buffered(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Vec<u8>
 pub fn read_buffered_utf8(path: impl AsRef<Path> + std::fmt::Debug) -> Result<String> {
     let path = path.as_ref();
     std::fs::read_to_string(path).with_context(|| format!("read file: {path:?}"))
-}
-
-/// Buffer the file content from disk and hash it.
-#[instrument]
-pub fn read_hash_buffered(path: impl AsRef<Path> + std::fmt::Debug) -> Result<(Vec<u8>, Vec<u8>)> {
-    let path = path.as_ref();
-    let content = std::fs::read(path).with_context(|| format!("read file: {path:?}"))?;
-    let hash = hash_buf(&content).with_context(|| format!("hash content of file: {path:?}"))?;
-    Ok((content, hash))
-}
-
-/// Buffer the file content from disk, parse it as UTF8, and hash it.
-#[instrument]
-pub fn read_hash_buffered_utf8(
-    path: impl AsRef<Path> + std::fmt::Debug,
-) -> Result<(String, Vec<u8>)> {
-    let path = path.as_ref();
-    let content = std::fs::read_to_string(path).with_context(|| format!("read file: {path:?}"))?;
-    let hash = hash_buf(&content).with_context(|| format!("hash content of file: {path:?}"))?;
-    Ok((content, hash))
-}
-
-/// Hash the contents of a buffer.
-#[instrument(skip(buf))]
-pub fn hash_buf(buf: impl AsRef<[u8]>) -> Result<Vec<u8>> {
-    let buf = buf.as_ref();
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(buf);
-    Ok(hasher.finalize().as_bytes().to_vec())
-}
-
-/// Hash the contents of a [`Read`] instance.
-#[instrument(skip(read))]
-pub fn hash_read(read: impl Read) -> Result<Vec<u8>> {
-    let mut reader = std::io::BufReader::new(read);
-    let mut hasher = blake3::Hasher::new();
-    std::io::copy(&mut reader, &mut hasher)?;
-    Ok(hasher.finalize().as_bytes().to_vec())
 }

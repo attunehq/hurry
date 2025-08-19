@@ -16,6 +16,7 @@ use crate::{
         workspace::{Cache, Locked, Workspace},
     },
     fs,
+    hash::Blake3,
 };
 
 /// Options for `cargo build`
@@ -46,11 +47,10 @@ pub fn exec(options: Options) -> Result<()> {
     // the CAS to cache individual items from different workspaces. In reality,
     // the "cache" as a concept may go away in favor of pure CAS
     // (maybe separated by build tool).
-    let key = fs::hash_file_content(workspace.dir().join("Cargo.lock"))
-        .with_context(|| format!("hash `Cargo.lock` inside {}", workspace.dir()))
-        .map(hex::encode)?;
+    let key = Blake3::from_file(workspace.root.join("Cargo.lock"))
+        .with_context(|| format!("hash `Cargo.lock` inside {}", workspace.root))?;
     let cache = workspace
-        .open_cache(&key)
+        .open_cache(key.as_str())
         .with_context(|| format!("open cache for key {key}"))?;
     let cache = cache
         .lock()
@@ -120,7 +120,7 @@ fn exec_inner(
 // otherwise fall back to a symlink.
 #[instrument(skip_all)]
 fn restore_target_from_cache(workspace: &Workspace, cache: &Cache<Locked>) -> Result<()> {
-    fs::copy_dir(cache.root(), workspace.target())
+    fs::copy_dir(cache.root(), &workspace.target)
 }
 
 /// Cache the target directory to the cache.
@@ -136,9 +136,8 @@ fn cache_target_from_workspace(workspace: &Workspace, cache: &Cache<Locked>) -> 
         .enumerate_buildunits()
         .context("enumerate build units")?;
     for unit in units {
-        
         todo!()
     }
 
-    fs::copy_dir(workspace.target(), cache.root())
+    fs::copy_dir(&workspace.target, cache.root())
 }

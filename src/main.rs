@@ -9,6 +9,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod cargo;
 mod cas;
 mod fs;
+mod hash;
 
 #[derive(Parser)]
 #[command(name = "hurry", about = "Really, really fast builds", version)]

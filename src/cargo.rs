@@ -24,7 +24,7 @@ pub fn invoke(
     let args = args.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
 
     let mut cmd = std::process::Command::new("cargo");
-    cmd.current_dir(workspace.dir());
+    cmd.current_dir(&workspace.root);
     cmd.args(once(subcommand.as_ref()).chain(args));
     let status = cmd
         .spawn()

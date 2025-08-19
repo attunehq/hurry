@@ -12,11 +12,13 @@ use cargo_metadata::{
 use color_eyre::{Result, eyre::Context};
 use derive_more::Display;
 use fslock::LockFile;
+use itertools::Itertools;
 use rayon::iter::{ParallelBridge, ParallelIterator};
+use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, trace};
 use walkdir::WalkDir;
 
-use crate::fs;
+use crate::{fs, hash::Blake3};
 
 /// The associated type's state is unlocked.
 /// Used for the typestate pattern.
@@ -34,7 +36,18 @@ pub struct Locked;
 /// standard projects; however for `hurry` they are not.
 #[derive(Debug)]
 pub struct Workspace {
-    metadata: Metadata,
+    /// The root directory of the workspace.
+    pub root: Utf8PathBuf,
+
+    /// The root of the target directory in the workspace.
+    pub target: Utf8PathBuf,
+
+    /// The user's Cargo home directory.
+    ///
+    /// This is almost definitely not inside the current workspace,
+    /// but we record it because we need it to make third party crate file paths
+    /// relative so they can be portable across machines.
+    pub cargo_home: Utf8PathBuf,
 }
 
 impl Workspace {
@@ -45,6 +58,7 @@ impl Workspace {
     /// if not then it uses the current working directory.
     #[instrument]
     pub fn current() -> Result<Self> {
+        // TODO: Should we even support this?
         // TODO: Should these be parsed higher up and passed in?
         let mut args = std::env::args().skip_while(|val| !val.starts_with("--manifest-path"));
 
@@ -65,17 +79,14 @@ impl Workspace {
 
         let metadata = cmd.exec().context("could not read cargo metadata")?;
         trace!(?metadata, "cargo metadata");
-        Ok(Self { metadata })
-    }
-
-    /// The working directory for the workspace on disk.
-    pub fn dir(&self) -> &Utf8Path {
-        &self.metadata.workspace_root
-    }
-
-    /// The target directory.
-    pub fn target(&self) -> &Path {
-        self.metadata.target_directory.as_std_path()
+        let cargo_home = std::env::var("CARGO_HOME")
+            .map(Utf8PathBuf::from)
+            .context("get cargo home")?;
+        Ok(Self {
+            root: metadata.workspace_root,
+            target: metadata.target_directory,
+            cargo_home,
+        })
     }
 
     /// Open the given named profile directory in the workspace.
@@ -92,63 +103,6 @@ impl Workspace {
         key: impl AsRef<Utf8Path> + std::fmt::Debug,
     ) -> Result<Cache<'_, Unlocked>> {
         Cache::open_default(self, key)
-    }
-
-    // Note that this iterator may contain the same module (i.e. file) multiple
-    // times if it is included from multiple target root directories (e.g. if a
-    // module is contained in both a `library` and a `bin` target).
-    #[instrument(skip(self))]
-    pub fn source_files(&self) -> impl Iterator<Item = Result<walkdir::DirEntry, walkdir::Error>> {
-        let packages = self.metadata.workspace_packages();
-        trace!(?packages, "workspace packages");
-        packages.into_iter().flat_map(|package| {
-            trace!(?package, "getting source files of package");
-            // TODO: The technically correct way to calculate the source files
-            // of a target is to shell out to `rustc --emit=dep-info=-` with the
-            // correct `rustc` flags (e.g. the `--extern` flags, which are
-            // required to import macros defined in dependency crates which
-            // might be used to add more source files to the target) and the
-            // module root.
-            //
-            // Unfortunately, this is quite annoying:
-            // - We need to get the correct flags for `rustc`. I'm not totally
-            //   sure how to do this - I think we should be able to by parsing
-            //   the output messages from `cargo build`? Or maybe we should be
-            //   able to reconstruct them from `cargo metadata`? Or maybe we can
-            //   use `cargo rustc`?
-            // - Running `rustc` takes quite a long time. Maybe we can improve
-            //   this by using some background daemon / file change notification
-            //   trickery? Maybe we can run things in parallel?
-            //
-            // Instead, we approximate the source files in a module by taking
-            // all the files in the folder of the crate root source file. This
-            // is also the approximation that Cargo uses to determine "relevant"
-            // files.
-            //
-            // TODO: We have not yet implemented Cargo's approximation logic
-            // that handles things like `.gitignore`, `package.include`,
-            // `package.exclude`, etc.
-            //
-            // See also:
-            // - `dep-info` files:
-            //   https://doc.rust-lang.org/cargo/reference/build-cache.html#dep-info-files
-            // - `cargo build` output messages:
-            //   https://doc.rust-lang.org/cargo/reference/external-tools.html#json-messages
-            // - Cargo's source file discovery logic:
-            //   https://docs.rs/cargo/latest/cargo/sources/path/struct.PathSource.html#method.list_files
-            package.targets.iter().flat_map(|target| {
-                let target_root = target.src_path.clone();
-                let target_root_folder = target_root
-                    .parent()
-                    .expect("module root should be a file in a folder");
-                debug!(
-                    ?target_root,
-                    ?target_root_folder,
-                    "adding target root to walk"
-                );
-                WalkDir::new(target_root_folder).into_iter()
-            })
-        })
     }
 }
 
@@ -197,7 +151,7 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
         profile: impl Into<String> + std::fmt::Debug,
     ) -> Result<Self> {
         let profile = profile.into();
-        let root = workspace.dir().join("target").join(&profile);
+        let root = workspace.root.join("target").join(&profile);
 
         let lock = root.join(".cargo-lock");
         let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;
@@ -238,12 +192,12 @@ impl<'ws> ProfileDir<'ws, Locked> {
     }
 
     /// Enumerate build units in the target.
-    pub fn enumerate_buildunits(&self) -> Result<Vec<BuildUnit<'_>>> {
+    pub fn enumerate_buildunits(&self) -> Result<Vec<BuildUnit>> {
         // TODO: parallelize this.
         // The critical part here is that we retain the order of input files.
         WalkDir::new(self.root.as_std_path()).into_iter().try_fold(
             Vec::new(),
-            |mut acc, entry| -> Result<Vec<BuildUnit<'_>>> {
+            |mut acc, entry| -> Result<Vec<BuildUnit>> {
                 let entry = entry.context("walk file")?;
 
                 // Only `*.d` files are valid build units.
@@ -289,15 +243,15 @@ impl<'ws> ProfileDir<'ws, Locked> {
 /// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/specialize.rs:
 /// ```
 #[derive(Debug)]
-pub struct BuildUnit(BuildUnitOutput, Vec<BuildUnitInput>);
+pub struct BuildUnit<'ws>(BuildUnitOutput<'ws>, Vec<BuildUnitInput<'ws>>);
 
-impl BuildUnit {
+impl<'ws> BuildUnit<'ws> {
     /// Parse a file to create the instance in the provided profile.
     #[instrument]
     pub fn parse(
-        profile: &ProfileDir<'_, Locked>,
+        profile: &'ws ProfileDir<'ws, Locked>,
         content: impl AsRef<str> + std::fmt::Debug,
-    ) -> Result<Vec<BuildUnit>> {
+    ) -> Result<Vec<BuildUnit<'ws>>> {
         let content = content.as_ref();
 
         // TODO: Parallelize this.
@@ -317,25 +271,52 @@ impl BuildUnit {
             // which are not copied into the `deps/` directory anyway
             // and therefore do not need to be considered.
             .filter(|(_, inputs)| !inputs.is_empty())
-            .map(|(output, inputs)| {
-                let output = {
-                    let path = Utf8PathBuf::from_str(output).context("create output path")?;
-                    let hash = fs::hash_file_content(&path).context("hash output file")?;
-                    BuildUnitOutput { path, hash }
-                };
-                let inputs = inputs
-                    .into_iter()
-                    .map(|input| {
-                        let path = Utf8PathBuf::from_str(input)
-                            .with_context(|| format!("create input path from: {input}"))?;
-                        let hash = fs::hash_file_content(&path)
-                            .with_context(|| format!("hash input file: {path}"))?;
-                        Ok(BuildUnitInput(hash))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(BuildUnit(output, inputs))
-            })
+            .map(|(output, inputs)| Self::new_from_strs(profile, output, &inputs))
             .collect()
+    }
+
+    /// Create an instance from the provided output and input files,
+    /// where the file paths are strings.
+    ///
+    /// This isn't public because it's really only meant to be called from
+    /// `parse` as a convenience/code organization function.
+    fn new_from_strs(
+        profile: &'ws ProfileDir<'ws, Locked>,
+        output: &str,
+        inputs: &[&str],
+    ) -> Result<Self> {
+        let output = Utf8PathBuf::from_str(output)
+            .with_context(|| format!("create output path from: {output}"))?;
+        let inputs = inputs
+            .into_iter()
+            .map(|input| {
+                Utf8PathBuf::from_str(input)
+                    .with_context(|| format!("create input path from: {input}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::new(profile, output, inputs)
+    }
+
+    /// Create an instance from the provided output and input files.
+    #[instrument]
+    pub fn new(
+        profile: &'ws ProfileDir<'ws, Locked>,
+        output: impl AsRef<Utf8Path> + std::fmt::Debug,
+        inputs: impl AsRef<[Utf8PathBuf]> + std::fmt::Debug,
+    ) -> Result<Self> {
+        let output = output.as_ref();
+        let inputs = inputs.as_ref();
+        let output = BuildUnitOutput::read(profile, output)
+            .with_context(|| format!("read output file: {output}"))?;
+        let inputs = inputs
+            .into_iter()
+            .map(|input| {
+                BuildUnitInput::read(profile.workspace, input)
+                    .with_context(|| format!("read input file: {input}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Self(output, inputs))
     }
 
     /// The output of the build unit.
@@ -351,27 +332,72 @@ impl BuildUnit {
 
 /// An output file for the build unit.
 #[derive(Debug)]
-pub struct BuildUnitOutput {
-    /// The path on disk for the artifact.
-    /// This is a relative path to [`ProfileDir::root`].
+pub struct BuildUnitOutput<'ws> {
+    /// The profile to which this output belongs.
+    profile: &'ws ProfileDir<'ws, Locked>,
+
+    /// The path on disk for the output file.
+    ///
+    /// This is a relative path to [`ProfileDir::root`]
+    /// in the associated `profile`.
     path: Utf8PathBuf,
 
     /// The Blake3 hash of the file's content on disk.
-    hash: Vec<u8>,
+    hash: Blake3,
 }
 
-/// The Blake3 hash of the input file.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub struct BuildUnitInput {
-    /// The path on disk for the artifact.
+impl<'ws> BuildUnitOutput<'ws> {
+    /// Create the output from the provided path on disk.
+    pub fn read(profile: &'ws ProfileDir<'ws, Locked>, path: &Utf8Path) -> Result<Self> {
+        let hash = Blake3::from_file(path).context("hash output file")?;
+        Ok(Self {
+            profile,
+            path: path.to_owned(),
+            hash,
+        })
+    }
+}
+
+/// An input for a build unit.
+#[derive(Debug)]
+pub struct BuildUnitInput<'ws> {
+    /// The workspace to which this input belongs.
+    workspace: &'ws Workspace,
+
+    /// The path on disk for the input file.
     ///
-    /// TODO: We need a stable way to refer to this path, but these can
-    /// exist in the user's cargo cache path so we need to gather
-    /// this information.
+    /// This path is relative to [`Workspace::cargo_home`]
+    /// in the associated `workspace`.
     path: Utf8PathBuf,
 
     /// The Blake3 hash of the file's content on disk.
-    hash: Vec<u8>,
+    hash: Blake3,
+}
+
+impl<'ws> BuildUnitInput<'ws> {
+    /// Create the input from the provided path on disk.
+    pub fn read(workspace: &'ws Workspace, path: &Utf8Path) -> Result<Self> {
+        let hash = Blake3::from_file(path).with_context(|| format!("hash input file {path:?}"))?;
+
+        // For now we report any case where this isn't valid as an error.
+        // I suspect that it'll be possible to have input paths that are
+        // relative to the current directory but right now the overall design
+        // assumes that they are relative to the cargo home directory,
+        // so if we find this to be the case we'll need to revisit the design.
+        // And the only way to know if this happens is to have errors surfaced.
+        let path = path.strip_prefix(&workspace.cargo_home).with_context(|| {
+            format!(
+                "make input {path:?} relative to cargo home {:?}",
+                workspace.cargo_home
+            )
+        })?;
+
+        Ok(Self {
+            workspace,
+            path: path.to_owned(),
+            hash,
+        })
+    }
 }
 
 /// The `hurry` cache corresponding to a given [`Workspace`].
@@ -388,12 +414,26 @@ pub struct Cache<'ws, State> {
     lock: LockFile,
 
     /// The root directory of the workspace cache.
+    ///
+    /// Note: this is intentionally not `pub` because we only want to give
+    /// callers access to the directory when the cache is locked;
+    /// reference the `root` method in the locked implementation block.
+    ///
+    /// The intention here is to minimize the chance of callers mutating or
+    /// referencing the contents of the cache while it is locked.
     root: Utf8PathBuf,
 
     /// The workspace in the context of which this cache is referenced.
     pub workspace: &'ws Workspace,
 }
 
+/// Implementation for all valid lifetimes and lock states.
+impl<'ws, L> Cache<'ws, L> {
+    /// The filename of the lockfile.
+    const LOCKFILE_NAME: &'static str = ".hurry-lock";
+}
+
+/// Implementation for all lifetimes and the unlocked state only.
 impl<'ws> Cache<'ws, Unlocked> {
     /// Open the cache for the given workspace for the given cache key
     /// in the default location for the user.
@@ -409,7 +449,7 @@ impl<'ws> Cache<'ws, Unlocked> {
             .join(key);
 
         std::fs::create_dir_all(&root).context("ensure directory exists")?;
-        let lock = root.join(".hurry-lock");
+        let lock = root.join(Self::LOCKFILE_NAME);
         let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;
 
         Ok(Self {
@@ -432,6 +472,7 @@ impl<'ws> Cache<'ws, Unlocked> {
     }
 }
 
+/// Implementation for all lifetimes and the locked state only.
 impl<'ws> Cache<'ws, Locked> {
     /// Unlock the cache.
     pub fn unlock(mut self) -> Result<Cache<'ws, Unlocked>> {
@@ -445,10 +486,6 @@ impl<'ws> Cache<'ws, Locked> {
     }
 
     /// The root path of the cache.
-    ///
-    /// Users can only get this value if the cache is locked;
-    /// the intention here is to reduce the likelihood of mutating the content
-    /// of the cache without having the cache locked.
     pub fn root(&self) -> &Utf8Path {
         &self.root
     }
@@ -457,7 +494,7 @@ impl<'ws> Cache<'ws, Locked> {
     pub fn is_empty(&self) -> Result<bool> {
         for entry in std::fs::read_dir(&self.root).context("read cache directory")? {
             let entry = entry.context("read entry")?;
-            if !entry.path().ends_with(".hurry-lock") {
+            if !entry.path().ends_with(Self::LOCKFILE_NAME) {
                 return Ok(false);
             }
         }
