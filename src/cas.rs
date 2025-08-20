@@ -1,7 +1,8 @@
-use cargo_metadata::camino::Utf8PathBuf;
+use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
 use fslock::LockFile;
 
 use color_eyre::{Result, eyre::Context};
+use tracing::instrument;
 
 use crate::fs;
 
@@ -35,6 +36,12 @@ impl Cas {
 
         std::fs::create_dir_all(&root).context("ensure directory exists")?;
         Ok(Self { root })
+    }
+
+    /// Copy the file at the provided path into the CAS using the provided key.
+    #[instrument]
+    pub fn copy_from(&self, src: &Utf8Path, key: impl AsRef<str> + std::fmt::Debug) -> Result<()> {
+        fs::copy_file_into(src, &self.root, key.as_ref())
     }
 }
 

@@ -27,3 +27,8 @@ derive_more = { version = "2.0.1", features = ["full"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.142"
 itertools = "0.14.0"
+strum = { version = "0.27.2", features = ["derive"] }
+enum-assoc = "1.2.4"
+subenum = "1.1.2"
+bon = "3.7.1"
+cargo-lock = { version = "10.1.0", features = ["dependency-tree"] }

@@ -5,20 +5,29 @@ use std::{
     str::FromStr,
 };
 
+use bon::Builder;
 use cargo_metadata::{
     Metadata,
     camino::{Utf8Path, Utf8PathBuf},
 };
-use color_eyre::{Result, eyre::Context};
-use derive_more::Display;
+use color_eyre::{
+    Result,
+    eyre::{Context, OptionExt},
+};
+use derive_more::Debug;
 use fslock::LockFile;
 use itertools::Itertools;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use serde::{Deserialize, Serialize};
+use tap::Pipe;
 use tracing::{debug, instrument, trace};
 use walkdir::WalkDir;
 
-use crate::{fs, hash::Blake3};
+use crate::{
+    cargo::{Profile, read_argv},
+    fs::{self, HashedFile},
+    hash::Blake3,
+};
 
 /// The associated type's state is unlocked.
 /// Used for the typestate pattern.
@@ -40,6 +49,7 @@ pub struct Workspace {
     pub root: Utf8PathBuf,
 
     /// The root of the target directory in the workspace.
+    #[debug(skip)]
     pub target: Utf8PathBuf,
 
     /// The user's Cargo home directory.
@@ -47,7 +57,11 @@ pub struct Workspace {
     /// This is almost definitely not inside the current workspace,
     /// but we record it because we need it to make third party crate file paths
     /// relative so they can be portable across machines.
-    pub cargo_home: Utf8PathBuf,
+    // pub cargo_home: Utf8PathBuf,
+
+    /// Dependencies in the workspace, keyed by [`Dependency::key`].
+    #[debug(skip)]
+    pub dependencies: HashMap<Blake3, Dependency>,
 }
 
 impl Workspace {
@@ -57,52 +71,113 @@ impl Workspace {
     /// to `hurry` and using `--manifest_path` if it is available;
     /// if not then it uses the current working directory.
     #[instrument]
-    pub fn current() -> Result<Self> {
-        // TODO: Should we even support this?
-        // TODO: Should these be parsed higher up and passed in?
-        let mut args = std::env::args().skip_while(|val| !val.starts_with("--manifest-path"));
-
+    pub fn from_argv(argv: &[String]) -> Result<Self> {
         // TODO: Maybe we should just replicate this logic and perform it
         // statically using filesystem operations instead of shelling out? This
         // costs something on the order of 200ms, which is not _terrible_ but
         // feels much slower than if we just did our own filesystem reads.
         let mut cmd = cargo_metadata::MetadataCommand::new();
-        match args.next() {
-            Some(ref p) if p == "--manifest-path" => {
-                cmd.manifest_path(args.next().expect("--manifest-path requires a value"));
-            }
-            Some(p) => {
-                cmd.manifest_path(p.trim_start_matches("--manifest-path="));
-            }
-            None => {}
+        if let Some(p) = read_argv(argv, "--manifest-path") {
+            cmd.manifest_path(p);
         }
-
         let metadata = cmd.exec().context("could not read cargo metadata")?;
         trace!(?metadata, "cargo metadata");
-        let cargo_home = std::env::var("CARGO_HOME")
-            .map(Utf8PathBuf::from)
-            .context("get cargo home")?;
+
+        // let cargo_home = std::env::var("CARGO_HOME")
+        //     .map(Utf8PathBuf::from)
+        //     .context("get cargo home")?;
+
+        // TODO: This currently blows up if we have no lockfile.
+        let lockfile = cargo_lock::Lockfile::load(metadata.workspace_root.join("Cargo.lock"))
+            .context("load cargo lockfile")?;
+        trace!(?lockfile, "cargo lockfile");
+
+        // We only care about third party packages for now.
+        //
+        // From observation, first party packages seem to have
+        // no `source` or `checksum` while third party packages do,
+        // so we just filter anything that doesn't have these.
+        //
+        // In addition, to keep things simple, we filter to only
+        // packages that are in the default registry.
+        //
+        // Only dependencies reported here are actually cached;
+        // anything we exclude here is ignored by the caching system.
+        //
+        // TODO: Support caching packages not in the default registry.
+        // TODO: Support caching first party packages.
+        // TODO: Support caching git etc packages.
+        let dependencies = lockfile
+            .packages
+            .into_iter()
+            .filter_map(|package| match (&package.source, &package.checksum) {
+                (Some(source), Some(checksum)) if source.is_default_registry() => {
+                    debug!(?package, "indexing package");
+                    Dependency::builder()
+                        .checksum(checksum.to_string())
+                        .name(package.name.to_string())
+                        .version(package.version.to_string())
+                        .build()
+                        .pipe(Some)
+                }
+                _ => {
+                    debug!(?package, "skipped indexing package for cache");
+                    None
+                }
+            })
+            .map(|dependency| (dependency.key(), dependency))
+            .collect();
+
         Ok(Self {
             root: metadata.workspace_root,
             target: metadata.target_directory,
-            cargo_home,
+            dependencies,
+            // cargo_home,
         })
     }
 
     /// Open the given named profile directory in the workspace.
-    pub fn open_profile(
-        &self,
-        profile: impl Into<String> + std::fmt::Debug,
-    ) -> Result<ProfileDir<'_, Unlocked>> {
+    pub fn open_profile(&self, profile: &Profile) -> Result<ProfileDir<'_, Unlocked>> {
         ProfileDir::open(self, profile)
     }
 
-    /// Open the `hurry` cache for the given key.
-    pub fn open_cache(
-        &self,
-        key: impl AsRef<Utf8Path> + std::fmt::Debug,
-    ) -> Result<Cache<'_, Unlocked>> {
-        Cache::open_default(self, key)
+    /// Open the `hurry` cache in the default location for the user.
+    pub fn open_cache(&self) -> Result<Cache<'_, Unlocked>> {
+        Cache::open_default(self)
+    }
+}
+
+/// A Cargo dependency.
+///
+/// This isn't the full set of information about a dependency, but it's enough
+/// to identify it uniquely within a workspace for the purposes of caching.
+#[derive(Debug, Builder)]
+pub struct Dependency {
+    /// The name of the dependency.
+    #[builder(into)]
+    pub name: String,
+
+    /// The version of the dependency.
+    #[builder(into)]
+    pub version: String,
+
+    /// The checksum of the dependency.
+    #[builder(into)]
+    pub checksum: String,
+}
+
+impl Dependency {
+    /// Hash key for the dependency.
+    pub fn key(&self) -> Blake3 {
+        Self::key_for(&self.name, &self.version)
+    }
+
+    /// Produce a hash key for a given name and version
+    /// in the same way as the hash key would be produced
+    /// for a [`Dependency`] instance with the same data.
+    pub fn key_for(name: impl AsRef<str>, version: impl AsRef<str>) -> Blake3 {
+        let key = format!("{}.{}", name.as_ref(), version.as_ref());
+        Blake3::from_buffer(key)
     }
 }
 
@@ -131,8 +206,15 @@ pub struct ProfileDir<'ws, State> {
     /// and the value of `profile` is `release`,
     /// the value of `root` would be `/home/me/projects/foo/target/release`.
     ///
-    /// Users should not rely on this though: use the actual value in this field.
-    pub root: Utf8PathBuf,
+    /// Users should not rely on this though:
+    /// use the actual value in this field.
+    ///
+    /// Note: this is intentionally not `pub` because we only want to give
+    /// callers access to the directory when the cache is locked;
+    /// reference the `root` method in the locked implementation block.
+    /// The intention here is to minimize the chance of callers mutating or
+    /// referencing the contents of the cache while it is locked.
+    root: Utf8PathBuf,
 
     /// The profile to which this directory refers.
     ///
@@ -140,25 +222,21 @@ pub struct ProfileDir<'ws, State> {
     /// although users can also define custom profiles, which is why
     /// this value is an opaque string:
     /// https://doc.rust-lang.org/cargo/reference/profiles.html#custom-profiles
-    pub profile: String,
+    pub profile: Profile,
 }
 
 impl<'ws> ProfileDir<'ws, Unlocked> {
     /// Instantiate a new instance for the provided profile in the workspace.
     #[instrument]
-    pub fn open(
-        workspace: &'ws Workspace,
-        profile: impl Into<String> + std::fmt::Debug,
-    ) -> Result<Self> {
-        let profile = profile.into();
-        let root = workspace.root.join("target").join(&profile);
+    pub fn open(workspace: &'ws Workspace, profile: &Profile) -> Result<Self> {
+        let root = workspace.root.join("target").join(profile.as_str());
 
         let lock = root.join(".cargo-lock");
         let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;
 
         Ok(Self {
             state: PhantomData,
-            profile,
+            profile: profile.clone(),
             lock,
             root,
             workspace,
@@ -199,18 +277,27 @@ impl<'ws> ProfileDir<'ws, Locked> {
             Vec::new(),
             |mut acc, entry| -> Result<Vec<BuildUnit>> {
                 let entry = entry.context("walk file")?;
+                let entry = entry.path();
 
                 // Only `*.d` files are valid build units.
-                if !entry.path().ends_with(".d") {
+                if !entry.extension().is_some_and(|ext| ext == "d") {
+                    debug!(?entry, "skip file: not a build unit");
                     return Ok(acc);
                 }
 
-                let content = fs::read_buffered_utf8(entry.path()).context("read file")?;
-                let unit = BuildUnit::parse(self, content).context("parse build unit")?;
+                let content = fs::read_buffered_utf8(entry)
+                    .with_context(|| format!("read build unit: {entry:?}"))?;
+                let unit = BuildUnit::parse(self, content)
+                    .with_context(|| format!("parse build unit: {entry:?}"))?;
                 acc.extend(unit);
                 Ok(acc)
             },
         )
+    }
+
+    /// The root of the profile directory.
+    pub fn root(&self) -> &Utf8Path {
+        &self.root
     }
 }
 
@@ -242,16 +329,28 @@ impl<'ws> ProfileDir<'ws, Locked> {
 /// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/random_state.rs:
 /// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/specialize.rs:
 /// ```
-#[derive(Debug)]
-pub struct BuildUnit<'ws>(BuildUnitOutput<'ws>, Vec<BuildUnitInput<'ws>>);
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BuildUnit {
+    /// The output of this build unit.
+    pub output: BuildUnitOutput,
 
-impl<'ws> BuildUnit<'ws> {
+    /// The inputs of this build unit.
+    pub inputs: Vec<BuildUnitInput>,
+
+    /// The key of the dependency which built this unit.
+    ///
+    /// Currently, only build units that came from third party dependencies
+    /// are supported for caching.
+    pub dependency_key: Option<Blake3>,
+}
+
+impl BuildUnit {
     /// Parse a file to create the instance in the provided profile.
     #[instrument]
     pub fn parse(
-        profile: &'ws ProfileDir<'ws, Locked>,
+        profile: &ProfileDir<Locked>,
         content: impl AsRef<str> + std::fmt::Debug,
-    ) -> Result<Vec<BuildUnit<'ws>>> {
+    ) -> Result<Vec<BuildUnit>> {
         let content = content.as_ref();
 
         // TODO: Parallelize this.
@@ -271,8 +370,9 @@ impl<'ws> BuildUnit<'ws> {
             // which are not copied into the `deps/` directory anyway
             // and therefore do not need to be considered.
             .filter(|(_, inputs)| !inputs.is_empty())
-            .map(|(output, inputs)| Self::new_from_strs(profile, output, &inputs))
-            .collect()
+            .filter_map(|(output, inputs)| Self::new_from_strs(profile, output, &inputs).ok())
+            .collect::<Vec<_>>()
+            .pipe(Ok)
     }
 
     /// Create an instance from the provided output and input files,
@@ -280,19 +380,11 @@ impl<'ws> BuildUnit<'ws> {
     ///
     /// This isn't public because it's really only meant to be called from
     /// `parse` as a convenience/code organization function.
-    fn new_from_strs(
-        profile: &'ws ProfileDir<'ws, Locked>,
-        output: &str,
-        inputs: &[&str],
-    ) -> Result<Self> {
-        let output = Utf8PathBuf::from_str(output)
-            .with_context(|| format!("create output path from: {output}"))?;
+    fn new_from_strs(profile: &ProfileDir<Locked>, output: &str, inputs: &[&str]) -> Result<Self> {
+        let output = fs::into_path(output).context("create output path")?;
         let inputs = inputs
             .into_iter()
-            .map(|input| {
-                Utf8PathBuf::from_str(input)
-                    .with_context(|| format!("create input path from: {input}"))
-            })
+            .map(|input| fs::into_path(input).context("create input path"))
             .collect::<Result<Vec<_>>>()?;
         Self::new(profile, output, inputs)
     }
@@ -300,7 +392,7 @@ impl<'ws> BuildUnit<'ws> {
     /// Create an instance from the provided output and input files.
     #[instrument]
     pub fn new(
-        profile: &'ws ProfileDir<'ws, Locked>,
+        profile: &ProfileDir<Locked>,
         output: impl AsRef<Utf8Path> + std::fmt::Debug,
         inputs: impl AsRef<[Utf8PathBuf]> + std::fmt::Debug,
     ) -> Result<Self> {
@@ -316,88 +408,131 @@ impl<'ws> BuildUnit<'ws> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Self(output, inputs))
-    }
+        // TODO: we don't currently prioritize certain inputs,
+        // or do anything to handle (or indeed check) when inputs
+        // don't agree on a source. I don't actually know if this ever
+        // happens, but we should figure it out.
+        let dependency_key = inputs.iter().find_map(|input| {
+            // Input paths are in the form:
+            // `.cargo/registry/src/index.crates.io-$HASH/$NAME-$VERSION/src/lib.rs`.
+            // We are after the `$NAME` and `$VERSION` here.
+            //
+            // TODO: this breaks on anything other than crates
+            // in the public registry. Currently this is OK because we
+            // similarly filter dependencies when listing them in the workspace,
+            // but we should fix this eventually. Maybe we could read
+            // the actual `Cargo.toml` at the directory that is the shared
+            // common root of all inputs for this information?
+            input
+                .path_rel()
+                .components()
+                .tuple_windows()
+                .find_map(|(parent, child)| {
+                    if parent.as_str().contains("index.crates.io") {
+                        if let Some((name, version)) = child.as_str().split_once('-') {
+                            return Some(Dependency::key_for(name, version));
+                        }
+                    }
+                    None
+                })
+        });
 
-    /// The output of the build unit.
-    pub fn output(&self) -> &BuildUnitOutput {
-        &self.0
-    }
-
-    /// The inputs of the build unit.
-    pub fn inputs(&self) -> &[BuildUnitInput] {
-        &self.1
+        Ok(Self {
+            output,
+            inputs,
+            dependency_key,
+        })
     }
 }
 
 /// An output file for the build unit.
-#[derive(Debug)]
-pub struct BuildUnitOutput<'ws> {
-    /// The profile to which this output belongs.
-    profile: &'ws ProfileDir<'ws, Locked>,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BuildUnitOutput(HashedFile);
 
-    /// The path on disk for the output file.
-    ///
-    /// This is a relative path to [`ProfileDir::root`]
-    /// in the associated `profile`.
-    path: Utf8PathBuf,
-
-    /// The Blake3 hash of the file's content on disk.
-    hash: Blake3,
-}
-
-impl<'ws> BuildUnitOutput<'ws> {
+impl BuildUnitOutput {
     /// Create the output from the provided path on disk.
-    pub fn read(profile: &'ws ProfileDir<'ws, Locked>, path: &Utf8Path) -> Result<Self> {
-        let hash = Blake3::from_file(path).context("hash output file")?;
-        Ok(Self {
-            profile,
-            path: path.to_owned(),
-            hash,
-        })
+    pub fn read(profile: &ProfileDir<Locked>, path: &Utf8Path) -> Result<Self> {
+        let file = HashedFile::read(path).context("hash file")?;
+
+        // Need to make the file path relative to the profile directory
+        // so that this can be cross platform and cross project.
+        //
+        // For now we report any case where this isn't valid as an error.
+        // This may not be the right decision forever, but for now we need this
+        // because the current system makes this assumption.
+        let path = file
+            .path
+            .strip_prefix(profile.root())
+            .with_context(|| format!("make {path:?} relative to {:?}", profile.root()))?;
+
+        HashedFile::builder()
+            .path(path)
+            .hash(file.hash)
+            .build()
+            .pipe(Self)
+            .pipe(Ok)
+    }
+
+    /// The hash of the file content.
+    pub fn hash(&self) -> &Blake3 {
+        &self.0.hash
+    }
+
+    /// The path relative to [`ProfileDir::root()`] for the file.
+    pub fn path_rel(&self) -> &Utf8Path {
+        &self.0.path
+    }
+
+    /// Compute the full path using the given profile.
+    pub fn path(&self, profile: &ProfileDir<Locked>) -> Utf8PathBuf {
+        profile.root().join(&self.0.path)
     }
 }
 
 /// An input for a build unit.
-#[derive(Debug)]
-pub struct BuildUnitInput<'ws> {
-    /// The workspace to which this input belongs.
-    workspace: &'ws Workspace,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BuildUnitInput(HashedFile);
 
-    /// The path on disk for the input file.
-    ///
-    /// This path is relative to [`Workspace::cargo_home`]
-    /// in the associated `workspace`.
-    path: Utf8PathBuf,
-
-    /// The Blake3 hash of the file's content on disk.
-    hash: Blake3,
-}
-
-impl<'ws> BuildUnitInput<'ws> {
+impl BuildUnitInput {
     /// Create the input from the provided path on disk.
-    pub fn read(workspace: &'ws Workspace, path: &Utf8Path) -> Result<Self> {
-        let hash = Blake3::from_file(path).with_context(|| format!("hash input file {path:?}"))?;
+    #[instrument]
+    pub fn read(_workspace: &Workspace, path: &Utf8Path) -> Result<Self> {
+        let file = HashedFile::read(path).context("hash file")?;
 
+        // Need to make the file path relative to the cargo home directory
+        // so that this can be cross platform and cross machine.
+        //
         // For now we report any case where this isn't valid as an error.
-        // I suspect that it'll be possible to have input paths that are
-        // relative to the current directory but right now the overall design
-        // assumes that they are relative to the cargo home directory,
-        // so if we find this to be the case we'll need to revisit the design.
-        // And the only way to know if this happens is to have errors surfaced.
-        let path = path.strip_prefix(&workspace.cargo_home).with_context(|| {
-            format!(
-                "make input {path:?} relative to cargo home {:?}",
-                workspace.cargo_home
-            )
-        })?;
+        // This may not be the right decision forever, but for now we need this
+        // because the current system makes this assumption.
+        // let path = file
+        //     .path
+        //     .strip_prefix(&workspace.cargo_home)
+        //     .with_context(|| format!("make {path:?} relative to {:?}", workspace.cargo_home))?
+        //     .to_owned();
 
-        Ok(Self {
-            workspace,
-            path: path.to_owned(),
-            hash,
-        })
+        HashedFile::builder()
+            .path(file.path)
+            .hash(file.hash)
+            .build()
+            .pipe(Self)
+            .pipe(Ok)
     }
+
+    /// The hash of the file content.
+    pub fn hash(&self) -> &Blake3 {
+        &self.0.hash
+    }
+
+    /// The path relative to [`Workspace::cargo_home`] for the file.
+    pub fn path_rel(&self) -> &Utf8Path {
+        &self.0.path
+    }
+
+    // /// Compute the full path using the given workspace.
+    // pub fn path(&self, workspace: &Workspace) -> Utf8PathBuf {
+    //     workspace.cargo_home.join(&self.0.path)
+    // }
 }
 
 /// The `hurry` cache corresponding to a given [`Workspace`].
@@ -435,18 +570,13 @@ impl<'ws, L> Cache<'ws, L> {
 
 /// Implementation for all lifetimes and the unlocked state only.
 impl<'ws> Cache<'ws, Unlocked> {
-    /// Open the cache for the given workspace for the given cache key
-    /// in the default location for the user.
+    /// Open the cache in the default location for the user.
     #[instrument]
-    pub fn open_default(
-        workspace: &'ws Workspace,
-        key: impl AsRef<Utf8Path> + std::fmt::Debug,
-    ) -> Result<Self> {
+    pub fn open_default(workspace: &'ws Workspace) -> Result<Self> {
         let root = fs::user_global_cache_path()
             .context("find user cache path")?
             .join("cargo")
-            .join("ws")
-            .join(key);
+            .join("ws");
 
         std::fs::create_dir_all(&root).context("ensure directory exists")?;
         let lock = root.join(Self::LOCKFILE_NAME);
@@ -490,6 +620,30 @@ impl<'ws> Cache<'ws, Locked> {
         &self.root
     }
 
+    /// Store the provided record in the cache.
+    #[instrument]
+    pub fn store(&self, record: &CacheRecord) -> Result<()> {
+        let name = self.root.join(record.dependency_key.as_str());
+        let content = serde_json::to_string_pretty(record).context("encode record")?;
+        std::fs::write(name, content).context("store cache record")
+    }
+
+    /// Retrieve the record from the cache for the given dependency key.
+    #[instrument]
+    pub fn retrieve(
+        &self,
+        key: impl AsRef<Blake3> + std::fmt::Debug,
+    ) -> Result<Option<CacheRecord>> {
+        let name = self.root.join(key.as_ref().as_str());
+        match std::fs::read_to_string(name) {
+            Ok(content) => Ok(Some(
+                serde_json::from_str(&content).context("decode record")?,
+            )),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err).context("read cache record"),
+        }
+    }
+
     /// Check whether the cache is empty (other than the lockfile).
     pub fn is_empty(&self) -> Result<bool> {
         for entry in std::fs::read_dir(&self.root).context("read cache directory")? {
@@ -500,4 +654,25 @@ impl<'ws> Cache<'ws, Locked> {
         }
         Ok(true)
     }
+}
+
+/// A cache record for a third party crate.
+///
+/// A cache record links a dependency (in `Cargo.toml`)
+/// to its CAS hash and to its location inside the profile folder.
+#[derive(Debug, Serialize, Deserialize, Builder)]
+pub struct CacheRecord {
+    /// The hash of the cached artifact.
+    /// Used to reference the artifact in the `hurry` CAS.
+    #[builder(into)]
+    pub hash: Blake3,
+
+    /// The dependency to which this cache corresponds.
+    #[builder(into)]
+    pub dependency_key: Blake3,
+
+    /// The relative location within the profile folder
+    /// to copy the cached artifact when restoring the cache.
+    #[builder(into)]
+    pub target: Utf8PathBuf,
 }

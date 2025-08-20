@@ -5,10 +5,12 @@
 
 use std::{
     path::{Path, PathBuf},
+    str::FromStr,
     time::SystemTime,
 };
 
-use cargo_metadata::camino::Utf8PathBuf;
+use bon::Builder;
+use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
 use color_eyre::{
     Result,
     eyre::{Context, OptionExt},
@@ -16,9 +18,12 @@ use color_eyre::{
 use dashmap::DashSet;
 use filetime::{FileTime, set_file_handle_times};
 use rayon::iter::{ParallelBridge, ParallelIterator};
+use serde::{Deserialize, Serialize};
 use tap::{Pipe, TryConv};
 use tracing::{debug, instrument, trace, warn};
 use walkdir::WalkDir;
+
+use crate::hash::Blake3;
 
 /// Determine the canonical cache path for the current user, if possible.
 ///
@@ -37,6 +42,12 @@ pub fn user_global_cache_path() -> Result<Utf8PathBuf> {
         .pipe(Ok)
 }
 
+/// Convert the provided string into a path, if valid.
+pub fn into_path(path: impl AsRef<str>) -> Result<Utf8PathBuf> {
+    let path = path.as_ref();
+    Utf8PathBuf::from_str(path).with_context(|| format!("convert to path: {path}"))
+}
+
 /// Recursively copy a directory in parallel.
 ///
 /// - Preserves file `mtime` and `atime`.
@@ -51,18 +62,18 @@ pub fn user_global_cache_path() -> Result<Utf8PathBuf> {
 // - `cargo vendor`: https://doc.rust-lang.org/cargo/commands/cargo-vendor.html
 #[instrument]
 pub fn copy_dir(
-    source: impl AsRef<Path> + std::fmt::Debug,
-    destination: impl AsRef<Path> + std::fmt::Debug,
+    src: impl AsRef<Path> + std::fmt::Debug,
+    dst: impl AsRef<Path> + std::fmt::Debug,
 ) -> Result<()> {
-    let source = source.as_ref();
-    let destination = destination.as_ref();
-    debug!(?source, ?destination, "copying directory recursively");
+    let src = src.as_ref();
+    let dst = dst.as_ref();
+    debug!(?src, ?dst, "copying directory recursively");
 
     // We use this to ensure that we actually only create any given parent
     // once per overall copy operation.
     let created_parents = DashSet::<PathBuf, _>::with_hasher(ahash::RandomState::default());
 
-    WalkDir::new(source)
+    WalkDir::new(src)
         .into_iter()
         .par_bridge()
         .try_for_each(|entry| {
@@ -80,8 +91,8 @@ pub fn copy_dir(
 
             // We delay these vars until here so that we can skip allocating/possible error path
             // for things that we don't actually care about.
-            let rel = src.strip_prefix(source).context("strip prefix")?;
-            let dst = destination.join(rel);
+            let rel = src.strip_prefix(src).context("strip prefix")?;
+            let dst = dst.join(rel);
 
             // We only need to copy the file if it has actually changed
             // (or if it doesn't exist) in the destination.
@@ -99,7 +110,7 @@ pub fn copy_dir(
                 }
                 FileComparison::DestinationMissing => {
                     debug!(?src, ?dst, "file needs copy: destination missing");
-                    create_parents_of(&created_parents, destination, rel)
+                    create_parents_of(&created_parents, &dst, rel)
                         .with_context(|| format!("create parents of {rel:?}"))?;
                     copy_file(src, &dst).context("copy file")?;
                 }
@@ -147,7 +158,13 @@ pub enum FileComparison {
 // the content, e.g. comparing using a hash function. We should benchmark and test
 // to determine whether this is needed.
 #[instrument]
-pub fn compare_file_sync(src: &Path, dst: &Path) -> Result<FileComparison> {
+pub fn compare_file_sync(
+    src: impl AsRef<Path> + std::fmt::Debug,
+    dst: impl AsRef<Path> + std::fmt::Debug,
+) -> Result<FileComparison> {
+    let src = src.as_ref();
+    let dst = dst.as_ref();
+
     // Statting destination first allows us to skip an exists check.
     match std::fs::metadata(dst) {
         Ok(dst_meta) => {
@@ -194,6 +211,17 @@ pub fn compare_file_sync(src: &Path, dst: &Path) -> Result<FileComparison> {
     Ok(FileComparison::DestinationInSync)
 }
 
+/// Copy the file from `src` to the root of `dir` with the provided `name`.
+#[instrument]
+pub fn copy_file_into(
+    src: impl AsRef<Path> + std::fmt::Debug,
+    dir: impl AsRef<Path> + std::fmt::Debug,
+    name: impl AsRef<str> + std::fmt::Debug,
+) -> Result<()> {
+    let dst = dir.as_ref().join(name.as_ref());
+    copy_file(src, &dst)
+}
+
 /// Copy the file from `src` to `dst`.
 ///
 /// Preserves some metadata from `src`:
@@ -209,7 +237,10 @@ pub fn compare_file_sync(src: &Path, dst: &Path) -> Result<FileComparison> {
 // TODO: optionally use `rustix::fs::copy_file_range` or similar to do linux copies
 // fully in kernel instead of passing through userspace(?)
 #[instrument]
-pub fn copy_file(src: &Path, dst: &Path) -> Result<()> {
+pub fn copy_file(
+    src: impl AsRef<Path> + std::fmt::Debug,
+    dst: impl AsRef<Path> + std::fmt::Debug,
+) -> Result<()> {
     debug!(?src, ?dst, "copy file");
 
     // Manually opening the source file allows us to access the stat info directly,
@@ -261,9 +292,11 @@ pub fn copy_file(src: &Path, dst: &Path) -> Result<()> {
 #[instrument(skip(created_parents))]
 pub fn create_parents_of(
     created_parents: &DashSet<PathBuf, ahash::RandomState>,
-    destination_root: &Path,
-    file_rel: &Path,
+    destination_root: impl AsRef<Path> + std::fmt::Debug,
+    file_rel: impl AsRef<Path> + std::fmt::Debug,
 ) -> Result<()> {
+    let destination_root = destination_root.as_ref();
+    let file_rel = file_rel.as_ref();
     let parent_rel = file_rel.parent().ok_or_eyre("get parent directory")?;
     if created_parents.contains(parent_rel) {
         trace!(?parent_rel, "parent directory already exists");
@@ -296,4 +329,26 @@ pub fn read_buffered(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Vec<u8>
 pub fn read_buffered_utf8(path: impl AsRef<Path> + std::fmt::Debug) -> Result<String> {
     let path = path.as_ref();
     std::fs::read_to_string(path).with_context(|| format!("read file: {path:?}"))
+}
+
+/// A file on disk and the hash of its contents.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize, Builder)]
+pub struct HashedFile {
+    /// The path on disk for the file.
+    #[builder(into)]
+    pub path: Utf8PathBuf,
+
+    /// The Blake3 hash of the file's content on disk.
+    #[builder(into)]
+    pub hash: Blake3,
+}
+
+impl HashedFile {
+    /// Create the output from the provided path on disk.
+    #[instrument]
+    pub fn read(path: impl Into<Utf8PathBuf> + std::fmt::Debug) -> Result<Self> {
+        let path = path.into();
+        let hash = Blake3::from_file(&path).with_context(|| format!("hash {path:?}"))?;
+        Ok(Self { path, hash })
+    }
 }

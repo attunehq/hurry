@@ -8,57 +8,53 @@ use std::time::Instant;
 
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
-use tracing::{info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::{
     cargo::{
-        invoke,
-        workspace::{Cache, Locked, Workspace},
+        Profile, invoke,
+        workspace::{Cache, CacheRecord, Locked, Workspace},
     },
+    cas::Cas,
     fs,
-    hash::Blake3,
 };
 
 /// Options for `cargo build`
 #[derive(Clone, Args, Debug)]
 pub struct Options {
+    /// Force updating the cache even if it already exists.
+    #[arg(long, default_value_t = false)]
+    force_cache_update: bool,
+
     /// These arguments are passed directly to `cargo build` as provided.
     #[arg(
         num_args = ..,
         trailing_var_arg = true,
         allow_hyphen_values = true,
+        value_name = "ARGS",
     )]
     argv: Vec<String>,
+}
+
+impl Options {
+    /// Get the profile specified by the user.
+    pub fn profile(&self) -> Profile {
+        Profile::from_argv(&self.argv)
+    }
 }
 
 #[instrument]
 pub fn exec(options: Options) -> Result<()> {
     let start = Instant::now();
-    let workspace = Workspace::current().context("open workspace")?;
+    let cas = Cas::open_default().context("open cas")?;
+    let workspace = Workspace::from_argv(&options.argv).context("open workspace")?;
 
-    // TODO: we need to separate various cargo flags in the cache
-    // - Release vs debug builds
-    // - Different sets of features
-    // - Different targets (linux/x86_64 vs darwin/aarch64, etc)
-    // - Probably more
-    //
-    // TODO: we currently assume one cache key is good enough for the whole
-    // workspace, but this is definitely not correct. We'll need to heavily use
-    // the CAS to cache individual items from different workspaces. In reality,
-    // the "cache" as a concept may go away in favor of pure CAS
-    // (maybe separated by build tool).
-    let key = Blake3::from_file(workspace.root.join("Cargo.lock"))
-        .with_context(|| format!("hash `Cargo.lock` inside {}", workspace.root))?;
-    let cache = workspace
-        .open_cache(key.as_str())
-        .with_context(|| format!("open cache for key {key}"))?;
-    let cache = cache
-        .lock()
-        .with_context(|| format!("lock cache for key {key}"))?;
+    let cache = workspace.open_cache().context("open cache")?;
+    let cache = cache.lock().context("lock cache")?;
 
     // This is split into an inner function so that we can reliably
     // release the lock if it fails.
-    let result = exec_inner(start, options, &workspace, &cache);
+    let result = exec_inner(start, options, &cas, &workspace, &cache);
     if let Err(err) = cache.unlock() {
         // This shouldn't happen, but if it does, we should warn users.
         // TODO: figure out a way to recover.
@@ -74,9 +70,12 @@ pub fn exec(options: Options) -> Result<()> {
 fn exec_inner(
     start: Instant,
     options: Options,
+    cas: &Cas,
     workspace: &Workspace,
     cache: &Cache<'_, Locked>,
 ) -> Result<()> {
+    let profile = options.profile();
+
     let cache_exists = !cache.is_empty().context("check if cache is empty")?;
     if cache_exists {
         info!(?cache, "Restoring target directory from cache");
@@ -102,9 +101,9 @@ fn exec_inner(
     //
     // TODO: watch and cache the target directory _as the build occurs_
     // rather than having to copy it all at the end.
-    if !cache_exists {
+    if !cache_exists || options.force_cache_update {
         info!("Caching built target directory");
-        match cache_target_from_workspace(&workspace, &cache) {
+        match cache_target_from_workspace(cas, &workspace, &cache, &profile) {
             Ok(_) => info!(elapsed = ?start.elapsed(), "cached target directory"),
             Err(err) => warn!(elapsed = ?start.elapsed(), ?err, "failed to cache target directory"),
         }
@@ -120,24 +119,66 @@ fn exec_inner(
 // otherwise fall back to a symlink.
 #[instrument(skip_all)]
 fn restore_target_from_cache(workspace: &Workspace, cache: &Cache<Locked>) -> Result<()> {
-    fs::copy_dir(cache.root(), &workspace.target)
+    warn!("restoring cache is currently a no-op");
+    Ok(())
 }
 
 /// Cache the target directory to the cache.
-#[instrument(skip_all)]
-fn cache_target_from_workspace(workspace: &Workspace, cache: &Cache<Locked>) -> Result<()> {
-    // TODO: support other profiles
+///
+/// When **restoring** `target/` in the future, we need to be able to restore
+/// from scratch without an existing `target/` directory. This is for two
+/// reasons: first, the project may actually be fresh, with no `target/`
+/// at all. Second, the `target/` may be outdated.
+/// This means that we can't rely on the functionality that `cargo`
+/// would typically provide for us inside `target/`, such as `.fingerprint`
+/// or `.d` files to find dependencies or hashes.
+///
+/// Of course, when **caching** `target/`, we can (and indeed must) assume
+/// that the contents of `target/` are correct and trustworthy. But we must
+/// copy all the data necessary to recreate the important parts of `target/`
+/// in a future fresh start environment.
+///
+/// ## Third party crates
+///
+/// The backup process enumerates dependencies (third party crates)
+/// in the project. For each discovered dependency, it:
+/// - Finds the built `.rlib` and `.rmeta` files
+/// - Finds tertiary files like `.fingerprint` etc
+/// - Stores the files in the CAS in such a way that they can be found
+///   using only data inside `Cargo.lock` in the future.
+#[instrument]
+fn cache_target_from_workspace(
+    cas: &Cas,
+    workspace: &Workspace,
+    cache: &Cache<Locked>,
+    profile: &Profile,
+) -> Result<()> {
     let target = workspace
-        .open_profile("debug")
-        .context("open debug profile")?;
+        .open_profile(profile)
+        .with_context(|| format!("open profile: {profile:?}"))
+        .and_then(|target| target.lock().context("lock profile: {profile:?}"))?;
 
-    let target = target.lock().context("lock profile")?;
     let units = target
         .enumerate_buildunits()
         .context("enumerate build units")?;
+    debug!(?units, "enumerated build units");
     for unit in units {
-        todo!()
+        if let Some(key) = &unit.dependency_key {
+            let output_file = unit.output.path(&target);
+            cas.copy_from(&output_file, unit.output.hash())
+                .context("backup output file")?;
+
+            let record = CacheRecord::builder()
+                .dependency_key(key)
+                .hash(unit.output.hash())
+                .target(unit.output.path_rel())
+                .build();
+            cache.store(&record).context("store cache record")?;
+            debug!(?unit, ?record, "stored cache record");
+        } else {
+            debug!(?unit, "skipped unit: no dependency");
+        }
     }
 
-    fs::copy_dir(&workspace.target, cache.root())
+    Ok(())
 }

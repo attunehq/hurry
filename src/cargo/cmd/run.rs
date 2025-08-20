@@ -18,6 +18,6 @@ pub struct Options {
 
 #[instrument]
 pub fn exec(options: Options) -> Result<()> {
-    let workspace = Workspace::current().context("open workspace")?;
+    let workspace = Workspace::from_argv(&options.argv).context("open workspace")?;
     invoke(&workspace, "run", options.argv)
 }
