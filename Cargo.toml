@@ -20,3 +20,4 @@ cargo_metadata = "0.19.2"
 camino = "1.1.9"
 tracing-flame = "0.2.0"
 sysinfo = { version = "0.35.1", features = ["apple-sandbox"] }
+interprocess = "2.2.3"
