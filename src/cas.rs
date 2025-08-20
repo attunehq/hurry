@@ -41,7 +41,19 @@ impl Cas {
     /// Copy the file at the provided path into the CAS using the provided key.
     #[instrument]
     pub fn copy_from(&self, src: &Utf8Path, key: impl AsRef<str> + std::fmt::Debug) -> Result<()> {
-        fs::copy_file_into(src, &self.root, key.as_ref())
+        let dst = self.root.join(key.as_ref());
+        fs::copy_file(src, &dst)
+    }
+
+    /// Extract the file with the referenced key to the destination path.
+    /// If the destination's parent directory doesn't exist, it is created.
+    #[instrument]
+    pub fn extract_to(&self, key: impl AsRef<str> + std::fmt::Debug, dst: &Utf8Path) -> Result<()> {
+        let src = self.root.join(key.as_ref());
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent).context("create parent directory")?;
+        }
+        fs::copy_file(src, dst)
     }
 }
 

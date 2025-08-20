@@ -211,17 +211,6 @@ pub fn compare_file_sync(
     Ok(FileComparison::DestinationInSync)
 }
 
-/// Copy the file from `src` to the root of `dir` with the provided `name`.
-#[instrument]
-pub fn copy_file_into(
-    src: impl AsRef<Path> + std::fmt::Debug,
-    dir: impl AsRef<Path> + std::fmt::Debug,
-    name: impl AsRef<str> + std::fmt::Debug,
-) -> Result<()> {
-    let dst = dir.as_ref().join(name.as_ref());
-    copy_file(src, &dst)
-}
-
 /// Copy the file from `src` to `dst`.
 ///
 /// Preserves some metadata from `src`:

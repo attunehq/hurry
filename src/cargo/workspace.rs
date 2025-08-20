@@ -6,7 +6,7 @@ use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context, eyre},
 };
-use derive_more::Debug;
+use derive_more::{Debug, Display};
 use fslock::LockFile;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -162,7 +162,8 @@ impl Workspace {
 /// independently and restored in other projects based on a matching
 /// cache key derived from other instances of `hurry` reading the
 /// `Cargo.lock` and other workspace/compiler/platform metadata.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Builder)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Builder)]
+#[display("{name}@{version}")]
 pub struct Dependency {
     /// The name of the dependency.
     #[builder(into)]
@@ -269,6 +270,7 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
     #[instrument]
     pub fn open(workspace: &'ws Workspace, profile: &Profile) -> Result<Self> {
         let root = workspace.root.join("target").join(profile.as_str());
+        std::fs::create_dir_all(&root).context("create profile directory")?;
 
         let lock = root.join(".cargo-lock");
         let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;

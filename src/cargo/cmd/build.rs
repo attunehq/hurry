@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, instrument, trace, warn};
 
 use crate::{
     cargo::{
@@ -21,9 +21,13 @@ use crate::{
 /// Options for `cargo build`
 #[derive(Clone, Args, Debug)]
 pub struct Options {
-    /// Force updating the cache even if it already exists.
+    /// Always back up the cache, if there is a `target` directory to use.
     #[arg(long, default_value_t = false)]
-    force_cache_update: bool,
+    force_backup: bool,
+
+    /// Skip the Cargo build, only performing the cache actions.
+    #[arg(long, default_value_t = false)]
+    skip_build: bool,
 
     /// These arguments are passed directly to `cargo build` as provided.
     #[arg(
@@ -78,7 +82,7 @@ fn exec_inner(
     let cache_exists = !cache.is_empty().context("check if cache is empty")?;
     if cache_exists {
         info!(?cache, "Restoring target directory from cache");
-        match restore_target_from_cache(&workspace, &cache) {
+        match restore_target_from_cache(cas, &workspace, &cache, &profile) {
             Ok(_) => info!(elapsed = ?start.elapsed(), "restored cache"),
             Err(err) => warn!(elapsed = ?start.elapsed(), ?err, "failed to restore cache"),
         }
@@ -88,8 +92,10 @@ fn exec_inner(
     // or if we never had a cache, we need to build it-
     // this is because we currently only cache based on lockfile hash;
     // if the first-party code has changed we'll need to rebuild.
-    info!("Building target directory");
-    invoke(&workspace, "build", &options.argv).context("build with cargo")?;
+    if !options.skip_build {
+        info!("Building target directory");
+        invoke(&workspace, "build", &options.argv).context("build with cargo")?;
+    }
 
     // If we didn't have a cache, we cache the target directory
     // after the build finishes.
@@ -100,7 +106,7 @@ fn exec_inner(
     //
     // TODO: watch and cache the target directory _as the build occurs_
     // rather than having to copy it all at the end.
-    if !cache_exists || options.force_cache_update {
+    if !cache_exists || options.force_backup {
         info!("Caching built target directory");
         match cache_target_from_workspace(cas, &workspace, &cache, &profile) {
             Ok(_) => info!(elapsed = ?start.elapsed(), "cached target directory"),
@@ -108,17 +114,6 @@ fn exec_inner(
         }
     }
 
-    Ok(())
-}
-
-/// Restore the target directory from the cache.
-//
-// TODO: Today we unconditionally copy the contents.
-// Implement with copy-on-write when possible;
-// otherwise fall back to a symlink.
-#[instrument(skip_all)]
-fn restore_target_from_cache(_workspace: &Workspace, _cache: &Cache<Locked>) -> Result<()> {
-    warn!("restoring cache is currently a no-op");
     Ok(())
 }
 
@@ -154,13 +149,12 @@ fn cache_target_from_workspace(
 ) -> Result<()> {
     let target = workspace
         .open_profile(profile)
-        .with_context(|| format!("open profile: {profile:?}"))
-        .and_then(|target| target.lock().context("lock profile: {profile:?}"))?;
+        .context("open profile")
+        .and_then(|target| target.lock().context("lock profile"))?;
 
     let units = target
         .enumerate_buildunits()
         .context("enumerate build units")?;
-    debug!(?units, "enumerated build units");
     for unit in units {
         if let Some(key) = &unit.dependency_key {
             let output_file = unit.output.path(&target);
@@ -177,6 +171,47 @@ fn cache_target_from_workspace(
         } else {
             debug!(?unit, "skipped unit: no dependency");
         }
+    }
+
+    Ok(())
+}
+
+/// Restore the target directory from the cache.
+//
+// TODO: Today we unconditionally copy files.
+// Implement with copy-on-write when possible;
+// otherwise fall back to a symlink.
+#[instrument(skip_all)]
+fn restore_target_from_cache(
+    cas: &Cas,
+    workspace: &Workspace,
+    cache: &Cache<Locked>,
+    profile: &Profile,
+) -> Result<()> {
+    let target = workspace
+        .open_profile(profile)
+        .context("open profile")
+        .and_then(|target| target.lock().context("lock profile"))?;
+
+    // When backing up a `target/` directory, we enumerate
+    // the build units before backing up dependencies.
+    // But when we restore, we don't have a target directory
+    // (or don't trust it), so we can't do that here.
+    // Instead, we just enumerate dependencies
+    // and try to find some to restore.
+    for (key, dependency) in &workspace.dependencies {
+        let Some(record) = cache
+            .retrieve(key)
+            .with_context(|| format!("retrieve cache record for dependency: {dependency}"))?
+        else {
+            trace!(?key, ?dependency, "no cache record for dependency");
+            continue;
+        };
+
+        let dst = target.root().join(&record.target);
+        cas.extract_to(&record.hash, &dst)
+            .context("extract backed up crate from cas")?;
+        trace!(?key, ?dependency, ?dst, "restored crate");
     }
 
     Ok(())
