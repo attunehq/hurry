@@ -1,9 +1,12 @@
 use std::iter::once;
 
+use bon::Builder;
+use cargo_metadata::camino::Utf8PathBuf;
 use color_eyre::{
     Result,
     eyre::{Context, bail},
 };
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 mod cmd;
@@ -11,7 +14,7 @@ mod workspace;
 
 pub use cmd::*;
 
-use crate::cargo::workspace::Workspace;
+use crate::{cargo::workspace::Workspace, hash::Blake3};
 
 /// Invoke a cargo subcommand with the given arguments.
 #[instrument(skip_all)]
@@ -36,4 +39,25 @@ pub fn invoke(
     } else {
         bail!("cargo exited with status: {status}");
     }
+}
+
+/// A cache record for a third party crate.
+///
+/// A cache record links a dependency (in `Cargo.toml`)
+/// to its CAS hash and to its location inside the profile folder.
+#[derive(Debug, Serialize, Deserialize, Builder)]
+pub struct CacheRecord {
+    /// The hash of the cached artifact.
+    /// Used to reference the artifact in the `hurry` CAS.
+    #[builder(into)]
+    pub hash: Blake3,
+
+    /// The dependency to which this cache corresponds.
+    #[builder(into)]
+    pub dependency_key: Blake3,
+
+    /// The relative location within the profile folder
+    /// to copy the cached artifact when restoring the cache.
+    #[builder(into)]
+    pub target: Utf8PathBuf,
 }

@@ -12,11 +12,10 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::{
     cargo::{
-        Profile, invoke,
-        workspace::{Cache, CacheRecord, Locked, Workspace},
+        CacheRecord, Profile, invoke,
+        workspace::{Cache, Locked, Workspace},
     },
     cas::Cas,
-    fs,
 };
 
 /// Options for `cargo build`
@@ -118,7 +117,7 @@ fn exec_inner(
 // Implement with copy-on-write when possible;
 // otherwise fall back to a symlink.
 #[instrument(skip_all)]
-fn restore_target_from_cache(workspace: &Workspace, cache: &Cache<Locked>) -> Result<()> {
+fn restore_target_from_cache(_workspace: &Workspace, _cache: &Cache<Locked>) -> Result<()> {
     warn!("restoring cache is currently a no-op");
     Ok(())
 }

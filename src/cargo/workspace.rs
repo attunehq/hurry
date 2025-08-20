@@ -1,30 +1,21 @@
-use std::{
-    collections::{HashMap, HashSet, hash_map::Entry},
-    marker::PhantomData,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::{collections::HashMap, marker::PhantomData};
 
-use bon::Builder;
-use cargo_metadata::{
-    Metadata,
-    camino::{Utf8Path, Utf8PathBuf},
-};
+use bon::{Builder, bon};
+use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
 use color_eyre::{
-    Result,
-    eyre::{Context, OptionExt},
+    Result, Section, SectionExt,
+    eyre::{Context, eyre},
 };
 use derive_more::Debug;
 use fslock::LockFile;
 use itertools::Itertools;
-use rayon::iter::{ParallelBridge, ParallelIterator};
 use serde::{Deserialize, Serialize};
-use tap::Pipe;
+use tap::{Pipe, Tap};
 use tracing::{debug, instrument, trace};
 use walkdir::WalkDir;
 
 use crate::{
-    cargo::{Profile, read_argv},
+    cargo::{CacheRecord, Profile, read_argv},
     fs::{self, HashedFile},
     hash::Blake3,
 };
@@ -52,12 +43,8 @@ pub struct Workspace {
     #[debug(skip)]
     pub target: Utf8PathBuf,
 
-    /// The user's Cargo home directory.
-    ///
-    /// This is almost definitely not inside the current workspace,
-    /// but we record it because we need it to make third party crate file paths
-    /// relative so they can be portable across machines.
-    // pub cargo_home: Utf8PathBuf,
+    /// Parsed `rustc` metadata relating to the current workspace.
+    pub rustc: RustcMetadata,
 
     /// Dependencies in the workspace, keyed by [`Dependency::key`].
     #[debug(skip)]
@@ -83,14 +70,14 @@ impl Workspace {
         let metadata = cmd.exec().context("could not read cargo metadata")?;
         trace!(?metadata, "cargo metadata");
 
-        // let cargo_home = std::env::var("CARGO_HOME")
-        //     .map(Utf8PathBuf::from)
-        //     .context("get cargo home")?;
-
         // TODO: This currently blows up if we have no lockfile.
         let lockfile = cargo_lock::Lockfile::load(metadata.workspace_root.join("Cargo.lock"))
             .context("load cargo lockfile")?;
         trace!(?lockfile, "cargo lockfile");
+
+        let rustc_meta = RustcMetadata::from_argv(&metadata.workspace_root, argv)
+            .context("read rustc metadata")?;
+        trace!(?rustc_meta, "rustc metadata");
 
         // We only care about third party packages for now.
         //
@@ -107,32 +94,34 @@ impl Workspace {
         // TODO: Support caching packages not in the default registry.
         // TODO: Support caching first party packages.
         // TODO: Support caching git etc packages.
+        // TODO: How can we properly report `target` for cross compiled deps?
         let dependencies = lockfile
             .packages
             .into_iter()
             .filter_map(|package| match (&package.source, &package.checksum) {
                 (Some(source), Some(checksum)) if source.is_default_registry() => {
-                    debug!(?package, "indexing package");
                     Dependency::builder()
                         .checksum(checksum.to_string())
                         .name(package.name.to_string())
                         .version(package.version.to_string())
+                        .target(&rustc_meta.llvm_target)
                         .build()
+                        .tap(|dependency| trace!(?dependency, ?package, "indexed dependency"))
                         .pipe(Some)
                 }
                 _ => {
-                    debug!(?package, "skipped indexing package for cache");
+                    trace!(?package, "skipped indexing package for cache");
                     None
                 }
             })
             .map(|dependency| (dependency.key(), dependency))
-            .collect();
+            .collect::<HashMap<_, _>>();
 
         Ok(Self {
             root: metadata.workspace_root,
             target: metadata.target_directory,
+            rustc: rustc_meta,
             dependencies,
-            // cargo_home,
         })
     }
 
@@ -145,13 +134,35 @@ impl Workspace {
     pub fn open_cache(&self) -> Result<Cache<'_, Unlocked>> {
         Cache::open_default(self)
     }
+
+    /// Find a dependency with the specified name and version
+    /// in the workspace, if it exists.
+    #[instrument(ret)]
+    fn find_dependency(
+        &self,
+        name: impl AsRef<str> + std::fmt::Debug,
+        version: impl AsRef<str> + std::fmt::Debug,
+    ) -> Option<&Dependency> {
+        // TODO: we may want to index this instead of iterating each time,
+        // or at minimum cache it (ref: https://docs.rs/cached/latest/cached/)
+        let (name, version) = (name.as_ref(), version.as_ref());
+        self.dependencies
+            .values()
+            .find(|d| d.name == name && d.version == version)
+    }
 }
 
 /// A Cargo dependency.
 ///
 /// This isn't the full set of information about a dependency, but it's enough
 /// to identify it uniquely within a workspace for the purposes of caching.
-#[derive(Debug, Builder)]
+///
+/// Each piece of data in this struct is used to build the "cache key"
+/// for the dependency; the intention is that each dependency is cached
+/// independently and restored in other projects based on a matching
+/// cache key derived from other instances of `hurry` reading the
+/// `Cargo.lock` and other workspace/compiler/platform metadata.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Builder)]
 pub struct Dependency {
     /// The name of the dependency.
     #[builder(into)]
@@ -164,20 +175,48 @@ pub struct Dependency {
     /// The checksum of the dependency.
     #[builder(into)]
     pub checksum: String,
+
+    /// The target triple for which the dependency
+    /// is being or has been built.
+    ///
+    /// Examples:
+    /// ```not_rust
+    /// aarch64-apple-darwin
+    /// x86_64-unknown-linux-gnu
+    /// ```
+    #[builder(into)]
+    pub target: String,
 }
 
 impl Dependency {
     /// Hash key for the dependency.
     pub fn key(&self) -> Blake3 {
-        Self::key_for(&self.name, &self.version)
+        Self::key_for()
+            .checksum(&self.checksum)
+            .name(&self.name)
+            .target(&self.target)
+            .version(&self.version)
+            .call()
     }
+}
 
-    /// Produce a hash key for a given name and version
-    /// in the same way as the hash key would be produced
-    /// for a [`Dependency`] instance with the same data.
-    pub fn key_for(name: impl AsRef<str>, version: impl AsRef<str>) -> Blake3 {
-        let key = format!("{}.{}", name.as_ref(), version.as_ref());
-        Blake3::from_buffer(key)
+#[bon]
+impl Dependency {
+    /// Produce a hash key for all the fields of a dependency
+    /// without having to actually make a proper dependency instance
+    /// (which may involve cloning).
+    #[builder]
+    pub fn key_for(
+        name: impl AsRef<[u8]>,
+        version: impl AsRef<[u8]>,
+        checksum: impl AsRef<[u8]>,
+        target: impl AsRef<[u8]>,
+    ) -> Blake3 {
+        let name = name.as_ref();
+        let version = version.as_ref();
+        let checksum = checksum.as_ref();
+        let target = target.as_ref();
+        Blake3::from_fields([name, version, checksum, target])
     }
 }
 
@@ -281,7 +320,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
 
                 // Only `*.d` files are valid build units.
                 if !entry.extension().is_some_and(|ext| ext == "d") {
-                    debug!(?entry, "skip file: not a build unit");
+                    trace!(?entry, "skip file: not a build unit");
                     return Ok(acc);
                 }
 
@@ -429,11 +468,14 @@ impl BuildUnit {
                 .tuple_windows()
                 .find_map(|(parent, child)| {
                     if parent.as_str().contains("index.crates.io") {
-                        if let Some((name, version)) = child.as_str().split_once('-') {
-                            return Some(Dependency::key_for(name, version));
-                        }
+                        let (name, version) = child.as_str().split_once('-')?;
+                        profile
+                            .workspace
+                            .find_dependency(name, version)
+                            .map(Dependency::key)
+                    } else {
+                        None
                     }
-                    None
                 })
         });
 
@@ -528,11 +570,6 @@ impl BuildUnitInput {
     pub fn path_rel(&self) -> &Utf8Path {
         &self.0.path
     }
-
-    // /// Compute the full path using the given workspace.
-    // pub fn path(&self, workspace: &Workspace) -> Utf8PathBuf {
-    //     workspace.cargo_home.join(&self.0.path)
-    // }
 }
 
 /// The `hurry` cache corresponding to a given [`Workspace`].
@@ -656,23 +693,52 @@ impl<'ws> Cache<'ws, Locked> {
     }
 }
 
-/// A cache record for a third party crate.
+/// Rust's compiler options for the current platform.
 ///
-/// A cache record links a dependency (in `Cargo.toml`)
-/// to its CAS hash and to its location inside the profile folder.
-#[derive(Debug, Serialize, Deserialize, Builder)]
-pub struct CacheRecord {
-    /// The hash of the cached artifact.
-    /// Used to reference the artifact in the `hurry` CAS.
-    #[builder(into)]
-    pub hash: Blake3,
+/// This isn't the _full_ set of options,
+/// just what we need for caching.
+//
+// TODO: Support users cross compiling; probably need to parse argv?
+// TODO: Determine minimum compiler version.
+// TODO: Is there a better way to get this?
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize)]
+pub struct RustcMetadata {
+    /// The LLVM target triple.
+    #[serde(rename = "llvm-target")]
+    llvm_target: String,
+}
 
-    /// The dependency to which this cache corresponds.
-    #[builder(into)]
-    pub dependency_key: Blake3,
+impl RustcMetadata {
+    /// Get platform metadata from the current compiler.
+    #[instrument]
+    pub fn from_argv(workspace_root: &Utf8Path, _argv: &[String]) -> Result<Self> {
+        let mut cmd = std::process::Command::new("rustc");
 
-    /// The relative location within the profile folder
-    /// to copy the cached artifact when restoring the cache.
-    #[builder(into)]
-    pub target: Utf8PathBuf,
+        // Bypasses the check that disallows using unstable commands on stable.
+        cmd.env("RUSTC_BOOTSTRAP", "1");
+        cmd.args(["-Z", "unstable-options", "--print", "target-spec-json"]);
+        cmd.current_dir(workspace_root);
+        let output = cmd.output().context("run rustc")?;
+        if !output.status.success() {
+            return Err(eyre!("invoke rustc"))
+                .with_section(|| {
+                    String::from_utf8_lossy(&output.stdout)
+                        .to_string()
+                        .header("Stdout:")
+                })
+                .with_section(|| {
+                    String::from_utf8_lossy(&output.stderr)
+                        .to_string()
+                        .header("Stderr:")
+                });
+        }
+
+        serde_json::from_slice::<RustcMetadata>(&output.stdout)
+            .context("parse rustc output")
+            .with_section(|| {
+                String::from_utf8_lossy(&output.stdout)
+                    .to_string()
+                    .header("Rustc Output:")
+            })
+    }
 }

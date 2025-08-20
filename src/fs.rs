@@ -10,7 +10,7 @@ use std::{
 };
 
 use bon::Builder;
-use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
+use cargo_metadata::camino::Utf8PathBuf;
 use color_eyre::{
     Result,
     eyre::{Context, OptionExt},

@@ -40,6 +40,17 @@ impl Blake3 {
         Ok(Self(hex::encode(hash)))
     }
 
+    /// Hash the contents of the iterator in order.
+    #[instrument(skip_all)]
+    pub fn from_fields(fields: impl IntoIterator<Item = impl AsRef<[u8]>>) -> Self {
+        let mut hasher = blake3::Hasher::new();
+        for field in fields {
+            hasher.update(field.as_ref());
+        }
+        let hash = hasher.finalize().as_bytes().to_vec();
+        Self(hex::encode(hash))
+    }
+
     /// View the hash as a string.
     pub fn as_str(&self) -> &str {
         &self.0
