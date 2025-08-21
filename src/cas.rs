@@ -1,4 +1,5 @@
 use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
+use derive_more::Display;
 use fslock::LockFile;
 
 use color_eyre::{Result, eyre::Context};
@@ -7,7 +8,8 @@ use tracing::instrument;
 use crate::fs;
 
 /// The content-addressed storage area shared by all `hurry` cache instances.
-#[derive(Debug)]
+#[derive(Debug, Display)]
+#[display("{root}")]
 pub struct Cas {
     /// The root directory of the CAS.
     ///

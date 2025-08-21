@@ -1,21 +1,28 @@
-use std::{collections::HashMap, marker::PhantomData};
+use std::{
+    collections::{HashMap, HashSet},
+    iter::repeat,
+    marker::PhantomData,
+    str::FromStr,
+};
 
 use bon::{Builder, bon};
 use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
 use color_eyre::{
     Result, Section, SectionExt,
-    eyre::{Context, eyre},
+    eyre::{Context, OptionExt, eyre},
 };
 use derive_more::{Debug, Display};
 use fslock::LockFile;
 use itertools::Itertools;
+use lockfile::Lockfile;
+use rayon::iter::ParallelBridge;
 use serde::{Deserialize, Serialize};
-use tap::{Pipe, Tap};
+use tap::{Pipe, Tap, TryConv};
 use tracing::{debug, instrument, trace};
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 
 use crate::{
-    cargo::{CacheRecord, Profile, read_argv},
+    cargo::{CacheRecord, CacheRecordArtifact, Profile, read_argv},
     fs::{self, HashedFile},
     hash::Blake3,
 };
@@ -34,7 +41,8 @@ pub struct Locked;
 ///
 /// Note that in Cargo, "workspace" projects are slightly different than
 /// standard projects; however for `hurry` they are not.
-#[derive(Debug)]
+#[derive(Debug, Display)]
+#[display("{root}")]
 pub struct Workspace {
     /// The root directory of the workspace.
     pub root: Utf8PathBuf,
@@ -44,6 +52,7 @@ pub struct Workspace {
     pub target: Utf8PathBuf,
 
     /// Parsed `rustc` metadata relating to the current workspace.
+    #[debug(skip)]
     pub rustc: RustcMetadata,
 
     /// Dependencies in the workspace, keyed by [`Dependency::key`].
@@ -106,7 +115,6 @@ impl Workspace {
                         .version(package.version.to_string())
                         .target(&rustc_meta.llvm_target)
                         .build()
-                        .tap(|dependency| trace!(?dependency, ?package, "indexed dependency"))
                         .pipe(Some)
                 }
                 _ => {
@@ -115,6 +123,7 @@ impl Workspace {
                 }
             })
             .map(|dependency| (dependency.key(), dependency))
+            .inspect(|(key, dependency)| trace!(?key, ?dependency, "indexed dependency"))
             .collect::<HashMap<_, _>>();
 
         Ok(Self {
@@ -123,6 +132,21 @@ impl Workspace {
             rustc: rustc_meta,
             dependencies,
         })
+    }
+
+    /// Ensure that the workspace `target/` directory
+    /// is created and well formed with the provided
+    /// profile directory created.
+    pub fn init_target(&self, profile: &Profile) -> Result<()> {
+        const CACHEDIR_TAG_NAME: &str = "CACHEDIR.TAG";
+        const CACHEDIR_TAG_CONTENT: &[u8] = include_bytes!("../../static/cargo/CACHEDIR.TAG");
+
+        // TODO: do we need to create `.rustc_info.json` to get cargo
+        // to recognize the target folder as valid when restoring caches?
+        std::fs::create_dir_all(self.target.join(profile.as_str()))
+            .context("create target directory")?;
+        std::fs::write(self.target.join(CACHEDIR_TAG_NAME), CACHEDIR_TAG_CONTENT)
+            .context("write CACHEDIR.TAG")
     }
 
     /// Open the given named profile directory in the workspace.
@@ -137,7 +161,7 @@ impl Workspace {
 
     /// Find a dependency with the specified name and version
     /// in the workspace, if it exists.
-    #[instrument(ret)]
+    #[instrument]
     fn find_dependency(
         &self,
         name: impl AsRef<str> + std::fmt::Debug,
@@ -149,6 +173,7 @@ impl Workspace {
         self.dependencies
             .values()
             .find(|d| d.name == name && d.version == version)
+            .tap(|dependency| trace!(?dependency, "search result"))
     }
 }
 
@@ -224,6 +249,7 @@ impl Dependency {
 /// A profile directory inside a [`Workspace`].
 #[derive(Debug)]
 pub struct ProfileDir<'ws, State> {
+    #[debug(skip)]
     state: PhantomData<State>,
 
     /// The lockfile for the directory.
@@ -235,6 +261,7 @@ pub struct ProfileDir<'ws, State> {
     ///
     /// This lockfile uses the same name and implementation as `cargo` uses,
     /// so a locked `ProfileDir` in `hurry` will block `cargo` and vice versa.
+    #[debug(skip)]
     lock: LockFile,
 
     /// The workspace in which this build profile is located.
@@ -267,10 +294,13 @@ pub struct ProfileDir<'ws, State> {
 
 impl<'ws> ProfileDir<'ws, Unlocked> {
     /// Instantiate a new instance for the provided profile in the workspace.
+    /// If the directory doesn't already exist, it is created.
     #[instrument]
     pub fn open(workspace: &'ws Workspace, profile: &Profile) -> Result<Self> {
         let root = workspace.root.join("target").join(profile.as_str());
-        std::fs::create_dir_all(&root).context("create profile directory")?;
+        workspace
+            .init_target(profile)
+            .context("init workspace target")?;
 
         let lock = root.join(".cargo-lock");
         let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;
@@ -308,6 +338,164 @@ impl<'ws> ProfileDir<'ws, Locked> {
             root: self.root,
             workspace: self.workspace,
         })
+    }
+
+    /// Enumerate cache artifacts in the target directory for the dependency.
+    ///
+    /// For now in this context, a "cache artifact" is _any file_ inside the
+    /// profile directory that is inside the `.fingerprint`, `build`, or `deps`
+    /// directories, where the immediate subdirectory of that parent is prefixed
+    /// by the name of the dependency.
+    ///
+    /// TODO: the above is probably overly broad for a cache; evaluate
+    /// what filtering mechanism to apply to reduce invalidations and rework.
+    /// TODO: This requires us to walk the target directory for every dep;
+    /// should we index instead? I haven't pre-emptively done this
+    /// because we may find a way to pare down what we need to walk
+    /// (or even avoid walking and compute keys directly)
+    /// by solving the todo above this one.
+    #[instrument]
+    pub fn enumerate_cache_artifacts(
+        &self,
+        dependency: &Dependency,
+    ) -> Result<Vec<CacheRecordArtifact>> {
+        let root = &self.root;
+
+        // Fingerprint artifacts are straightforward:
+        // if they're inside the `.fingerprint` directory,
+        // and the subdirectory of `.fingerprint` starts with the name of
+        // the dependency, then they should be backed up.
+        //
+        // Builds are the same as fingerprints, just with a different root:
+        // instead of `.fingerprint`, they're looking for `build`.
+        let standard = WalkDir::new(root).into_iter().filter_entry(|entry| {
+            let path = entry.path();
+            if path == root {
+                return true;
+            }
+            let Ok(subdir) = path.strip_prefix(root) else {
+                return false;
+            };
+
+            for sdname in [".fingerprint", "build"] {
+                if subdir.starts_with(sdname) {
+                    let subsubdir = subdir.components().skip(1).next();
+                    return subsubdir.is_none_or(|ssd| {
+                        ssd.as_os_str()
+                            .to_string_lossy()
+                            .starts_with(&dependency.name)
+                    });
+                }
+            }
+
+            false
+        });
+
+        // Dependencies are totally different from the two above.
+        // This directory is flat; inside we're looking for one primary file:
+        // a `.d` file whose name starts with the name of the dependency.
+        //
+        // This file then lists other files (namely, `.rlib` and `.rmeta`)
+        // that this dependency built; these are _often_ (but not always)
+        // named with a different prefix (often, but not always, "lib").
+        //
+        // Along the way we also grab any other random file in here that is
+        // prefixed with the same name as the `.d` file; from observation
+        // so far this has been `.rcgu.o` files which appear to be compiled
+        // codegen.
+        //
+        // Since we have to read this directory potentially several times in
+        // effectively random order we just read the whole list into memory.
+        // TODO: cache this?
+        let dependencies_root = root.join("deps");
+        let all_dependencies = std::fs::read_dir(&dependencies_root)
+            .context("read dependencies")?
+            .into_iter()
+            .map(|entry| -> Result<String> {
+                let entry = entry.context("walk files")?;
+                Ok(entry.file_name().to_string_lossy().to_string())
+            })
+            .collect::<Result<Vec<_>>>()
+            .with_context(|| format!("enumerate contents of {dependencies_root:?}"))?;
+
+        // `.d` files are structured a little like makefiles, where each output
+        // is on its own line followed by a colon followed by the inputs.
+        //
+        // Currently, we only care about the outputs, and only the outputs
+        // that end with `.d`, `.rlib`, or `.rmeta`.
+        //
+        // Also, not all crates create `.d` files, or even entries in
+        // the `deps` folder at all!
+        let dotd = all_dependencies
+            .iter()
+            .find(|name| name.starts_with(&dependency.name) && name.ends_with(".d"));
+        let dependencies = if let Some(dotd) = dotd {
+            let dotd_path = dependencies_root.join(dotd);
+            let dependency_outputs = fs::read_buffered_utf8(&dotd_path)
+                .with_context(|| format!("read .d file: {dotd_path:?}"))?
+                .lines()
+                .filter_map(|line| {
+                    let (output, _) = line.split_once(':')?;
+                    const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta"];
+                    if DEP_EXTS.iter().any(|ext| output.ends_with(ext)) {
+                        trace!(?dotd, ?line, ?output, "read .d line");
+                        Utf8PathBuf::from_str(output).ok()
+                    } else {
+                        trace!(?dotd, ?line, "skipped .d line");
+                        None
+                    }
+                })
+                .filter_map(|path| {
+                    path.file_name()
+                        .map(|n| n.to_string())
+                        .tap(|stripped| trace!(?path, ?stripped, "stripped .d path"))
+                })
+                .collect::<HashSet<_>>();
+            all_dependencies
+                .into_iter()
+                .filter_map(|name| {
+                    if name.starts_with(&dependency.name) || dependency_outputs.contains(&name) {
+                        Some(dependencies_root.join(name))
+                    } else {
+                        None
+                    }
+                })
+                .collect_vec()
+        } else {
+            Vec::new()
+        };
+
+        // Now that we have our three sources of files,
+        // we actually treat them all the same way!
+        standard
+            .map(|entry| -> Result<Option<Utf8PathBuf>> {
+                let entry = entry.context("walk files")?;
+                if entry.file_type().is_file() {
+                    entry.into_path().try_into().context("parse path").map(Some)
+                } else {
+                    Ok(None)
+                }
+            })
+            .filter_map(Result::transpose)
+            .chain(dependencies.into_iter().map(Ok))
+            // TODO: parallelize with rayon
+            .map(|entry| -> Result<CacheRecordArtifact> {
+                let entry = entry?;
+                CacheRecordArtifact::builder()
+                    .hash(
+                        Blake3::from_file(&entry)
+                            .with_context(|| format!("hash file: {entry:?}"))?,
+                    )
+                    .target(
+                        entry
+                            .strip_prefix(root)
+                            .with_context(|| format!("make {entry:?} relative to {root:?}"))?,
+                    )
+                    .build()
+                    .tap(|artifact| trace!(?artifact, "enumerated artifact"))
+                    .pipe(Ok)
+            })
+            .collect()
     }
 
     /// Enumerate build units in the target.
@@ -401,6 +589,7 @@ impl BuildUnit {
         content
             .lines()
             .into_iter()
+            .inspect(|line| trace!(?line, "parse build unit .d file"))
             .filter_map(|line| {
                 let (output, inputs) = line.split_once(':')?;
                 let (output, inputs) = (output.trim(), inputs.trim());
@@ -410,8 +599,26 @@ impl BuildUnit {
             // Build units with empty inputs seem to be practice source files,
             // which are not copied into the `deps/` directory anyway
             // and therefore do not need to be considered.
-            .filter(|(_, inputs)| !inputs.is_empty())
-            .filter_map(|(output, inputs)| Self::new_from_strs(profile, output, &inputs).ok())
+            .filter(|(output, inputs)| {
+                if inputs.is_empty() {
+                    trace!(?output, "skipped build unit: empty inputs");
+                    false
+                } else {
+                    true
+                }
+            })
+            .filter_map(
+                |(output, inputs)| match Self::new_from_strs(profile, output, &inputs) {
+                    Ok(parsed) => {
+                        trace!(?output, ?inputs, "parsed build unit");
+                        Some(parsed)
+                    }
+                    Err(error) => {
+                        trace!(?output, ?inputs, ?error, "failed to parse build unit");
+                        None
+                    }
+                },
+            )
             .collect::<Vec<_>>()
             .pipe(Ok)
     }
@@ -575,8 +782,10 @@ impl BuildUnitInput {
 }
 
 /// The `hurry` cache corresponding to a given [`Workspace`].
-#[derive(Debug)]
+#[derive(Debug, Display)]
+#[display("{root}")]
 pub struct Cache<'ws, State> {
+    #[debug(skip)]
     state: PhantomData<State>,
 
     /// Locks the workspace cache.
@@ -585,6 +794,7 @@ pub struct Cache<'ws, State> {
     /// from mutating the state of the cache directory at the same time,
     /// or from mutating it at the same time as another instance
     /// is reading it.
+    #[debug(skip)]
     lock: LockFile,
 
     /// The root directory of the workspace cache.

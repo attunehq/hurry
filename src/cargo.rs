@@ -41,23 +41,32 @@ pub fn invoke(
     }
 }
 
-/// A cache record for a third party crate.
+/// Records backed up cache artifacts for third party crates.
 ///
 /// A cache record links a dependency (in `Cargo.toml`)
-/// to its CAS hash and to its location inside the profile folder.
+/// to one or more artifacts in the CAS
+/// by the dependency's key and the CAS hash.
 #[derive(Debug, Serialize, Deserialize, Builder)]
 pub struct CacheRecord {
-    /// The hash of the cached artifact.
-    /// Used to reference the artifact in the `hurry` CAS.
-    #[builder(into)]
-    pub hash: Blake3,
-
     /// The dependency to which this cache corresponds.
     #[builder(into)]
     pub dependency_key: Blake3,
 
+    /// The artifacts in this record.
+    #[builder(default, into)]
+    pub artifacts: Vec<CacheRecordArtifact>,
+}
+
+/// A recorded cache artifact.
+#[derive(Debug, Serialize, Deserialize, Builder)]
+pub struct CacheRecordArtifact {
     /// The relative location within the profile folder
     /// to copy the cached artifact when restoring the cache.
     #[builder(into)]
     pub target: Utf8PathBuf,
+
+    /// The hash of the cached artifact.
+    /// Used to reference the artifact in the `hurry` CAS.
+    #[builder(into)]
+    pub hash: Blake3,
 }
