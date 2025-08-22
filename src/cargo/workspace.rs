@@ -20,7 +20,7 @@ use walkdir::WalkDir;
 
 use crate::{
     cargo::{CacheRecord, CacheRecordArtifact, Profile, read_argv},
-    fs,
+    fs::{self, Index},
     hash::Blake3,
 };
 
@@ -44,9 +44,9 @@ pub struct Workspace {
     /// The root directory of the workspace.
     pub root: Utf8PathBuf,
 
-    /// The root of the target directory in the workspace.
+    /// The target directory in the workspace.
     #[debug(skip)]
-    pub target: Utf8PathBuf,
+    pub target: Index,
 
     /// Parsed `rustc` metadata relating to the current workspace.
     #[debug(skip)]
@@ -63,7 +63,11 @@ impl Workspace {
     /// "Current workspace" is discovered by parsing the arguments passed
     /// to `hurry` and using `--manifest_path` if it is available;
     /// if not then it uses the current working directory.
-    #[instrument]
+    //
+    // TODO: A few of these setup steps could be parallelized...
+    // I'm not certain they're worth the thread spawn cost
+    // but this can be mitigated by using the rayon thread pool.
+    #[instrument(name = "Workspace::from_argv")]
     pub fn from_argv(argv: &[String]) -> Result<Self> {
         // TODO: Maybe we should just replicate this logic and perform it
         // statically using filesystem operations instead of shelling out? This
@@ -123,10 +127,12 @@ impl Workspace {
             .inspect(|(key, dependency)| trace!(?key, ?dependency, "indexed dependency"))
             .collect::<HashMap<_, _>>();
 
+        let target = Index::recursive(metadata.target_directory).context("index target folder")?;
+
         Ok(Self {
             root: metadata.workspace_root,
-            target: metadata.target_directory,
             rustc: rustc_meta,
+            target,
             dependencies,
         })
     }
@@ -134,16 +140,20 @@ impl Workspace {
     /// Ensure that the workspace `target/` directory
     /// is created and well formed with the provided
     /// profile directory created.
+    #[instrument(name = "Workspace::init_target")]
     pub fn init_target(&self, profile: &Profile) -> Result<()> {
         const CACHEDIR_TAG_NAME: &str = "CACHEDIR.TAG";
         const CACHEDIR_TAG_CONTENT: &[u8] = include_bytes!("../../static/cargo/CACHEDIR.TAG");
 
         // TODO: do we need to create `.rustc_info.json` to get cargo
         // to recognize the target folder as valid when restoring caches?
-        fs::create_dir_all(self.target.join(profile.as_str()))
+        fs::create_dir_all(self.target.root.join(profile.as_str()))
             .context("create target directory")?;
-        fs::write(self.target.join(CACHEDIR_TAG_NAME), CACHEDIR_TAG_CONTENT)
-            .context("write CACHEDIR.TAG")
+        fs::write(
+            self.target.root.join(CACHEDIR_TAG_NAME),
+            CACHEDIR_TAG_CONTENT,
+        )
+        .context("write CACHEDIR.TAG")
     }
 
     /// Open the given named profile directory in the workspace.
@@ -158,7 +168,7 @@ impl Workspace {
 
     /// Find a dependency with the specified name and version
     /// in the workspace, if it exists.
-    #[instrument]
+    #[instrument(name = "Workspace::find_dependency")]
     fn find_dependency(
         &self,
         name: impl AsRef<str> + std::fmt::Debug,
@@ -292,7 +302,7 @@ pub struct ProfileDir<'ws, State> {
 impl<'ws> ProfileDir<'ws, Unlocked> {
     /// Instantiate a new instance for the provided profile in the workspace.
     /// If the directory doesn't already exist, it is created.
-    #[instrument]
+    #[instrument(name = "ProfileDir::open")]
     pub fn open(workspace: &'ws Workspace, profile: &Profile) -> Result<Self> {
         workspace
             .init_target(profile)
@@ -312,6 +322,7 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
     }
 
     /// Lock the directory.
+    #[instrument(name = "ProfileDir::lock")]
     pub fn lock(mut self) -> Result<ProfileDir<'ws, Locked>> {
         self.lock.lock().context("lock profile")?;
         Ok(ProfileDir {
@@ -339,7 +350,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     /// because we may find a way to pare down what we need to walk
     /// (or even avoid walking and compute keys directly)
     /// by solving the todo above this one.
-    #[instrument]
+    #[instrument(name = "ProfileDir::enumerate_cache_artifacts")]
     pub fn enumerate_cache_artifacts(
         &self,
         dependency: &Dependency,
@@ -528,7 +539,7 @@ impl<'ws, L> Cache<'ws, L> {
 /// Implementation for all lifetimes and the unlocked state only.
 impl<'ws> Cache<'ws, Unlocked> {
     /// Open the cache in the default location for the user.
-    #[instrument]
+    #[instrument(name = "Cache::open_default")]
     pub fn open_default(workspace: &'ws Workspace) -> Result<Self> {
         let root = fs::user_global_cache_path()
             .context("find user cache path")?
@@ -548,6 +559,7 @@ impl<'ws> Cache<'ws, Unlocked> {
     }
 
     /// Lock the cache.
+    #[instrument(name = "Cache::lock")]
     pub fn lock(mut self) -> Result<Cache<'ws, Locked>> {
         self.lock.lock().context("lock workspace cache")?;
         Ok(Cache {
@@ -562,6 +574,7 @@ impl<'ws> Cache<'ws, Unlocked> {
 /// Implementation for all lifetimes and the locked state only.
 impl<'ws> Cache<'ws, Locked> {
     /// Unlock the cache.
+    #[instrument(name = "Cache::unlock")]
     pub fn unlock(mut self) -> Result<Cache<'ws, Unlocked>> {
         self.lock.unlock().context("unlock workspace cache")?;
         Ok(Cache {
@@ -573,7 +586,7 @@ impl<'ws> Cache<'ws, Locked> {
     }
 
     /// Store the provided record in the cache.
-    #[instrument]
+    #[instrument(name = "Cache::store")]
     pub fn store(&self, record: &CacheRecord) -> Result<()> {
         let name = self.root.join(record.dependency_key.as_str());
         let content = serde_json::to_string_pretty(record).context("encode record")?;
@@ -581,7 +594,7 @@ impl<'ws> Cache<'ws, Locked> {
     }
 
     /// Retrieve the record from the cache for the given dependency key.
-    #[instrument]
+    #[instrument(name = "Cache::retrieve")]
     pub fn retrieve(
         &self,
         key: impl AsRef<Blake3> + std::fmt::Debug,
@@ -591,9 +604,14 @@ impl<'ws> Cache<'ws, Locked> {
             Ok(content) => Ok(Some(
                 serde_json::from_str(&content).context("decode record")?,
             )),
-            Err(err) if err.downcast_ref::<std::io::Error>()
-                .map(|e| e.kind() == std::io::ErrorKind::NotFound)
-                .unwrap_or(false) => Ok(None),
+            Err(err)
+                if err
+                    .downcast_ref::<std::io::Error>()
+                    .map(|e| e.kind() == std::io::ErrorKind::NotFound)
+                    .unwrap_or(false) =>
+            {
+                Ok(None)
+            }
             Err(err) => Err(err).context("read cache record"),
         }
     }
@@ -616,7 +634,7 @@ pub struct RustcMetadata {
 
 impl RustcMetadata {
     /// Get platform metadata from the current compiler.
-    #[instrument]
+    #[instrument(name = "RustcMetadata::from_argv")]
     pub fn from_argv(workspace_root: &Utf8Path, _argv: &[String]) -> Result<Self> {
         let mut cmd = std::process::Command::new("rustc");
 

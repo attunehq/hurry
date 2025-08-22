@@ -17,7 +17,7 @@ pub use cmd::*;
 use crate::{cargo::workspace::Workspace, hash::Blake3};
 
 /// Invoke a cargo subcommand with the given arguments.
-#[instrument(skip_all)]
+#[instrument(skip_all, name = "cargo::invoke")]
 pub fn invoke(
     workspace: &Workspace,
     subcommand: impl AsRef<str>,

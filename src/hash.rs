@@ -15,7 +15,7 @@ pub struct Blake3(String);
 
 impl Blake3 {
     /// Hash the contents of the file at the specified path.
-    #[instrument]
+    #[instrument(name = "Blake3::from_file")]
     pub fn from_file(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Self> {
         let path = path.as_ref();
         let file = fs::open_file(path)?;
@@ -31,7 +31,7 @@ impl Blake3 {
     }
 
     /// Hash the contents of a buffer.
-    #[instrument(skip_all)]
+    #[instrument(skip_all, name = "Blake3::from_buffer")]
     pub fn from_buffer(buffer: impl AsRef<[u8]> + std::fmt::Debug) -> Self {
         let buffer = buffer.as_ref();
         let mut hasher = blake3::Hasher::new();
@@ -44,7 +44,7 @@ impl Blake3 {
     }
 
     /// Hash the contents of the iterator in order.
-    #[instrument(skip_all)]
+    #[instrument(skip_all, name = "Blake3::from_fields")]
     pub fn from_fields(fields: impl IntoIterator<Item = impl AsRef<[u8]>>) -> Self {
         let mut hasher = blake3::Hasher::new();
         let mut bytes = 0;

@@ -119,7 +119,7 @@ impl From<&String> for Profile {
 /// Handles cases like:
 /// - `--flag value`
 /// - `--flag=value`
-#[instrument]
+#[instrument(name = "cargo::read_argv")]
 pub fn read_argv<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
     debug_assert!(flag.starts_with("--"), "flag must start with `--`");
     argv.into_iter().tuple_windows().find_map(|(a, b)| {

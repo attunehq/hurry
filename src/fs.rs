@@ -13,8 +13,130 @@ use color_eyre::{
     eyre::{Context, OptionExt},
 };
 use filetime::{FileTime, set_file_handle_times};
+use radix_trie::Trie;
+use rayon::iter::{ParallelBridge, ParallelIterator};
 use tap::{Pipe, Tap, TapFallible, TryConv};
-use tracing::{instrument, trace, warn};
+use tracing::{debug, instrument, trace, warn};
+use walkdir::WalkDir;
+
+use crate::hash::Blake3;
+
+/// File index of a directory.
+#[derive(Clone, Debug)]
+pub struct Index {
+    /// The root directory of the index.
+    pub root: Utf8PathBuf,
+
+    /// The trie storing the index.
+    ///
+    /// Keys are `Utf8PathBuf` instances relative to `root` stored as strings,
+    /// because `Utf8PathBuf` does not implement `TrieKey` so sadly can't
+    /// be used directly.
+    pub files: Trie<String, IndexEntry>,
+}
+
+impl Index {
+    /// Index the provided path recursively.
+    #[instrument(name = "Index::recursive")]
+    pub fn recursive(root: impl Into<Utf8PathBuf> + std::fmt::Debug) -> Result<Self> {
+        let root = root.into();
+
+        // Annoyingly, `Trie` doesn't allow iteration or merging,
+        // so we can't perform this work entirely within the `rayon`
+        // instance as it requires `try_fold -> try_reduce`.
+        //
+        // Normally, `rayon` instances that want to collect into a single value
+        // perform a `map -> fold -> reduce` pipeline, where `map` and `fold`
+        // are done per-thread in the threadpool but then `reduce` is actually
+        // run in a single thread and is meant to do simple merging work
+        // from the outputs of the various threads.
+        //
+        // However, since `Trie` doesn't support iterating or merging trie
+        // instances, we can't do that pattern. Instead we hack it using
+        // channels as you can see below.
+        let (tx, rx) = flume::bounded::<(Utf8PathBuf, IndexEntry)>(0);
+
+        // The `rayon` instance runs in its own threadpool, but its overall
+        // operation is still blocking, so we run it in a background thread that
+        // just waits for rayon to complete.
+        // Technically we could probably also run this inside the `rayon`
+        // thread pool itself, but I'm not sure if that'll have odd effects
+        // on the parallelization `rayon` performs, and at the end of the day
+        // a single thread spawn isn't that bad.
+        let walker = std::thread::spawn({
+            let root = root.clone();
+            move || {
+                WalkDir::new(&root).into_iter().par_bridge().try_for_each(
+                    move |entry| -> Result<()> {
+                        let entry = entry.context("walk directory")?;
+                        let path = entry.path();
+                        if !entry.file_type().is_file() {
+                            trace!(?path, "skipped entry: not a file");
+                            return Ok(());
+                        }
+
+                        trace!(?path, "walked entry");
+                        let path = path
+                            .strip_prefix(&root)
+                            .with_context(|| format!("make {path:?} relative to {root:?}"))?
+                            .to_path_buf();
+                        let path = Utf8PathBuf::try_from(path).context("read path as utf8")?;
+                        let entry = IndexEntry::from_file(entry.path()).context("index entry")?;
+
+                        // Only errors if the channel receivers have been dropped,
+                        // which should never happen but we'll handle it
+                        // just in case.
+                        tx.send((path, entry)).context("send entry to main thread")
+                    },
+                )
+            }
+        });
+
+        // When the directory walk finishes, the senders all drop.
+        // This causes the receiver channel to close, terminating the iterator.
+        let files = rx
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .inspect(|(path, entry)| trace!(?path, ?entry, "indexed file"))
+            .collect::<Trie<_, _>>();
+
+        // Joining a fallible operation from a background thread (as we do here)
+        // has two levels of errors:
+        // - The thread could have panicked
+        // - The operation could have completed fallibly
+        //
+        // The `expect` call here is for the former case: if the thread panicks,
+        // the only really safe thing to do is also panic since panic implies
+        // a broken invariant or partially corrupt state.
+        //
+        // Then the `context` call wraps the result of the actual fallible
+        // operation that we were doing inside the thread (walking the files).
+        walker
+            .join()
+            .expect("join thread")
+            .context("walk directory")?;
+
+        debug!("indexed directory");
+        Ok(Self { root, files })
+    }
+}
+
+/// An entry for a file that was indexed in [`Index`].
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+pub struct IndexEntry {
+    /// The hash of the file's contents.
+    pub hash: Blake3,
+}
+
+impl IndexEntry {
+    /// Construct the entry from the provided file on disk.
+    #[instrument(name = "IndexEntry::from_file")]
+    pub fn from_file(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Self> {
+        let path = path.as_ref();
+        let hash = Blake3::from_file(path).context("hash file")?;
+        Ok(Self { hash })
+    }
+}
 
 /// Determine the canonical cache path for the current user, if possible.
 ///

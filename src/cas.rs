@@ -30,6 +30,7 @@ pub struct Cas {
 
 impl Cas {
     /// Open an instance in the default location for the user.
+    #[instrument(name = "Cas::open_default")]
     pub fn open_default() -> Result<Self> {
         let root = fs::user_global_cache_path()
             .context("find user cache path")?
@@ -41,7 +42,7 @@ impl Cas {
     }
 
     /// Copy the file at the provided path into the CAS using the provided key.
-    #[instrument]
+    #[instrument(name = "Cas::copy_from")]
     pub fn copy_from(&self, src: &Utf8Path, key: impl AsRef<str> + std::fmt::Debug) -> Result<()> {
         let dst = self.root.join(key.as_ref());
         fs::copy_file(src, &dst)
@@ -49,7 +50,7 @@ impl Cas {
 
     /// Extract the file with the referenced key to the destination path.
     /// If the destination's parent directory doesn't exist, it is created.
-    #[instrument]
+    #[instrument(name = "Cas::extract_to")]
     pub fn extract_to(&self, key: impl AsRef<str> + std::fmt::Debug, dst: &Utf8Path) -> Result<()> {
         let src = self.root.join(key.as_ref());
         if let Some(parent) = dst.parent() {

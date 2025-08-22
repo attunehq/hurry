@@ -4,8 +4,6 @@
 //! - `docs/DESIGN.md`
 //! - `docs/development/cargo.md`
 
-use std::time::Instant;
-
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use tracing::{debug, error, info, instrument, trace, warn};
@@ -50,9 +48,10 @@ impl Options {
     }
 }
 
-#[instrument]
+#[instrument(name = "cargo_build")]
 pub fn exec(options: Options) -> Result<()> {
-    let start = Instant::now();
+    info!("Starting");
+
     let cas = Cas::open_default().context("open cas")?;
     let workspace = Workspace::from_argv(&options.argv).context("open workspace")?;
 
@@ -61,21 +60,19 @@ pub fn exec(options: Options) -> Result<()> {
 
     // This is split into an inner function so that we can reliably
     // release the lock if it fails.
-    let result = exec_inner(start, options, &cas, &workspace, &cache);
+    let result = exec_inner(options, &cas, &workspace, &cache);
     if let Err(err) = cache.unlock() {
         // This shouldn't happen, but if it does, we should warn users.
         // TODO: figure out a way to recover.
         warn!("unable to release workspace cache lock: {err:?}");
     }
 
-    let elapsed = start.elapsed();
     result
-        .inspect(|_| info!(?elapsed, "finished"))
-        .inspect_err(|error| error!(?elapsed, ?error, "failed: {error:#?}"))
+        .inspect(|_| info!("finished"))
+        .inspect_err(|error| error!(?error, "failed: {error:#?}"))
 }
 
 fn exec_inner(
-    start: Instant,
     options: Options,
     cas: &Cas,
     workspace: &Workspace,
@@ -86,8 +83,8 @@ fn exec_inner(
     if !options.skip_restore {
         info!(?cache, "Restoring target directory from cache");
         match restore_target_from_cache(cas, &workspace, &cache, &profile) {
-            Ok(_) => info!(elapsed = ?start.elapsed(), "Restored cache"),
-            Err(error) => warn!(elapsed = ?start.elapsed(), ?error, "Failed to restore cache"),
+            Ok(_) => info!("Restored cache"),
+            Err(error) => warn!(?error, "Failed to restore cache"),
         }
     }
 
@@ -112,8 +109,8 @@ fn exec_inner(
     if !options.skip_backup {
         info!("Caching built target directory");
         match cache_target_from_workspace(cas, &workspace, &cache, &profile) {
-            Ok(_) => info!(elapsed = ?start.elapsed(), "Cached target directory"),
-            Err(error) => warn!(elapsed = ?start.elapsed(), ?error, "Failed to cache target"),
+            Ok(_) => info!("Cached target directory"),
+            Err(error) => warn!(?error, "Failed to cache target"),
         }
     }
 

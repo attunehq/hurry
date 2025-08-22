@@ -16,7 +16,7 @@ pub struct Options {
     argv: Vec<String>,
 }
 
-#[instrument]
+#[instrument(name = "cargo_run")]
 pub fn exec(options: Options) -> Result<()> {
     let workspace = Workspace::from_argv(&options.argv).context("open workspace")?;
     invoke(&workspace, "run", options.argv)
