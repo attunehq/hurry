@@ -395,9 +395,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         // effectively random order we just read the whole list into memory.
         // TODO: cache this?
         let dependencies_root = root.join("deps");
-        let all_dependencies = std::fs::read_dir(&dependencies_root)
-            .context("read dependencies")?
-            .into_iter()
+        let all_dependencies = fs::read_dir(&dependencies_root)?
             .map(|entry| -> Result<String> {
                 let entry = entry.context("walk files")?;
                 Ok(entry.file_name().to_string_lossy().to_string())
@@ -537,7 +535,7 @@ impl<'ws> Cache<'ws, Unlocked> {
             .join("cargo")
             .join("ws");
 
-        std::fs::create_dir_all(&root).context("ensure directory exists")?;
+        fs::create_dir_all(&root)?;
         let lock = root.join(Self::LOCKFILE_NAME);
         let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;
 
@@ -579,7 +577,7 @@ impl<'ws> Cache<'ws, Locked> {
     pub fn store(&self, record: &CacheRecord) -> Result<()> {
         let name = self.root.join(record.dependency_key.as_str());
         let content = serde_json::to_string_pretty(record).context("encode record")?;
-        std::fs::write(name, content).context("store cache record")
+        fs::write(name, content).context("store cache record")
     }
 
     /// Retrieve the record from the cache for the given dependency key.
@@ -589,11 +587,13 @@ impl<'ws> Cache<'ws, Locked> {
         key: impl AsRef<Blake3> + std::fmt::Debug,
     ) -> Result<Option<CacheRecord>> {
         let name = self.root.join(key.as_ref().as_str());
-        match std::fs::read_to_string(name) {
+        match fs::read_buffered_utf8(name) {
             Ok(content) => Ok(Some(
                 serde_json::from_str(&content).context("decode record")?,
             )),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) if err.downcast_ref::<std::io::Error>()
+                .map(|e| e.kind() == std::io::ErrorKind::NotFound)
+                .unwrap_or(false) => Ok(None),
             Err(err) => Err(err).context("read cache record"),
         }
     }

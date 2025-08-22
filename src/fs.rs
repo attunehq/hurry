@@ -3,6 +3,8 @@
 //! Inside this module, we refer to `std::fs` by its fully qualified path to
 //! make it maximally clear what we are using.
 
+#![allow(clippy::disallowed_methods)]
+
 use std::{path::Path, time::SystemTime};
 
 use cargo_metadata::camino::Utf8PathBuf;
@@ -131,4 +133,22 @@ pub fn write(path: impl AsRef<Path> + std::fmt::Debug, content: impl AsRef<[u8]>
     std::fs::write(path, content)
         .with_context(|| format!("write file: {path:?}"))
         .tap_ok(|_| trace!(?path, bytes = content.len(), "write file"))
+}
+
+/// Open a file for reading.
+#[instrument]
+pub fn open_file(path: impl AsRef<Path> + std::fmt::Debug) -> Result<std::fs::File> {
+    let path = path.as_ref();
+    std::fs::File::open(path)
+        .with_context(|| format!("open file: {path:?}"))
+        .tap_ok(|_| trace!(?path, "open file"))
+}
+
+/// Read directory entries.
+#[instrument]
+pub fn read_dir(path: impl AsRef<Path> + std::fmt::Debug) -> Result<std::fs::ReadDir> {
+    let path = path.as_ref();
+    std::fs::read_dir(path)
+        .with_context(|| format!("read directory: {path:?}"))
+        .tap_ok(|_| trace!(?path, "read directory"))
 }

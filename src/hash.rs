@@ -3,10 +3,11 @@
 use std::path::Path;
 
 use color_eyre::Result;
-use color_eyre::eyre::Context;
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
 use tracing::{instrument, trace};
+
+use crate::fs;
 
 /// A Blake3 hash.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Serialize, Deserialize)]
@@ -17,7 +18,7 @@ impl Blake3 {
     #[instrument]
     pub fn from_file(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Self> {
         let path = path.as_ref();
-        let file = std::fs::File::open(path).with_context(|| format!("open {path:?}"))?;
+        let file = fs::open_file(path)?;
 
         let mut reader = std::io::BufReader::new(file);
         let mut hasher = blake3::Hasher::new();

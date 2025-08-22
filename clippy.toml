@@ -1,0 +1,16 @@
+disallowed-methods = [
+    { path = "std::fs::read", reason = "use crate::fs::read_buffered instead" },
+    { path = "std::fs::read_to_string", reason = "use crate::fs::read_buffered_utf8 instead" },
+    { path = "std::fs::write", reason = "use crate::fs::write instead" },
+    { path = "std::fs::create_dir", reason = "use crate::fs::create_dir_all instead" },
+    { path = "std::fs::create_dir_all", reason = "use crate::fs::create_dir_all instead" },
+    { path = "std::fs::remove_dir", reason = "use crate::fs module instead" },
+    { path = "std::fs::remove_dir_all", reason = "use crate::fs module instead" },
+    { path = "std::fs::remove_file", reason = "use crate::fs module instead" },
+    { path = "std::fs::rename", reason = "use crate::fs module instead" },
+    { path = "std::fs::copy", reason = "use crate::fs::copy_file instead" },
+    { path = "std::fs::read_dir", reason = "use crate::fs::read_dir instead" },
+    { path = "std::fs::File::open", reason = "use crate::fs::open_file instead" },
+    { path = "std::fs::File::create", reason = "use crate::fs module instead" },
+    { path = "std::fs::OpenOptions::new", reason = "use crate::fs module instead" },
+]
