@@ -1,9 +1,8 @@
 use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
 use derive_more::Display;
-use fslock::LockFile;
 
 use color_eyre::{Result, eyre::Context};
-use tracing::instrument;
+use tracing::{instrument, trace};
 
 use crate::fs;
 
@@ -36,7 +35,8 @@ impl Cas {
             .context("find user cache path")?
             .join("cas");
 
-        std::fs::create_dir_all(&root).context("ensure directory exists")?;
+        fs::create_dir_all(&root)?;
+        trace!(?root, "open cas");
         Ok(Self { root })
     }
 
@@ -53,15 +53,8 @@ impl Cas {
     pub fn extract_to(&self, key: impl AsRef<str> + std::fmt::Debug, dst: &Utf8Path) -> Result<()> {
         let src = self.root.join(key.as_ref());
         if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent).context("create parent directory")?;
+            fs::create_dir_all(parent)?;
         }
         fs::copy_file(src, dst)
     }
 }
-
-/// Holds the lock of the file being interacted with, preventing other instances
-/// of `hurry` from mutating or reading the file at the same time.
-///
-/// Once this guard is dropped, the lock is released.
-#[derive(Debug)]
-pub struct CasLockGuard(LockFile);

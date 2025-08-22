@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    iter::repeat,
     marker::PhantomData,
     str::FromStr,
 };
@@ -9,21 +8,19 @@ use bon::{Builder, bon};
 use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
 use color_eyre::{
     Result, Section, SectionExt,
-    eyre::{Context, OptionExt, eyre},
+    eyre::{Context, eyre},
 };
 use derive_more::{Debug, Display};
 use fslock::LockFile;
 use itertools::Itertools;
-use lockfile::Lockfile;
-use rayon::iter::ParallelBridge;
-use serde::{Deserialize, Serialize};
-use tap::{Pipe, Tap, TryConv};
+use serde::Deserialize;
+use tap::{Pipe, Tap};
 use tracing::{debug, instrument, trace};
-use walkdir::{DirEntry, WalkDir};
+use walkdir::WalkDir;
 
 use crate::{
     cargo::{CacheRecord, CacheRecordArtifact, Profile, read_argv},
-    fs::{self, HashedFile},
+    fs,
     hash::Blake3,
 };
 
@@ -77,16 +74,16 @@ impl Workspace {
             cmd.manifest_path(p);
         }
         let metadata = cmd.exec().context("could not read cargo metadata")?;
-        trace!(?metadata, "cargo metadata");
+        debug!(?metadata, "cargo metadata");
 
         // TODO: This currently blows up if we have no lockfile.
         let lockfile = cargo_lock::Lockfile::load(metadata.workspace_root.join("Cargo.lock"))
             .context("load cargo lockfile")?;
-        trace!(?lockfile, "cargo lockfile");
+        debug!(?lockfile, "cargo lockfile");
 
         let rustc_meta = RustcMetadata::from_argv(&metadata.workspace_root, argv)
             .context("read rustc metadata")?;
-        trace!(?rustc_meta, "rustc metadata");
+        debug!(?rustc_meta, "rustc metadata");
 
         // We only care about third party packages for now.
         //
@@ -118,12 +115,12 @@ impl Workspace {
                         .pipe(Some)
                 }
                 _ => {
-                    trace!(?package, "skipped indexing package for cache");
+                    debug!(?package, "skipped indexing package for cache");
                     None
                 }
             })
             .map(|dependency| (dependency.key(), dependency))
-            .inspect(|(key, dependency)| trace!(?key, ?dependency, "indexed dependency"))
+            .inspect(|(key, dependency)| debug!(?key, ?dependency, "indexed dependency"))
             .collect::<HashMap<_, _>>();
 
         Ok(Self {
@@ -143,9 +140,9 @@ impl Workspace {
 
         // TODO: do we need to create `.rustc_info.json` to get cargo
         // to recognize the target folder as valid when restoring caches?
-        std::fs::create_dir_all(self.target.join(profile.as_str()))
+        fs::create_dir_all(self.target.join(profile.as_str()))
             .context("create target directory")?;
-        std::fs::write(self.target.join(CACHEDIR_TAG_NAME), CACHEDIR_TAG_CONTENT)
+        fs::write(self.target.join(CACHEDIR_TAG_NAME), CACHEDIR_TAG_CONTENT)
             .context("write CACHEDIR.TAG")
     }
 
@@ -173,7 +170,7 @@ impl Workspace {
         self.dependencies
             .values()
             .find(|d| d.name == name && d.version == version)
-            .tap(|dependency| trace!(?dependency, "search result"))
+            .tap(|dependency| debug!(?dependency, "search result"))
     }
 }
 
@@ -229,7 +226,7 @@ impl Dependency {
 #[bon]
 impl Dependency {
     /// Produce a hash key for all the fields of a dependency
-    /// without having to actually make a proper dependency instance
+    /// without having to actually make a dependency instance
     /// (which may involve cloning).
     #[builder]
     pub fn key_for(
@@ -297,11 +294,11 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
     /// If the directory doesn't already exist, it is created.
     #[instrument]
     pub fn open(workspace: &'ws Workspace, profile: &Profile) -> Result<Self> {
-        let root = workspace.root.join("target").join(profile.as_str());
         workspace
             .init_target(profile)
             .context("init workspace target")?;
 
+        let root = workspace.root.join("target").join(profile.as_str());
         let lock = root.join(".cargo-lock");
         let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;
 
@@ -328,18 +325,6 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
 }
 
 impl<'ws> ProfileDir<'ws, Locked> {
-    /// Unlock the directory.
-    pub fn unlock(mut self) -> Result<ProfileDir<'ws, Unlocked>> {
-        self.lock.unlock().context("unlock profile")?;
-        Ok(ProfileDir {
-            state: PhantomData,
-            profile: self.profile,
-            lock: self.lock,
-            root: self.root,
-            workspace: self.workspace,
-        })
-    }
-
     /// Enumerate cache artifacts in the target directory for the dependency.
     ///
     /// For now in this context, a "cache artifact" is _any file_ inside the
@@ -370,6 +355,8 @@ impl<'ws> ProfileDir<'ws, Locked> {
         // instead of `.fingerprint`, they're looking for `build`.
         let standard = WalkDir::new(root).into_iter().filter_entry(|entry| {
             let path = entry.path();
+            trace!(?path, "walk");
+
             if path == root {
                 return true;
             }
@@ -498,286 +485,9 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .collect()
     }
 
-    /// Enumerate build units in the target.
-    pub fn enumerate_buildunits(&self) -> Result<Vec<BuildUnit>> {
-        // TODO: parallelize this.
-        // The critical part here is that we retain the order of input files.
-        WalkDir::new(self.root.as_std_path()).into_iter().try_fold(
-            Vec::new(),
-            |mut acc, entry| -> Result<Vec<BuildUnit>> {
-                let entry = entry.context("walk file")?;
-                let entry = entry.path();
-
-                // Only `*.d` files are valid build units.
-                if !entry.extension().is_some_and(|ext| ext == "d") {
-                    trace!(?entry, "skip file: not a build unit");
-                    return Ok(acc);
-                }
-
-                let content = fs::read_buffered_utf8(entry)
-                    .with_context(|| format!("read build unit: {entry:?}"))?;
-                let unit = BuildUnit::parse(self, content)
-                    .with_context(|| format!("parse build unit: {entry:?}"))?;
-                acc.extend(unit);
-                Ok(acc)
-            },
-        )
-    }
-
     /// The root of the profile directory.
     pub fn root(&self) -> &Utf8Path {
         &self.root
-    }
-}
-
-/// A build unit inside a workspace.
-///
-/// This is a `hurry`-specific term for a `.d` file inside the `target`
-/// directory; these files are a psuedo-makefile syntax that lists:
-/// - Output files (compiled artifacts)
-/// - Their input files (source code)
-///
-/// ## Example
-///
-/// For example here you can see that `libahash-d548a2253ff6e8a0.rlib`
-/// depends on several files, e.g. `ahash-0.8.12/src/lib.rs`;
-/// then later in the file you can see that `ahash-0.8.12/src/lib.rs`
-/// doesn't depend on anything else.
-///
-/// ```not_rust
-/// /Users/jess/projects/attune/target/release/deps/ahash-d548a2253ff6e8a0.d: /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/lib.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/convert.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/fallback_hash.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/operations.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/random_state.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/specialize.rs
-///
-/// /Users/jess/projects/attune/target/release/deps/libahash-d548a2253ff6e8a0.rlib: /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/lib.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/convert.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/fallback_hash.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/operations.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/random_state.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/specialize.rs
-///
-/// /Users/jess/projects/attune/target/release/deps/libahash-d548a2253ff6e8a0.rmeta: /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/lib.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/convert.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/fallback_hash.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/operations.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/random_state.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/specialize.rs
-///
-/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/lib.rs:
-/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/convert.rs:
-/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/fallback_hash.rs:
-/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/operations.rs:
-/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/random_state.rs:
-/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ahash-0.8.12/src/specialize.rs:
-/// ```
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BuildUnit {
-    /// The output of this build unit.
-    pub output: BuildUnitOutput,
-
-    /// The inputs of this build unit.
-    pub inputs: Vec<BuildUnitInput>,
-
-    /// The key of the dependency which built this unit.
-    ///
-    /// Currently, only build units that came from third party dependencies
-    /// are supported for caching.
-    pub dependency_key: Option<Blake3>,
-}
-
-impl BuildUnit {
-    /// Parse a file to create the instance in the provided profile.
-    #[instrument]
-    pub fn parse(
-        profile: &ProfileDir<Locked>,
-        content: impl AsRef<str> + std::fmt::Debug,
-    ) -> Result<Vec<BuildUnit>> {
-        let content = content.as_ref();
-
-        // TODO: Parallelize this.
-        // The most important thing when it come to parallelization
-        // is ensuring that we emit each `Vec<BuildUnitInput>` in the same order
-        // as what is actually written in the file.
-        content
-            .lines()
-            .into_iter()
-            .inspect(|line| trace!(?line, "parse build unit .d file"))
-            .filter_map(|line| {
-                let (output, inputs) = line.split_once(':')?;
-                let (output, inputs) = (output.trim(), inputs.trim());
-                let inputs = inputs.split_whitespace().collect::<Vec<_>>();
-                Some((output, inputs))
-            })
-            // Build units with empty inputs seem to be practice source files,
-            // which are not copied into the `deps/` directory anyway
-            // and therefore do not need to be considered.
-            .filter(|(output, inputs)| {
-                if inputs.is_empty() {
-                    trace!(?output, "skipped build unit: empty inputs");
-                    false
-                } else {
-                    true
-                }
-            })
-            .filter_map(
-                |(output, inputs)| match Self::new_from_strs(profile, output, &inputs) {
-                    Ok(parsed) => {
-                        trace!(?output, ?inputs, "parsed build unit");
-                        Some(parsed)
-                    }
-                    Err(error) => {
-                        trace!(?output, ?inputs, ?error, "failed to parse build unit");
-                        None
-                    }
-                },
-            )
-            .collect::<Vec<_>>()
-            .pipe(Ok)
-    }
-
-    /// Create an instance from the provided output and input files,
-    /// where the file paths are strings.
-    ///
-    /// This isn't public because it's really only meant to be called from
-    /// `parse` as a convenience/code organization function.
-    fn new_from_strs(profile: &ProfileDir<Locked>, output: &str, inputs: &[&str]) -> Result<Self> {
-        let output = fs::into_path(output).context("create output path")?;
-        let inputs = inputs
-            .into_iter()
-            .map(|input| fs::into_path(input).context("create input path"))
-            .collect::<Result<Vec<_>>>()?;
-        Self::new(profile, output, inputs)
-    }
-
-    /// Create an instance from the provided output and input files.
-    #[instrument]
-    pub fn new(
-        profile: &ProfileDir<Locked>,
-        output: impl AsRef<Utf8Path> + std::fmt::Debug,
-        inputs: impl AsRef<[Utf8PathBuf]> + std::fmt::Debug,
-    ) -> Result<Self> {
-        let output = output.as_ref();
-        let inputs = inputs.as_ref();
-        let output = BuildUnitOutput::read(profile, output)
-            .with_context(|| format!("read output file: {output}"))?;
-        let inputs = inputs
-            .into_iter()
-            .map(|input| {
-                BuildUnitInput::read(profile.workspace, input)
-                    .with_context(|| format!("read input file: {input}"))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        // TODO: we don't currently prioritize certain inputs,
-        // or do anything to handle (or indeed check) when inputs
-        // don't agree on a source. I don't actually know if this ever
-        // happens, but we should figure it out.
-        let dependency_key = inputs.iter().find_map(|input| {
-            // Input paths are in the form:
-            // `.cargo/registry/src/index.crates.io-$HASH/$NAME-$VERSION/src/lib.rs`.
-            // We are after the `$NAME` and `$VERSION` here.
-            //
-            // TODO: this breaks on anything other than crates
-            // in the public registry. Currently this is OK because we
-            // similarly filter dependencies when listing them in the workspace,
-            // but we should fix this eventually. Maybe we could read
-            // the actual `Cargo.toml` at the directory that is the shared
-            // common root of all inputs for this information?
-            input
-                .path_rel()
-                .components()
-                .tuple_windows()
-                .find_map(|(parent, child)| {
-                    if parent.as_str().contains("index.crates.io") {
-                        let (name, version) = child.as_str().split_once('-')?;
-                        profile
-                            .workspace
-                            .find_dependency(name, version)
-                            .map(Dependency::key)
-                    } else {
-                        None
-                    }
-                })
-        });
-
-        Ok(Self {
-            output,
-            inputs,
-            dependency_key,
-        })
-    }
-}
-
-/// An output file for the build unit.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BuildUnitOutput(HashedFile);
-
-impl BuildUnitOutput {
-    /// Create the output from the provided path on disk.
-    pub fn read(profile: &ProfileDir<Locked>, path: &Utf8Path) -> Result<Self> {
-        let file = HashedFile::read(path).context("hash file")?;
-
-        // Need to make the file path relative to the profile directory
-        // so that this can be cross platform and cross project.
-        //
-        // For now we report any case where this isn't valid as an error.
-        // This may not be the right decision forever, but for now we need this
-        // because the current system makes this assumption.
-        let path = file
-            .path
-            .strip_prefix(profile.root())
-            .with_context(|| format!("make {path:?} relative to {:?}", profile.root()))?;
-
-        HashedFile::builder()
-            .path(path)
-            .hash(file.hash)
-            .build()
-            .pipe(Self)
-            .pipe(Ok)
-    }
-
-    /// The hash of the file content.
-    pub fn hash(&self) -> &Blake3 {
-        &self.0.hash
-    }
-
-    /// The path relative to [`ProfileDir::root()`] for the file.
-    pub fn path_rel(&self) -> &Utf8Path {
-        &self.0.path
-    }
-
-    /// Compute the full path using the given profile.
-    pub fn path(&self, profile: &ProfileDir<Locked>) -> Utf8PathBuf {
-        profile.root().join(&self.0.path)
-    }
-}
-
-/// An input for a build unit.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BuildUnitInput(HashedFile);
-
-impl BuildUnitInput {
-    /// Create the input from the provided path on disk.
-    #[instrument]
-    pub fn read(_workspace: &Workspace, path: &Utf8Path) -> Result<Self> {
-        let file = HashedFile::read(path).context("hash file")?;
-
-        // Need to make the file path relative to the cargo home directory
-        // so that this can be cross platform and cross machine.
-        //
-        // For now we report any case where this isn't valid as an error.
-        // This may not be the right decision forever, but for now we need this
-        // because the current system makes this assumption.
-        // let path = file
-        //     .path
-        //     .strip_prefix(&workspace.cargo_home)
-        //     .with_context(|| format!("make {path:?} relative to {:?}", workspace.cargo_home))?
-        //     .to_owned();
-
-        HashedFile::builder()
-            .path(file.path)
-            .hash(file.hash)
-            .build()
-            .pipe(Self)
-            .pipe(Ok)
-    }
-
-    /// The hash of the file content.
-    pub fn hash(&self) -> &Blake3 {
-        &self.0.hash
-    }
-
-    /// The path relative to [`Workspace::cargo_home`] for the file.
-    pub fn path_rel(&self) -> &Utf8Path {
-        &self.0.path
     }
 }
 
@@ -864,11 +574,6 @@ impl<'ws> Cache<'ws, Locked> {
         })
     }
 
-    /// The root path of the cache.
-    pub fn root(&self) -> &Utf8Path {
-        &self.root
-    }
-
     /// Store the provided record in the cache.
     #[instrument]
     pub fn store(&self, record: &CacheRecord) -> Result<()> {
@@ -891,17 +596,6 @@ impl<'ws> Cache<'ws, Locked> {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(err).context("read cache record"),
         }
-    }
-
-    /// Check whether the cache is empty (other than the lockfile).
-    pub fn is_empty(&self) -> Result<bool> {
-        for entry in std::fs::read_dir(&self.root).context("read cache directory")? {
-            let entry = entry.context("read entry")?;
-            if !entry.path().ends_with(Self::LOCKFILE_NAME) {
-                return Ok(false);
-            }
-        }
-        Ok(true)
     }
 }
 

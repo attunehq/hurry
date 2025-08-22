@@ -1,3 +1,5 @@
+//! The binary entrypoint for `hurry`, the ultra-fast build tool.
+
 use cargo_metadata::camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use color_eyre::{Result, eyre::Context};
@@ -6,6 +8,11 @@ use tracing_error::ErrorLayer;
 use tracing_flame::FlameLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+// Since this is a binary crate, we need to ensure these modules aren't pub
+// so that they can correctly warn about dead code:
+// https://github.com/rust-lang/rust/issues/74970
+//
+// Relatedly, in this file specifically nothing should be `pub`.
 mod cargo;
 mod cas;
 mod fs;

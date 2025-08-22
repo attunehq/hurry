@@ -1,12 +1,12 @@
 //! Hashing operations and types.
 
-use std::{io::Read, path::Path};
+use std::path::Path;
 
 use color_eyre::Result;
 use color_eyre::eyre::Context;
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
-use tracing::instrument;
+use tracing::{instrument, trace};
 
 /// A Blake3 hash.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Serialize, Deserialize)]
@@ -18,37 +18,46 @@ impl Blake3 {
     pub fn from_file(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Self> {
         let path = path.as_ref();
         let file = std::fs::File::open(path).with_context(|| format!("open {path:?}"))?;
-        let reader = std::io::BufReader::new(file);
-        Self::from_reader(reader)
+
+        let mut reader = std::io::BufReader::new(file);
+        let mut hasher = blake3::Hasher::new();
+        let bytes = std::io::copy(&mut reader, &mut hasher)?;
+
+        let hash = hasher.finalize().as_bytes().to_vec();
+        let hash = hex::encode(hash);
+        trace!(?path, ?hash, ?bytes, "hash file");
+        Ok(Self(hash))
     }
 
     /// Hash the contents of a buffer.
-    #[instrument]
-    pub fn from_buffer(buffer: impl AsRef<[u8]> + std::fmt::Debug) -> Self {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(buffer.as_ref());
-        let hash = hasher.finalize().as_bytes().to_vec();
-        Self(hex::encode(hash))
-    }
-
-    /// Hash the contents of the reader.
     #[instrument(skip_all)]
-    pub fn from_reader(mut reader: impl Read) -> Result<Self> {
+    pub fn from_buffer(buffer: impl AsRef<[u8]> + std::fmt::Debug) -> Self {
+        let buffer = buffer.as_ref();
         let mut hasher = blake3::Hasher::new();
-        std::io::copy(&mut reader, &mut hasher)?;
+        hasher.update(buffer);
+
         let hash = hasher.finalize().as_bytes().to_vec();
-        Ok(Self(hex::encode(hash)))
+        let hash = hex::encode(hash);
+        trace!(?hash, bytes = ?buffer.len(), "hash buffer");
+        Self(hash)
     }
 
     /// Hash the contents of the iterator in order.
     #[instrument(skip_all)]
     pub fn from_fields(fields: impl IntoIterator<Item = impl AsRef<[u8]>>) -> Self {
         let mut hasher = blake3::Hasher::new();
+        let mut bytes = 0;
+
         for field in fields {
-            hasher.update(field.as_ref());
+            let field = field.as_ref();
+            bytes += field.len();
+            hasher.update(field);
         }
+
         let hash = hasher.finalize().as_bytes().to_vec();
-        Self(hex::encode(hash))
+        let hash = hex::encode(hash);
+        trace!(?hash, ?bytes, "hash fields");
+        Self(hash)
     }
 
     /// View the hash as a string.
