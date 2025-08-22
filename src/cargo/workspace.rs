@@ -115,12 +115,12 @@ impl Workspace {
                         .pipe(Some)
                 }
                 _ => {
-                    debug!(?package, "skipped indexing package for cache");
+                    trace!(?package, "skipped indexing package for cache");
                     None
                 }
             })
             .map(|dependency| (dependency.key(), dependency))
-            .inspect(|(key, dependency)| debug!(?key, ?dependency, "indexed dependency"))
+            .inspect(|(key, dependency)| trace!(?key, ?dependency, "indexed dependency"))
             .collect::<HashMap<_, _>>();
 
         Ok(Self {
@@ -170,7 +170,7 @@ impl Workspace {
         self.dependencies
             .values()
             .find(|d| d.name == name && d.version == version)
-            .tap(|dependency| debug!(?dependency, "search result"))
+            .tap(|dependency| trace!(?dependency, "search result"))
     }
 }
 

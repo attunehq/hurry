@@ -168,7 +168,7 @@ fn cache_target_from_workspace(
             let output_file = target.root().join(&artifact.target);
             cas.copy_from(&output_file, &artifact.hash)
                 .with_context(|| format!("backup output file: {output_file:?}"))?;
-            debug!(?key, ?dependency, ?artifact, "stored artifact");
+            trace!(?key, ?dependency, ?artifact, "stored artifact");
         }
 
         let record = CacheRecord::builder()

@@ -14,7 +14,7 @@ use color_eyre::{
 };
 use filetime::{FileTime, set_file_handle_times};
 use tap::{Pipe, Tap, TapFallible, TryConv};
-use tracing::{debug, instrument, trace, warn};
+use tracing::{instrument, trace, warn};
 
 /// Determine the canonical cache path for the current user, if possible.
 ///
@@ -30,7 +30,7 @@ pub fn user_global_cache_path() -> Result<Utf8PathBuf> {
         .join(".cache")
         .join("hurry")
         .join("v2")
-        .tap(|dir| debug!(?dir, "read user global cache path"))
+        .tap(|dir| trace!(?dir, "read user global cache path"))
         .pipe(Ok)
 }
 
