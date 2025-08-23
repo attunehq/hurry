@@ -19,7 +19,6 @@ rayon = "1.11.0"
 tap = "1.0.1"
 hex = "0.4.3"
 fslock = "0.2.1"
-dashmap = { version = "6.1.0", features = ["rayon"] }
 ahash = "0.8.12"
 filetime = "0.2.25"
 tracing-tree = { version = "0.4.0", features = ["time"] }
@@ -32,8 +31,5 @@ enum-assoc = "1.2.4"
 subenum = "1.1.2"
 bon = "3.7.1"
 cargo-lock = { version = "10.1.0", features = ["dependency-tree"] }
-radix_trie = "0.2.1"
 flume = "0.11.1"
-clonelicious = "2.2.4"
-humantime = "2.2.0"
 atomic-time = "0.1.5"

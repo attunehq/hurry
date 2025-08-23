@@ -8,15 +8,14 @@ use bon::{Builder, bon};
 use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
 use color_eyre::{
     Result, Section, SectionExt,
-    eyre::{Context, eyre},
+    eyre::{Context, OptionExt, eyre},
 };
 use derive_more::{Debug, Display};
 use fslock::LockFile;
 use itertools::Itertools;
 use serde::Deserialize;
-use tap::{Pipe, Tap};
+use tap::{Pipe, Tap, TapFallible};
 use tracing::{debug, instrument, trace};
-use walkdir::WalkDir;
 
 use crate::{
     cargo::{CacheRecord, CacheRecordArtifact, Profile, read_argv},
@@ -46,7 +45,7 @@ pub struct Workspace {
 
     /// The target directory in the workspace.
     #[debug(skip)]
-    pub target: Index,
+    pub target: Utf8PathBuf,
 
     /// Parsed `rustc` metadata relating to the current workspace.
     #[debug(skip)]
@@ -127,12 +126,10 @@ impl Workspace {
             .inspect(|(key, dependency)| trace!(?key, ?dependency, "indexed dependency"))
             .collect::<HashMap<_, _>>();
 
-        let target = Index::recursive(metadata.target_directory).context("index target folder")?;
-
         Ok(Self {
             root: metadata.workspace_root,
+            target: metadata.target_directory,
             rustc: rustc_meta,
-            target,
             dependencies,
         })
     }
@@ -147,13 +144,10 @@ impl Workspace {
 
         // TODO: do we need to create `.rustc_info.json` to get cargo
         // to recognize the target folder as valid when restoring caches?
-        fs::create_dir_all(self.target.root.join(profile.as_str()))
+        fs::create_dir_all(self.target.join(profile.as_str()))
             .context("create target directory")?;
-        fs::write(
-            self.target.root.join(CACHEDIR_TAG_NAME),
-            CACHEDIR_TAG_CONTENT,
-        )
-        .context("write CACHEDIR.TAG")
+        fs::write(self.target.join(CACHEDIR_TAG_NAME), CACHEDIR_TAG_CONTENT)
+            .context("write CACHEDIR.TAG")
     }
 
     /// Open the given named profile directory in the workspace.
@@ -274,6 +268,15 @@ pub struct ProfileDir<'ws, State> {
     /// The workspace in which this build profile is located.
     pub workspace: &'ws Workspace,
 
+    /// The index of files inside the profile directory.
+    /// Paths in this index are relative to [`ProfileDir::root`].
+    ///
+    /// This index is built when the profile directory is locked.
+    /// Currently there's no explicit unlock mechanism for profiles since
+    /// they're just dropped, but if we ever add one that's where we'd clear
+    /// this and set it to `None`.
+    index: Option<Index>,
+
     /// The root of the directory.
     ///
     /// For example, if the workspace is at `/home/me/projects/foo`,
@@ -314,6 +317,7 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
 
         Ok(Self {
             state: PhantomData,
+            index: None,
             profile: profile.clone(),
             lock,
             root,
@@ -325,12 +329,16 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
     #[instrument(name = "ProfileDir::lock")]
     pub fn lock(mut self) -> Result<ProfileDir<'ws, Locked>> {
         self.lock.lock().context("lock profile")?;
+        let index = Index::recursive(&self.root)
+            .map(Some)
+            .context("index target folder")?;
         Ok(ProfileDir {
             state: PhantomData,
             profile: self.profile,
             lock: self.lock,
             root: self.root,
             workspace: self.workspace,
+            index,
         })
     }
 }
@@ -345,17 +353,12 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ///
     /// TODO: the above is probably overly broad for a cache; evaluate
     /// what filtering mechanism to apply to reduce invalidations and rework.
-    /// TODO: This requires us to walk the target directory for every dep;
-    /// should we index instead? I haven't pre-emptively done this
-    /// because we may find a way to pare down what we need to walk
-    /// (or even avoid walking and compute keys directly)
-    /// by solving the todo above this one.
     #[instrument(name = "ProfileDir::enumerate_cache_artifacts")]
     pub fn enumerate_cache_artifacts(
         &self,
         dependency: &Dependency,
     ) -> Result<Vec<CacheRecordArtifact>> {
-        let root = &self.root;
+        let index = self.index.as_ref().ok_or_eyre("files not indexed")?;
 
         // Fingerprint artifacts are straightforward:
         // if they're inside the `.fingerprint` directory,
@@ -364,97 +367,64 @@ impl<'ws> ProfileDir<'ws, Locked> {
         //
         // Builds are the same as fingerprints, just with a different root:
         // instead of `.fingerprint`, they're looking for `build`.
-        let standard = WalkDir::new(root).into_iter().filter_entry(|entry| {
-            let path = entry.path();
-            trace!(?path, "walk");
-
-            if path == root {
-                return true;
-            }
-            let Ok(subdir) = path.strip_prefix(root) else {
-                return false;
-            };
-
-            for sdname in [".fingerprint", "build"] {
-                if subdir.starts_with(sdname) {
-                    let subsubdir = subdir.components().skip(1).next();
-                    return subsubdir.is_none_or(|ssd| {
-                        ssd.as_os_str()
-                            .to_string_lossy()
-                            .starts_with(&dependency.name)
-                    });
-                }
-            }
-
-            false
-        });
+        let standard = index
+            .files
+            .iter()
+            .filter(|(path, _)| {
+                path.components()
+                    .tuple_windows()
+                    .next()
+                    .is_some_and(|(parent, child)| {
+                        child.as_str().starts_with(&dependency.name)
+                            && (parent.as_str() == ".fingerprint" || parent.as_str() == "build")
+                    })
+            })
+            .collect_vec();
 
         // Dependencies are totally different from the two above.
         // This directory is flat; inside we're looking for one primary file:
         // a `.d` file whose name starts with the name of the dependency.
         //
-        // This file then lists other files (namely, `.rlib` and `.rmeta`)
+        // This file then lists other files (e.g. `*.rlib` and `*.rmeta`)
         // that this dependency built; these are _often_ (but not always)
         // named with a different prefix (often, but not always, "lib").
         //
         // Along the way we also grab any other random file in here that is
-        // prefixed with the same name as the `.d` file; from observation
-        // so far this has been `.rcgu.o` files which appear to be compiled
-        // codegen.
+        // prefixed with the name of the dependency; so far this has been
+        // `.rcgu.o` files which appear to be compiled codegen.
         //
-        // Since we have to read this directory potentially several times in
-        // effectively random order we just read the whole list into memory.
-        // TODO: cache this?
-        let dependencies_root = root.join("deps");
-        let all_dependencies = fs::read_dir(&dependencies_root)?
-            .map(|entry| -> Result<String> {
-                let entry = entry.context("walk files")?;
-                Ok(entry.file_name().to_string_lossy().to_string())
-            })
-            .collect::<Result<Vec<_>>>()
-            .with_context(|| format!("enumerate contents of {dependencies_root:?}"))?;
-
-        // `.d` files are structured a little like makefiles, where each output
-        // is on its own line followed by a colon followed by the inputs.
-        //
-        // Currently, we only care about the outputs, and only the outputs
-        // that end with `.d`, `.rlib`, or `.rmeta`.
-        //
-        // Also, not all crates create `.d` files, or even entries in
-        // the `deps` folder at all!
-        let dotd = all_dependencies
+        // Not all dependencies create `.d` files or indeed anything else
+        // in the `deps` folder- from observation, it seems that this is the
+        // case for purely proc-macro crates. This is honestly mostly ok,
+        // because we want those to run anyway for now (until we figure out
+        // a way to cache proc-macro invocations).
+        let dependencies = index
+            .files
             .iter()
-            .find(|name| name.starts_with(&dependency.name) && name.ends_with(".d"));
-        let dependencies = if let Some(dotd) = dotd {
-            let dotd_path = dependencies_root.join(dotd);
-            let dependency_outputs = fs::read_buffered_utf8(&dotd_path)
-                .with_context(|| format!("read .d file: {dotd_path:?}"))?
-                .lines()
-                .filter_map(|line| {
-                    let (output, _) = line.split_once(':')?;
-                    const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta"];
-                    if DEP_EXTS.iter().any(|ext| output.ends_with(ext)) {
-                        trace!(?dotd, ?line, ?output, "read .d line");
-                        Utf8PathBuf::from_str(output).ok()
-                    } else {
-                        trace!(?dotd, ?line, "skipped .d line");
-                        None
-                    }
-                })
-                .filter_map(|path| {
-                    path.file_name()
-                        .map(|n| n.to_string())
-                        .tap(|stripped| trace!(?path, ?stripped, "stripped .d path"))
-                })
-                .collect::<HashSet<_>>();
-            all_dependencies
+            .filter(|(path, _)| {
+                path.components()
+                    .next()
+                    .is_some_and(|part| part.as_str() == "deps")
+            })
+            .collect_vec();
+        let dotd = dependencies.iter().find(|(path, _)| {
+            path.components().skip(1).next().is_some_and(|part| {
+                part.as_str().ends_with(".d") && part.as_str().starts_with(&dependency.name)
+            })
+        });
+        let dependencies = if let Some((path, _)) = dotd {
+            let outputs = Dotd::from_file(self, path)
+                .context("parse .d file")?
+                .outputs
                 .into_iter()
-                .filter_map(|name| {
-                    if name.starts_with(&dependency.name) || dependency_outputs.contains(&name) {
-                        Some(dependencies_root.join(name))
-                    } else {
-                        None
-                    }
+                .collect::<HashSet<_>>();
+            dependencies
+                .into_iter()
+                .filter(|(path, _)| {
+                    outputs.contains(*path)
+                        || path
+                            .file_name()
+                            .is_some_and(|name| name.starts_with(&dependency.name))
                 })
                 .collect_vec()
         } else {
@@ -464,34 +434,17 @@ impl<'ws> ProfileDir<'ws, Locked> {
         // Now that we have our three sources of files,
         // we actually treat them all the same way!
         standard
-            .map(|entry| -> Result<Option<Utf8PathBuf>> {
-                let entry = entry.context("walk files")?;
-                if entry.file_type().is_file() {
-                    entry.into_path().try_into().context("parse path").map(Some)
-                } else {
-                    Ok(None)
-                }
-            })
-            .filter_map(Result::transpose)
-            .chain(dependencies.into_iter().map(Ok))
-            // TODO: parallelize with rayon
-            .map(|entry| -> Result<CacheRecordArtifact> {
-                let entry = entry?;
+            .into_iter()
+            .chain(dependencies)
+            .map(|(path, entry)| {
                 CacheRecordArtifact::builder()
-                    .hash(
-                        Blake3::from_file(&entry)
-                            .with_context(|| format!("hash file: {entry:?}"))?,
-                    )
-                    .target(
-                        entry
-                            .strip_prefix(root)
-                            .with_context(|| format!("make {entry:?} relative to {root:?}"))?,
-                    )
+                    .hash(&entry.hash)
+                    .target(path)
                     .build()
-                    .tap(|artifact| trace!(?artifact, "enumerated artifact"))
-                    .pipe(Ok)
             })
-            .collect()
+            .inspect(|artifact| trace!(?artifact, "enumerated artifact"))
+            .collect::<Vec<_>>()
+            .pipe(Ok)
     }
 
     /// The root of the profile directory.
@@ -664,5 +617,50 @@ impl RustcMetadata {
                     .to_string()
                     .header("Rustc Output:")
             })
+    }
+}
+
+/// A parsed Cargo .d file.
+///
+/// `.d` files are structured a little like makefiles, where each output
+/// is on its own line followed by a colon followed by the inputs.
+#[derive(Debug)]
+pub struct Dotd<'ws> {
+    #[debug(skip)]
+    #[allow(dead_code)]
+    profile: &'ws ProfileDir<'ws, Locked>,
+
+    /// Recorded output paths, relative to the profile root.
+    pub outputs: Vec<Utf8PathBuf>,
+}
+
+impl<'ws> Dotd<'ws> {
+    /// Construct an instance by parsing the file.
+    #[instrument(name = "Dotd::from_file")]
+    pub fn from_file(profile: &'ws ProfileDir<'ws, Locked>, path: &Utf8Path) -> Result<Self> {
+        const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta"];
+        let outputs = fs::read_buffered_utf8(profile.root.join(path))
+            .with_context(|| format!("read .d file: {path:?}"))?
+            .lines()
+            .filter_map(|line| {
+                let (output, _) = line.split_once(':')?;
+                if DEP_EXTS.iter().any(|ext| output.ends_with(ext)) {
+                    trace!(?line, ?output, "read .d line");
+                    Utf8PathBuf::from_str(output)
+                        .tap_err(|error| trace!(?line, ?output, ?error, "not a valid path"))
+                        .ok()
+                } else {
+                    trace!(?line, "skipped .d line");
+                    None
+                }
+            })
+            .map(|output| -> Result<Utf8PathBuf> {
+                output
+                    .strip_prefix(&profile.root)
+                    .with_context(|| format!("make {output:?} relative to {:?}", profile.root))
+                    .map(|p| p.to_path_buf())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { profile, outputs })
     }
 }

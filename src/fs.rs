@@ -3,17 +3,20 @@
 //! Inside this module, we refer to `std::fs` by its fully qualified path to
 //! make it maximally clear what we are using.
 
-#![allow(clippy::disallowed_methods)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "The methods are disallowed elsewhere, but we need them here!"
+)]
 
 use std::{path::Path, time::SystemTime};
 
+use ahash::AHashMap;
 use cargo_metadata::camino::Utf8PathBuf;
 use color_eyre::{
     Result,
     eyre::{Context, OptionExt},
 };
 use filetime::{FileTime, set_file_handle_times};
-use radix_trie::Trie;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use tap::{Pipe, Tap, TapFallible, TryConv};
 use tracing::{debug, instrument, trace, warn};
@@ -25,14 +28,16 @@ use crate::hash::Blake3;
 #[derive(Clone, Debug)]
 pub struct Index {
     /// The root directory of the index.
+    #[allow(dead_code)]
     pub root: Utf8PathBuf,
 
-    /// The trie storing the index.
-    ///
-    /// Keys are `Utf8PathBuf` instances relative to `root` stored as strings,
-    /// because `Utf8PathBuf` does not implement `TrieKey` so sadly can't
-    /// be used directly.
-    pub files: Trie<String, IndexEntry>,
+    /// Stores the index.
+    /// Keys relative to `root`.
+    //
+    // TODO: May want to make this a trie or something.
+    // https://docs.rs/fs-tree/0.2.2/fs_tree/ looked like it might work,
+    // but the API was sketchy so I didn't use it for now.
+    pub files: AHashMap<Utf8PathBuf, IndexEntry>,
 }
 
 impl Index {
@@ -41,7 +46,7 @@ impl Index {
     pub fn recursive(root: impl Into<Utf8PathBuf> + std::fmt::Debug) -> Result<Self> {
         let root = root.into();
 
-        // Annoyingly, `Trie` doesn't allow iteration or merging,
+        // Annoyingly, `Trie` doesn't allow merging,
         // so we can't perform this work entirely within the `rayon`
         // instance as it requires `try_fold -> try_reduce`.
         //
@@ -51,7 +56,7 @@ impl Index {
         // run in a single thread and is meant to do simple merging work
         // from the outputs of the various threads.
         //
-        // However, since `Trie` doesn't support iterating or merging trie
+        // However, since `Trie` doesn't support merging trie
         // instances, we can't do that pattern. Instead we hack it using
         // channels as you can see below.
         let (tx, rx) = flume::bounded::<(Utf8PathBuf, IndexEntry)>(0);
@@ -79,8 +84,9 @@ impl Index {
                         let path = path
                             .strip_prefix(&root)
                             .with_context(|| format!("make {path:?} relative to {root:?}"))?
-                            .to_path_buf();
-                        let path = Utf8PathBuf::try_from(path).context("read path as utf8")?;
+                            .to_path_buf()
+                            .pipe(Utf8PathBuf::try_from)
+                            .context("read path as utf8")?;
                         let entry = IndexEntry::from_file(entry.path()).context("index entry")?;
 
                         // Only errors if the channel receivers have been dropped,
@@ -96,9 +102,8 @@ impl Index {
         // This causes the receiver channel to close, terminating the iterator.
         let files = rx
             .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
             .inspect(|(path, entry)| trace!(?path, ?entry, "indexed file"))
-            .collect::<Trie<_, _>>();
+            .collect();
 
         // Joining a fallible operation from a background thread (as we do here)
         // has two levels of errors:
