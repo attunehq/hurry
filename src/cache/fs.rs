@@ -1,21 +1,18 @@
 //! Local file system implementation of cache and CAS traits.
 
-use std::marker::PhantomData;
-use std::{fmt::Debug as StdDebug, path::Path};
+use std::{fmt::Debug as StdDebug, marker::PhantomData, path::Path};
 
 use cargo_metadata::camino::Utf8PathBuf;
-use color_eyre::{Result, eyre::Context};
-use color_eyre::{Section, SectionExt};
+use color_eyre::{Result, Section, SectionExt, eyre::Context};
 use derive_more::{Debug, Display};
 use fslock::LockFile;
 use itertools::Itertools;
 use tap::Pipe;
 use tracing::{instrument, trace};
 
-use crate::cache::Artifact;
-use crate::{Locked, Unlocked};
 use crate::{
-    cache::{Kind, Record},
+    Locked, Unlocked,
+    cache::{Artifact, Kind, Record},
     fs,
     hash::Blake3,
 };
