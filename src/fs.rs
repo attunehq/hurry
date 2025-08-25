@@ -18,6 +18,7 @@ use color_eyre::{
 };
 use filetime::{FileTime, set_file_handle_times};
 use rayon::iter::{ParallelBridge, ParallelIterator};
+use relative_path::RelativePathBuf;
 use tap::{Pipe, Tap, TapFallible, TryConv};
 use tracing::{debug, instrument, trace, warn};
 use walkdir::WalkDir;
@@ -37,7 +38,7 @@ pub struct Index {
     // TODO: May want to make this a trie or something.
     // https://docs.rs/fs-tree/0.2.2/fs_tree/ looked like it might work,
     // but the API was sketchy so I didn't use it for now.
-    pub files: AHashMap<Utf8PathBuf, IndexEntry>,
+    pub files: AHashMap<RelativePathBuf, IndexEntry>,
 }
 
 impl Index {
@@ -59,7 +60,7 @@ impl Index {
         // However, since `Trie` doesn't support merging trie
         // instances, we can't do that pattern. Instead we hack it using
         // channels as you can see below.
-        let (tx, rx) = flume::bounded::<(Utf8PathBuf, IndexEntry)>(0);
+        let (tx, rx) = flume::bounded::<(RelativePathBuf, IndexEntry)>(0);
 
         // The `rayon` instance runs in its own threadpool, but its overall
         // operation is still blocking, so we run it in a background thread that
@@ -85,7 +86,7 @@ impl Index {
                             .strip_prefix(&root)
                             .with_context(|| format!("make {path:?} relative to {root:?}"))?
                             .to_path_buf()
-                            .pipe(Utf8PathBuf::try_from)
+                            .pipe(RelativePathBuf::from_path)
                             .context("read path as utf8")?;
                         let entry = IndexEntry::from_file(entry.path()).context("index entry")?;
 
@@ -205,6 +206,9 @@ pub fn copy_file(
     // the rust compiler is the ultimate authority here.
     let src_mtime = src_meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let src_atime = src_meta.accessed().unwrap_or(SystemTime::UNIX_EPOCH);
+    if let Some(parent) = dst.as_ref().parent() {
+        create_dir_all(parent).context("create parent directory")?;
+    }
 
     // Manually opening the destination file allows us to set the metadata directly,
     // without the additional syscall to touch the file metadata.
@@ -237,26 +241,39 @@ pub fn copy_file(
 
 /// Buffer the file content from disk.
 #[instrument]
-pub fn read_buffered(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Vec<u8>> {
+pub fn read_buffered(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Option<Vec<u8>>> {
     let path = path.as_ref();
-    std::fs::read(path)
-        .with_context(|| format!("read file: {path:?}"))
-        .tap_ok(|buf| trace!(?path, bytes = buf.len(), "read file"))
+    match std::fs::read(path) {
+        Ok(buf) => {
+            trace!(?path, bytes = buf.len(), "read file");
+            Ok(Some(buf))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).context(format!("read file: {path:?}")),
+    }
 }
 
 /// Buffer the file content from disk and parse it as UTF8.
 #[instrument]
-pub fn read_buffered_utf8(path: impl AsRef<Path> + std::fmt::Debug) -> Result<String> {
+pub fn read_buffered_utf8(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Option<String>> {
     let path = path.as_ref();
-    std::fs::read_to_string(path)
-        .with_context(|| format!("read file: {path:?}"))
-        .tap_ok(|buf| trace!(?path, bytes = buf.len(), "read file as string"))
+    match std::fs::read_to_string(path) {
+        Ok(buf) => {
+            trace!(?path, bytes = buf.len(), "read file as string");
+            Ok(Some(buf))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).context(format!("read file: {path:?}")),
+    }
 }
 
 /// Write the provided file content to disk.
 #[instrument(skip(content))]
 pub fn write(path: impl AsRef<Path> + std::fmt::Debug, content: impl AsRef<[u8]>) -> Result<()> {
     let (path, content) = (path.as_ref(), content.as_ref());
+    if let Some(parent) = path.parent() {
+        create_dir_all(parent).context("create parent directory")?;
+    }
     std::fs::write(path, content)
         .with_context(|| format!("write file: {path:?}"))
         .tap_ok(|_| trace!(?path, bytes = content.len(), "write file"))

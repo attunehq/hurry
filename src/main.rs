@@ -9,6 +9,7 @@ use atomic_time::AtomicInstant;
 use cargo_metadata::camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use color_eyre::{Result, eyre::Context};
+use derive_more::Display;
 use tap::Pipe;
 use tracing::{instrument, level_filters::LevelFilter};
 use tracing_error::ErrorLayer;
@@ -21,10 +22,20 @@ use tracing_tree::time::FormatTime;
 // https://github.com/rust-lang/rust/issues/74970
 //
 // Relatedly, in this file specifically nothing should be `pub`.
+mod cache;
 mod cargo;
-mod cas;
 mod fs;
 mod hash;
+
+/// The associated type's state is unlocked.
+/// Used for the typestate pattern.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Default)]
+pub struct Unlocked;
+
+/// The associated type's state is locked.
+/// Used for the typestate pattern.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Default)]
+pub struct Locked;
 
 #[derive(Parser)]
 #[command(name = "hurry", about = "Really, really fast builds", version)]

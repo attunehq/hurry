@@ -4,16 +4,17 @@
 //! - `docs/DESIGN.md`
 //! - `docs/development/cargo.md`
 
+use std::fmt::Debug;
+
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
+use futures::executor::block_on;
+use tap::Pipe;
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    cargo::{
-        CacheRecord, Profile, invoke,
-        workspace::{Cache, Locked, Workspace},
-    },
-    cas::Cas,
+    cache::{Cache, Cas, FsCache, FsCas, Kind},
+    cargo::{Profile, invoke, workspace::Workspace},
 };
 
 /// Options for `cargo build`
@@ -52,10 +53,10 @@ impl Options {
 pub fn exec(options: Options) -> Result<()> {
     info!("Starting");
 
-    let cas = Cas::open_default().context("open cas")?;
+    let cas = FsCas::open_default().context("open CAS")?;
     let workspace = Workspace::from_argv(&options.argv).context("open workspace")?;
 
-    let cache = workspace.open_cache().context("open cache")?;
+    let cache = FsCache::open_default(&workspace.root).context("open cache")?;
     let cache = cache.lock().context("lock cache")?;
 
     // This is split into an inner function so that we can reliably
@@ -74,15 +75,15 @@ pub fn exec(options: Options) -> Result<()> {
 
 fn exec_inner(
     options: Options,
-    cas: &Cas,
+    cas: impl Cas + Debug + Copy,
     workspace: &Workspace,
-    cache: &Cache<'_, Locked>,
+    cache: impl Cache + Debug + Copy,
 ) -> Result<()> {
     let profile = options.profile();
 
     if !options.skip_restore {
         info!(?cache, "Restoring target directory from cache");
-        match restore_target_from_cache(cas, &workspace, &cache, &profile) {
+        match restore_target_from_cache(cas, &workspace, cache, &profile) {
             Ok(_) => info!("Restored cache"),
             Err(error) => warn!(?error, "Failed to restore cache"),
         }
@@ -108,7 +109,7 @@ fn exec_inner(
     // rather than having to copy it all at the end.
     if !options.skip_backup {
         info!("Caching built target directory");
-        match cache_target_from_workspace(cas, &workspace, &cache, &profile) {
+        match cache_target_from_workspace(cas, &workspace, cache, &profile) {
             Ok(_) => info!("Cached target directory"),
             Err(error) => warn!(?error, "Failed to cache target"),
         }
@@ -140,11 +141,11 @@ fn exec_inner(
 /// - Finds tertiary files like `.fingerprint` etc
 /// - Stores the files in the CAS in such a way that they can be found
 ///   using only data inside `Cargo.lock` in the future.
-#[instrument(skip_all, fields(%cas, %workspace, %cache, %profile))]
+#[instrument(skip_all, fields(?cas, ?workspace, ?cache, ?profile))]
 fn cache_target_from_workspace(
-    cas: &Cas,
+    cas: impl Cas + Debug,
     workspace: &Workspace,
-    cache: &Cache<Locked>,
+    cache: impl Cache + Debug,
     profile: &Profile,
 ) -> Result<()> {
     let target = workspace
@@ -162,18 +163,20 @@ fn cache_target_from_workspace(
             .with_context(|| format!("enumerate cache artifacts for dependency: {dependency}"))?;
 
         for artifact in &artifacts {
-            let output_file = target.root().join(&artifact.target);
-            cas.copy_from(&output_file, &artifact.hash)
+            let output_file = artifact.target.to_path(target.root());
+            cas.store_file(Kind::Cargo, &output_file)
+                .pipe(block_on)
                 .with_context(|| format!("backup output file: {output_file:?}"))?;
             trace!(?key, ?dependency, ?artifact, "stored artifact");
         }
 
-        let record = CacheRecord::builder()
-            .artifacts(artifacts)
-            .dependency_key(key)
-            .build();
-        cache.store(&record).context("store cache record")?;
-        debug!(?key, ?dependency, ?record, "stored cache record");
+        // let record = Record::builder().artifacts(artifacts).key(key).build();
+        // let record = Record::builder().kind(Kind::Cargo).key(key).build();
+        cache
+            .store(Kind::Cargo, key, &artifacts)
+            .pipe(block_on)
+            .context("store cache record")?;
+        debug!(?key, ?dependency, ?artifacts, "stored cache record");
         info!(
             name = %dependency.name,
             version = %dependency.version,
@@ -191,11 +194,11 @@ fn cache_target_from_workspace(
 // TODO: Today we unconditionally copy files.
 // Implement with copy-on-write when possible;
 // otherwise fall back to a symlink.
-#[instrument(skip_all, fields(%cas, %workspace, %cache, %profile))]
+#[instrument(skip_all, fields(?cas, ?workspace, ?cache, ?profile))]
 fn restore_target_from_cache(
-    cas: &Cas,
+    cas: impl Cas + Debug,
     workspace: &Workspace,
-    cache: &Cache<Locked>,
+    cache: impl Cache + Debug,
     profile: &Profile,
 ) -> Result<()> {
     let target = workspace
@@ -211,7 +214,8 @@ fn restore_target_from_cache(
     // and try to find some to restore.
     for (key, dependency) in &workspace.dependencies {
         let Some(record) = cache
-            .retrieve(key)
+            .get(Kind::Cargo, key)
+            .pipe(block_on)
             .with_context(|| format!("retrieve cache record for dependency: {dependency}"))?
         else {
             trace!(?key, ?dependency, "no cache record for dependency");
@@ -219,8 +223,9 @@ fn restore_target_from_cache(
         };
 
         for artifact in record.artifacts {
-            let dst = target.root().join(&artifact.target);
-            cas.extract_to(&artifact.hash, &dst)
+            let dst = artifact.target.to_path(target.root());
+            cas.get_file(Kind::Cargo, &artifact.hash, &dst)
+                .pipe(block_on)
                 .context("extract backed up crate from cas")?;
             trace!(?key, ?dependency, ?artifact, ?dst, "restored artifact");
         }
