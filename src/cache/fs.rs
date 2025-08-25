@@ -60,7 +60,7 @@ impl<L> FsCache<L> {
 /// Implementation for all lifetimes and the unlocked state only.
 impl FsCache<Unlocked> {
     /// Open the cache in the default location for the user.
-    #[instrument(name = "fs::Cache::open_default")]
+    #[instrument(name = "FsCache::open_default")]
     pub fn open_default(workspace: impl Into<Utf8PathBuf> + StdDebug) -> Result<Self> {
         let root = fs::user_global_cache_path()
             .context("find user cache path")?
@@ -79,7 +79,7 @@ impl FsCache<Unlocked> {
     }
 
     /// Lock the cache.
-    #[instrument(name = "fs::Cache::lock")]
+    #[instrument(name = "FsCache::lock")]
     pub fn lock(mut self) -> Result<FsCache<Locked>> {
         self.lock.lock().context("lock cache")?;
         Ok(FsCache {
@@ -93,7 +93,7 @@ impl FsCache<Unlocked> {
 
 impl FsCache<Locked> {
     /// Unlock the cache.
-    #[instrument(name = "fs::Cache::unlock")]
+    #[instrument(name = "FsCache::unlock")]
     pub fn unlock(mut self) -> Result<FsCache<Unlocked>> {
         self.lock.unlock().context("unlock cache")?;
         Ok(FsCache {
@@ -106,7 +106,7 @@ impl FsCache<Locked> {
 }
 
 impl super::Cache for &FsCache<Locked> {
-    #[instrument(name = "fs::Cache::store")]
+    #[instrument(name = "FsCache::store")]
     async fn store(
         &self,
         kind: Kind,
@@ -126,7 +126,7 @@ impl super::Cache for &FsCache<Locked> {
         fs::write(name, content).context("store record")
     }
 
-    #[instrument(name = "fs::Cache::get")]
+    #[instrument(name = "FsCache::get")]
     async fn get(&self, kind: Kind, key: impl AsRef<Blake3> + StdDebug) -> Result<Option<Record>> {
         let key = key.as_ref();
         let name = self.root.join(kind.as_str()).join(key.as_str());
@@ -159,7 +159,7 @@ pub struct FsCas {
 
 impl FsCas {
     /// Open an instance in the default location for the user.
-    #[instrument(name = "fs::Cas::open_default")]
+    #[instrument(name = "FsCas::open_default")]
     pub fn open_default() -> Result<Self> {
         let root = fs::user_global_cache_path()
             .context("find user cache path")?
@@ -172,7 +172,7 @@ impl FsCas {
 }
 
 impl super::Cas for &FsCas {
-    #[instrument(name = "fs::Cas::store")]
+    #[instrument(name = "FsCas::store")]
     async fn store(
         &self,
         kind: Kind,
@@ -185,7 +185,7 @@ impl super::Cas for &FsCas {
         Ok(key)
     }
 
-    #[instrument(name = "fs::Cas::store_file")]
+    #[instrument(name = "FsCas::store_file")]
     async fn store_file(
         &self,
         kind: Kind,
@@ -198,7 +198,7 @@ impl super::Cas for &FsCas {
         Ok(key)
     }
 
-    #[instrument(name = "fs::Cas::get")]
+    #[instrument(name = "FsCas::get")]
     async fn get(
         &self,
         kind: Kind,
@@ -208,7 +208,7 @@ impl super::Cas for &FsCas {
         fs::read_buffered(src)
     }
 
-    #[instrument(name = "fs::Cas::get_file")]
+    #[instrument(name = "FsCas::get_file")]
     async fn get_file(
         &self,
         kind: Kind,
