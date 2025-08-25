@@ -147,9 +147,10 @@ pub fn read_argv<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
         // but this is extremely unlikely to ever be an issue.
         for v in [a, b] {
             if let Some((a, b)) = v.split_once('=')
-                && a == flag {
-                    return Some(b);
-                }
+                && a == flag
+            {
+                return Some(b);
+            }
         }
 
         None
