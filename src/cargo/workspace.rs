@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
+    path::PathBuf,
     str::FromStr,
 };
 
@@ -13,7 +14,7 @@ use color_eyre::{
 use derive_more::{Debug, Display};
 use fslock::LockFile;
 use itertools::Itertools;
-use relative_path::{RelativePath, RelativePathBuf};
+use relative_path::{PathExt, RelativePath, RelativePathBuf};
 use serde::Deserialize;
 use tap::{Pipe, Tap, TapFallible};
 use tracing::{debug, instrument, trace};
@@ -270,21 +271,15 @@ pub struct ProfileDir<'ws, State> {
     /// this and set it to `None`.
     index: Option<Index>,
 
-    /// The root of the directory.
-    ///
-    /// For example, if the workspace is at `/home/me/projects/foo`,
-    /// and the value of `profile` is `release`,
-    /// the value of `root` would be `/home/me/projects/foo/target/release`.
-    ///
-    /// Users should not rely on this though:
-    /// use the actual value in this field.
+    /// The root of the directory,
+    /// relative to [`workspace.target`](Workspace::target).
     ///
     /// Note: this is intentionally not `pub` because we only want to give
     /// callers access to the directory when the cache is locked;
     /// reference the `root` method in the locked implementation block.
     /// The intention here is to minimize the chance of callers mutating or
     /// referencing the contents of the cache while it is locked.
-    root: Utf8PathBuf,
+    root: RelativePathBuf,
 
     /// The profile to which this directory refers.
     ///
@@ -304,7 +299,7 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
             .init_target(profile)
             .context("init workspace target")?;
 
-        let root = workspace.root.join("target").join(profile.as_str());
+        let root = workspace.target.join(profile.as_str());
         let lock = root.join(".cargo-lock");
         let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;
 
@@ -312,8 +307,11 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
             state: PhantomData,
             index: None,
             profile: profile.clone(),
+            root: root
+                .as_std_path()
+                .relative_to(&workspace.target)
+                .context("make root relative")?,
             lock,
-            root,
             workspace,
         })
     }
@@ -433,8 +431,8 @@ impl<'ws> ProfileDir<'ws, Locked> {
     }
 
     /// The root of the profile directory.
-    pub fn root(&self) -> &Utf8Path {
-        &self.root
+    pub fn root(&self) -> PathBuf {
+        self.root.to_path(&self.workspace.target)
     }
 }
 
@@ -507,7 +505,8 @@ impl<'ws> Dotd<'ws> {
     #[instrument(name = "Dotd::from_file")]
     pub fn from_file(profile: &'ws ProfileDir<'ws, Locked>, target: &RelativePath) -> Result<Self> {
         const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta"];
-        let outputs = fs::read_buffered_utf8(target.to_path(&profile.root))
+        let profile_root = profile.root();
+        let outputs = fs::read_buffered_utf8(target.to_path(&profile_root))
             .with_context(|| format!("read .d file: {target:?}"))?
             .ok_or_eyre("file does not exist")?
             .lines()
@@ -525,8 +524,8 @@ impl<'ws> Dotd<'ws> {
             })
             .map(|output| -> Result<RelativePathBuf> {
                 output
-                    .strip_prefix(&profile.root)
-                    .with_context(|| format!("make {output:?} relative to {:?}", profile.root))
+                    .strip_prefix(&profile_root)
+                    .with_context(|| format!("make {output:?} relative to {profile_root:?}"))
                     .and_then(|p| RelativePathBuf::from_path(p).context("read path as utf8"))
             })
             .collect::<Result<Vec<_>>>()?;
