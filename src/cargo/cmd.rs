@@ -122,7 +122,7 @@ impl From<&String> for Profile {
 #[instrument(name = "cargo::read_argv")]
 pub fn read_argv<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
     debug_assert!(flag.starts_with("--"), "flag must start with `--`");
-    argv.into_iter().tuple_windows().find_map(|(a, b)| {
+    argv.iter().tuple_windows().find_map(|(a, b)| {
         let (a, b) = (a.trim(), b.trim());
 
         // Handle the `--flag value` case, where the flag and its value
@@ -146,11 +146,10 @@ pub fn read_argv<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
         // Just in case I've thrown an `instrument` call on the function,
         // but this is extremely unlikely to ever be an issue.
         for v in [a, b] {
-            if let Some((a, b)) = v.split_once('=') {
-                if a == flag {
+            if let Some((a, b)) = v.split_once('=')
+                && a == flag {
                     return Some(b);
                 }
-            }
         }
 
         None

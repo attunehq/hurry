@@ -83,7 +83,7 @@ fn exec_inner(
 
     if !options.skip_restore {
         info!(?cache, "Restoring target directory from cache");
-        match restore_target_from_cache(cas, &workspace, cache, &profile) {
+        match restore_target_from_cache(cas, workspace, cache, &profile) {
             Ok(_) => info!("Restored cache"),
             Err(error) => warn!(?error, "Failed to restore cache"),
         }
@@ -95,7 +95,7 @@ fn exec_inner(
     // if the first-party code has changed we'll need to rebuild.
     if !options.skip_build {
         info!("Building target directory");
-        invoke(&workspace, "build", &options.argv).context("build with cargo")?;
+        invoke(workspace, "build", &options.argv).context("build with cargo")?;
     }
 
     // If we didn't have a cache, we cache the target directory
@@ -109,7 +109,7 @@ fn exec_inner(
     // rather than having to copy it all at the end.
     if !options.skip_backup {
         info!("Caching built target directory");
-        match cache_target_from_workspace(cas, &workspace, cache, &profile) {
+        match cache_target_from_workspace(cas, workspace, cache, &profile) {
             Ok(_) => info!("Cached target directory"),
             Err(error) => warn!(?error, "Failed to cache target"),
         }

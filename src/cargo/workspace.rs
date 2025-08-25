@@ -396,7 +396,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
             })
             .collect_vec();
         let dotd = dependencies.iter().find(|(path, _)| {
-            path.components().skip(1).next().is_some_and(|part| {
+            path.components().nth(1).is_some_and(|part| {
                 part.as_str().ends_with(".d") && part.as_str().starts_with(&dependency.name)
             })
         });
