@@ -44,8 +44,9 @@ pub struct Index {
 impl Index {
     /// Index the provided path recursively.
     #[instrument(name = "Index::recursive")]
-    pub fn recursive(root: impl Into<Utf8PathBuf> + std::fmt::Debug) -> Result<Self> {
-        let root = root.into();
+    pub fn recursive(root: impl AsRef<Path> + std::fmt::Debug) -> Result<Self> {
+        let root = root.as_ref().to_path_buf();
+        let root = Utf8PathBuf::try_from(root).context("path as utf8")?;
 
         // Annoyingly, `Trie` doesn't allow merging,
         // so we can't perform this work entirely within the `rayon`

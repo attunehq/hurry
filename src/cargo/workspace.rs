@@ -320,7 +320,8 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
     #[instrument(name = "ProfileDir::lock")]
     pub fn lock(mut self) -> Result<ProfileDir<'ws, Locked>> {
         self.lock.lock().context("lock profile")?;
-        let index = Index::recursive(&self.root)
+        let root = self.root.to_path(&self.workspace.target);
+        let index = Index::recursive(&root)
             .map(Some)
             .context("index target folder")?;
         Ok(ProfileDir {
