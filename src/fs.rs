@@ -327,3 +327,22 @@ pub fn set_executable(path: impl AsRef<Path> + std::fmt::Debug) -> Result<()> {
         .context("set permissions")
         .tap_ok(|_| trace!("set executable"))
 }
+
+/// Report whether the file is executable.
+/// On Windows, this is a simple executable check.
+#[instrument]
+#[cfg(target_os = "windows")]
+pub fn is_executable(path: impl AsRef<Path> + std::fmt::Debug) -> Result<bool> {
+    path.as_ref()
+        .extension()
+        .is_some_and(|ext| ext == "exe")
+        .pipe(Ok)
+}
+
+/// Set the file as executable.
+/// On Windows this is a no-op.
+#[instrument]
+#[cfg(target_os = "windows")]
+pub fn set_executable(path: impl AsRef<Path> + std::fmt::Debug) -> Result<()> {
+    Ok(())
+}
