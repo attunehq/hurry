@@ -12,11 +12,11 @@ mod workspace;
 pub use cmd::*;
 
 use crate::cargo::workspace::Workspace;
+use crate::hash::Blake3;
 
 /// Invoke a cargo subcommand with the given arguments.
-#[instrument(skip_all, name = "cargo::invoke")]
+#[instrument(skip_all)]
 pub fn invoke(
-    workspace: &Workspace,
     subcommand: impl AsRef<str>,
     args: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> Result<()> {
@@ -25,7 +25,6 @@ pub fn invoke(
     let args = args.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
 
     let mut cmd = std::process::Command::new("cargo");
-    cmd.current_dir(&workspace.root);
     cmd.args(once(subcommand).chain(args.iter().copied()));
     let status = cmd
         .spawn()
@@ -33,7 +32,7 @@ pub fn invoke(
         .wait()
         .context("could complete cargo execution")?;
     if status.success() {
-        trace!(?workspace, ?subcommand, ?args, "invoke cargo");
+        trace!(?subcommand, ?args, "invoke cargo");
         Ok(())
     } else {
         bail!("cargo exited with status: {status}");

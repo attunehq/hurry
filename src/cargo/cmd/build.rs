@@ -44,12 +44,13 @@ pub struct Options {
 
 impl Options {
     /// Get the profile specified by the user.
+    #[instrument(name = "Options::profile")]
     pub fn profile(&self) -> Profile {
         Profile::from_argv(&self.argv)
     }
 }
 
-#[instrument(name = "cargo_build")]
+#[instrument]
 pub fn exec(options: Options) -> Result<()> {
     info!("Starting");
 
@@ -73,6 +74,7 @@ pub fn exec(options: Options) -> Result<()> {
         .inspect_err(|error| error!(?error, "failed: {error:#?}"))
 }
 
+#[instrument]
 fn exec_inner(
     options: Options,
     cas: impl Cas + Debug + Copy,
@@ -95,7 +97,7 @@ fn exec_inner(
     // if the first-party code has changed we'll need to rebuild.
     if !options.skip_build {
         info!("Building target directory");
-        invoke(workspace, "build", &options.argv).context("build with cargo")?;
+        invoke("build", &options.argv).context("build with cargo")?;
     }
 
     // If we didn't have a cache, we cache the target directory
