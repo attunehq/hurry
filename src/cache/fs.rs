@@ -43,8 +43,10 @@ pub struct FsCache<State> {
     #[debug(skip)]
     lock: LockFile,
 
-    /// The cache root of the workspace in the context in which this cache exists.
-    /// For most kinds of projects, this is expected to be the root of the project.
+    /// The cache root of the workspace in the context
+    /// in which this cache exists.
+    /// For most kinds of projects, this is expected to be
+    /// the root of the project.
     pub workspace: Utf8PathBuf,
 }
 
