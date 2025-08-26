@@ -4,34 +4,35 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-homedir = "0.3.4"
+ahash = "0.8.12"
+atomic-time = "0.1.5"
 blake3 = "1.8.2"
-walkdir = "2.5.0"
+bon = "3.7.1"
 cargo_metadata = "0.19.2"
-tracing-flame = "0.2.0"
+cargo-lock = { version = "10.1.0", features = ["dependency-tree"] }
+clap = { version = "4.5", features = ["cargo", "derive", "string"] }
 color-eyre = "0.6.5"
-tracing-error = "0.2.1"
+derive_more = { version = "2.0.1", features = ["full"] }
+enum-assoc = "1.2.4"
+filetime = "0.2.25"
+flume = "0.11.1"
+fslock = "0.2.1"
+futures = { version = "0.3.31", features = ["executor"] }
+git-version = "0.3.9"
+hex = "0.4.3"
+homedir = "0.3.4"
+itertools = "0.14.0"
 lockfile = "0.4.0"
 rayon = "1.11.0"
-tap = "1.0.1"
-hex = "0.4.3"
-fslock = "0.2.1"
-ahash = "0.8.12"
-filetime = "0.2.25"
-tracing-tree = { version = "0.4.0", features = ["time"] }
-derive_more = { version = "2.0.1", features = ["full"] }
+relative-path = { version = "2.0.1", features = ["serde"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.142"
-itertools = "0.14.0"
 strum = { version = "0.27.2", features = ["derive"] }
-enum-assoc = "1.2.4"
 subenum = "1.1.2"
-bon = "3.7.1"
-cargo-lock = { version = "10.1.0", features = ["dependency-tree"] }
-flume = "0.11.1"
-atomic-time = "0.1.5"
-relative-path = { version = "2.0.1", features = ["serde"] }
-futures = { version = "0.3.31", features = ["executor"] }
+tap = "1.0.1"
+tracing = "0.1.41"
+tracing-error = "0.2.1"
+tracing-flame = "0.2.0"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-tree = { version = "0.4.0", features = ["time"] }
+walkdir = "2.5.0"
