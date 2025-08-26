@@ -170,8 +170,6 @@ fn cache_target_from_workspace(
             trace!(?key, ?dependency, ?artifact, "stored artifact");
         }
 
-        // let record = Record::builder().artifacts(artifacts).key(key).build();
-        // let record = Record::builder().kind(Kind::Cargo).key(key).build();
         cache
             .store(Kind::Cargo, key, &artifacts)
             .pipe(block_on)

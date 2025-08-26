@@ -30,12 +30,12 @@ mod hash;
 /// The associated type's state is unlocked.
 /// Used for the typestate pattern.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Default)]
-pub struct Unlocked;
+struct Unlocked;
 
 /// The associated type's state is locked.
 /// Used for the typestate pattern.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Default)]
-pub struct Locked;
+struct Locked;
 
 #[derive(Parser)]
 #[command(name = "hurry", about = "Really, really fast builds", version)]
