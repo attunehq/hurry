@@ -96,7 +96,7 @@ fn exec_inner(
     // if the first-party code has changed we'll need to rebuild.
     if !options.skip_build {
         info!("Building target directory");
-        invoke(&workspace, "build", &options.argv).context("build with cargo")?;
+        invoke("build", &options.argv).context("build with cargo")?;
     }
 
     // If we didn't have a cache, we cache the target directory
