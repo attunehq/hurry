@@ -17,19 +17,21 @@ use crate::{
     cargo::{Profile, invoke, workspace::Workspace},
 };
 
-/// Options for `cargo build`
+/// Options for `cargo build`.
+//
+// Hurry options are prefixed with `hurry-` to disambiguate from `cargo` args.
 #[derive(Clone, Args, Debug)]
 pub struct Options {
     /// Skip backing up the cache.
-    #[arg(long, default_value_t = false)]
+    #[arg(long = "hurry-skip-backup", default_value_t = false)]
     skip_backup: bool,
 
     /// Skip the Cargo build, only performing the cache actions.
-    #[arg(long, default_value_t = false)]
+    #[arg(long = "hurry-skip-build", default_value_t = false)]
     skip_build: bool,
 
     /// Skip restoring the cache.
-    #[arg(long, default_value_t = false)]
+    #[arg(long = "hurry-skip-restore", default_value_t = false)]
     skip_restore: bool,
 
     /// These arguments are passed directly to `cargo build` as provided.
