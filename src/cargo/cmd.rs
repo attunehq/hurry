@@ -127,7 +127,7 @@ pub fn read_argv<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
         "flag {:?} must start with `--`",
         flag
     );
-    argv.into_iter().tuple_windows().find_map(|(a, b)| {
+    argv.iter().tuple_windows().find_map(|(a, b)| {
         let (a, b) = (a.trim(), b.trim());
 
         // Handle the `--flag value` case, where the flag and its value

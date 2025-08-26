@@ -11,8 +11,6 @@ mod workspace;
 
 pub use cmd::*;
 
-use crate::cargo::workspace::Workspace;
-use crate::hash::Blake3;
 
 /// Invoke a cargo subcommand with the given arguments.
 #[instrument(skip_all)]

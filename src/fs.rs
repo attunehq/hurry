@@ -74,7 +74,7 @@ impl Index {
             move || {
                 WalkDir::new(&root).into_iter().par_bridge().try_for_each(
                     move |entry| -> Result<()> {
-                        let entry = entry.context("walk directory")?;
+                        let entry = entry.context("walk files")?;
                         let path = entry.path();
                         if !entry.file_type().is_file() {
                             trace!(?path, "skipped entry: not a file");
