@@ -133,6 +133,9 @@ impl Index {
 pub struct IndexEntry {
     /// The hash of the file's contents.
     pub hash: Blake3,
+
+    /// Whether the file is executable.
+    pub executable: bool,
 }
 
 impl IndexEntry {
@@ -141,7 +144,8 @@ impl IndexEntry {
     pub fn from_file(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Self> {
         let path = path.as_ref();
         let hash = Blake3::from_file(path).context("hash file")?;
-        Ok(Self { hash })
+        let executable = is_executable(path).context("check executable")?;
+        Ok(Self { hash, executable })
     }
 }
 
@@ -296,4 +300,30 @@ pub fn read_dir(path: impl AsRef<Path> + std::fmt::Debug) -> Result<std::fs::Rea
     std::fs::read_dir(path)
         .with_context(|| format!("read directory: {path:?}"))
         .tap_ok(|_| trace!(?path, "read directory"))
+}
+
+/// Report whether the file is executable.
+#[instrument]
+#[cfg(not(target_os = "windows"))]
+pub fn is_executable(path: impl AsRef<Path> + std::fmt::Debug) -> Result<bool> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = path.as_ref();
+    let metadata = std::fs::metadata(path).context("get metadata")?;
+    let is_executable = metadata.permissions().mode() & 0o111 != 0;
+    trace!(?is_executable, "is executable");
+    Ok(is_executable)
+}
+
+/// Set the file as executable.
+#[instrument]
+#[cfg(not(target_os = "windows"))]
+pub fn set_executable(path: impl AsRef<Path> + std::fmt::Debug) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = path.as_ref();
+    let metadata = std::fs::metadata(path).context("get metadata")?;
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(permissions.mode() | 0o111);
+    std::fs::set_permissions(path, permissions)
+        .context("set permissions")
+        .tap_ok(|_| trace!("set executable"))
 }

@@ -15,6 +15,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use crate::{
     cache::{Cache, Cas, FsCache, FsCas, Kind},
     cargo::{Profile, invoke, workspace::Workspace},
+    fs,
 };
 
 /// Options for `cargo build`.
@@ -229,6 +230,9 @@ fn restore_target_from_cache(
             cas.get_file(Kind::Cargo, &artifact.hash, &dst)
                 .pipe(block_on)
                 .context("extract backed up crate from cas")?;
+            if artifact.executable {
+                fs::set_executable(&dst).context("set executable")?;
+            }
             trace!(?key, ?dependency, ?artifact, ?dst, "restored artifact");
         }
 
