@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
+    path::PathBuf,
     str::FromStr,
 };
 
@@ -13,25 +14,18 @@ use color_eyre::{
 use derive_more::{Debug, Display};
 use fslock::LockFile;
 use itertools::Itertools;
+use relative_path::{PathExt, RelativePath, RelativePathBuf};
 use serde::Deserialize;
 use tap::{Pipe, Tap, TapFallible};
 use tracing::{debug, instrument, trace};
 
 use crate::{
-    cargo::{CacheRecord, CacheRecordArtifact, Profile, read_argv},
+    Locked, Unlocked,
+    cache::{Artifact, FsCache},
+    cargo::{Profile, read_argv},
     fs::{self, Index},
     hash::Blake3,
 };
-
-/// The associated type's state is unlocked.
-/// Used for the typestate pattern.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Unlocked;
-
-/// The associated type's state is locked.
-/// Used for the typestate pattern.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Locked;
 
 /// A Cargo workspace.
 ///
@@ -156,8 +150,8 @@ impl Workspace {
     }
 
     /// Open the `hurry` cache in the default location for the user.
-    pub fn open_cache(&self) -> Result<Cache<'_, Unlocked>> {
-        Cache::open_default(self)
+    pub fn open_cache(&self) -> Result<FsCache<Unlocked>> {
+        FsCache::open_default(&self.root)
     }
 
     /// Find a dependency with the specified name and version
@@ -277,21 +271,15 @@ pub struct ProfileDir<'ws, State> {
     /// this and set it to `None`.
     index: Option<Index>,
 
-    /// The root of the directory.
-    ///
-    /// For example, if the workspace is at `/home/me/projects/foo`,
-    /// and the value of `profile` is `release`,
-    /// the value of `root` would be `/home/me/projects/foo/target/release`.
-    ///
-    /// Users should not rely on this though:
-    /// use the actual value in this field.
+    /// The root of the directory,
+    /// relative to [`workspace.target`](Workspace::target).
     ///
     /// Note: this is intentionally not `pub` because we only want to give
     /// callers access to the directory when the cache is locked;
     /// reference the `root` method in the locked implementation block.
     /// The intention here is to minimize the chance of callers mutating or
     /// referencing the contents of the cache while it is locked.
-    root: Utf8PathBuf,
+    root: RelativePathBuf,
 
     /// The profile to which this directory refers.
     ///
@@ -311,7 +299,7 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
             .init_target(profile)
             .context("init workspace target")?;
 
-        let root = workspace.root.join("target").join(profile.as_str());
+        let root = workspace.target.join(profile.as_str());
         let lock = root.join(".cargo-lock");
         let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;
 
@@ -319,8 +307,11 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
             state: PhantomData,
             index: None,
             profile: profile.clone(),
+            root: root
+                .as_std_path()
+                .relative_to(&workspace.target)
+                .context("make root relative")?,
             lock,
-            root,
             workspace,
         })
     }
@@ -329,7 +320,8 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
     #[instrument(name = "ProfileDir::lock")]
     pub fn lock(mut self) -> Result<ProfileDir<'ws, Locked>> {
         self.lock.lock().context("lock profile")?;
-        let index = Index::recursive(&self.root)
+        let root = self.root.to_path(&self.workspace.target);
+        let index = Index::recursive(&root)
             .map(Some)
             .context("index target folder")?;
         Ok(ProfileDir {
@@ -354,10 +346,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     /// TODO: the above is probably overly broad for a cache; evaluate
     /// what filtering mechanism to apply to reduce invalidations and rework.
     #[instrument(name = "ProfileDir::enumerate_cache_artifacts")]
-    pub fn enumerate_cache_artifacts(
-        &self,
-        dependency: &Dependency,
-    ) -> Result<Vec<CacheRecordArtifact>> {
+    pub fn enumerate_cache_artifacts(&self, dependency: &Dependency) -> Result<Vec<Artifact>> {
         let index = self.index.as_ref().ok_or_eyre("files not indexed")?;
 
         // Fingerprint artifacts are straightforward:
@@ -408,7 +397,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
             })
             .collect_vec();
         let dotd = dependencies.iter().find(|(path, _)| {
-            path.components().skip(1).next().is_some_and(|part| {
+            path.components().nth(1).is_some_and(|part| {
                 part.as_str().ends_with(".d") && part.as_str().starts_with(&dependency.name)
             })
         });
@@ -436,137 +425,15 @@ impl<'ws> ProfileDir<'ws, Locked> {
         standard
             .into_iter()
             .chain(dependencies)
-            .map(|(path, entry)| {
-                CacheRecordArtifact::builder()
-                    .hash(&entry.hash)
-                    .target(path)
-                    .build()
-            })
+            .map(|(path, entry)| Artifact::builder().hash(&entry.hash).target(path).build())
             .inspect(|artifact| trace!(?artifact, "enumerated artifact"))
             .collect::<Vec<_>>()
             .pipe(Ok)
     }
 
     /// The root of the profile directory.
-    pub fn root(&self) -> &Utf8Path {
-        &self.root
-    }
-}
-
-/// The `hurry` cache corresponding to a given [`Workspace`].
-#[derive(Debug, Display)]
-#[display("{root}")]
-pub struct Cache<'ws, State> {
-    #[debug(skip)]
-    state: PhantomData<State>,
-
-    /// Locks the workspace cache.
-    ///
-    /// The intention of this lock is to prevent multiple `hurry` instances
-    /// from mutating the state of the cache directory at the same time,
-    /// or from mutating it at the same time as another instance
-    /// is reading it.
-    #[debug(skip)]
-    lock: LockFile,
-
-    /// The root directory of the workspace cache.
-    ///
-    /// Note: this is intentionally not `pub` because we only want to give
-    /// callers access to the directory when the cache is locked;
-    /// reference the `root` method in the locked implementation block.
-    ///
-    /// The intention here is to minimize the chance of callers mutating or
-    /// referencing the contents of the cache while it is locked.
-    root: Utf8PathBuf,
-
-    /// The workspace in the context of which this cache is referenced.
-    pub workspace: &'ws Workspace,
-}
-
-/// Implementation for all valid lifetimes and lock states.
-impl<'ws, L> Cache<'ws, L> {
-    /// The filename of the lockfile.
-    const LOCKFILE_NAME: &'static str = ".hurry-lock";
-}
-
-/// Implementation for all lifetimes and the unlocked state only.
-impl<'ws> Cache<'ws, Unlocked> {
-    /// Open the cache in the default location for the user.
-    #[instrument(name = "Cache::open_default")]
-    pub fn open_default(workspace: &'ws Workspace) -> Result<Self> {
-        let root = fs::user_global_cache_path()
-            .context("find user cache path")?
-            .join("cargo")
-            .join("ws");
-
-        fs::create_dir_all(&root)?;
-        let lock = root.join(Self::LOCKFILE_NAME);
-        let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;
-
-        Ok(Self {
-            state: PhantomData,
-            root,
-            workspace,
-            lock,
-        })
-    }
-
-    /// Lock the cache.
-    #[instrument(name = "Cache::lock")]
-    pub fn lock(mut self) -> Result<Cache<'ws, Locked>> {
-        self.lock.lock().context("lock workspace cache")?;
-        Ok(Cache {
-            state: PhantomData,
-            root: self.root,
-            lock: self.lock,
-            workspace: self.workspace,
-        })
-    }
-}
-
-/// Implementation for all lifetimes and the locked state only.
-impl<'ws> Cache<'ws, Locked> {
-    /// Unlock the cache.
-    #[instrument(name = "Cache::unlock")]
-    pub fn unlock(mut self) -> Result<Cache<'ws, Unlocked>> {
-        self.lock.unlock().context("unlock workspace cache")?;
-        Ok(Cache {
-            state: PhantomData,
-            root: self.root,
-            lock: self.lock,
-            workspace: self.workspace,
-        })
-    }
-
-    /// Store the provided record in the cache.
-    #[instrument(name = "Cache::store")]
-    pub fn store(&self, record: &CacheRecord) -> Result<()> {
-        let name = self.root.join(record.dependency_key.as_str());
-        let content = serde_json::to_string_pretty(record).context("encode record")?;
-        fs::write(name, content).context("store cache record")
-    }
-
-    /// Retrieve the record from the cache for the given dependency key.
-    #[instrument(name = "Cache::retrieve")]
-    pub fn retrieve(
-        &self,
-        key: impl AsRef<Blake3> + std::fmt::Debug,
-    ) -> Result<Option<CacheRecord>> {
-        let name = self.root.join(key.as_ref().as_str());
-        match fs::read_buffered_utf8(name) {
-            Ok(content) => Ok(Some(
-                serde_json::from_str(&content).context("decode record")?,
-            )),
-            Err(err)
-                if err
-                    .downcast_ref::<std::io::Error>()
-                    .map(|e| e.kind() == std::io::ErrorKind::NotFound)
-                    .unwrap_or(false) =>
-            {
-                Ok(None)
-            }
-            Err(err) => Err(err).context("read cache record"),
-        }
+    pub fn root(&self) -> PathBuf {
+        self.root.to_path(&self.workspace.target)
     }
 }
 
@@ -631,16 +498,18 @@ pub struct Dotd<'ws> {
     profile: &'ws ProfileDir<'ws, Locked>,
 
     /// Recorded output paths, relative to the profile root.
-    pub outputs: Vec<Utf8PathBuf>,
+    pub outputs: Vec<RelativePathBuf>,
 }
 
 impl<'ws> Dotd<'ws> {
     /// Construct an instance by parsing the file.
     #[instrument(name = "Dotd::from_file")]
-    pub fn from_file(profile: &'ws ProfileDir<'ws, Locked>, path: &Utf8Path) -> Result<Self> {
+    pub fn from_file(profile: &'ws ProfileDir<'ws, Locked>, target: &RelativePath) -> Result<Self> {
         const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta"];
-        let outputs = fs::read_buffered_utf8(profile.root.join(path))
-            .with_context(|| format!("read .d file: {path:?}"))?
+        let profile_root = profile.root();
+        let outputs = fs::read_buffered_utf8(target.to_path(&profile_root))
+            .with_context(|| format!("read .d file: {target:?}"))?
+            .ok_or_eyre("file does not exist")?
             .lines()
             .filter_map(|line| {
                 let (output, _) = line.split_once(':')?;
@@ -654,11 +523,11 @@ impl<'ws> Dotd<'ws> {
                     None
                 }
             })
-            .map(|output| -> Result<Utf8PathBuf> {
+            .map(|output| -> Result<RelativePathBuf> {
                 output
-                    .strip_prefix(&profile.root)
-                    .with_context(|| format!("make {output:?} relative to {:?}", profile.root))
-                    .map(|p| p.to_path_buf())
+                    .strip_prefix(&profile_root)
+                    .with_context(|| format!("make {output:?} relative to {profile_root:?}"))
+                    .and_then(|p| RelativePathBuf::from_path(p).context("read path as utf8"))
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self { profile, outputs })

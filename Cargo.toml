@@ -33,3 +33,5 @@ bon = "3.7.1"
 cargo-lock = { version = "10.1.0", features = ["dependency-tree"] }
 flume = "0.11.1"
 atomic-time = "0.1.5"
+relative-path = { version = "2.0.1", features = ["serde"] }
+futures = { version = "0.3.31", features = ["executor"] }

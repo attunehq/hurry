@@ -122,8 +122,12 @@ impl From<&String> for Profile {
 /// - `--flag=value`
 #[instrument]
 pub fn read_argv<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
-    debug_assert!(flag.starts_with("--"), "flag {:?} must start with `--`", flag);
-    argv.into_iter().tuple_windows().find_map(|(a, b)| {
+    debug_assert!(
+        flag.starts_with("--"),
+        "flag {:?} must start with `--`",
+        flag
+    );
+    argv.iter().tuple_windows().find_map(|(a, b)| {
         let (a, b) = (a.trim(), b.trim());
 
         // Handle the `--flag value` case, where the flag and its value
@@ -147,10 +151,10 @@ pub fn read_argv<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
         // Just in case I've thrown an `instrument` call on the function,
         // but this is extremely unlikely to ever be an issue.
         for v in [a, b] {
-            if let Some((a, b)) = v.split_once('=') {
-                if a == flag {
-                    return Some(b);
-                }
+            if let Some((a, b)) = v.split_once('=')
+                && a == flag
+            {
+                return Some(b);
             }
         }
 

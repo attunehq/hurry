@@ -5,6 +5,8 @@ use tracing::instrument;
 use crate::cargo::invoke;
 
 /// Options for `cargo run`
+//
+// Hurry options are prefixed with `hurry-` to disambiguate from `cargo` args.
 #[derive(Clone, Args, Debug)]
 pub struct Options {
     /// These arguments are passed directly to `cargo run` as provided.
