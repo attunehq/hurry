@@ -9,33 +9,37 @@ atomic-time = { workspace = true }
 blake3 = { workspace = true }
 bon = { workspace = true }
 cargo_metadata = { workspace = true }
-cargo-lock = { workspace = true }
-clap = { workspace = true }
+cargo-lock = { workspace = true, features = ["dependency-tree"] }
+clap = { workspace = true, features = ["cargo", "derive", "string"] }
 color-eyre = { workspace = true }
-colored = { workspace = true }
-derive_more = { workspace = true }
+derive_more = { workspace = true, features = ["full"] }
 enum-assoc = { workspace = true }
 filetime = { workspace = true }
 flume = { workspace = true }
 fslock = { workspace = true }
-futures = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 git-version = { workspace = true }
 hex = { workspace = true }
 homedir = { workspace = true }
-inquire = { workspace = true }
 itertools = { workspace = true }
-location-macros = { workspace = true }
 lockfile = { workspace = true }
-rayon = { workspace = true }
-relative-path = { workspace = true }
+relative-path = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde = { workspace = true }
-strum = { workspace = true }
+strum = { workspace = true, features = ["derive"] }
 subenum = { workspace = true }
 tap = { workspace = true }
+tracing = { workspace = true }
 tracing-error = { workspace = true }
 tracing-flame = { workspace = true }
-tracing-subscriber = { workspace = true }
-tracing-tree = { workspace = true }
-tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-tree = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["full"] }
+extfn = { workspace = true }
+async-walkdir = { workspace = true }
+clonelicious = { workspace = true }
 walkdir = { workspace = true }
+rayon = { workspace = true }
+inquire = {workspace = true }
+colored = {workspace = true }
+location-macros = {workspace = true }

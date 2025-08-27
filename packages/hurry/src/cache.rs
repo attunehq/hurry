@@ -5,7 +5,7 @@ use color_eyre::Result;
 use enum_assoc::Assoc;
 use relative_path::RelativePathBuf;
 use serde::{Deserialize, Serialize};
-use std::{fmt::Debug, path::Path};
+use std::{fmt::Debug, future::Future, path::Path};
 use strum::Display;
 
 use crate::hash::Blake3;
@@ -32,6 +32,25 @@ pub trait Cache {
         kind: Kind,
         key: impl AsRef<Blake3> + Debug + Send,
     ) -> impl Future<Output = Result<Option<Record>>> + Send;
+}
+
+impl<'a, T: Cache + Sync> Cache for &'a T {
+    async fn store(
+        &self,
+        kind: Kind,
+        key: impl AsRef<Blake3> + Debug + Send,
+        artifacts: impl IntoIterator<Item = impl Into<Artifact>> + Debug + Send,
+    ) -> Result<()> {
+        Cache::store(*self, kind, key, artifacts).await
+    }
+
+    async fn get(
+        &self,
+        kind: Kind,
+        key: impl AsRef<Blake3> + Debug + Send,
+    ) -> Result<Option<Record>> {
+        Cache::get(*self, kind, key).await
+    }
 }
 
 /// Conceptualizes "content addressed storage" across providers.
@@ -69,6 +88,33 @@ pub trait Cas {
         key: impl AsRef<Blake3> + Debug + Send,
         destination: impl AsRef<Path> + Debug + Send,
     ) -> impl Future<Output = Result<()>> + Send;
+}
+
+impl<'a, T: Cas + Sync> Cas for &'a T {
+    async fn store(&self, kind: Kind, content: impl AsRef<[u8]> + Debug + Send) -> Result<Blake3> {
+        Cas::store(*self, kind, content).await
+    }
+
+    async fn store_file(&self, kind: Kind, src: impl AsRef<Path> + Debug + Send) -> Result<Blake3> {
+        Cas::store_file(*self, kind, src).await
+    }
+
+    async fn get(
+        &self,
+        kind: Kind,
+        key: impl AsRef<Blake3> + Debug + Send,
+    ) -> Result<Option<Vec<u8>>> {
+        Cas::get(*self, kind, key).await
+    }
+
+    async fn get_file(
+        &self,
+        kind: Kind,
+        key: impl AsRef<Blake3> + Debug + Send,
+        destination: impl AsRef<Path> + Debug + Send,
+    ) -> Result<()> {
+        Cas::get_file(*self, kind, key, destination).await
+    }
 }
 
 /// The kind of project corresponding to the cache and CAS.

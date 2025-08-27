@@ -14,7 +14,7 @@ pub use cmd::*;
 
 /// Invoke a cargo subcommand with the given arguments.
 #[instrument(skip_all)]
-pub fn invoke(
+pub async fn invoke(
     subcommand: impl AsRef<str>,
     args: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> Result<()> {
@@ -22,12 +22,13 @@ pub fn invoke(
     let args = args.into_iter().collect::<Vec<_>>();
     let args = args.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
 
-    let mut cmd = std::process::Command::new("cargo");
+    let mut cmd = tokio::process::Command::new("cargo");
     cmd.args(once(subcommand).chain(args.iter().copied()));
     let status = cmd
         .spawn()
         .context("could not spawn cargo")?
         .wait()
+        .await
         .context("could complete cargo execution")?;
     if status.success() {
         trace!(?subcommand, ?args, "invoke cargo");

@@ -1,10 +1,11 @@
 //! Hashing operations and types.
 
-use std::path::Path;
+use std::{fmt::Debug, path::Path};
 
-use color_eyre::Result;
+use color_eyre::{Result, eyre::Context};
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncReadExt;
 use tracing::{instrument, trace};
 
 use crate::fs;
@@ -16,14 +17,20 @@ pub struct Blake3(String);
 impl Blake3 {
     /// Hash the contents of the file at the specified path.
     #[instrument(name = "Blake3::from_file")]
-    pub fn from_file(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Self> {
+    pub async fn from_file(path: impl AsRef<Path> + Debug) -> Result<Self> {
         let path = path.as_ref();
-        let file = fs::open_file(path)?;
-
-        let mut reader = std::io::BufReader::new(file);
+        let mut file = fs::open_file(path).await.context("open file")?;
         let mut hasher = blake3::Hasher::new();
-        let bytes = std::io::copy(&mut reader, &mut hasher)?;
-
+        let mut data = vec![0; 64 * 1024];
+        let mut bytes = 0;
+        loop {
+            let len = file.read(&mut data).await.context("read chunk")?;
+            if len == 0 {
+                break;
+            }
+            hasher.update(&data[..len]);
+            bytes += len;
+        }
         let hash = hasher.finalize().as_bytes().to_vec();
         let hash = hex::encode(hash);
         trace!(?path, ?hash, ?bytes, "hash file");
@@ -32,7 +39,8 @@ impl Blake3 {
 
     /// Hash the contents of a buffer.
     #[instrument(skip_all, name = "Blake3::from_buffer")]
-    pub fn from_buffer(buffer: impl AsRef<[u8]> + std::fmt::Debug) -> Self {
+    #[allow(dead_code)]
+    pub fn from_buffer(buffer: impl AsRef<[u8]> + Debug) -> Self {
         let buffer = buffer.as_ref();
         let mut hasher = blake3::Hasher::new();
         hasher.update(buffer);

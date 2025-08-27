@@ -122,11 +122,7 @@ impl From<&String> for Profile {
 /// - `--flag=value`
 #[instrument]
 pub fn read_argv<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
-    debug_assert!(
-        flag.starts_with("--"),
-        "flag {:?} must start with `--`",
-        flag
-    );
+    debug_assert!(flag.starts_with("--"), "flag {flag:?} must start with `--`");
     argv.iter().tuple_windows().find_map(|(a, b)| {
         let (a, b) = (a.trim(), b.trim());
 

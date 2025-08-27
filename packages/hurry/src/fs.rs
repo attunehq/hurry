@@ -1,14 +1,21 @@
 //! Filesystem operations tailored to `hurry`.
 //!
-//! Inside this module, we refer to `std::fs` by its fully qualified path to
-//! make it maximally clear what we are using.
+//! Inside this module, we refer to `std::fs` or `tokio::fs` by its fully
+//! qualified path to make it maximally clear what we are using.
 
 #![allow(
     clippy::disallowed_methods,
     reason = "The methods are disallowed elsewhere, but we need them here!"
 )]
 
-use std::{path::Path, time::SystemTime};
+use std::{
+    fmt::Debug as StdDebug,
+    fs::Metadata,
+    marker::PhantomData,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::SystemTime,
+};
 
 use ahash::AHashMap;
 use cargo_metadata::camino::Utf8PathBuf;
@@ -16,14 +23,97 @@ use color_eyre::{
     Result,
     eyre::{Context, OptionExt},
 };
-use filetime::{FileTime, set_file_handle_times};
+use derive_more::{Debug, Display};
+use filetime::FileTime;
+use fslock::LockFile as FsLockFile;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use relative_path::RelativePathBuf;
 use tap::{Pipe, Tap, TapFallible, TryConv};
-use tracing::{debug, instrument, trace, warn};
+use tokio::{
+    fs::{File, ReadDir},
+    runtime::Handle,
+    sync::Mutex,
+    task::spawn_blocking,
+};
+use tracing::{debug, instrument, trace};
 use walkdir::WalkDir;
 
-use crate::hash::Blake3;
+use crate::{Locked, Unlocked, ext::then_context, hash::Blake3};
+
+/// Shared lock file on the file system.
+///
+/// Lock the file with [`LockFile::lock`]. Unlock it with [`LockFile::unlock`],
+/// or by dropping the locked instance.
+#[derive(Debug, Clone, Display)]
+#[display("{}", path.display())]
+pub struct LockFile<State> {
+    state: PhantomData<State>,
+    path: PathBuf,
+    inner: Arc<Mutex<FsLockFile>>,
+}
+
+impl LockFile<Unlocked> {
+    /// Create a new instance at the provided path.
+    pub async fn open(path: impl AsRef<Path> + StdDebug) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let (file, path) = spawn_blocking(move || FsLockFile::open(&path).map(|file| (file, path)))
+            .await
+            .context("join task")?
+            .context("open lock file")?;
+        Ok(Self {
+            state: PhantomData,
+            inner: Arc::new(Mutex::new(file)),
+            path,
+        })
+    }
+
+    /// Lock the lockfile.
+    #[instrument(skip_all, fields(%self))]
+    pub async fn lock(self) -> Result<LockFile<Locked>> {
+        spawn_blocking(move || {
+            {
+                // fslock::LockFile can panic if the handle is already locked,
+                // but we've set it up (using typestate) such that it's not
+                // possible to lock an already locked handle.
+                let mut inner = self.inner.blocking_lock();
+                inner.lock().context("lock file")?;
+            }
+            Ok(LockFile {
+                state: PhantomData,
+                inner: self.inner,
+                path: self.path,
+            })
+        })
+        .await
+        .context("join task")?
+        .tap_ok(|f| trace!(path = ?f.path, "locked file"))
+    }
+}
+
+impl LockFile<Locked> {
+    /// Unlock the lockfile.
+    #[instrument(skip_all, fields(%self))]
+    pub async fn unlock(self) -> Result<LockFile<Unlocked>> {
+        spawn_blocking(move || -> Result<_> {
+            {
+                // fslock::LockFile can panic if the handle is not locked,
+                // but we've set it up (using typestate) such that it's not
+                // possible to unlock a non-locked handle.
+                let mut inner = self.inner.blocking_lock();
+                inner.unlock().context("unlock file")?;
+            }
+
+            Ok(LockFile {
+                state: PhantomData,
+                inner: self.inner,
+                path: self.path,
+            })
+        })
+        .await
+        .context("join task")?
+        .tap_ok(|f| trace!(path = ?f.path, "unlocked file"))
+    }
+}
 
 /// File index of a directory.
 #[derive(Clone, Debug)]
@@ -38,43 +128,40 @@ pub struct Index {
     // TODO: May want to make this a trie or something.
     // https://docs.rs/fs-tree/0.2.2/fs_tree/ looked like it might work,
     // but the API was sketchy so I didn't use it for now.
+    #[debug("{}", files.len())]
     pub files: AHashMap<RelativePathBuf, IndexEntry>,
 }
 
 impl Index {
     /// Index the provided path recursively.
+    //
+    // TODO: move this to use async natively.
     #[instrument(name = "Index::recursive")]
-    pub fn recursive(root: impl AsRef<Path> + std::fmt::Debug) -> Result<Self> {
+    pub async fn recursive(root: impl AsRef<Path> + StdDebug) -> Result<Self> {
+        let root = root.as_ref().to_path_buf();
+        spawn_blocking(move || Self::recursive_sync(root))
+            .await
+            .context("join task")?
+    }
+
+    /// Index the provided path recursively, blocking the current thread.
+    #[instrument(name = "Index::recursive_sync")]
+    fn recursive_sync(root: impl AsRef<Path> + StdDebug) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         let root = Utf8PathBuf::try_from(root).context("path as utf8")?;
-
-        // Annoyingly, `Trie` doesn't allow merging,
-        // so we can't perform this work entirely within the `rayon`
-        // instance as it requires `try_fold -> try_reduce`.
-        //
-        // Normally, `rayon` instances that want to collect into a single value
-        // perform a `map -> fold -> reduce` pipeline, where `map` and `fold`
-        // are done per-thread in the threadpool but then `reduce` is actually
-        // run in a single thread and is meant to do simple merging work
-        // from the outputs of the various threads.
-        //
-        // However, since `Trie` doesn't support merging trie
-        // instances, we can't do that pattern. Instead we hack it using
-        // channels as you can see below.
-        let (tx, rx) = flume::bounded::<(RelativePathBuf, IndexEntry)>(0);
 
         // The `rayon` instance runs in its own threadpool, but its overall
         // operation is still blocking, so we run it in a background thread that
         // just waits for rayon to complete.
-        // Technically we could probably also run this inside the `rayon`
-        // thread pool itself, but I'm not sure if that'll have odd effects
-        // on the parallelization `rayon` performs, and at the end of the day
-        // a single thread spawn isn't that bad.
+        let (tx, rx) = flume::bounded::<(RelativePathBuf, IndexEntry)>(0);
+        let runtime = Handle::current();
         let walker = std::thread::spawn({
             let root = root.clone();
+            let runtime = runtime.clone();
             move || {
                 WalkDir::new(&root).into_iter().par_bridge().try_for_each(
                     move |entry| -> Result<()> {
+                        let _guard = runtime.enter();
                         let entry = entry.context("walk files")?;
                         let path = entry.path();
                         if !entry.file_type().is_file() {
@@ -89,7 +176,9 @@ impl Index {
                             .to_path_buf()
                             .pipe(RelativePathBuf::from_path)
                             .context("read path as utf8")?;
-                        let entry = IndexEntry::from_file(entry.path()).context("index entry")?;
+                        let entry = runtime
+                            .block_on(IndexEntry::from_file(entry.path()))
+                            .context("index entry")?;
 
                         // Only errors if the channel receivers have been dropped,
                         // which should never happen but we'll handle it
@@ -141,10 +230,12 @@ pub struct IndexEntry {
 impl IndexEntry {
     /// Construct the entry from the provided file on disk.
     #[instrument(name = "IndexEntry::from_file")]
-    pub fn from_file(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Self> {
+    pub async fn from_file(path: impl AsRef<Path> + StdDebug) -> Result<Self> {
         let path = path.as_ref();
-        let hash = Blake3::from_file(path).context("hash file")?;
-        let executable = is_executable(path).context("check executable")?;
+        let (hash, executable) = tokio::try_join!(
+            Blake3::from_file(path).then_context("hash file"),
+            is_executable(path).then_context("check executable"),
+        )?;
         Ok(Self { hash, executable })
     }
 }
@@ -154,7 +245,7 @@ impl IndexEntry {
 /// This can fail if the user has no home directory,
 /// or if the home directory cannot be accessed.
 #[instrument]
-pub fn user_global_cache_path() -> Result<Utf8PathBuf> {
+pub async fn user_global_cache_path() -> Result<Utf8PathBuf> {
     homedir::my_home()
         .context("get user home directory")?
         .ok_or_eyre("user has no home directory")?
@@ -169,9 +260,10 @@ pub fn user_global_cache_path() -> Result<Utf8PathBuf> {
 
 /// Create the directory and all its parents, if they don't already exist.
 #[instrument]
-pub fn create_dir_all(dir: impl AsRef<Path> + std::fmt::Debug) -> Result<()> {
+pub async fn create_dir_all(dir: impl AsRef<Path> + StdDebug) -> Result<()> {
     let dir = dir.as_ref();
-    std::fs::create_dir_all(dir)
+    tokio::fs::create_dir_all(dir)
+        .await
         .with_context(|| format!("create dir: {dir:?}"))
         .tap_ok(|_| trace!(?dir, "create directory"))
 }
@@ -191,14 +283,16 @@ pub fn create_dir_all(dir: impl AsRef<Path> + std::fmt::Debug) -> Result<()> {
 // TODO: optionally use `rustix::fs::copy_file_range` or similar to do linux copies
 // fully in kernel instead of passing through userspace(?)
 #[instrument]
-pub fn copy_file(
-    src: impl AsRef<Path> + std::fmt::Debug,
-    dst: impl AsRef<Path> + std::fmt::Debug,
+pub async fn copy_file(
+    src: impl AsRef<Path> + StdDebug,
+    dst: impl AsRef<Path> + StdDebug,
 ) -> Result<()> {
     // Manually opening the source file allows us to access the stat info directly,
     // without an additional syscall to stat directly.
-    let mut src = std::fs::File::open(src).context("open source file")?;
-    let src_meta = src.metadata().context("get source metadata")?;
+    let mut src = tokio::fs::File::open(src)
+        .await
+        .context("open source file")?;
+    let src_meta = src.metadata().await.context("get source metadata")?;
 
     // If we can't read the actual times from the stat, default to unix epoch
     // so that we don't break the build system.
@@ -212,7 +306,9 @@ pub fn copy_file(
     let src_mtime = src_meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let src_atime = src_meta.accessed().unwrap_or(SystemTime::UNIX_EPOCH);
     if let Some(parent) = dst.as_ref().parent() {
-        create_dir_all(parent).context("create parent directory")?;
+        create_dir_all(parent)
+            .await
+            .context("create parent directory")?;
     }
 
     // Manually opening the destination file allows us to set the metadata directly,
@@ -223,32 +319,61 @@ pub fn copy_file(
     // anything that is out of sync.
     //
     // If we find that we have excessive rebuilds we can revisit this.
-    let mut dst = std::fs::OpenOptions::new()
+    let mut dst = tokio::fs::OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
         .open(dst)
+        .await
         .context("open destination file")?;
-    let bytes = std::io::copy(&mut src, &mut dst).context("copy file contents")?;
+    let bytes = tokio::io::copy(&mut src, &mut dst)
+        .await
+        .context("copy file contents")?;
 
     // Using the `filetime` crate here instead of the stdlib because it's cross platform.
     let mtime = FileTime::from_system_time(src_mtime);
     let atime = FileTime::from_system_time(src_atime);
-    set_file_handle_times(&dst, Some(atime), Some(mtime)).context("set destination file times")?;
+    trace!(?src, ?dst, ?mtime, ?atime, ?bytes, "copy file");
+
+    // We need to get the raw handle for filetime operations
+    let dst = set_file_handle_times(dst, Some(atime), Some(mtime))
+        .await
+        .context("set destination file times")?;
 
     // And finally, we have to sync the file to disk so that we are sure it's actually finished copying
     // before we move on. Technically we could leave this up to the FS, but this is safer.
-    dst.sync_all().context("sync destination file")?;
+    dst.sync_all().await.context("sync destination file")
+}
 
-    trace!(?src, ?dst, ?mtime, ?atime, ?bytes, "copy file");
-    Ok(())
+/// Update the `atime` and `mtime` of a file handle.
+/// Returns the same file handle after the update.
+#[instrument]
+pub async fn set_file_handle_times(
+    file: File,
+    mtime: Option<FileTime>,
+    atime: Option<FileTime>,
+) -> Result<File> {
+    match (mtime, atime) {
+        (None, None) => Ok(file),
+        (mtime, atime) => {
+            let file = file.into_std().await;
+            spawn_blocking(move || {
+                filetime::set_file_handle_times(&file, atime, mtime).map(|_| file)
+            })
+            .await
+            .context("join thread")?
+            .context("update handle")
+            .map(File::from_std)
+        }
+    }
 }
 
 /// Buffer the file content from disk.
 #[instrument]
-pub fn read_buffered(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Option<Vec<u8>>> {
+#[allow(dead_code)]
+pub async fn read_buffered(path: impl AsRef<Path> + StdDebug) -> Result<Option<Vec<u8>>> {
     let path = path.as_ref();
-    match std::fs::read(path) {
+    match tokio::fs::read(path).await {
         Ok(buf) => {
             trace!(?path, bytes = buf.len(), "read file");
             Ok(Some(buf))
@@ -260,9 +385,9 @@ pub fn read_buffered(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Option<
 
 /// Buffer the file content from disk and parse it as UTF8.
 #[instrument]
-pub fn read_buffered_utf8(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Option<String>> {
+pub async fn read_buffered_utf8(path: impl AsRef<Path> + StdDebug) -> Result<Option<String>> {
     let path = path.as_ref();
-    match std::fs::read_to_string(path) {
+    match tokio::fs::read_to_string(path).await {
         Ok(buf) => {
             trace!(?path, bytes = buf.len(), "read file as string");
             Ok(Some(buf))
@@ -274,30 +399,36 @@ pub fn read_buffered_utf8(path: impl AsRef<Path> + std::fmt::Debug) -> Result<Op
 
 /// Write the provided file content to disk.
 #[instrument(skip(content))]
-pub fn write(path: impl AsRef<Path> + std::fmt::Debug, content: impl AsRef<[u8]>) -> Result<()> {
+pub async fn write(path: impl AsRef<Path> + StdDebug, content: impl AsRef<[u8]>) -> Result<()> {
     let (path, content) = (path.as_ref(), content.as_ref());
     if let Some(parent) = path.parent() {
-        create_dir_all(parent).context("create parent directory")?;
+        create_dir_all(parent)
+            .await
+            .context("create parent directory")?;
     }
-    std::fs::write(path, content)
+    tokio::fs::write(path, content)
+        .await
         .with_context(|| format!("write file: {path:?}"))
         .tap_ok(|_| trace!(?path, bytes = content.len(), "write file"))
 }
 
 /// Open a file for reading.
 #[instrument]
-pub fn open_file(path: impl AsRef<Path> + std::fmt::Debug) -> Result<std::fs::File> {
+pub async fn open_file(path: impl AsRef<Path> + StdDebug) -> Result<File> {
     let path = path.as_ref();
-    std::fs::File::open(path)
+    File::open(path)
+        .await
         .with_context(|| format!("open file: {path:?}"))
         .tap_ok(|_| trace!(?path, "open file"))
 }
 
 /// Read directory entries.
 #[instrument]
-pub fn read_dir(path: impl AsRef<Path> + std::fmt::Debug) -> Result<std::fs::ReadDir> {
+#[allow(dead_code)]
+pub async fn read_dir(path: impl AsRef<Path> + StdDebug) -> Result<ReadDir> {
     let path = path.as_ref();
-    std::fs::read_dir(path)
+    tokio::fs::read_dir(path)
+        .await
         .with_context(|| format!("read directory: {path:?}"))
         .tap_ok(|_| trace!(?path, "read directory"))
 }
@@ -305,10 +436,10 @@ pub fn read_dir(path: impl AsRef<Path> + std::fmt::Debug) -> Result<std::fs::Rea
 /// Report whether the file is executable.
 #[instrument]
 #[cfg(not(target_os = "windows"))]
-pub fn is_executable(path: impl AsRef<Path> + std::fmt::Debug) -> Result<bool> {
+pub async fn is_executable(path: impl AsRef<Path> + StdDebug) -> Result<bool> {
     use std::os::unix::fs::PermissionsExt;
     let path = path.as_ref();
-    let metadata = std::fs::metadata(path).context("get metadata")?;
+    let metadata = tokio::fs::metadata(path).await.context("get metadata")?;
     let is_executable = metadata.permissions().mode() & 0o111 != 0;
     trace!(?is_executable, "is executable");
     Ok(is_executable)
@@ -317,13 +448,14 @@ pub fn is_executable(path: impl AsRef<Path> + std::fmt::Debug) -> Result<bool> {
 /// Set the file as executable.
 #[instrument]
 #[cfg(not(target_os = "windows"))]
-pub fn set_executable(path: impl AsRef<Path> + std::fmt::Debug) -> Result<()> {
+pub async fn set_executable(path: impl AsRef<Path> + StdDebug) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let path = path.as_ref();
-    let metadata = std::fs::metadata(path).context("get metadata")?;
+    let metadata = tokio::fs::metadata(path).await.context("get metadata")?;
     let mut permissions = metadata.permissions();
     permissions.set_mode(permissions.mode() | 0o111);
-    std::fs::set_permissions(path, permissions)
+    tokio::fs::set_permissions(path, permissions)
+        .await
         .context("set permissions")
         .tap_ok(|_| trace!("set executable"))
 }
@@ -332,7 +464,7 @@ pub fn set_executable(path: impl AsRef<Path> + std::fmt::Debug) -> Result<()> {
 /// On Windows, this is a simple executable check.
 #[instrument]
 #[cfg(target_os = "windows")]
-pub fn is_executable(path: impl AsRef<Path> + std::fmt::Debug) -> Result<bool> {
+pub async fn is_executable(path: impl AsRef<Path> + StdDebug) -> Result<bool> {
     path.as_ref()
         .extension()
         .is_some_and(|ext| ext == "exe")
@@ -343,6 +475,35 @@ pub fn is_executable(path: impl AsRef<Path> + std::fmt::Debug) -> Result<bool> {
 /// On Windows this is a no-op.
 #[instrument]
 #[cfg(target_os = "windows")]
-pub fn set_executable(path: impl AsRef<Path> + std::fmt::Debug) -> Result<()> {
+pub async fn set_executable(path: impl AsRef<Path> + StdDebug) -> Result<()> {
     Ok(())
+}
+
+/// Get the metadata for a file.
+pub async fn metadata(path: impl AsRef<Path> + StdDebug) -> Result<Option<Metadata>> {
+    let path = path.as_ref();
+    match tokio::fs::metadata(path).await {
+        Ok(metadata) => {
+            trace!(?path, ?metadata, "read metadata");
+            Ok(Some(metadata))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).context(format!("remove directory: {path:?}")),
+    }
+}
+
+/// Remove the directory and all its contents.
+pub async fn remove_dir_all(path: impl AsRef<Path> + StdDebug) -> Result<()> {
+    let path = path.as_ref();
+    match tokio::fs::remove_dir_all(path).await {
+        Ok(()) => {
+            trace!(?path, "removed directory");
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            trace!(?path, "removed directory (already removed)");
+            Ok(())
+        }
+        Err(err) => Err(err).context(format!("remove directory: {path:?}")),
+    }
 }

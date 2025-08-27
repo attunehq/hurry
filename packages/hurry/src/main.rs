@@ -25,6 +25,7 @@ use tracing_tree::time::FormatTime;
 // Relatedly, in this file specifically nothing should be `pub`.
 mod cache;
 mod cargo;
+mod ext;
 mod fs;
 mod hash;
 
@@ -39,7 +40,11 @@ struct Unlocked;
 struct Locked;
 
 #[derive(Parser)]
-#[command(name = "hurry", about = "Really, really fast builds", version = format!("v{} commit {}", crate_version!(), git_version!()))]
+#[command(
+    name = "hurry",
+    about = "Really, really fast builds",
+    version = format!("v{} commit {}", crate_version!(), git_version!()),
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -63,7 +68,8 @@ enum Command {
 }
 
 #[instrument]
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     color_eyre::install()?;
 
@@ -100,12 +106,12 @@ fn main() -> Result<()> {
         .init();
 
     let result = match cli.command {
-        Command::Cargo(cmd) => match cmd {
-            cargo::Command::Build(opts) => cargo::build::exec(opts),
-            cargo::Command::Run(opts) => cargo::run::exec(opts),
-        },
         Command::Cache(cmd) => match cmd {
-            cache::Command::Reset(opts) => cache::reset::exec(opts),
+            cache::Command::Reset(opts) => cache::reset::exec(opts).await,
+        },
+        Command::Cargo(cmd) => match cmd {
+            cargo::Command::Build(opts) => cargo::build::exec(opts).await,
+            cargo::Command::Run(opts) => cargo::run::exec(opts).await,
         },
     };
 
