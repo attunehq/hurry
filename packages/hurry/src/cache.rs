@@ -10,6 +10,9 @@ use strum::Display;
 
 use crate::hash::Blake3;
 
+mod cmd;
+pub use cmd::*;
+
 mod fs;
 pub use fs::*;
 
