@@ -17,7 +17,6 @@ enum-assoc = "1.2.4"
 filetime = "0.2.25"
 flume = "0.11.1"
 fslock = "0.2.1"
-futures = { version = "0.3.31", features = ["executor"] }
 git-version = "0.3.9"
 hex = "0.4.3"
 homedir = "0.3.4"

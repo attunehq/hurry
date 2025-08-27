@@ -12,7 +12,6 @@ use color_eyre::{
     eyre::{Context, OptionExt, eyre},
 };
 use derive_more::{Debug, Display};
-use futures::executor::block_on;
 use itertools::Itertools;
 use location_macros::workspace_dir;
 use relative_path::{PathExt, RelativePath, RelativePathBuf};
@@ -150,7 +149,8 @@ impl Workspace {
     #[instrument(name = "Workspace::init_target")]
     pub async fn init_target(&self, profile: &Profile) -> Result<()> {
         const CACHEDIR_TAG_NAME: &str = "CACHEDIR.TAG";
-        const CACHEDIR_TAG_CONTENT: &[u8] = include_bytes!(concat!(workspace_dir!(), "/static/cargo/CACHEDIR.TAG"));
+        const CACHEDIR_TAG_CONTENT: &[u8] =
+            include_bytes!(concat!(workspace_dir!(), "/static/cargo/CACHEDIR.TAG"));
 
         // TODO: do we need to create `.rustc_info.json` to get cargo
         // to recognize the target folder as valid when restoring caches?
@@ -165,6 +165,16 @@ impl Workspace {
     /// Open the given named profile directory in the workspace.
     pub async fn open_profile(&self, profile: &Profile) -> Result<ProfileDir<'_, Unlocked>> {
         ProfileDir::open(self, profile).await
+    }
+
+    /// Open the given named profile directory in the workspace locked.
+    pub async fn open_profile_locked(&self, profile: &Profile) -> Result<ProfileDir<'_, Locked>> {
+        self.open_profile(profile)
+            .await
+            .context("open profile")?
+            .pipe(|target| target.lock())
+            .await
+            .context("lock profile")
     }
 }
 
@@ -342,14 +352,13 @@ impl<'ws> ProfileDir<'ws, Locked> {
     /// directories, where the immediate subdirectory of that parent is prefixed
     /// by the name of the dependency.
     ///
-    /// This is non-blocking as it uses the index of the profile directory
-    /// (built at the time when the profile directory was locked)
-    /// rather than the file system directly.
-    ///
     /// TODO: the above is probably overly broad for a cache; evaluate
     /// what filtering mechanism to apply to reduce invalidations and rework.
     #[instrument(name = "ProfileDir::enumerate_cache_artifacts")]
-    pub fn enumerate_cache_artifacts(&self, dependency: &Dependency) -> Result<Vec<Artifact>> {
+    pub async fn enumerate_cache_artifacts(
+        &self,
+        dependency: &Dependency,
+    ) -> Result<Vec<Artifact>> {
         let index = self.index.as_ref().ok_or_eyre("files not indexed")?;
 
         // Fingerprint artifacts are straightforward:
@@ -406,6 +415,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         });
         let dependencies = if let Some((path, _)) = dotd {
             let outputs = Dotd::from_file(self, path)
+                .await
                 .context("parse .d file")?
                 .outputs
                 .into_iter()
@@ -513,10 +523,14 @@ pub struct Dotd<'ws> {
 impl<'ws> Dotd<'ws> {
     /// Construct an instance by parsing the file.
     #[instrument(name = "Dotd::from_file")]
-    pub fn from_file(profile: &'ws ProfileDir<'ws, Locked>, target: &RelativePath) -> Result<Self> {
+    pub async fn from_file(
+        profile: &'ws ProfileDir<'ws, Locked>,
+        target: &RelativePath,
+    ) -> Result<Self> {
         const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta"];
         let profile_root = profile.root();
-        let outputs = block_on(fs::read_buffered_utf8(target.to_path(&profile_root)))
+        let outputs = fs::read_buffered_utf8(target.to_path(&profile_root))
+            .await
             .with_context(|| format!("read .d file: {target:?}"))?
             .ok_or_eyre("file does not exist")?
             .lines()

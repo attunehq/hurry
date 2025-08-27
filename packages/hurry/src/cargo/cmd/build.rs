@@ -158,10 +158,9 @@ async fn cache_target_from_workspace(
     profile: &Profile,
 ) -> Result<()> {
     let target = workspace
-        .open_profile(profile)
+        .open_profile_locked(profile)
         .await
-        .context("open profile")
-        .and_then(|target| futures::executor::block_on(target.lock()).context("lock profile"))?;
+        .context("open profile")?;
 
     // TODO: this currently assumes that the entire `target/` folder
     // doesn't have any _outdated_ data; this is _probably_ not correct.
@@ -170,6 +169,7 @@ async fn cache_target_from_workspace(
         // inside the profile directory.
         let artifacts = target
             .enumerate_cache_artifacts(dependency)
+            .await
             .with_context(|| format!("enumerate cache artifacts for dependency: {dependency}"))?;
 
         for artifact in &artifacts {
@@ -210,10 +210,9 @@ async fn restore_target_from_cache(
     profile: &Profile,
 ) -> Result<()> {
     let target = workspace
-        .open_profile(profile)
+        .open_profile_locked(profile)
         .await
-        .context("open profile")
-        .and_then(|target| futures::executor::block_on(target.lock()).context("lock profile"))?;
+        .context("open profile")?;
 
     // When backing up a `target/` directory, we enumerate
     // the build units before backing up dependencies.

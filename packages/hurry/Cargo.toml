@@ -17,7 +17,6 @@ enum-assoc = { workspace = true }
 filetime = { workspace = true }
 flume = { workspace = true }
 fslock = { workspace = true }
-futures = { workspace = true, features = ["executor"] }
 git-version = { workspace = true }
 hex = { workspace = true }
 homedir = { workspace = true }
