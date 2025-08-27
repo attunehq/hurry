@@ -57,8 +57,9 @@ enum Command {
     // TODO: /// Manage remote authentication
     // Auth,
 
-    // TODO: Manage user cache, including busting it when it gets into a corrupt or weird state.
-    // Cache,
+    /// Manage user cache
+    #[clap(subcommand)]
+    Cache(cache::Command),
 }
 
 #[instrument]
@@ -102,6 +103,9 @@ fn main() -> Result<()> {
         Command::Cargo(cmd) => match cmd {
             cargo::Command::Build(opts) => cargo::build::exec(opts),
             cargo::Command::Run(opts) => cargo::run::exec(opts),
+        },
+        Command::Cache(cmd) => match cmd {
+            cache::Command::Reset(opts) => cache::reset::exec(opts),
         },
     };
 
