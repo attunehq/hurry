@@ -1,0 +1,39 @@
+[package]
+name = "hurry"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ahash.workspace = true
+atomic-time.workspace = true
+blake3.workspace = true
+bon.workspace = true
+cargo_metadata.workspace = true
+cargo-lock.workspace = true
+clap.workspace = true
+color-eyre.workspace = true
+derive_more.workspace = true
+enum-assoc.workspace = true
+filetime.workspace = true
+flume.workspace = true
+fslock.workspace = true
+futures.workspace = true
+git-version.workspace = true
+hex.workspace = true
+homedir.workspace = true
+itertools.workspace = true
+location-macros.workspace = true
+lockfile.workspace = true
+rayon.workspace = true
+relative-path.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+strum.workspace = true
+subenum.workspace = true
+tap.workspace = true
+tracing-error.workspace = true
+tracing-flame.workspace = true
+tracing-subscriber.workspace = true
+tracing-tree.workspace = true
+tracing.workspace = true
+walkdir.workspace = true

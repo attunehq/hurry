@@ -14,6 +14,7 @@ use color_eyre::{
 use derive_more::{Debug, Display};
 use fslock::LockFile;
 use itertools::Itertools;
+use location_macros::workspace_dir;
 use relative_path::{PathExt, RelativePath, RelativePathBuf};
 use serde::Deserialize;
 use tap::{Pipe, Tap, TapFallible};
@@ -134,7 +135,7 @@ impl Workspace {
     #[instrument(name = "Workspace::init_target")]
     pub fn init_target(&self, profile: &Profile) -> Result<()> {
         const CACHEDIR_TAG_NAME: &str = "CACHEDIR.TAG";
-        const CACHEDIR_TAG_CONTENT: &[u8] = include_bytes!("../../static/cargo/CACHEDIR.TAG");
+        const CACHEDIR_TAG_CONTENT: &[u8] = include_bytes!(concat!(workspace_dir!(), "/static/cargo/CACHEDIR.TAG"));
 
         // TODO: do we need to create `.rustc_info.json` to get cargo
         // to recognize the target folder as valid when restoring caches?
