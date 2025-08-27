@@ -34,7 +34,7 @@ pub trait Cache {
     ) -> impl Future<Output = Result<Option<Record>>> + Send;
 }
 
-impl<'a, T: Cache + Sync> Cache for &'a T {
+impl<T: Cache + Sync> Cache for &T {
     async fn store(
         &self,
         kind: Kind,
@@ -90,7 +90,7 @@ pub trait Cas {
     ) -> impl Future<Output = Result<()>> + Send;
 }
 
-impl<'a, T: Cas + Sync> Cas for &'a T {
+impl<T: Cas + Sync> Cas for &T {
     async fn store(&self, kind: Kind, content: impl AsRef<[u8]> + Debug + Send) -> Result<Blake3> {
         Cas::store(*self, kind, content).await
     }
