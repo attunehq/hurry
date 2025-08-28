@@ -12,19 +12,19 @@ use color_eyre::{
     eyre::{Context, OptionExt, eyre},
 };
 use derive_more::{Debug, Display};
-use fslock::LockFile;
 use itertools::Itertools;
 use location_macros::workspace_dir;
 use relative_path::{PathExt, RelativePath, RelativePathBuf};
 use serde::Deserialize;
-use tap::{Pipe, Tap, TapFallible};
+use tap::{Pipe, TapFallible};
+use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
 
 use crate::{
     Locked, Unlocked,
-    cache::{Artifact, FsCache},
+    cache::Artifact,
     cargo::{Profile, read_argv},
-    fs::{self, Index},
+    fs::{self, Index, LockFile},
     hash::Blake3,
 };
 
@@ -62,24 +62,38 @@ impl Workspace {
     // I'm not certain they're worth the thread spawn cost
     // but this can be mitigated by using the rayon thread pool.
     #[instrument(name = "Workspace::from_argv")]
-    pub fn from_argv(argv: &[String]) -> Result<Self> {
+    pub async fn from_argv(argv: &[String]) -> Result<Self> {
         // TODO: Maybe we should just replicate this logic and perform it
         // statically using filesystem operations instead of shelling out? This
         // costs something on the order of 200ms, which is not _terrible_ but
         // feels much slower than if we just did our own filesystem reads.
-        let mut cmd = cargo_metadata::MetadataCommand::new();
-        if let Some(p) = read_argv(argv, "--manifest-path") {
-            cmd.manifest_path(p);
-        }
-        let metadata = cmd.exec().context("could not read cargo metadata")?;
-        debug!(?metadata, "cargo metadata");
+        let manifest_path = read_argv(argv, "--manifest-path").map(String::from);
+        let metadata = spawn_blocking(move || -> Result<_> {
+            let mut cmd = cargo_metadata::MetadataCommand::new();
+            if let Some(p) = manifest_path {
+                cmd.manifest_path(p);
+            }
+            let metadata = cmd.exec().context("could not read cargo metadata")?;
+            debug!(?metadata, "cargo metadata");
+            Ok(metadata)
+        })
+        .await
+        .context("join task")?
+        .context("read cargo metadata")?;
 
         // TODO: This currently blows up if we have no lockfile.
-        let lockfile = cargo_lock::Lockfile::load(metadata.workspace_root.join("Cargo.lock"))
-            .context("load cargo lockfile")?;
-        debug!(?lockfile, "cargo lockfile");
+        let cargo_lock = metadata.workspace_root.join("Cargo.lock");
+        let lockfile = spawn_blocking(move || -> Result<_> {
+            let lockfile = cargo_lock::Lockfile::load(cargo_lock).context("load cargo lockfile")?;
+            debug!(?lockfile, "cargo lockfile");
+            Ok(lockfile)
+        })
+        .await
+        .context("join task")?
+        .context("read cargo lockfile")?;
 
         let rustc_meta = RustcMetadata::from_argv(&metadata.workspace_root, argv)
+            .await
             .context("read rustc metadata")?;
         debug!(?rustc_meta, "rustc metadata");
 
@@ -133,43 +147,34 @@ impl Workspace {
     /// is created and well formed with the provided
     /// profile directory created.
     #[instrument(name = "Workspace::init_target")]
-    pub fn init_target(&self, profile: &Profile) -> Result<()> {
+    pub async fn init_target(&self, profile: &Profile) -> Result<()> {
         const CACHEDIR_TAG_NAME: &str = "CACHEDIR.TAG";
-        const CACHEDIR_TAG_CONTENT: &[u8] = include_bytes!(concat!(workspace_dir!(), "/static/cargo/CACHEDIR.TAG"));
+        const CACHEDIR_TAG_CONTENT: &[u8] =
+            include_bytes!(concat!(workspace_dir!(), "/static/cargo/CACHEDIR.TAG"));
 
         // TODO: do we need to create `.rustc_info.json` to get cargo
         // to recognize the target folder as valid when restoring caches?
         fs::create_dir_all(self.target.join(profile.as_str()))
+            .await
             .context("create target directory")?;
         fs::write(self.target.join(CACHEDIR_TAG_NAME), CACHEDIR_TAG_CONTENT)
+            .await
             .context("write CACHEDIR.TAG")
     }
 
     /// Open the given named profile directory in the workspace.
-    pub fn open_profile(&self, profile: &Profile) -> Result<ProfileDir<'_, Unlocked>> {
-        ProfileDir::open(self, profile)
+    pub async fn open_profile(&self, profile: &Profile) -> Result<ProfileDir<'_, Unlocked>> {
+        ProfileDir::open(self, profile).await
     }
 
-    /// Open the `hurry` cache in the default location for the user.
-    pub fn open_cache(&self) -> Result<FsCache<Unlocked>> {
-        FsCache::open_default(&self.root)
-    }
-
-    /// Find a dependency with the specified name and version
-    /// in the workspace, if it exists.
-    #[instrument(name = "Workspace::find_dependency")]
-    fn find_dependency(
-        &self,
-        name: impl AsRef<str> + std::fmt::Debug,
-        version: impl AsRef<str> + std::fmt::Debug,
-    ) -> Option<&Dependency> {
-        // TODO: we may want to index this instead of iterating each time,
-        // or at minimum cache it (ref: https://docs.rs/cached/latest/cached/)
-        let (name, version) = (name.as_ref(), version.as_ref());
-        self.dependencies
-            .values()
-            .find(|d| d.name == name && d.version == version)
-            .tap(|dependency| trace!(?dependency, "search result"))
+    /// Open the given named profile directory in the workspace locked.
+    pub async fn open_profile_locked(&self, profile: &Profile) -> Result<ProfileDir<'_, Locked>> {
+        self.open_profile(profile)
+            .await
+            .context("open profile")?
+            .pipe(|target| target.lock())
+            .await
+            .context("lock profile")
     }
 }
 
@@ -258,7 +263,7 @@ pub struct ProfileDir<'ws, State> {
     /// This lockfile uses the same name and implementation as `cargo` uses,
     /// so a locked `ProfileDir` in `hurry` will block `cargo` and vice versa.
     #[debug(skip)]
-    lock: LockFile,
+    lock: LockFile<State>,
 
     /// The workspace in which this build profile is located.
     pub workspace: &'ws Workspace,
@@ -295,23 +300,25 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
     /// Instantiate a new instance for the provided profile in the workspace.
     /// If the directory doesn't already exist, it is created.
     #[instrument(name = "ProfileDir::open")]
-    pub fn open(workspace: &'ws Workspace, profile: &Profile) -> Result<Self> {
+    pub async fn open(workspace: &'ws Workspace, profile: &Profile) -> Result<Self> {
         workspace
             .init_target(profile)
+            .await
             .context("init workspace target")?;
 
         let root = workspace.target.join(profile.as_str());
         let lock = root.join(".cargo-lock");
-        let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;
+        let lock = LockFile::open(lock).await.context("open lockfile")?;
+        let root = root
+            .as_std_path()
+            .relative_to(&workspace.target)
+            .context("make root relative")?;
 
         Ok(Self {
             state: PhantomData,
             index: None,
             profile: profile.clone(),
-            root: root
-                .as_std_path()
-                .relative_to(&workspace.target)
-                .context("make root relative")?,
+            root,
             lock,
             workspace,
         })
@@ -319,18 +326,19 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
 
     /// Lock the directory.
     #[instrument(name = "ProfileDir::lock")]
-    pub fn lock(mut self) -> Result<ProfileDir<'ws, Locked>> {
-        self.lock.lock().context("lock profile")?;
+    pub async fn lock(self) -> Result<ProfileDir<'ws, Locked>> {
+        let lock = self.lock.lock().await.context("lock profile")?;
         let root = self.root.to_path(&self.workspace.target);
         let index = Index::recursive(&root)
+            .await
             .map(Some)
             .context("index target folder")?;
         Ok(ProfileDir {
             state: PhantomData,
             profile: self.profile,
-            lock: self.lock,
             root: self.root,
             workspace: self.workspace,
+            lock,
             index,
         })
     }
@@ -347,7 +355,10 @@ impl<'ws> ProfileDir<'ws, Locked> {
     /// TODO: the above is probably overly broad for a cache; evaluate
     /// what filtering mechanism to apply to reduce invalidations and rework.
     #[instrument(name = "ProfileDir::enumerate_cache_artifacts")]
-    pub fn enumerate_cache_artifacts(&self, dependency: &Dependency) -> Result<Vec<Artifact>> {
+    pub async fn enumerate_cache_artifacts(
+        &self,
+        dependency: &Dependency,
+    ) -> Result<Vec<Artifact>> {
         let index = self.index.as_ref().ok_or_eyre("files not indexed")?;
 
         // Fingerprint artifacts are straightforward:
@@ -404,6 +415,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         });
         let dependencies = if let Some((path, _)) = dotd {
             let outputs = Dotd::from_file(self, path)
+                .await
                 .context("parse .d file")?
                 .outputs
                 .into_iter()
@@ -462,14 +474,14 @@ pub struct RustcMetadata {
 impl RustcMetadata {
     /// Get platform metadata from the current compiler.
     #[instrument(name = "RustcMetadata::from_argv")]
-    pub fn from_argv(workspace_root: &Utf8Path, _argv: &[String]) -> Result<Self> {
-        let mut cmd = std::process::Command::new("rustc");
+    pub async fn from_argv(workspace_root: &Utf8Path, _argv: &[String]) -> Result<Self> {
+        let mut cmd = tokio::process::Command::new("rustc");
 
         // Bypasses the check that disallows using unstable commands on stable.
         cmd.env("RUSTC_BOOTSTRAP", "1");
         cmd.args(["-Z", "unstable-options", "--print", "target-spec-json"]);
         cmd.current_dir(workspace_root);
-        let output = cmd.output().context("run rustc")?;
+        let output = cmd.output().await.context("run rustc")?;
         if !output.status.success() {
             return Err(eyre!("invoke rustc"))
                 .with_section(|| {
@@ -499,22 +511,22 @@ impl RustcMetadata {
 /// `.d` files are structured a little like makefiles, where each output
 /// is on its own line followed by a colon followed by the inputs.
 #[derive(Debug)]
-pub struct Dotd<'ws> {
-    #[debug(skip)]
-    #[allow(dead_code)]
-    profile: &'ws ProfileDir<'ws, Locked>,
-
+pub struct Dotd {
     /// Recorded output paths, relative to the profile root.
     pub outputs: Vec<RelativePathBuf>,
 }
 
-impl<'ws> Dotd<'ws> {
+impl Dotd {
     /// Construct an instance by parsing the file.
     #[instrument(name = "Dotd::from_file")]
-    pub fn from_file(profile: &'ws ProfileDir<'ws, Locked>, target: &RelativePath) -> Result<Self> {
+    pub async fn from_file(
+        profile: &ProfileDir<'_, Locked>,
+        target: &RelativePath,
+    ) -> Result<Self> {
         const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta"];
         let profile_root = profile.root();
         let outputs = fs::read_buffered_utf8(target.to_path(&profile_root))
+            .await
             .with_context(|| format!("read .d file: {target:?}"))?
             .ok_or_eyre("file does not exist")?
             .lines()
@@ -537,6 +549,6 @@ impl<'ws> Dotd<'ws> {
                     .and_then(|p| RelativePathBuf::from_path(p).context("read path as utf8"))
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Self { profile, outputs })
+        Ok(Self { outputs })
     }
 }

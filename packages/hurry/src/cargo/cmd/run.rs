@@ -19,6 +19,6 @@ pub struct Options {
 }
 
 #[instrument]
-pub fn exec(options: Options) -> Result<()> {
-    invoke("run", options.argv)
+pub async fn exec(options: Options) -> Result<()> {
+    invoke("run", options.argv).await
 }

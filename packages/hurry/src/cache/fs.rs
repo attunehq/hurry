@@ -5,7 +5,6 @@ use std::{fmt::Debug as StdDebug, marker::PhantomData, path::Path};
 use cargo_metadata::camino::Utf8PathBuf;
 use color_eyre::{Result, Section, SectionExt, eyre::Context};
 use derive_more::{Debug, Display};
-use fslock::LockFile;
 use itertools::Itertools;
 use tap::Pipe;
 use tracing::{instrument, trace};
@@ -13,12 +12,12 @@ use tracing::{instrument, trace};
 use crate::{
     Locked, Unlocked,
     cache::{Artifact, Kind, Record},
-    fs,
+    fs::{self, LockFile},
     hash::Blake3,
 };
 
 /// The local file system implementation of a cache.
-#[derive(Debug, Display)]
+#[derive(Clone, Debug, Display)]
 #[display("{root}")]
 pub struct FsCache<State> {
     #[debug(skip)]
@@ -41,7 +40,7 @@ pub struct FsCache<State> {
     /// or from mutating it at the same time as another instance
     /// is reading it.
     #[debug(skip)]
-    lock: LockFile,
+    lock: LockFile<State>,
 
     /// The cache root of the workspace in the context
     /// in which this cache exists.
@@ -60,14 +59,17 @@ impl<L> FsCache<L> {
 impl FsCache<Unlocked> {
     /// Open the cache in the default location for the user.
     #[instrument(name = "FsCache::open_default")]
-    pub fn open_default(workspace: impl Into<Utf8PathBuf> + StdDebug) -> Result<Self> {
+    pub async fn open_default(workspace: impl Into<Utf8PathBuf> + StdDebug) -> Result<Self> {
         let root = fs::user_global_cache_path()
+            .await
             .context("find user cache path")?
             .join("ws");
 
-        fs::create_dir_all(&root)?;
+        fs::create_dir_all(&root).await?;
         let lock = root.join(Self::LOCKFILE_NAME);
-        let lock = LockFile::open(lock.as_std_path()).context("open lockfile")?;
+        let lock = LockFile::open(lock.as_std_path())
+            .await
+            .context("open lockfile")?;
 
         Ok(Self {
             state: PhantomData,
@@ -79,13 +81,13 @@ impl FsCache<Unlocked> {
 
     /// Lock the cache.
     #[instrument(name = "FsCache::lock")]
-    pub fn lock(mut self) -> Result<FsCache<Locked>> {
-        self.lock.lock().context("lock cache")?;
+    pub async fn lock(self) -> Result<FsCache<Locked>> {
+        let lock = self.lock.lock().await.context("lock cache")?;
         Ok(FsCache {
             state: PhantomData,
             root: self.root,
-            lock: self.lock,
             workspace: self.workspace,
+            lock,
         })
     }
 }
@@ -93,18 +95,18 @@ impl FsCache<Unlocked> {
 impl FsCache<Locked> {
     /// Unlock the cache.
     #[instrument(name = "FsCache::unlock")]
-    pub fn unlock(mut self) -> Result<FsCache<Unlocked>> {
-        self.lock.unlock().context("unlock cache")?;
+    pub async fn unlock(self) -> Result<FsCache<Unlocked>> {
+        let lock = self.lock.unlock().await.context("unlock cache")?;
         Ok(FsCache {
             state: PhantomData,
             root: self.root,
-            lock: self.lock,
             workspace: self.workspace,
+            lock,
         })
     }
 }
 
-impl super::Cache for &FsCache<Locked> {
+impl super::Cache for FsCache<Locked> {
     #[instrument(name = "FsCache::store")]
     async fn store(
         &self,
@@ -122,24 +124,26 @@ impl super::Cache for &FsCache<Locked> {
             .build()
             .pipe_ref(serde_json::to_string_pretty)
             .context("encode record")?;
-        fs::write(name, content).context("store record")
+        fs::write(name, content).await.context("store record")
     }
 
     #[instrument(name = "FsCache::get")]
     async fn get(&self, kind: Kind, key: impl AsRef<Blake3> + StdDebug) -> Result<Option<Record>> {
         let key = key.as_ref();
         let name = self.root.join(kind.as_str()).join(key.as_str());
-        Ok(match fs::read_buffered_utf8(name).context("read file")? {
-            Some(content) => serde_json::from_str(&content)
-                .context("decode record")
-                .with_section(|| content.header("Content:"))?,
-            None => None,
-        })
+        Ok(
+            match fs::read_buffered_utf8(name).await.context("read file")? {
+                Some(content) => serde_json::from_str(&content)
+                    .context("decode record")
+                    .with_section(|| content.header("Content:"))?,
+                None => None,
+            },
+        )
     }
 }
 
 /// The content-addressed storage area shared by all `hurry` cache instances.
-#[derive(Debug, Display)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display)]
 #[display("{root}")]
 pub struct FsCas {
     /// The root directory of the CAS.
@@ -159,18 +163,19 @@ pub struct FsCas {
 impl FsCas {
     /// Open an instance in the default location for the user.
     #[instrument(name = "FsCas::open_default")]
-    pub fn open_default() -> Result<Self> {
+    pub async fn open_default() -> Result<Self> {
         let root = fs::user_global_cache_path()
+            .await
             .context("find user cache path")?
             .join("cas");
 
-        fs::create_dir_all(&root)?;
+        fs::create_dir_all(&root).await?;
         trace!(?root, "open cas");
         Ok(Self { root })
     }
 }
 
-impl super::Cas for &FsCas {
+impl super::Cas for FsCas {
     #[instrument(name = "FsCas::store")]
     async fn store(
         &self,
@@ -180,7 +185,7 @@ impl super::Cas for &FsCas {
         let content = content.as_ref();
         let key = Blake3::from_buffer(content);
         let dst = self.root.join(kind.as_str()).join(key.as_str());
-        fs::write(dst, content)?;
+        fs::write(dst, content).await?;
         Ok(key)
     }
 
@@ -191,9 +196,9 @@ impl super::Cas for &FsCas {
         src: impl AsRef<Path> + StdDebug + Send,
     ) -> Result<Blake3> {
         let src = src.as_ref();
-        let key = Blake3::from_file(src).context("hash file")?;
+        let key = Blake3::from_file(src).await.context("hash file")?;
         let dst = self.root.join(kind.as_str()).join(key.as_str());
-        fs::copy_file(src, dst)?;
+        fs::copy_file(src, dst).await?;
         Ok(key)
     }
 
@@ -204,7 +209,7 @@ impl super::Cas for &FsCas {
         key: impl AsRef<Blake3> + StdDebug + Send,
     ) -> Result<Option<Vec<u8>>> {
         let src = self.root.join(kind.as_str()).join(key.as_ref().as_str());
-        fs::read_buffered(src)
+        fs::read_buffered(src).await
     }
 
     #[instrument(name = "FsCas::get_file")]
@@ -215,6 +220,6 @@ impl super::Cas for &FsCas {
         destination: impl AsRef<Path> + StdDebug + Send,
     ) -> Result<()> {
         let src = self.root.join(kind.as_str()).join(key.as_ref().as_str());
-        fs::copy_file(src, destination.as_ref())
+        fs::copy_file(src, destination.as_ref()).await
     }
 }
