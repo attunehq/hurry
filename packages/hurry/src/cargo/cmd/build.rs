@@ -9,14 +9,12 @@ use std::fmt::Debug;
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use futures::{StreamExt, TryStreamExt, stream};
-use itertools::Itertools;
-use tap::Pipe;
+use tap::{Pipe, TapFallible};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
     cache::{Cache, Cas, FsCache, FsCas, Kind},
     cargo::{Profile, invoke, workspace::Workspace},
-    fs,
 };
 
 /// Options for `cargo build`.
@@ -153,13 +151,14 @@ async fn exec_inner(
 /// - Finds tertiary files like `.fingerprint` etc
 /// - Stores the files in the CAS in such a way that they can be found
 ///   using only data inside `Cargo.lock` in the future.
-#[instrument(skip_all, fields(?cas, ?workspace, ?cache, ?profile))]
+#[instrument]
 async fn cache_target_from_workspace(
-    cas: impl Cas + Debug,
+    cas: impl Cas + Debug + Clone,
     workspace: &Workspace,
-    cache: impl Cache + Debug,
+    cache: impl Cache + Debug + Clone,
     profile: &Profile,
 ) -> Result<()> {
+    info!("Indexing target folder");
     let target = workspace
         .open_profile_locked(profile)
         .await
@@ -167,37 +166,96 @@ async fn cache_target_from_workspace(
 
     // TODO: this currently assumes that the entire `target/` folder
     // doesn't have any _outdated_ data; this may not be correct.
-    for (key, dependency) in &workspace.dependencies {
-        // Each dependency has several entries we need to back up
-        // inside the profile directory.
-        let artifacts = target
-            .enumerate_cache_artifacts(dependency)
-            .await
-            .with_context(|| format!("enumerate cache artifacts for dependency: {dependency}"))?;
+    stream::iter(&workspace.dependencies)
+        .then(|(key, dependency)| {
+            let target = target.clone();
+            async move {
+                debug!(?key, ?dependency, "restoring dependency");
+                target
+                    .enumerate_cache_artifacts(dependency)
+                    .await
+                    .map(|artifacts| (key, dependency, artifacts))
+                    .with_context(|| {
+                        format!("enumerate cache artifacts for dependency: {dependency}")
+                    })
+            }
+        })
+        .try_for_each_concurrent(Some(10), |(key, dependency, artifacts)| {
+            let (cas, target, cache) = (cas.clone(), target.clone(), cache.clone());
+            async move {
+                debug!(?key, ?dependency, ?artifacts, "caching artifacts");
+                stream::iter(&artifacts)
+                    .map(|artifact| Ok(artifact))
+                    .try_for_each_concurrent(Some(100), |artifact| {
+                        let (cas, target) = (cas.clone(), target.clone());
+                        async move {
+                            let dst = artifact.target.to_path(target.root());
+                            cas.store_file(Kind::Cargo, &dst)
+                                .await
+                                .with_context(|| format!("backup output file: {dst:?}"))
+                                .tap_ok(|key| {
+                                    trace!(?key, ?dependency, ?artifact, "restored artifact")
+                                })
+                                .map(drop)
+                        }
+                    })
+                    .await
+                    .pipe(|_| {
+                        let cache = cache.clone();
+                        async move {
+                            cache
+                                .store(Kind::Cargo, key, &artifacts)
+                                .await
+                                .context("store cache record")
+                                .tap_ok(|_| {
+                                    debug!(?key, ?dependency, ?artifacts, "stored cache record")
+                                })
+                        }
+                    })
+                    .await
+                    .map(|_| {
+                        info!(
+                            name = %dependency.name,
+                            version = %dependency.version,
+                            target = %dependency.target,
+                            %key,
+                            "Updated dependency in cache",
+                        )
+                    })
+            }
+        })
+        .await
+    // for (key, dependency) in &workspace.dependencies {
+    //     // Each dependency has several entries we need to back up
+    //     // inside the profile directory.
+    //     let artifacts = target
+    //         .enumerate_cache_artifacts(dependency)
+    //         .await
+    //         .with_context(|| format!("enumerate cache artifacts for dependency: {dependency}"))?;
 
-        for artifact in &artifacts {
-            let output_file = artifact.target.to_path(target.root());
-            cas.store_file(Kind::Cargo, &output_file)
-                .await
-                .with_context(|| format!("backup output file: {output_file:?}"))?;
-            trace!(?key, ?dependency, ?artifact, "stored artifact");
-        }
+    //     for artifact in &artifacts {
+    //         let output_file = artifact.target.to_path(target.root());
+    //         cas.store_file(Kind::Cargo, &output_file)
+    //             .await
+    //             .with_context(|| format!("backup output file: {output_file:?}"))?;
+    //         trace!(?key, ?dependency, ?artifact, "stored artifact");
+    //     }
 
-        cache
-            .store(Kind::Cargo, key, &artifacts)
-            .await
-            .context("store cache record")?;
-        debug!(?key, ?dependency, ?artifacts, "stored cache record");
-        info!(
-            name = %dependency.name,
-            version = %dependency.version,
-            target = %dependency.target,
-            %key,
-            "Updated dependency in cache",
-        );
-    }
+    //     cache
+    //         .store(Kind::Cargo, key, &artifacts)
+    //         .await
+    //         .context("store cache record")?;
+    //     debug!(?key, ?dependency, ?artifacts, "stored cache record");
+    //     info!(
+    //         name = %dependency.name,
+    //         version = %dependency.version,
+    //         target = %dependency.target,
+    //         %key,
+    //         "Updated dependency in cache",
+    //     );
+    // }
 
-    Ok(())
+    // Ok(())
 }
 
 /// Restore the target directory from the cache.
@@ -205,13 +263,14 @@ async fn cache_target_from_workspace(
 // TODO: Today we unconditionally copy files.
 // Implement with copy-on-write when possible;
 // otherwise fall back to a symlink.
-#[instrument(skip_all, fields(?cas, ?workspace, ?cache, ?profile))]
+#[instrument]
 async fn restore_target_from_cache(
     cas: impl Cas + Debug + Clone,
     workspace: &Workspace,
     cache: impl Cache + Debug + Clone,
     profile: &Profile,
 ) -> Result<()> {
+    info!("Indexing target folder");
     let target = workspace
         .open_profile_locked(profile)
         .await
@@ -232,6 +291,8 @@ async fn restore_target_from_cache(
     // TODO: ideally we'd have some kind of dynamic semaphore that sets
     // a budget based on task throughput so that we can ramp up or down
     // concurrency based on the capability and contention of the hardware.
+    //
+    // TODO: benchmark different approaches and compare to a standard `cp`.
     debug!(dependencies = ?workspace.dependencies, "restoring dependencies");
     stream::iter(&workspace.dependencies)
         .filter_map(|(key, dependency)| {
@@ -259,6 +320,9 @@ async fn restore_target_from_cache(
                             cas.get_file(Kind::Cargo, &artifact.hash, &dst)
                                 .await
                                 .context("extract crate")
+                                .tap_ok(|_| {
+                                    trace!(?key, ?dependency, ?artifact, "restored artifact")
+                                })
                         }
                     })
                     .await
