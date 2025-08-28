@@ -350,8 +350,8 @@ pub async fn copy_file(
 #[instrument]
 pub async fn set_file_handle_times(
     file: File,
-    mtime: Option<FileTime>,
     atime: Option<FileTime>,
+    mtime: Option<FileTime>,
 ) -> Result<File> {
     match (mtime, atime) {
         (None, None) => Ok(file),
