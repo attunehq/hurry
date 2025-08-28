@@ -225,37 +225,6 @@ async fn cache_target_from_workspace(
             }
         })
         .await
-    // for (key, dependency) in &workspace.dependencies {
-    //     // Each dependency has several entries we need to back up
-    //     // inside the profile directory.
-    //     let artifacts = target
-    //         .enumerate_cache_artifacts(dependency)
-    //         .await
-    //         .with_context(|| format!("enumerate cache artifacts for dependency: {dependency}"))?;
-
-    //     for artifact in &artifacts {
-    //         let output_file = artifact.target.to_path(target.root());
-    //         cas.store_file(Kind::Cargo, &output_file)
-    //             .await
-    //             .with_context(|| format!("backup output file: {output_file:?}"))?;
-    //         trace!(?key, ?dependency, ?artifact, "stored artifact");
-    //     }
-
-    //     cache
-    //         .store(Kind::Cargo, key, &artifacts)
-    //         .await
-    //         .context("store cache record")?;
-    //     debug!(?key, ?dependency, ?artifacts, "stored cache record");
-    //     info!(
-    //         name = %dependency.name,
-    //         version = %dependency.version,
-    //         target = %dependency.target,
-    //         %key,
-    //         "Updated dependency in cache",
-    //     );
-    // }
-
-    // Ok(())
 }
 
 /// Restore the target directory from the cache.
@@ -338,37 +307,4 @@ async fn restore_target_from_cache(
             }
         })
         .await
-    // for (key, dependency) in &workspace.dependencies {
-    //     debug!(?key, ?dependency, "restoring dependency");
-    //     let Some(record) = cache
-    //         .get(Kind::Cargo, key)
-    //         .await
-    //         .with_context(|| format!("retrieve cache record for dependency: {dependency}"))?
-    //     else {
-    //         trace!(?key, ?dependency, "no cache record for dependency");
-    //         continue;
-    //     };
-
-    //     debug!(?key, ?dependency, artifacts = ?record.artifacts, "restoring artifacts");
-    //     for artifact in record.artifacts {
-    //         let dst = artifact.target.to_path(target.root());
-    //         cas.get_file(Kind::Cargo, &artifact.hash, &dst)
-    //             .await
-    //             .context("extract backed up crate from cas")?;
-    //         if artifact.executable {
-    //             fs::set_executable(&dst).await.context("set executable")?;
-    //         }
-    //         trace!(?key, ?dependency, ?artifact, ?dst, "restored artifact");
-    //     }
-
-    //     info!(
-    //         name = %dependency.name,
-    //         version = %dependency.version,
-    //         target = %dependency.target,
-    //         %key,
-    //         "Restored dependency from cache",
-    //     );
-    // }
-
-    // Ok(())
 }
