@@ -488,7 +488,7 @@ pub async fn metadata(path: impl AsRef<Path> + StdDebug) -> Result<Option<Metada
             Ok(Some(metadata))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err).context(format!("remove directory: {path:?}")),
+        Err(err) => Err(err).context(format!("read metadata: {path:?}")),
     }
 }
 
