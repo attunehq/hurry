@@ -361,6 +361,9 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ) -> Result<Vec<Artifact>> {
         let index = self.index.as_ref().ok_or_eyre("files not indexed")?;
 
+        // Package names with hyphens are saved on disk with underscores.
+        let normalized_name = dependency.name.clone().replace("-", "_");
+
         // Fingerprint artifacts are straightforward:
         // if they're inside the `.fingerprint` directory,
         // and the subdirectory of `.fingerprint` starts with the name of
@@ -376,7 +379,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
                     .tuple_windows()
                     .next()
                     .is_some_and(|(parent, child)| {
-                        child.as_str().starts_with(&dependency.name)
+                        child.as_str().starts_with(&normalized_name)
                             && (parent.as_str() == ".fingerprint" || parent.as_str() == "build")
                     })
             })
@@ -410,7 +413,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .collect_vec();
         let dotd = dependencies.iter().find(|(path, _)| {
             path.components().nth(1).is_some_and(|part| {
-                part.as_str().ends_with(".d") && part.as_str().starts_with(&dependency.name)
+                part.as_str().ends_with(".d") && part.as_str().starts_with(&normalized_name)
             })
         });
         let dependencies = if let Some((path, _)) = dotd {
@@ -426,7 +429,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
                     outputs.contains(*path)
                         || path
                             .file_name()
-                            .is_some_and(|name| name.starts_with(&dependency.name))
+                            .is_some_and(|name| name.starts_with(&normalized_name))
                 })
                 .collect_vec()
         } else {

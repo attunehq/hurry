@@ -150,7 +150,7 @@ async fn exec_inner(
 /// - Finds tertiary files like `.fingerprint` etc
 /// - Stores the files in the CAS in such a way that they can be found
 ///   using only data inside `Cargo.lock` in the future.
-#[instrument(skip_all, fields(?cas, ?workspace, ?cache, ?profile))]
+#[instrument]
 async fn cache_target_from_workspace(
     cas: impl Cas + Debug,
     workspace: &Workspace,
@@ -202,7 +202,7 @@ async fn cache_target_from_workspace(
 // TODO: Today we unconditionally copy files.
 // Implement with copy-on-write when possible;
 // otherwise fall back to a symlink.
-#[instrument(skip_all, fields(?cas, ?workspace, ?cache, ?profile))]
+#[instrument]
 async fn restore_target_from_cache(
     cas: impl Cas + Debug,
     workspace: &Workspace,

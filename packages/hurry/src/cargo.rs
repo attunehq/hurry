@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::iter::once;
 
 use color_eyre::{
@@ -11,12 +12,11 @@ mod workspace;
 
 pub use cmd::*;
 
-
 /// Invoke a cargo subcommand with the given arguments.
-#[instrument(skip_all)]
+#[instrument]
 pub async fn invoke(
-    subcommand: impl AsRef<str>,
-    args: impl IntoIterator<Item = impl AsRef<str>>,
+    subcommand: impl AsRef<str> + Debug,
+    args: impl IntoIterator<Item = impl AsRef<str>> + Debug,
 ) -> Result<()> {
     let subcommand = subcommand.as_ref();
     let args = args.into_iter().collect::<Vec<_>>();
