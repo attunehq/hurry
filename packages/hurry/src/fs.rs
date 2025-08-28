@@ -2,6 +2,22 @@
 //!
 //! Inside this module, we refer to `std::fs` or `tokio::fs` by its fully
 //! qualified path to make it maximally clear what we are using.
+//!
+//! ## Other IO implementations
+//!
+//! We may find that we want to swap to a different IO backend than tokio:
+//! - https://docs.rs/compio/latest/compio/
+//! - https://docs.rs/nuclei/latest/nuclei/
+//! - https://docs.rs/monoio/latest/monoio/
+//! - https://docs.rs/rio/latest/rio/
+//!
+//! Alternatively, we may want to swap to different library implementations:
+//! - https://docs.rs/io-uring/latest/io_uring/
+//! - https://docs.rs/reflink-copy/latest/reflink_copy/
+//!
+//! I've held off on this for now until/unless we can prove that
+//! tokio and its default way of interfacing with the file system is
+//! actually the bottleneck for us.
 
 #![allow(
     clippy::disallowed_methods,

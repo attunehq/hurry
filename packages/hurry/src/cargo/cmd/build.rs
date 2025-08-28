@@ -8,6 +8,9 @@ use std::fmt::Debug;
 
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
+use futures::{StreamExt, TryStreamExt, stream};
+use itertools::Itertools;
+use tap::Pipe;
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
@@ -163,7 +166,7 @@ async fn cache_target_from_workspace(
         .context("open profile")?;
 
     // TODO: this currently assumes that the entire `target/` folder
-    // doesn't have any _outdated_ data; this is _probably_ not correct.
+    // doesn't have any _outdated_ data; this may not be correct.
     for (key, dependency) in &workspace.dependencies {
         // Each dependency has several entries we need to back up
         // inside the profile directory.
@@ -204,9 +207,9 @@ async fn cache_target_from_workspace(
 // otherwise fall back to a symlink.
 #[instrument(skip_all, fields(?cas, ?workspace, ?cache, ?profile))]
 async fn restore_target_from_cache(
-    cas: impl Cas + Debug,
+    cas: impl Cas + Debug + Clone,
     workspace: &Workspace,
-    cache: impl Cache + Debug,
+    cache: impl Cache + Debug + Clone,
     profile: &Profile,
 ) -> Result<()> {
     let target = workspace
@@ -220,38 +223,88 @@ async fn restore_target_from_cache(
     // (or don't trust it), so we can't do that here.
     // Instead, we just enumerate dependencies
     // and try to find some to restore.
+    //
+    // The concurrency limits below are currently just vibes;
+    // we want to avoid opening too many file handles at a time
+    // because that can have a negative effect on performance
+    // but we obviously want to have enough running that we saturate the disk.
+    //
+    // TODO: ideally we'd have some kind of dynamic semaphore that sets
+    // a budget based on task throughput so that we can ramp up or down
+    // concurrency based on the capability and contention of the hardware.
     debug!(dependencies = ?workspace.dependencies, "restoring dependencies");
-    for (key, dependency) in &workspace.dependencies {
-        debug!(?key, ?dependency, "restoring dependency");
-        let Some(record) = cache
-            .get(Kind::Cargo, key)
-            .await
-            .with_context(|| format!("retrieve cache record for dependency: {dependency}"))?
-        else {
-            trace!(?key, ?dependency, "no cache record for dependency");
-            continue;
-        };
-
-        debug!(?key, ?dependency, artifacts = ?record.artifacts, "restoring artifacts");
-        for artifact in record.artifacts {
-            let dst = artifact.target.to_path(target.root());
-            cas.get_file(Kind::Cargo, &artifact.hash, &dst)
-                .await
-                .context("extract backed up crate from cas")?;
-            if artifact.executable {
-                fs::set_executable(&dst).await.context("set executable")?;
+    stream::iter(&workspace.dependencies)
+        .filter_map(|(key, dependency)| {
+            let cache = cache.clone();
+            async move {
+                debug!(?key, ?dependency, "restoring dependency");
+                cache
+                    .get(Kind::Cargo, key)
+                    .await
+                    .with_context(|| format!("retrieve cache record for dependency: {dependency}"))
+                    .map(|lookup| lookup.map(|record| (key, dependency, record)))
+                    .transpose()
             }
-            trace!(?key, ?dependency, ?artifact, ?dst, "restored artifact");
-        }
+        })
+        .try_for_each_concurrent(Some(10), |(key, dependency, record)| {
+            let (cas, target) = (cas.clone(), target.clone());
+            async move {
+                debug!(?key, ?dependency, artifacts = ?record.artifacts, "restoring artifacts");
+                stream::iter(record.artifacts)
+                    .map(|artifact| Ok(artifact))
+                    .try_for_each_concurrent(Some(100), |artifact| {
+                        let (cas, target) = (cas.clone(), target.clone());
+                        async move {
+                            let dst = artifact.target.to_path(target.root());
+                            cas.get_file(Kind::Cargo, &artifact.hash, &dst)
+                                .await
+                                .context("extract crate")
+                        }
+                    })
+                    .await
+                    .map(|_| {
+                        info!(
+                            name = %dependency.name,
+                            version = %dependency.version,
+                            target = %dependency.target,
+                            %key,
+                            "Restored dependency from cache",
+                        )
+                    })
+            }
+        })
+        .await
+    // for (key, dependency) in &workspace.dependencies {
+    //     debug!(?key, ?dependency, "restoring dependency");
+    //     let Some(record) = cache
+    //         .get(Kind::Cargo, key)
+    //         .await
+    //         .with_context(|| format!("retrieve cache record for dependency: {dependency}"))?
+    //     else {
+    //         trace!(?key, ?dependency, "no cache record for dependency");
+    //         continue;
+    //     };
 
-        info!(
-            name = %dependency.name,
-            version = %dependency.version,
-            target = %dependency.target,
-            %key,
-            "Restored dependency from cache",
-        );
-    }
+    //     debug!(?key, ?dependency, artifacts = ?record.artifacts, "restoring artifacts");
+    //     for artifact in record.artifacts {
+    //         let dst = artifact.target.to_path(target.root());
+    //         cas.get_file(Kind::Cargo, &artifact.hash, &dst)
+    //             .await
+    //             .context("extract backed up crate from cas")?;
+    //         if artifact.executable {
+    //             fs::set_executable(&dst).await.context("set executable")?;
+    //         }
+    //         trace!(?key, ?dependency, ?artifact, ?dst, "restored artifact");
+    //     }
 
-    Ok(())
+    //     info!(
+    //         name = %dependency.name,
+    //         version = %dependency.version,
+    //         target = %dependency.target,
+    //         %key,
+    //         "Restored dependency from cache",
+    //     );
+    // }
+
+    // Ok(())
 }

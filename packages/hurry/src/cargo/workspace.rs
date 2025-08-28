@@ -3,6 +3,7 @@ use std::{
     marker::PhantomData,
     path::PathBuf,
     str::FromStr,
+    sync::Arc,
 };
 
 use bon::{Builder, bon};
@@ -248,7 +249,7 @@ impl Dependency {
 }
 
 /// A profile directory inside a [`Workspace`].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProfileDir<'ws, State> {
     #[debug(skip)]
     state: PhantomData<State>,
@@ -275,7 +276,10 @@ pub struct ProfileDir<'ws, State> {
     /// Currently there's no explicit unlock mechanism for profiles since
     /// they're just dropped, but if we ever add one that's where we'd clear
     /// this and set it to `None`.
-    index: Option<Index>,
+    ///
+    /// This is in an `Arc` so that we don't have to clone the whole index
+    /// when we clone the `ProfileDir`.
+    index: Option<Arc<Index>>,
 
     /// The root of the directory,
     /// relative to [`workspace.target`](Workspace::target).
@@ -331,6 +335,7 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
         let root = self.root.to_path(&self.workspace.target);
         let index = Index::recursive(&root)
             .await
+            .map(Arc::new)
             .map(Some)
             .context("index target folder")?;
         Ok(ProfileDir {
