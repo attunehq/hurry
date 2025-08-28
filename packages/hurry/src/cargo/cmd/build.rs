@@ -15,6 +15,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use crate::{
     cache::{Cache, Cas, FsCache, FsCas, Kind},
     cargo::{Profile, invoke, workspace::Workspace},
+    fs,
 };
 
 /// Options for `cargo build`.
@@ -164,6 +165,17 @@ async fn cache_target_from_workspace(
         .await
         .context("open profile")?;
 
+    // The concurrency limits below are currently just vibes;
+    // we want to avoid opening too many file handles at a time
+    // because that can have a negative effect on performance
+    // but we obviously want to have enough running that we saturate the disk.
+    //
+    // TODO: ideally we'd have some kind of dynamic semaphore that sets
+    // a budget based on task throughput so that we can ramp up or down
+    // concurrency based on the capability and contention of the hardware.
+    //
+    // TODO: benchmark different approaches and compare to a standard `cp`.
+    //
     // TODO: this currently assumes that the entire `target/` folder
     // doesn't have any _outdated_ data; this may not be correct.
     stream::iter(&workspace.dependencies)
@@ -294,6 +306,13 @@ async fn restore_target_from_cache(
                             cas.get_file(Kind::Cargo, &artifact.hash, &dst)
                                 .await
                                 .context("extract crate")
+                                .pipe(|_| async move {
+                                    if artifact.executable {
+                                        fs::set_executable(&dst).await.context("set executable")?;
+                                    }
+                                    Ok(())
+                                })
+                                .await
                                 .tap_ok(|_| {
                                     trace!(?key, ?dependency, ?artifact, "restored artifact")
                                 })
