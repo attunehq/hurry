@@ -7,19 +7,25 @@ use tracing::{instrument, warn};
 use crate::fs::{self, user_global_cache_path};
 
 #[derive(Clone, Args, Debug)]
-pub struct Options {}
+pub struct Options {
+    /// Skip confirmation prompt.
+    #[arg(short, long)]
+    yes: bool,
+}
 
 #[instrument]
 pub async fn exec(options: Options) -> Result<()> {
-    println!(
-        "{}",
-        "WARNING: This will delete all cached data across all Hurry projects".on_red()
-    );
-    let ok = Confirm::new("Are you sure you want to proceed?")
-        .with_default(false)
-        .prompt()?;
-    if !ok {
-        return Ok(());
+    if !options.yes {
+        println!(
+            "{}",
+            "WARNING: This will delete all cached data across all Hurry projects".on_red()
+        );
+        let confirmed = Confirm::new("Are you sure you want to proceed?")
+            .with_default(false)
+            .prompt()?;
+        if !confirmed {
+            return Ok(());
+        }
     }
 
     let cache_path = user_global_cache_path()
