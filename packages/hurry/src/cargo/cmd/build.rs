@@ -167,7 +167,7 @@ async fn cache_target_from_workspace(
     // TODO: this currently assumes that the entire `target/` folder
     // doesn't have any _outdated_ data; this may not be correct.
     stream::iter(&workspace.dependencies)
-        .then(|(key, dependency)| {
+        .filter_map(|(key, dependency)| {
             let target = target.clone();
             async move {
                 debug!(?key, ?dependency, "restoring dependency");
@@ -175,9 +175,14 @@ async fn cache_target_from_workspace(
                     .enumerate_cache_artifacts(dependency)
                     .await
                     .map(|artifacts| (key, dependency, artifacts))
-                    .with_context(|| {
-                        format!("enumerate cache artifacts for dependency: {dependency}")
+                    .tap_err(|err| {
+                        warn!(
+                            ?err,
+                            "Failed to enumerate cache artifacts for dependency: {dependency}"
+                        )
                     })
+                    .ok()
+                    .map(Ok)
             }
         })
         .try_for_each_concurrent(Some(10), |(key, dependency, artifacts)| {
