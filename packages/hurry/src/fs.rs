@@ -119,7 +119,6 @@ impl LockFile<Locked> {
 #[derive(Clone, Debug)]
 pub struct Index {
     /// The root directory of the index.
-    #[allow(dead_code)]
     pub root: Utf8PathBuf,
 
     /// Stores the index.
@@ -370,7 +369,6 @@ pub async fn set_file_handle_times(
 
 /// Buffer the file content from disk.
 #[instrument]
-#[allow(dead_code)]
 pub async fn read_buffered(path: impl AsRef<Path> + StdDebug) -> Result<Option<Vec<u8>>> {
     let path = path.as_ref();
     match tokio::fs::read(path).await {
@@ -424,7 +422,6 @@ pub async fn open_file(path: impl AsRef<Path> + StdDebug) -> Result<File> {
 
 /// Read directory entries.
 #[instrument]
-#[allow(dead_code)]
 pub async fn read_dir(path: impl AsRef<Path> + StdDebug) -> Result<ReadDir> {
     let path = path.as_ref();
     tokio::fs::read_dir(path)

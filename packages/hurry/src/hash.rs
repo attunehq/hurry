@@ -39,7 +39,6 @@ impl Blake3 {
 
     /// Hash the contents of a buffer.
     #[instrument(skip_all, name = "Blake3::from_buffer")]
-    #[allow(dead_code)]
     pub fn from_buffer(buffer: impl AsRef<[u8]> + Debug) -> Self {
         let buffer = buffer.as_ref();
         let mut hasher = blake3::Hasher::new();

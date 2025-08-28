@@ -57,7 +57,6 @@ impl<T: Cache + Sync> Cache for &T {
 pub trait Cas {
     /// Store the content in the CAS.
     /// Returns the key by which this content can be referred to in the future.
-    #[allow(dead_code)]
     fn store(
         &self,
         kind: Kind,
@@ -73,7 +72,6 @@ pub trait Cas {
     ) -> impl Future<Output = Result<Blake3>> + Send;
 
     /// Get the content from the cache, if it exists.
-    #[allow(dead_code)]
     fn get(
         &self,
         kind: Kind,

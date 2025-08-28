@@ -511,20 +511,16 @@ impl RustcMetadata {
 /// `.d` files are structured a little like makefiles, where each output
 /// is on its own line followed by a colon followed by the inputs.
 #[derive(Debug)]
-pub struct Dotd<'ws> {
-    #[debug(skip)]
-    #[allow(dead_code)]
-    profile: &'ws ProfileDir<'ws, Locked>,
-
+pub struct Dotd {
     /// Recorded output paths, relative to the profile root.
     pub outputs: Vec<RelativePathBuf>,
 }
 
-impl<'ws> Dotd<'ws> {
+impl Dotd {
     /// Construct an instance by parsing the file.
     #[instrument(name = "Dotd::from_file")]
     pub async fn from_file(
-        profile: &'ws ProfileDir<'ws, Locked>,
+        profile: &ProfileDir<'_, Locked>,
         target: &RelativePath,
     ) -> Result<Self> {
         const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta"];
@@ -553,6 +549,6 @@ impl<'ws> Dotd<'ws> {
                     .and_then(|p| RelativePathBuf::from_path(p).context("read path as utf8"))
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Self { profile, outputs })
+        Ok(Self { outputs })
     }
 }
