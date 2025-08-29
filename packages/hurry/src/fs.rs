@@ -302,85 +302,73 @@ pub async fn copy_file(
     src: impl AsRef<Path> + StdDebug,
     dst: impl AsRef<Path> + StdDebug,
 ) -> Result<()> {
-    // Manually opening the source file allows us to access the stat info directly,
-    // without an additional syscall to stat directly.
-    let mut src = tokio::fs::File::open(src)
-        .await
-        .context("open source file")?;
-    let src_meta = src.metadata().await.context("get source metadata")?;
+    let (src, dst) = (src.as_ref(), dst.as_ref());
 
-    // If we can't read the actual times from the stat, default to unix epoch
-    // so that we don't break the build system.
-    //
-    // We could promote this to an actual error, but since the rust compiler is ultimately
-    // what's going to read this, this is simpler: it'll just transparently rebuild anything
-    // that we had to set like this (since the source file will obviously be newer).
-    //
-    // In other words, this forms a safe "fail closed" system since
-    // the rust compiler is the ultimate authority here.
-    let src_mtime = src_meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-    let src_atime = src_meta.accessed().unwrap_or(SystemTime::UNIX_EPOCH);
-    if let Some(parent) = dst.as_ref().parent() {
+    if let Some(parent) = dst.parent() {
         create_dir_all(parent)
             .await
             .context("create parent directory")?;
     }
+    let bytes = tokio::fs::copy(src, dst).await.context("copy file")?;
+    trace!(?src, ?dst, ?bytes, "copy file");
 
-    // Manually opening the destination file allows us to set the metadata directly,
-    // without the additional syscall to touch the file metadata.
+    // Transfer the executable bit on unix.
     //
-    // We don't currently care about any other metadata (e.g. permission bits, read only, etc)
-    // since the rust compiler is the ultimate arbiter of this data and will reject/rebuild
-    // anything that is out of sync.
+    // TODO: can we run this concurrently with updating the mtimes?
+    // I assume not.
+    let src_meta = metadata(src)
+        .await
+        .context("get source metadata")?
+        .ok_or_eyre("source does not exist")?;
+    if meta_is_executable(&src_meta) {
+        set_executable(dst)
+            .await
+            .context("set destination executable")?;
+    }
+
+    // If we can't read the actual times from the stat, default to unix epoch
+    // so that we don't break the build system.
     //
-    // If we find that we have excessive rebuilds we can revisit this.
-    let mut dst = tokio::fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(dst)
+    // We could promote this to an actual error, but since the rust compiler is
+    // ultimately what's going to read this, this is simpler: it'll just
+    // transparently rebuild anything that we had to set like this
+    // (since the source file will obviously be newer).
+    //
+    // In other words, this forms a safe "fail closed" system since
+    // the rust compiler is the ultimate authority here.
+    //
+    // Using the `filetime` crate here instead of the stdlib because it's cross
+    // platform. We've also put this after setting the executable bit
+    // as that might alter the mtime of the file.
+    let mtime = src_meta
+        .modified()
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+        .pipe(FileTime::from_system_time);
+    let atime = src_meta
+        .accessed()
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+        .pipe(FileTime::from_system_time);
+    set_file_times(dst, atime, mtime)
         .await
-        .context("open destination file")?;
-    let bytes = tokio::io::copy(&mut src, &mut dst)
-        .await
-        .context("copy file contents")?;
+        .context("set file times")?;
 
-    // Using the `filetime` crate here instead of the stdlib because it's cross platform.
-    let mtime = FileTime::from_system_time(src_mtime);
-    let atime = FileTime::from_system_time(src_atime);
-    trace!(?src, ?dst, ?mtime, ?atime, ?bytes, "copy file");
-
-    // We need to get the raw handle for filetime operations
-    let dst = set_file_handle_times(dst, Some(atime), Some(mtime))
-        .await
-        .context("set destination file times")?;
-
-    // And finally, we have to sync the file to disk so that we are sure it's actually finished copying
-    // before we move on. Technically we could leave this up to the FS, but this is safer.
-    dst.sync_all().await.context("sync destination file")
+    // TODO: do we care about other metadata?
+    // As of now all we've seen is the executable bit and file mtime/atime.
+    // If we find others, we should add it to this function.
+    //
+    // Make sure to keep the part that sets the mtime/atime last
+    // so that we don't accidentally make the file appear newer than it is.
+    Ok(())
 }
 
-/// Update the `atime` and `mtime` of a file handle.
-/// Returns the same file handle after the update.
+/// Update the `atime` and `mtime` of the specified file.
 #[instrument]
-pub async fn set_file_handle_times(
-    file: File,
-    atime: Option<FileTime>,
-    mtime: Option<FileTime>,
-) -> Result<File> {
-    match (mtime, atime) {
-        (None, None) => Ok(file),
-        (mtime, atime) => {
-            let file = file.into_std().await;
-            spawn_blocking(move || {
-                filetime::set_file_handle_times(&file, atime, mtime).map(|_| file)
-            })
-            .await
-            .context("join thread")?
-            .context("update handle")
-            .map(File::from_std)
-        }
-    }
+async fn set_file_times(path: &Path, atime: FileTime, mtime: FileTime) -> Result<()> {
+    let path = path.to_path_buf();
+    spawn_blocking(move || filetime::set_file_times(path, atime, mtime))
+        .await
+        .context("join thread")?
+        .context("update handle")
 }
 
 /// Buffer the file content from disk.
@@ -450,12 +438,18 @@ pub async fn read_dir(path: impl AsRef<Path> + StdDebug) -> Result<ReadDir> {
 #[instrument]
 #[cfg(not(target_os = "windows"))]
 pub async fn is_executable(path: impl AsRef<Path> + StdDebug) -> Result<bool> {
-    use std::os::unix::fs::PermissionsExt;
     let path = path.as_ref();
     let metadata = tokio::fs::metadata(path).await.context("get metadata")?;
-    let is_executable = metadata.permissions().mode() & 0o111 != 0;
+    let is_executable = meta_is_executable(&metadata);
     trace!(?is_executable, "is executable");
     Ok(is_executable)
+}
+
+#[instrument]
+#[cfg(not(target_os = "windows"))]
+fn meta_is_executable(metadata: &Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode() & 0o111 != 0
 }
 
 /// Set the file as executable.
@@ -490,6 +484,12 @@ pub async fn is_executable(path: impl AsRef<Path> + StdDebug) -> Result<bool> {
 #[cfg(target_os = "windows")]
 pub async fn set_executable(path: impl AsRef<Path> + StdDebug) -> Result<()> {
     Ok(())
+}
+
+#[instrument]
+#[cfg(target_os = "windows")]
+fn meta_is_executable(_metadata: &Metadata) -> bool {
+    false
 }
 
 /// Get the metadata for a file.

@@ -310,14 +310,8 @@ mod using_tokio {
 }
 
 mod hurry_fs {
-    use std::{path::Path, time::SystemTime};
-
     use color_eyre::eyre::{Context, eyre};
-    use filetime::FileTime;
     use futures::{StreamExt, TryStreamExt};
-    use tap::TapFallible;
-    use tokio::{fs::File, task::spawn_blocking};
-    use tracing::{instrument, trace};
 
     use super::*;
 

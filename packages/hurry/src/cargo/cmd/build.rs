@@ -9,7 +9,6 @@ use std::fmt::Debug;
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use futures::{StreamExt, TryStreamExt, stream};
-use hurry::fs;
 use tap::{Pipe, TapFallible};
 use tracing::{debug, error, info, instrument, trace, warn};
 
@@ -306,13 +305,6 @@ async fn restore_target_from_cache(
                             cas.get_file(Kind::Cargo, &artifact.hash, &dst)
                                 .await
                                 .context("extract crate")
-                                .pipe(|_| async move {
-                                    if artifact.executable {
-                                        fs::set_executable(&dst).await.context("set executable")?;
-                                    }
-                                    Ok(())
-                                })
-                                .await
                                 .tap_ok(|_| {
                                     trace!(?key, ?dependency, ?artifact, "restored artifact")
                                 })
