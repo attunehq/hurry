@@ -1,8 +1,7 @@
 use clap::Args;
 use color_eyre::Result;
+use hurry::cargo::invoke;
 use tracing::instrument;
-
-use crate::cargo::invoke;
 
 /// Options for `cargo run`
 //

@@ -9,13 +9,12 @@ use std::fmt::Debug;
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use futures::{StreamExt, TryStreamExt, stream};
+use hurry::{
+    cache::{Cache, Cas, FsCache, FsCas, Kind},
+    cargo::{Profile, Workspace, invoke},
+};
 use tap::{Pipe, TapFallible};
 use tracing::{debug, error, info, instrument, trace, warn};
-
-use crate::{
-    cache::{Cache, Cas, FsCache, FsCas, Kind},
-    cargo::{Profile, invoke, workspace::Workspace},
-};
 
 /// Options for `cargo build`.
 //

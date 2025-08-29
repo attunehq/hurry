@@ -1,12 +1,24 @@
+//! Benchmarks for copying `target/` directories of Cargo projects.
+//!
+//! Note: these benchmarks use the `target/` of the _current_ project;
+//! as such the benchmark changing doesn't _automatically_ mean that
+//! performance actually changed as the `target/` folder may have also changed.
+
 use std::path::PathBuf;
 
 use color_eyre::Result;
 use location_macros::workspace_dir;
 use tempfile::TempDir;
-use xshell::{Shell, cmd};
 
 fn main() {
     divan::main();
+}
+
+#[track_caller]
+fn setup() -> (PathBuf, TempDir) {
+    let target = PathBuf::from(workspace_dir!()).join("target");
+    let temp = TempDir::new().expect("create temporary directory");
+    (target, temp)
 }
 
 mod baseline {
@@ -17,8 +29,10 @@ mod baseline {
         let (target, temp) = setup();
         let destination = temp.path();
 
-        let sh = Shell::new().expect("create xshell");
-        cmd!(sh, "cp -r {target} {destination}")
+        std::process::Command::new("cp")
+            .arg("-r")
+            .arg(target.as_os_str())
+            .arg(destination.as_os_str())
             .output()
             .expect("copy with cp");
     }
@@ -29,20 +43,11 @@ mod baseline {
         let (target, temp) = setup();
         let destination = temp.path();
 
-        let sh = Shell::new().expect("create xshell");
-        cmd!(sh, "cp -c -r {target} {destination}")
-            .output()
-            .expect("copy with cp");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[divan::bench(sample_count = 5)]
-    fn cp_reflink() {
-        let (target, temp) = setup();
-        let destination = temp.path();
-
-        let sh = Shell::new().expect("create xshell");
-        cmd!(sh, "cp --reflink -r {target} {destination}")
+        std::process::Command::new("cp")
+            .arg("-c")
+            .arg("-r")
+            .arg(target.as_os_str())
+            .arg(destination.as_os_str())
             .output()
             .expect("copy with cp");
     }
@@ -348,11 +353,4 @@ mod using_tokio {
             copy.expect("copy files");
         }
     }
-}
-
-#[track_caller]
-fn setup() -> (PathBuf, TempDir) {
-    let target = PathBuf::from(workspace_dir!()).join("target");
-    let temp = TempDir::new().expect("create temporary directory");
-    (target, temp)
 }

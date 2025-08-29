@@ -11,7 +11,10 @@ default = []
 force-copy-metadata = []
 
 [[bench]]
-name = "copytarget"
+name = "cargo_copy_target"
+harness = false
+[[bench]]
+name = "cargo_cache"
 harness = false
 
 [dependencies]

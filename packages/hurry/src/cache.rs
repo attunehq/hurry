@@ -3,14 +3,12 @@
 use bon::Builder;
 use color_eyre::Result;
 use enum_assoc::Assoc;
-use hurry::hash::Blake3;
 use relative_path::RelativePathBuf;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Debug, future::Future, path::Path};
 use strum::Display;
 
-mod cmd;
-pub use cmd::*;
+use crate::hash::Blake3;
 
 mod fs;
 pub use fs::*;
