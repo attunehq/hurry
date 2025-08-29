@@ -177,9 +177,6 @@ pub struct Artifact {
     /// Intended to be used to reference the artifact in the CAS.
     #[builder(into)]
     pub hash: Blake3,
-
-    /// Whether the artifact is executable.
-    pub executable: bool,
 }
 
 impl From<&Artifact> for Artifact {

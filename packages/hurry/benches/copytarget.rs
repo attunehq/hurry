@@ -12,7 +12,7 @@ fn main() {
 mod baseline {
     use super::*;
 
-    #[divan::bench(sample_count = 1)]
+    #[divan::bench(sample_count = 5)]
     fn cp() {
         let (target, temp) = setup();
         let destination = temp.path();
@@ -24,7 +24,7 @@ mod baseline {
     }
 
     #[cfg(target_os = "macos")]
-    #[divan::bench(sample_count = 1)]
+    #[divan::bench(sample_count = 5)]
     fn cp_cow() {
         let (target, temp) = setup();
         let destination = temp.path();
@@ -36,7 +36,7 @@ mod baseline {
     }
 
     #[cfg(target_os = "linux")]
-    #[divan::bench(sample_count = 1)]
+    #[divan::bench(sample_count = 5)]
     fn cp_reflink() {
         let (target, temp) = setup();
         let destination = temp.path();
@@ -58,7 +58,7 @@ mod sync {
 
         use super::*;
 
-        #[divan::bench(sample_count = 1)]
+        #[divan::bench(sample_count = 5)]
         fn walkdir_single_pass() {
             let (target, temp) = setup();
 
@@ -80,7 +80,7 @@ mod sync {
             }
         }
 
-        #[divan::bench(sample_count = 1)]
+        #[divan::bench(sample_count = 5)]
         fn walkdir_two_pass() {
             let (target, temp) = setup();
 
@@ -128,7 +128,7 @@ mod sync {
 
         use super::*;
 
-        #[divan::bench(sample_count = 1)]
+        #[divan::bench(sample_count = 5)]
         fn walkdir_single_pass() {
             let (target, temp) = setup();
 
@@ -158,7 +158,7 @@ mod sync {
                 .expect("copy files");
         }
 
-        #[divan::bench(sample_count = 1)]
+        #[divan::bench(sample_count = 5)]
         fn walkdir_two_pass() {
             let (target, temp) = setup();
 
@@ -203,7 +203,7 @@ mod sync {
                 .expect("copy files");
         }
 
-        #[divan::bench(sample_count = 1)]
+        #[divan::bench(sample_count = 5)]
         fn jwalk_single_pass() {
             let (target, temp) = setup();
 
@@ -238,7 +238,7 @@ mod using_tokio {
 
     use super::*;
 
-    #[divan::bench(sample_count = 1)]
+    #[divan::bench(sample_count = 5)]
     fn naive() {
         let (target, temp) = setup();
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
@@ -271,7 +271,7 @@ mod using_tokio {
         copy.expect("copy files");
     }
 
-    #[divan::bench(sample_count = 1, args = [1, 10, 100, 1000])]
+    #[divan::bench(sample_count = 5, args = [1, 10, 100, 1000])]
     fn concurrent(concurrency: usize) {
         let (target, temp) = setup();
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
@@ -307,72 +307,46 @@ mod using_tokio {
         });
         copy.expect("copy files");
     }
-}
 
-mod hurry_fs {
-    use color_eyre::eyre::{Context, eyre};
-    use futures::{StreamExt, TryStreamExt};
+    mod hurry_fs {
+        use super::*;
 
-    use super::*;
+        #[divan::bench(sample_count = 5)]
+        fn naive() {
+            let (target, temp) = setup();
+            let runtime = tokio::runtime::Runtime::new().expect("create runtime");
 
-    #[divan::bench(sample_count = 1)]
-    fn naive() {
-        let (target, temp) = setup();
-        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+            let copy: Result<()> = runtime.block_on(async move {
+                let mut walker = hurry::fs::walk_files(&target);
+                while let Some(entry) = walker.next().await {
+                    let entry = entry.context("walk files")?;
 
-        let copy: Result<()> = runtime.block_on(async move {
-            let mut walker = async_walkdir::WalkDir::new(&target);
-            while let Some(entry) = walker.next().await {
-                let entry = entry.context("walk files")?;
-                let ft = entry.file_type().await.context("get type")?;
-                if !ft.is_file() {
-                    continue;
+                    let src = entry.path();
+                    let rel = src.strip_prefix(&target).context("make relative")?;
+                    let dst = temp.path().join(rel);
+
+                    hurry::fs::copy_file(&src, &dst)
+                        .await
+                        .with_context(|| format!("copy {src:?} to {dst:?}"))?;
                 }
 
-                let src = entry.path();
-                let rel = src.strip_prefix(&target).context("make relative")?;
-                let dst = temp.path().join(rel);
+                Ok(())
+            });
+            copy.expect("copy files");
+        }
 
-                hurry::fs::copy_file(&src, &dst)
+        #[divan::bench(sample_count = 5, args = [1, 10, 100, 1000])]
+        fn concurrent(concurrency: usize) {
+            let (target, temp) = setup();
+            let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+
+            let copy: Result<()> = runtime.block_on(async move {
+                hurry::fs::copy_dir_with_concurrency(concurrency, &target, temp.path())
                     .await
-                    .with_context(|| format!("copy {src:?} to {dst:?}"))?;
-            }
-
-            Ok(())
-        });
-        copy.expect("copy files");
-    }
-
-    #[divan::bench(sample_count = 1, args = [1, 10, 100, 1000])]
-    fn concurrent(concurrency: usize) {
-        let (target, temp) = setup();
-        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
-
-        let copy: Result<()> = runtime.block_on(async move {
-            async_walkdir::WalkDir::new(&target)
-                .map_err(|err| eyre!(err))
-                .try_for_each_concurrent(Some(concurrency), |entry| {
-                    let target = target.clone();
-                    let temp = temp.path().to_path_buf();
-                    async move {
-                        let ft = entry.file_type().await.context("get type")?;
-                        if !ft.is_file() {
-                            return Ok(());
-                        }
-
-                        let src = entry.path();
-                        let rel = src.strip_prefix(&target).context("make relative")?;
-                        let dst = temp.join(rel);
-
-                        hurry::fs::copy_file(&src, &dst)
-                            .await
-                            .with_context(|| format!("copy {src:?} to {dst:?}"))
-                            .map(drop)
-                    }
-                })
-                .await
-        });
-        copy.expect("copy files");
+                    .map(drop)
+            });
+            copy.expect("copy files");
+        }
     }
 }
 

@@ -220,6 +220,6 @@ impl super::Cas for FsCas {
         destination: impl AsRef<Path> + StdDebug + Send,
     ) -> Result<()> {
         let src = self.root.join(kind.as_str()).join(key.as_ref().as_str());
-        fs::copy_file(src, destination.as_ref()).await
+        fs::copy_file(src, destination.as_ref()).await.map(drop)
     }
 }

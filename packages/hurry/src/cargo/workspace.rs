@@ -445,13 +445,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         standard
             .into_iter()
             .chain(dependencies)
-            .map(|(path, entry)| {
-                Artifact::builder()
-                    .target(path)
-                    .hash(&entry.hash)
-                    .executable(entry.executable)
-                    .build()
-            })
+            .map(|(path, entry)| Artifact::builder().target(path).hash(&entry.hash).build())
             .inspect(|artifact| trace!(?artifact, "enumerated artifact"))
             .collect::<Vec<_>>()
             .pipe(Ok)
