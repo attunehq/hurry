@@ -18,5 +18,10 @@ fn setup() -> (PathBuf, TempDir) {
 
 #[divan::bench(sample_count = 5)]
 fn backup() {
-    let (workspace, temp) = setup();
+    let (_workspace, _temp) = setup();
+}
+
+#[divan::bench(sample_count = 5)]
+fn restore() {
+    let (_workspace, _temp) = setup();
 }
