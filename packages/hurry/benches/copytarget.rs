@@ -12,7 +12,7 @@ fn main() {
 mod baseline {
     use super::*;
 
-    #[divan::bench(sample_count = 3)]
+    #[divan::bench(sample_count = 1)]
     fn cp() {
         let (target, temp) = setup();
         let destination = temp.path();
@@ -24,7 +24,7 @@ mod baseline {
     }
 
     #[cfg(target_os = "macos")]
-    #[divan::bench(sample_count = 3)]
+    #[divan::bench(sample_count = 1)]
     fn cp_cow() {
         let (target, temp) = setup();
         let destination = temp.path();
@@ -36,7 +36,7 @@ mod baseline {
     }
 
     #[cfg(target_os = "linux")]
-    #[divan::bench(sample_count = 3)]
+    #[divan::bench(sample_count = 1)]
     fn cp_reflink() {
         let (target, temp) = setup();
         let destination = temp.path();
@@ -58,7 +58,7 @@ mod sync {
 
         use super::*;
 
-        #[divan::bench(sample_count = 3)]
+        #[divan::bench(sample_count = 1)]
         fn walkdir_single_pass() {
             let (target, temp) = setup();
 
@@ -80,7 +80,7 @@ mod sync {
             }
         }
 
-        #[divan::bench(sample_count = 3)]
+        #[divan::bench(sample_count = 1)]
         fn walkdir_two_pass() {
             let (target, temp) = setup();
 
@@ -128,7 +128,7 @@ mod sync {
 
         use super::*;
 
-        #[divan::bench(sample_count = 3)]
+        #[divan::bench(sample_count = 1)]
         fn walkdir_single_pass() {
             let (target, temp) = setup();
 
@@ -158,7 +158,7 @@ mod sync {
                 .expect("copy files");
         }
 
-        #[divan::bench(sample_count = 3)]
+        #[divan::bench(sample_count = 1)]
         fn walkdir_two_pass() {
             let (target, temp) = setup();
 
@@ -203,7 +203,7 @@ mod sync {
                 .expect("copy files");
         }
 
-        #[divan::bench(sample_count = 3)]
+        #[divan::bench(sample_count = 1)]
         fn jwalk_single_pass() {
             let (target, temp) = setup();
 
@@ -238,7 +238,7 @@ mod using_tokio {
 
     use super::*;
 
-    #[divan::bench(sample_count = 3)]
+    #[divan::bench(sample_count = 1)]
     fn naive() {
         let (target, temp) = setup();
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
@@ -271,7 +271,7 @@ mod using_tokio {
         copy.expect("copy files");
     }
 
-    #[divan::bench(sample_count = 3, args = [1, 10, 100, 1000])]
+    #[divan::bench(sample_count = 1, args = [1, 10, 100, 1000])]
     fn concurrent(concurrency: usize) {
         let (target, temp) = setup();
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
@@ -321,7 +321,7 @@ mod hurry_fs {
 
     use super::*;
 
-    #[divan::bench(sample_count = 3)]
+    #[divan::bench(sample_count = 1)]
     fn naive() {
         let (target, temp) = setup();
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
@@ -349,7 +349,7 @@ mod hurry_fs {
         copy.expect("copy files");
     }
 
-    #[divan::bench(sample_count = 3, args = [1, 10, 100, 1000])]
+    #[divan::bench(sample_count = 1, args = [1, 10, 100, 1000])]
     fn concurrent(concurrency: usize) {
         let (target, temp) = setup();
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
