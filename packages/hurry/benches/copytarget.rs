@@ -271,15 +271,15 @@ mod using_tokio {
         copy.expect("copy files");
     }
 
-    #[divan::bench(sample_count = 3)]
-    fn concurrent() {
+    #[divan::bench(sample_count = 3, args = [1, 10, 100, 1000])]
+    fn concurrent(concurrency: usize) {
         let (target, temp) = setup();
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
 
         let copy: Result<()> = runtime.block_on(async move {
             async_walkdir::WalkDir::new(&target)
                 .map_err(|err| eyre!(err))
-                .try_for_each_concurrent(Some(100), |entry| {
+                .try_for_each_concurrent(Some(concurrency), |entry| {
                     let target = target.clone();
                     let temp = temp.path().to_path_buf();
                     async move {
@@ -349,15 +349,15 @@ mod hurry_fs {
         copy.expect("copy files");
     }
 
-    #[divan::bench(sample_count = 3)]
-    fn concurrent() {
+    #[divan::bench(sample_count = 3, args = [1, 10, 100, 1000])]
+    fn concurrent(concurrency: usize) {
         let (target, temp) = setup();
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
 
         let copy: Result<()> = runtime.block_on(async move {
             async_walkdir::WalkDir::new(&target)
                 .map_err(|err| eyre!(err))
-                .try_for_each_concurrent(Some(100), |entry| {
+                .try_for_each_concurrent(Some(concurrency), |entry| {
                     let target = target.clone();
                     let temp = temp.path().to_path_buf();
                     async move {
