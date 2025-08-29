@@ -5,16 +5,16 @@ use std::{fmt::Debug as StdDebug, marker::PhantomData, path::Path};
 use cargo_metadata::camino::Utf8PathBuf;
 use color_eyre::{Result, Section, SectionExt, eyre::Context};
 use derive_more::{Debug, Display};
+use hurry::{
+    Locked, Unlocked,
+    fs::{self, LockFile},
+    hash::Blake3,
+};
 use itertools::Itertools;
 use tap::Pipe;
 use tracing::{instrument, trace};
 
-use crate::{
-    Locked, Unlocked,
-    cache::{Artifact, Kind, Record},
-    fs::{self, LockFile},
-    hash::Blake3,
-};
+use crate::cache::{Artifact, Kind, Record};
 
 /// The local file system implementation of a cache.
 #[derive(Clone, Debug, Display)]

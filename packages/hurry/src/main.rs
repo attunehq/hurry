@@ -9,7 +9,6 @@ use atomic_time::AtomicInstant;
 use cargo_metadata::camino::Utf8PathBuf;
 use clap::{Parser, Subcommand, crate_version};
 use color_eyre::{Result, eyre::Context};
-use derive_more::Display;
 use git_version::git_version;
 use tap::Pipe;
 use tracing::{instrument, level_filters::LevelFilter};
@@ -25,19 +24,6 @@ use tracing_tree::time::FormatTime;
 // Relatedly, in this file specifically nothing should be `pub`.
 mod cache;
 mod cargo;
-mod ext;
-mod fs;
-mod hash;
-
-/// The associated type's state is unlocked.
-/// Used for the typestate pattern.
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Default)]
-struct Unlocked;
-
-/// The associated type's state is locked.
-/// Used for the typestate pattern.
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Default)]
-struct Locked;
 
 #[derive(Parser)]
 #[command(

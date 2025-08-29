@@ -13,6 +13,11 @@ use color_eyre::{
     eyre::{Context, OptionExt, eyre},
 };
 use derive_more::{Debug, Display};
+use hurry::{
+    Locked, Unlocked,
+    fs::{self, Index, LockFile},
+    hash::Blake3,
+};
 use itertools::Itertools;
 use location_macros::workspace_dir;
 use relative_path::{PathExt, RelativePath, RelativePathBuf};
@@ -22,11 +27,8 @@ use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
 
 use crate::{
-    Locked, Unlocked,
     cache::Artifact,
     cargo::{Profile, read_argv},
-    fs::{self, Index, LockFile},
-    hash::Blake3,
 };
 
 /// A Cargo workspace.
