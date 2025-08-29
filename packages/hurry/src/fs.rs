@@ -378,6 +378,7 @@ pub async fn copy_file(
     //
     // TODO: it's not clear whether this is actually needed since we're
     // now doing a proper copy operation. Trace/test this.
+    #[cfg(feature = "force-copy-metadata")]
     if let Some(src_meta) = Metadata::from_file(src).await? {
         src_meta
             .set_file(dst)

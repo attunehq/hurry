@@ -3,6 +3,13 @@ name = "hurry"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+
+# Manually sets metadata Cargo cares about when restoring files from the cache,
+# even when `hurry` doesn't think this is necessary.
+force-copy-metadata = []
+
 [[bench]]
 name = "copytarget"
 harness = false
