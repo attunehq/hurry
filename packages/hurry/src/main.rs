@@ -61,7 +61,6 @@ enum Command {
     Cargo(cargo::Command),
     // TODO: /// Manage remote authentication
     // Auth,
-
     /// Manage user cache
     #[clap(subcommand)]
     Cache(cache::Command),

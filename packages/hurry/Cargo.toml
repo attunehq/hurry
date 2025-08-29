@@ -3,6 +3,10 @@ name = "hurry"
 version = "0.1.0"
 edition = "2024"
 
+[[bench]]
+name = "copytarget"
+harness = false
+
 [dependencies]
 ahash = { workspace = true }
 atomic-time = { workspace = true }
@@ -43,3 +47,10 @@ inquire = {workspace = true }
 colored = {workspace = true }
 location-macros = {workspace = true }
 futures = { workspace = true }
+tempfile = "3.21.0"
+
+[dev-dependencies]
+async-walkdir.workspace = true
+divan = "0.1.21"
+jwalk = "0.8.1"
+xshell = "0.2.7"
