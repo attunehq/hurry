@@ -126,7 +126,7 @@ async fn restore_workspace() -> Result<()> {
 
     // TODO: currently, we don't actually restore anything to `deps` or `build`
     // because we fail to parse the .d files since the project is moved.
-    // This may need to be fixed as part of #14:
+    // This may need to be fixed as part of #17.
     for name in [/*"deps", "build",*/ ".fingerprint"] {
         let subdir = target.root().join(name);
         assert!(

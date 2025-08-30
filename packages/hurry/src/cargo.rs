@@ -90,12 +90,6 @@ pub async fn cache_target_from_workspace(
     // because that can have a negative effect on performance
     // but we obviously want to have enough running that we saturate the disk.
     //
-    // TODO: ideally we'd have some kind of dynamic semaphore that sets
-    // a budget based on task throughput so that we can ramp up or down
-    // concurrency based on the capability and contention of the hardware.
-    //
-    // TODO: benchmark different approaches and compare to a standard `cp`.
-    //
     // TODO: this currently assumes that the entire `target/` folder
     // doesn't have any _outdated_ data; this may not be correct.
     stream::iter(&target.workspace.dependencies)
@@ -176,12 +170,6 @@ pub async fn restore_target_from_cache(
     // we want to avoid opening too many file handles at a time
     // because that can have a negative effect on performance
     // but we obviously want to have enough running that we saturate the disk.
-    //
-    // TODO: ideally we'd have some kind of dynamic semaphore that sets
-    // a budget based on task throughput so that we can ramp up or down
-    // concurrency based on the capability and contention of the hardware.
-    //
-    // TODO: benchmark different approaches and compare to a standard `cp`.
     debug!(dependencies = ?target.workspace.dependencies, "restoring dependencies");
     stream::iter(&target.workspace.dependencies)
         .filter_map(|(key, dependency)| {
@@ -453,8 +441,6 @@ impl Workspace {
         const CACHEDIR_TAG_CONTENT: &[u8] =
             include_bytes!(concat!(workspace_dir!(), "/static/cargo/CACHEDIR.TAG"));
 
-        // TODO: do we need to create `.rustc_info.json` to get cargo
-        // to recognize the target folder as valid when restoring caches?
         fs::create_dir_all(self.target.join(profile.as_str()))
             .await
             .context("create target directory")?;
