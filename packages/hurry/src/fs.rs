@@ -383,13 +383,15 @@ pub async fn copy_file(
     let bytes = tokio::fs::copy(src, dst).await.context("copy file")?;
     trace!(?src, ?dst, ?bytes, "copy file");
 
-    // Best effort: sync the metadata between source and destination files.
-    // We do this "best effort" instead of breaking the whole copy operation
-    // on the assumption that cargo/rustc will fix any metadata mismatches
-    // for us.
+    // TODO: I'm keeping this for now behind this feature just in case it
+    // needs to come back... but if you're refactoring stuff and need to touch
+    // this code, go ahead and remove this feature and this block.
     //
-    // TODO: it's not clear whether this is actually needed since we're
-    // now doing a proper copy operation. Trace/test this.
+    // Now that we're doing proper OS-supported copies this doesn't seem
+    // to be needed; it seems to just slow everything down for no reason.
+    // The main reason I'm keeping it for now is in case that's wrong
+    // or to support network restores (which _may_ need to manually set
+    // this data, we'll see).
     #[cfg(feature = "force-copy-metadata")]
     if let Some(src_meta) = Metadata::from_file(src).await? {
         src_meta
