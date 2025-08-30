@@ -50,7 +50,6 @@ tracing-tree = { workspace = true, features = ["time"] }
 tokio = { workspace = true, features = ["full"] }
 extfn = { workspace = true }
 async-walkdir = { workspace = true }
-clonelicious = { workspace = true }
 walkdir = { workspace = true }
 rayon = { workspace = true }
 inquire = {workspace = true }

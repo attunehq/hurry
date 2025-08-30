@@ -378,12 +378,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
-name = "clonelicious"
-version = "2.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c04f59c31f4449e5c986288b3bb59afdc5417cbadee9488d08fdda7adcfa26b"
-
-[[package]]
 name = "color-eyre"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1026,7 +1020,6 @@ dependencies = [
  "cargo-lock",
  "cargo_metadata",
  "clap",
- "clonelicious",
  "color-eyre",
  "colored",
  "derive_more",
