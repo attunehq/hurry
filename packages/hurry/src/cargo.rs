@@ -1,4 +1,6 @@
-use std::{iter::once, marker::PhantomData, path::PathBuf, str::FromStr, sync::Arc};
+use std::{
+    fmt::Debug as StdDebug, iter::once, marker::PhantomData, path::PathBuf, str::FromStr, sync::Arc,
+};
 
 use ahash::{HashMap, HashSet};
 use bon::{Builder, bon};
@@ -9,19 +11,20 @@ use color_eyre::{
 };
 use derive_more::{Debug, Display};
 use enum_assoc::Assoc;
+use futures::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
 use location_macros::workspace_dir;
 use relative_path::{PathExt, RelativePath, RelativePathBuf};
 use serde::Deserialize;
 use strum::{EnumIter, IntoEnumIterator};
 use subenum::subenum;
-use tap::{Pipe, TapFallible};
+use tap::{Pipe, Tap, TapFallible};
 use tokio::task::spawn_blocking;
-use tracing::{debug, instrument, trace};
+use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     Locked, Unlocked,
-    cache::Artifact,
+    cache::{Artifact, Cache, Cas, Kind},
     fs::{self, Index, LockFile},
     hash::Blake3,
 };
@@ -50,6 +53,172 @@ pub async fn invoke(
     } else {
         bail!("cargo exited with status: {status}");
     }
+}
+
+/// Cache the target directory to the cache.
+///
+/// When **restoring** `target/` in the future, we need to be able to restore
+/// from scratch without an existing `target/` directory. This is for two
+/// reasons: first, the project may actually be fresh, with no `target/`
+/// at all. Second, the `target/` may be outdated.
+/// This means that we can't rely on the functionality that `cargo`
+/// would typically provide for us inside `target/`, such as `.fingerprint`
+/// or `.d` files to find dependencies or hashes.
+///
+/// Of course, when **caching** `target/`, we can (and indeed must) assume
+/// that the contents of `target/` are correct and trustworthy. But we must
+/// copy all the data necessary to recreate the important parts of `target/`
+/// in a future fresh start environment.
+///
+/// ## Third party crates
+///
+/// The backup process enumerates dependencies (third party crates)
+/// in the project. For each discovered dependency, it:
+/// - Finds the built `.rlib` and `.rmeta` files
+/// - Finds tertiary files like `.fingerprint` etc
+/// - Stores the files in the CAS in such a way that they can be found
+///   using only data inside `Cargo.lock` in the future.
+#[instrument(skip(progress))]
+pub async fn cache_target_from_workspace(
+    cas: impl Cas + StdDebug + Clone,
+    cache: impl Cache + StdDebug + Clone,
+    target: &ProfileDir<'_, Locked>,
+    progress: impl Fn(&Blake3, &Dependency) + Clone,
+) -> Result<()> {
+    // The concurrency limits below are currently just vibes;
+    // we want to avoid opening too many file handles at a time
+    // because that can have a negative effect on performance
+    // but we obviously want to have enough running that we saturate the disk.
+    //
+    // TODO: ideally we'd have some kind of dynamic semaphore that sets
+    // a budget based on task throughput so that we can ramp up or down
+    // concurrency based on the capability and contention of the hardware.
+    //
+    // TODO: benchmark different approaches and compare to a standard `cp`.
+    //
+    // TODO: this currently assumes that the entire `target/` folder
+    // doesn't have any _outdated_ data; this may not be correct.
+    stream::iter(&target.workspace.dependencies)
+        .filter_map(|(key, dependency)| {
+            let target = target.clone();
+            async move {
+                debug!(?key, ?dependency, "restoring dependency");
+                target
+                    .enumerate_cache_artifacts(dependency)
+                    .await
+                    .map(|artifacts| (key, dependency, artifacts))
+                    .tap_err(|err| {
+                        warn!(
+                            ?err,
+                            "Failed to enumerate cache artifacts for dependency: {dependency}"
+                        )
+                    })
+                    .ok()
+                    .map(Ok)
+            }
+        })
+        .try_for_each_concurrent(Some(10), |(key, dependency, artifacts)| {
+            let (cas, target, cache, progress) =
+                (cas.clone(), target.clone(), cache.clone(), progress.clone());
+            async move {
+                debug!(?key, ?dependency, ?artifacts, "caching artifacts");
+                stream::iter(&artifacts)
+                    .map(|artifact| Ok(artifact))
+                    .try_for_each_concurrent(Some(100), |artifact| {
+                        let (cas, target) = (cas.clone(), target.clone());
+                        async move {
+                            let dst = artifact.target.to_path(target.root());
+                            cas.store_file(Kind::Cargo, &dst)
+                                .await
+                                .with_context(|| format!("backup output file: {dst:?}"))
+                                .tap_ok(|key| {
+                                    trace!(?key, ?dependency, ?artifact, "restored artifact")
+                                })
+                                .map(drop)
+                        }
+                    })
+                    .await
+                    .pipe(|_| {
+                        let cache = cache.clone();
+                        async move {
+                            cache
+                                .store(Kind::Cargo, key, &artifacts)
+                                .await
+                                .context("store cache record")
+                                .tap_ok(|_| {
+                                    debug!(?key, ?dependency, ?artifacts, "stored cache record")
+                                })
+                        }
+                    })
+                    .await
+                    .map(|_| progress(key, dependency))
+            }
+        })
+        .await
+}
+
+/// Restore the target directory from the cache.
+#[instrument(skip(progress))]
+pub async fn restore_target_from_cache(
+    cas: impl Cas + StdDebug + Clone,
+    cache: impl Cache + StdDebug + Clone,
+    target: &ProfileDir<'_, Locked>,
+    progress: impl Fn(&Blake3, &Dependency) + Clone,
+) -> Result<()> {
+    // When backing up a `target/` directory, we enumerate
+    // the build units before backing up dependencies.
+    // But when we restore, we don't have a target directory
+    // (or don't trust it), so we can't do that here.
+    // Instead, we just enumerate dependencies
+    // and try to find some to restore.
+    //
+    // The concurrency limits below are currently just vibes;
+    // we want to avoid opening too many file handles at a time
+    // because that can have a negative effect on performance
+    // but we obviously want to have enough running that we saturate the disk.
+    //
+    // TODO: ideally we'd have some kind of dynamic semaphore that sets
+    // a budget based on task throughput so that we can ramp up or down
+    // concurrency based on the capability and contention of the hardware.
+    //
+    // TODO: benchmark different approaches and compare to a standard `cp`.
+    debug!(dependencies = ?target.workspace.dependencies, "restoring dependencies");
+    stream::iter(&target.workspace.dependencies)
+        .filter_map(|(key, dependency)| {
+            let cache = cache.clone();
+            async move {
+                debug!(?key, ?dependency, "restoring dependency");
+                cache
+                    .get(Kind::Cargo, key)
+                    .await
+                    .with_context(|| format!("retrieve cache record for dependency: {dependency}"))
+                    .map(|lookup| lookup.map(|record| (key, dependency, record)))
+                    .transpose()
+            }
+        })
+        .try_for_each_concurrent(Some(10), |(key, dependency, record)| {
+            let (cas, target, progress) = (cas.clone(), target.clone(), progress.clone());
+            async move {
+                debug!(?key, ?dependency, artifacts = ?record.artifacts, "restoring artifacts");
+                stream::iter(record.artifacts)
+                    .map(|artifact| Ok(artifact))
+                    .try_for_each_concurrent(Some(100), |artifact| {
+                        let (cas, target) = (cas.clone(), target.clone());
+                        async move {
+                            let dst = artifact.target.to_path(target.root());
+                            cas.get_file(Kind::Cargo, &artifact.hash, &dst)
+                                .await
+                                .context("extract crate")
+                                .tap_ok(|_| {
+                                    trace!(?key, ?dependency, ?artifact, "restored artifact")
+                                })
+                        }
+                    })
+                    .await
+                    .map(|_| progress(key, dependency))
+            }
+        })
+        .await
 }
 
 /// The profile for the build.
@@ -173,50 +342,49 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// Parse metadata about the current workspace.
-    ///
-    /// "Current workspace" is discovered by parsing the arguments passed
-    /// to `hurry` and using `--manifest_path` if it is available;
-    /// if not then it uses the current working directory.
-    //
-    // TODO: A few of these setup steps could be parallelized...
-    // I'm not certain they're worth the thread spawn cost
-    // but this can be mitigated by using the rayon thread pool.
-    #[instrument(name = "Workspace::from_argv")]
-    pub async fn from_argv(argv: &[String]) -> Result<Self> {
+    /// Parse metadata about the workspace, indicated by the provided path.
+    #[instrument(name = "Workspace::from_argv_in_dir")]
+    pub async fn from_argv_in_dir(
+        path: impl Into<PathBuf> + StdDebug,
+        argv: &[String],
+    ) -> Result<Self> {
+        let path = path.into();
+
         // TODO: Maybe we should just replicate this logic and perform it
         // statically using filesystem operations instead of shelling out? This
         // costs something on the order of 200ms, which is not _terrible_ but
         // feels much slower than if we just did our own filesystem reads.
         let manifest_path = read_argv(argv, "--manifest-path").map(String::from);
         let metadata = spawn_blocking(move || -> Result<_> {
-            let mut cmd = cargo_metadata::MetadataCommand::new();
-            if let Some(p) = manifest_path {
-                cmd.manifest_path(p);
-            }
-            let metadata = cmd.exec().context("could not read cargo metadata")?;
-            debug!(?metadata, "cargo metadata");
-            Ok(metadata)
+            cargo_metadata::MetadataCommand::new()
+                .tap_mut(|cmd| {
+                    if let Some(p) = manifest_path {
+                        cmd.manifest_path(p);
+                    }
+                })
+                .current_dir(&path)
+                .exec()
+                .context("could not read cargo metadata")
         })
         .await
         .context("join task")?
+        .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
         .context("read cargo metadata")?;
 
         // TODO: This currently blows up if we have no lockfile.
         let cargo_lock = metadata.workspace_root.join("Cargo.lock");
         let lockfile = spawn_blocking(move || -> Result<_> {
-            let lockfile = cargo_lock::Lockfile::load(cargo_lock).context("load cargo lockfile")?;
-            debug!(?lockfile, "cargo lockfile");
-            Ok(lockfile)
+            cargo_lock::Lockfile::load(cargo_lock).context("load cargo lockfile")
         })
         .await
         .context("join task")?
+        .tap_ok(|lockfile| debug!(?lockfile, "cargo lockfile"))
         .context("read cargo lockfile")?;
 
         let rustc_meta = RustcMetadata::from_argv(&metadata.workspace_root, argv)
             .await
+            .tap_ok(|rustc_meta| debug!(?rustc_meta, "rustc metadata"))
             .context("read rustc metadata")?;
-        debug!(?rustc_meta, "rustc metadata");
 
         // We only care about third party packages for now.
         //
@@ -262,6 +430,18 @@ impl Workspace {
             rustc: rustc_meta,
             dependencies,
         })
+    }
+
+    /// Parse metadata about the current workspace.
+    /// "Current workspace" is defined by the process working directory.
+    //
+    // TODO: A few of these setup steps could be parallelized...
+    // I'm not certain they're worth the thread spawn cost
+    // but this can be mitigated by using the rayon thread pool.
+    #[instrument(name = "Workspace::from_argv")]
+    pub async fn from_argv(argv: &[String]) -> Result<Self> {
+        let pwd = std::env::current_dir().context("get working directory")?;
+        Self::from_argv_in_dir(pwd, argv).await
     }
 
     /// Ensure that the workspace `target/` directory

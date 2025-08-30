@@ -64,4 +64,5 @@ async-walkdir.workspace = true
 divan = "0.1.21"
 jwalk = "0.8.1"
 pretty_assertions = "1.4.1"
+test-log = { version = "0.2.18", features = ["trace"] }
 xshell = "0.2.7"

@@ -7,26 +7,43 @@ use color_eyre::{Result, eyre::Context};
 use futures::{StreamExt, TryStreamExt};
 use hurry::fs::{self, Metadata};
 use location_macros::workspace_dir;
+use pretty_assertions::assert_eq;
 use relative_path::{PathExt, RelativePathBuf};
 use tempfile::TempDir;
 
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn copy_files_diff() -> Result<()> {
-    let _ = color_eyre::install()?;
+    // Concurrent tests might mess with files in the current project's target
+    // directory (notably: lockfiles).
+    //
+    // We're pretty confident that `cp -r` works; as such we use it to copy
+    // the target to a tempdir and then test against that.
+    let workspace = PathBuf::from(workspace_dir!()).join("target");
 
-    let target = PathBuf::from(workspace_dir!()).join("target");
-    let temp = TempDir::new().context("create temporary directory")?;
-    fs::copy_dir(&target, temp.path())
+    let source_temp = TempDir::new().expect("create tempdir");
+    let destination_temp = TempDir::new().expect("create tempdir");
+    let src = source_temp.path();
+    let dst = destination_temp.path();
+    tokio::process::Command::new("cp")
+        .arg("-r")
+        .arg(workspace.as_os_str())
+        .arg(src.as_os_str())
+        .output()
         .await
-        .context("copy folder")?;
+        .with_context(|| format!("copy {workspace:?} to {src:?} using 'cp'"))?;
 
+    // Now we copy using our native functionality from the copy to _another_
+    // copy; this way we can test that our copy works as expected without
+    // having racing tests.
+    fs::copy_dir(src, dst)
+        .await
+        .with_context(|| format!("copy {src:?} to {dst:?} natively"))?;
     let (source, destination) = tokio::try_join!(
-        DirectoryMetadata::from_directory(&target),
-        DirectoryMetadata::from_directory(temp.path())
+        DirectoryMetadata::from_directory(src),
+        DirectoryMetadata::from_directory(dst)
     )
-    .context("diff directories")?;
-
-    pretty_assertions::assert_eq!(source, destination, "directories should be equivalent");
+    .with_context(|| format!("diff {src:?} and {dst:?}"))?;
+    assert_eq!(source, destination, "directories should be equivalent");
 
     Ok(())
 }

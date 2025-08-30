@@ -324,6 +324,18 @@ pub fn walk_files(
         .pipe(Box::pin)
 }
 
+/// Report whether the provided directory is empty.
+/// For the purpose of this function, the directory is empty
+/// if it has no regular files.
+#[instrument]
+pub async fn is_dir_empty(path: impl AsRef<Path> + StdDebug) -> Result<bool> {
+    let path = path.as_ref();
+    walk_files(path)
+        .try_any(|_| async { true })
+        .await
+        .map(|found| !found)
+}
+
 /// Recursively copy the contents of `src` to `dst` with specified concurrency.
 ///
 /// Preserves metadata that cargo/rustc cares about during the copy.
