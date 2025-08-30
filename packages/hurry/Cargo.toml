@@ -56,12 +56,12 @@ inquire = {workspace = true }
 colored = {workspace = true }
 location-macros = {workspace = true }
 futures = { workspace = true }
-tempfile = "3.21.0"
+tempfile = { workspace = true }
 
 [dev-dependencies]
 async-walkdir.workspace = true
-divan = "0.1.21"
-jwalk = "0.8.1"
-pretty_assertions = "1.4.1"
-test-log = { version = "0.2.18", features = ["trace"] }
-xshell = "0.2.7"
+divan = { workspace = true }
+jwalk = { workspace = true }
+pretty_assertions = { workspace = true }
+test-log = { workspace = true, features = ["trace"] }
+xshell = { workspace = true }
