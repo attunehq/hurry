@@ -10,13 +10,19 @@ use serde::Deserialize;
 use tap::TapFallible;
 use tracing::{instrument, trace};
 
-use crate::{Locked, fs};
 use super::workspace::ProfileDir;
+use crate::{Locked, fs};
 
-/// Rust's compiler options for the current platform.
+/// Rust compiler metadata for cache key generation.
 ///
-/// This isn't the _full_ set of options,
-/// just what we need for caching.
+/// Contains platform-specific compiler information needed to generate
+/// cache keys that are valid only for the current compilation target.
+/// This ensures cached artifacts are not incorrectly shared between
+/// different platforms or compiler configurations.
+///
+/// Currently only captures the LLVM target triple, but could be extended
+/// to include compiler version, feature flags, or other compilation options
+/// that affect output compatibility.
 //
 // TODO: Support users cross compiling; probably need to parse argv?
 // TODO: Determine minimum compiler version.
@@ -65,8 +71,14 @@ impl RustcMetadata {
 
 /// A parsed Cargo .d file.
 ///
-/// `.d` files are structured a little like makefiles, where each output
-/// is on its own line followed by a colon followed by the inputs.
+/// Cargo generates `.d` files in the `deps/` directory that follow a
+/// makefile-like format: `output: input1 input2 ...`.
+/// These files list the artifacts (`.rlib`, `.rmeta`, `.d` files) produced
+/// when compiling a dependency.
+///
+/// This parser extracts the output paths from these files, which are then used
+/// by the caching system to identify which files need to be backed up and
+/// restored for each dependency.
 #[derive(Debug)]
 pub struct Dotd {
     /// Recorded output paths, relative to the profile root.
@@ -74,7 +86,17 @@ pub struct Dotd {
 }
 
 impl Dotd {
-    /// Construct an instance by parsing the file.
+    /// Parse a `.d` file and extract output artifact paths.
+    ///
+    /// Reads the dependency file at the given path (relative to profile root),
+    /// parses each line for the `output:` format, and filters for relevant
+    /// file extensions. All returned paths are relative to the profile root.
+    ///
+    /// ## Contract
+    /// - Requires a locked [`ProfileDir`] to access the file system
+    /// - Target path must be relative to the profile root
+    /// - Only extracts outputs with extensions: `.d`, `.rlib`, `.rmeta`
+    /// - Returns paths relative to the profile root for cache consistency
     #[instrument(name = "Dotd::from_file")]
     pub async fn from_file(
         profile: &ProfileDir<'_, Locked>,

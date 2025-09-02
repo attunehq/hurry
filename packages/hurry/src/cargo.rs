@@ -15,17 +15,17 @@ use crate::{
     hash::Blake3,
 };
 
-mod profile;
-mod workspace;
 mod dependency;
 mod metadata;
+mod profile;
+mod workspace;
 
-pub use profile::*;
-pub use workspace::*;
 pub use dependency::*;
 pub use metadata::*;
+pub use profile::*;
+pub use workspace::*;
 
-/// Invoke a cargo subcommand with the given arguments.
+/// Execute a Cargo subcommand with specified arguments.
 #[instrument(skip_all)]
 pub async fn invoke(
     subcommand: impl AsRef<str>,
@@ -51,29 +51,22 @@ pub async fn invoke(
     }
 }
 
-/// Cache the target directory to the cache.
+/// Cache build artifacts from a workspace target directory.
 ///
-/// When **restoring** `target/` in the future, we need to be able to restore
-/// from scratch without an existing `target/` directory. This is for two
-/// reasons: first, the project may actually be fresh, with no `target/`
-/// at all. Second, the `target/` may be outdated.
-/// This means that we can't rely on the functionality that `cargo`
-/// would typically provide for us inside `target/`, such as `.fingerprint`
-/// or `.d` files to find dependencies or hashes.
+/// Enumerates and stores all build artifacts for third-party dependencies
+/// in the content-addressable storage (CAS) and updates the cache index.
 ///
-/// Of course, when **caching** `target/`, we can (and indeed must) assume
-/// that the contents of `target/` are correct and trustworthy. But we must
-/// copy all the data necessary to recreate the important parts of `target/`
-/// in a future fresh start environment.
+/// ## Process
+/// For each dependency in the workspace:
+///   1. Enumerate its artifacts (`.rlib`, `.rmeta`, fingerprints, etc.)
+///   2. Store each artifact file in the CAS
+///   3. Create a cache record mapping dependency key to artifact hashes
 ///
-/// ## Third party crates
+/// ## Caching Strategy
+/// The cache assumes the current `target/` directory is valid and trustworthy.
+/// It stores sufficient metadata to recreate the dependency artifacts in a
+/// fresh environment without relying on Cargo's internal state files.
 ///
-/// The backup process enumerates dependencies (third party crates)
-/// in the project. For each discovered dependency, it:
-/// - Finds the built `.rlib` and `.rmeta` files
-/// - Finds tertiary files like `.fingerprint` etc
-/// - Stores the files in the CAS in such a way that they can be found
-///   using only data inside `Cargo.lock` in the future.
 #[instrument(skip(progress))]
 pub async fn cache_target_from_workspace(
     cas: impl Cas + StdDebug + Clone,
@@ -147,7 +140,17 @@ pub async fn cache_target_from_workspace(
         .await
 }
 
-/// Restore the target directory from the cache.
+/// Restore build artifacts from cache to the target directory.
+///
+/// Retrieves cached artifacts for all workspace dependencies and extracts
+/// them to their proper locations in the target directory. Only restores
+/// dependencies that have cached records available.
+///
+/// ## Process
+/// For each dependency in the workspace:
+///   1. Look up cached artifacts by dependency key
+///   2. Extract each artifact from CAS to target location
+///   3. Call progress callback when dependency is complete
 #[instrument(skip(progress))]
 pub async fn restore_target_from_cache(
     cas: impl Cas + StdDebug + Clone,
@@ -205,11 +208,19 @@ pub async fn restore_target_from_cache(
         .await
 }
 
-/// Parse the value of an argument flag from `argv`.
+/// Extract the value of a command line flag from argument vector.
 ///
-/// Handles cases like:
-/// - `--flag value`
-/// - `--flag=value`
+/// Supports both space-separated (`--flag value`) and equals-separated
+/// (`--flag=value`) flag formats. Returns the first matching value found.
+///
+/// ## Examples
+/// ```not_rust
+/// let args = vec!["--profile".to_string(), "release".to_string()];
+/// assert_eq!(read_argv(&args, "--profile"), Some("release"));
+///
+/// let args = vec!["--profile=debug".to_string()];
+/// assert_eq!(read_argv(&args, "--profile"), Some("debug"));
+/// ```
 #[instrument]
 pub fn read_argv<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
     debug_assert!(flag.starts_with("--"), "flag {flag:?} must start with `--`");

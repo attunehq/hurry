@@ -1,6 +1,4 @@
-use std::{
-    fmt::Debug as StdDebug, marker::PhantomData, path::PathBuf, sync::Arc,
-};
+use std::{fmt::Debug as StdDebug, marker::PhantomData, path::PathBuf, sync::Arc};
 
 use ahash::{HashMap, HashSet};
 use cargo_metadata::camino::Utf8PathBuf;
@@ -30,10 +28,14 @@ use super::{
     read_argv,
 };
 
-/// A Cargo workspace.
+/// Represents a Cargo workspace with caching metadata.
 ///
-/// Note that in Cargo, "workspace" projects are slightly different than
-/// standard projects; however for `hurry` they are not.
+/// A workspace is the root container for a Rust project, containing
+/// the `Cargo.toml`, `Cargo.lock`, and `target/` directory. This struct
+/// holds parsed metadata needed for intelligent caching of build artifacts.
+///
+/// Note: For hurry's purposes, workspace and non-workspace projects
+/// are treated identically.
 #[derive(Debug, Display)]
 #[display("{root}")]
 pub struct Workspace {
@@ -54,7 +56,16 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// Parse metadata about the workspace, indicated by the provided path.
+    /// Create a workspace by parsing metadata from the given directory.
+    ///
+    /// Loads and parses `Cargo.toml`, `Cargo.lock`, and rustc metadata
+    /// to build a complete picture of the workspace for caching purposes.
+    /// Only includes third-party dependencies from the default registry
+    /// in the dependencies map.
+    //
+    // TODO: A few of these setup steps could be parallelized...
+    // I'm not certain they're worth the thread spawn cost
+    // but this can be mitigated by using the rayon thread pool.
     #[instrument(name = "Workspace::from_argv_in_dir")]
     pub async fn from_argv_in_dir(
         path: impl Into<PathBuf> + StdDebug,
@@ -144,21 +155,25 @@ impl Workspace {
         })
     }
 
-    /// Parse metadata about the current workspace.
-    /// "Current workspace" is defined by the process working directory.
-    //
-    // TODO: A few of these setup steps could be parallelized...
-    // I'm not certain they're worth the thread spawn cost
-    // but this can be mitigated by using the rayon thread pool.
+    /// Create a workspace from the current working directory.
+    ///
+    /// Convenience method that calls `from_argv_in_dir`
+    /// using the current working directory as the workspace root.
     #[instrument(name = "Workspace::from_argv")]
     pub async fn from_argv(argv: &[String]) -> Result<Self> {
         let pwd = std::env::current_dir().context("get working directory")?;
         Self::from_argv_in_dir(pwd, argv).await
     }
 
-    /// Ensure that the workspace `target/` directory
-    /// is created and well formed with the provided
-    /// profile directory created.
+    /// Initialize the target directory structure for a build profile.
+    ///
+    /// Creates the profile subdirectory under `target/` and writes a
+    /// `CACHEDIR.TAG` file to mark it as a cache directory.
+    ///
+    /// We don't currently have this as a distinct state transition for
+    /// workspace as it's unclear whether this is strictly required.
+    //
+    // TODO: Is this required?
     #[instrument(name = "Workspace::init_target")]
     pub async fn init_target(&self, profile: &Profile) -> Result<()> {
         const CACHEDIR_TAG_NAME: &str = "CACHEDIR.TAG";
@@ -173,12 +188,15 @@ impl Workspace {
             .context("write CACHEDIR.TAG")
     }
 
-    /// Open the given named profile directory in the workspace.
+    /// Open a profile directory for reading.
     pub async fn open_profile(&self, profile: &Profile) -> Result<ProfileDir<'_, Unlocked>> {
         ProfileDir::open(self, profile).await
     }
 
-    /// Open the given named profile directory in the workspace locked.
+    /// Open a profile directory with exclusive write access.
+    ///
+    /// Acquires a file lock and builds a file index of the profile directory.
+    /// Required for cache operations that modify the target directory.
     pub async fn open_profile_locked(&self, profile: &Profile) -> Result<ProfileDir<'_, Locked>> {
         self.open_profile(profile)
             .await
@@ -189,7 +207,19 @@ impl Workspace {
     }
 }
 
-/// A profile directory inside a [`Workspace`].
+/// A build profile directory within a Cargo workspace.
+///
+/// Represents a specific profile subdirectory
+/// (e.g., `target/debug/`, `target/release/`)
+/// within a workspace's target directory.
+/// Provides controlled access to the directory
+/// contents with proper locking to prevent conflicts
+/// with concurrent Cargo builds.
+///
+/// ## State Management
+/// - `Unlocked`: No file operations allowed
+/// - `Locked`: Exclusive access with file index and directory
+/// - Locking is compatible with Cargo's own locking mechanism
 #[derive(Debug, Clone)]
 pub struct ProfileDir<'ws, State> {
     #[debug(skip)]
@@ -242,8 +272,7 @@ pub struct ProfileDir<'ws, State> {
 }
 
 impl<'ws> ProfileDir<'ws, Unlocked> {
-    /// Instantiate a new instance for the provided profile in the workspace.
-    /// If the directory doesn't already exist, it is created.
+    /// Open a profile directory in unlocked mode.
     #[instrument(name = "ProfileDir::open")]
     pub async fn open(workspace: &'ws Workspace, profile: &Profile) -> Result<Self> {
         workspace
@@ -269,7 +298,7 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
         })
     }
 
-    /// Lock the directory.
+    /// Acquire exclusive lock and build file index.
     #[instrument(name = "ProfileDir::lock")]
     pub async fn lock(self) -> Result<ProfileDir<'ws, Locked>> {
         let lock = self.lock.lock().await.context("lock profile")?;
@@ -291,15 +320,25 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
 }
 
 impl<'ws> ProfileDir<'ws, Locked> {
-    /// Enumerate cache artifacts in the target directory for the dependency.
+    /// Find all cache artifacts for a specific dependency.
     ///
-    /// For now in this context, a "cache artifact" is _any file_ inside the
-    /// profile directory that is inside the `.fingerprint`, `build`, or `deps`
-    /// directories, where the immediate subdirectory of that parent is prefixed
-    /// by the name of the dependency.
+    /// Scans the profile directory's file index to locate artifacts that belong
+    /// to the given dependency.
     ///
-    /// TODO: the above is probably overly broad for a cache; evaluate
-    /// what filtering mechanism to apply to reduce invalidations and rework.
+    /// Artifacts are identified by location and naming.
+    ///
+    /// ## Artifact Types
+    /// - **Fingerprint/Build**: Files in `.fingerprint/` or `build/`
+    ///   subdirectories where the subdirectory name starts with
+    ///   the dependency name.
+    /// - **Dependencies**: Files in `deps/` directory, discovered through
+    ///   `.d` files that list the actual outputs (`.rlib`, `.rmeta`, etc.)
+    ///
+    /// ## Contract
+    /// - Returns artifacts with paths relative to profile root
+    /// - Filters to dependency-specific files to avoid over-caching
+    ///
+    /// TODO: Evaluate more precise filtering to reduce cache invalidations
     #[instrument(name = "ProfileDir::enumerate_cache_artifacts")]
     pub async fn enumerate_cache_artifacts(
         &self,
@@ -390,7 +429,10 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .pipe(Ok)
     }
 
-    /// The root of the profile directory.
+    /// Get the absolute path to the profile directory root.
+    ///
+    /// Converts the internal relative path to an absolute path
+    /// based on the workspace's target directory.
     pub fn root(&self) -> PathBuf {
         self.root.to_path(&self.workspace.target)
     }

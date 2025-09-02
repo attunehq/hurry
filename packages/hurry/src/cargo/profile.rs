@@ -6,7 +6,15 @@ use tracing::instrument;
 
 use super::read_argv;
 
-/// The profile for the build.
+/// Cargo build profile specification.
+///
+/// Represents the different compilation profiles available in Cargo,
+/// including the four built-in profiles (`debug`, `release`, `test`, `bench`)
+/// and support for custom user-defined profiles.
+///
+/// Used for cache key generation and target directory organization.
+/// Each profile has different optimization settings and produces different
+/// compilation artifacts that must be cached separately.
 ///
 /// Reference: https://doc.rust-lang.org/cargo/reference/profiles.html
 //
@@ -45,9 +53,15 @@ pub enum Profile {
 }
 
 impl Profile {
-    /// Get the profile specified by the user.
+    /// Parse the build profile from command line arguments.
     ///
-    /// If the user didn't specify, defaults to [`Profile::Debug`].
+    /// Checks for `--profile <name>` or `--release` flags in argv.
+    /// Defaults to [`Profile::Debug`] if no profile is specified.
+    ///
+    /// ## Parsing Rules
+    /// - `--profile <name>` → Profile::from(name)
+    /// - `--release` → Profile::Release  
+    /// - No flags → Profile::Debug
     #[instrument(name = "Profile::from_argv")]
     pub fn from_argv(argv: &[String]) -> Profile {
         if let Some(profile) = read_argv(argv, "--profile") {

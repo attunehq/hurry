@@ -3,16 +3,29 @@ use derive_more::{Debug, Display};
 
 use crate::hash::Blake3;
 
-/// A Cargo dependency.
+/// A third-party Cargo dependency for cache identification.
 ///
-/// This isn't the full set of information about a dependency, but it's enough
-/// to identify it uniquely within a workspace for the purposes of caching.
+/// Contains the minimal set of information needed to uniquely identify
+/// a dependency across different workspaces and machines for caching purposes.
+/// Each dependency gets cached independently based on its cache key.
 ///
-/// Each piece of data in this struct is used to build the "cache key"
-/// for the dependency; the intention is that each dependency is cached
-/// independently and restored in other projects based on a matching
-/// cache key derived from other instances of `hurry` reading the
-/// `Cargo.lock` and other workspace/compiler/platform metadata.
+/// ## Cache Key Components
+/// All fields contribute to the cache key generation:
+/// - `name`: Crate name from `Cargo.lock`
+/// - `version`: Exact version from `Cargo.lock`
+/// - `checksum`: Registry checksum ensuring content integrity
+/// - `target`: Compilation target (e.g., `x86_64-unknown-linux-gnu`)
+///
+/// ## Contract
+/// - Only represents third-party dependencies from the default registry
+/// - Cache keys must match exactly for artifacts to be reused
+/// - Target triple ensures platform-specific artifacts aren't mixed
+///
+/// ## TODO
+/// - We probably need to move to a model where we search for matching caches
+///   based on the elements in this instead of opaque cache keys.
+/// - We aren't including things that should almost definitely be included,
+///   for example active features.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Builder)]
 #[display("{name}@{version}")]
 pub struct Dependency {
@@ -41,7 +54,11 @@ pub struct Dependency {
 }
 
 impl Dependency {
-    /// Hash key for the dependency.
+    /// Generate a cache key for this dependency.
+    ///
+    /// Creates a Blake3 hash from all dependency fields to uniquely
+    /// identify this dependency for cache storage and retrieval.
+    #[deprecated = "Refer to TODO's on this type"]
     pub fn key(&self) -> Blake3 {
         Self::key_for()
             .checksum(&self.checksum)
@@ -54,9 +71,10 @@ impl Dependency {
 
 #[bon]
 impl Dependency {
-    /// Produce a hash key for all the fields of a dependency
-    /// without having to actually make a dependency instance
-    /// (which may involve cloning).
+    /// Generate a cache key without creating a Dependency instance.
+    ///
+    /// Use this when you have the fields that would normally go into a
+    /// [`Dependency`] instance borrowed.
     #[builder]
     pub fn key_for(
         name: impl AsRef<[u8]>,
