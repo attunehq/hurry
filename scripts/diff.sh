@@ -18,14 +18,14 @@ echo "Saving run ID: $RUN_ID"
 # tree to remove first-party artifacts and then take a snapshot of the target
 # tree in its current state.
 rm -rf ./target/debug/{examples,hurry,hurry.d,incremental,libhurry.d,libhurry.rlib}
-tree -a ./target/debug/ > ./.scratch/trees/$RUN_ID/cargo-tree.txt
+tree -a -f ./target/debug/ > ./.scratch/trees/$RUN_ID/cargo-tree.txt
 
 echo "Restoring build"
 # Then, do a restored clean build and take a snapshot of the restored build.
 cargo clean
 hurry cargo build --hurry-skip-build --hurry-skip-backup
 rm -rf ./target/debug/{examples,hurry,hurry.d,incremental,libhurry.d,libhurry.rlib}
-tree -a ./target/debug/ > ./.scratch/trees/$RUN_ID/hurry-tree.txt
+tree -a -f ./target/debug/ > ./.scratch/trees/$RUN_ID/hurry-tree.txt
 echo "Build restored"
 
 # Save a tree diff.
