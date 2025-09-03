@@ -1,24 +1,20 @@
-use clap::Subcommand;
-use enum_assoc::Assoc;
 use itertools::Itertools;
 use strum::{EnumIter, IntoEnumIterator};
 use subenum::subenum;
+use enum_assoc::Assoc;
 use tracing::instrument;
 
-pub mod build;
-pub mod run;
+use super::read_argv;
 
-/// Supported cargo subcommands.
-#[derive(Clone, Subcommand)]
-pub enum Command {
-    /// Fast `cargo` builds.
-    Build(build::Options),
-
-    /// Execute `cargo` commands.
-    Run(run::Options),
-}
-
-/// The profile for the build.
+/// Cargo build profile specification.
+///
+/// Represents the different compilation profiles available in Cargo,
+/// including the four built-in profiles (`debug`, `release`, `test`, `bench`)
+/// and support for custom user-defined profiles.
+///
+/// Used for cache key generation and target directory organization.
+/// Each profile has different optimization settings and produces different
+/// compilation artifacts that must be cached separately.
 ///
 /// Reference: https://doc.rust-lang.org/cargo/reference/profiles.html
 //
@@ -57,9 +53,15 @@ pub enum Profile {
 }
 
 impl Profile {
-    /// Get the profile specified by the user.
+    /// Parse the build profile from command line arguments.
     ///
-    /// If the user didn't specify, defaults to [`Profile::Debug`].
+    /// Checks for `--profile <name>` or `--release` flags in argv.
+    /// Defaults to [`Profile::Debug`] if no profile is specified.
+    ///
+    /// ## Parsing Rules
+    /// - `--profile <name>` → Profile::from(name)
+    /// - `--release` → Profile::Release  
+    /// - No flags → Profile::Debug
     #[instrument(name = "Profile::from_argv")]
     pub fn from_argv(argv: &[String]) -> Profile {
         if let Some(profile) = read_argv(argv, "--profile") {
@@ -105,7 +107,7 @@ impl From<&str> for Profile {
                 return variant.into();
             }
         }
-        Profile::Custom(value.to_string())
+        Profile::Custom(String::from(value))
     }
 }
 
@@ -113,47 +115,4 @@ impl From<&String> for Profile {
     fn from(value: &String) -> Self {
         value.as_str().into()
     }
-}
-
-/// Parse the value of an argument flag from `argv`.
-///
-/// Handles cases like:
-/// - `--flag value`
-/// - `--flag=value`
-#[instrument]
-pub fn read_argv<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
-    debug_assert!(flag.starts_with("--"), "flag {flag:?} must start with `--`");
-    argv.iter().tuple_windows().find_map(|(a, b)| {
-        let (a, b) = (a.trim(), b.trim());
-
-        // Handle the `--flag value` case, where the flag and its value
-        // are distinct entries in `argv`.
-        if a == flag {
-            return Some(b);
-        }
-
-        // Handle the `--flag=value` case, where the flag and its value
-        // are the same entry in `argv`.
-        //
-        // Due to how tuple windows work, this case could be in either
-        // `a` or `b`. If `b` is the _last_ element in `argv`,
-        // it won't be iterated over again as a future `a`,
-        // so we have to check both.
-        //
-        // Unfortunately this leads to rework as all but the last `b`
-        // will be checked again as a future `a`, but since `argv`
-        // is relatively small this shouldn't be an issue in practice.
-        //
-        // Just in case I've thrown an `instrument` call on the function,
-        // but this is extremely unlikely to ever be an issue.
-        for v in [a, b] {
-            if let Some((a, b)) = v.split_once('=')
-                && a == flag
-            {
-                return Some(b);
-            }
-        }
-
-        None
-    })
 }

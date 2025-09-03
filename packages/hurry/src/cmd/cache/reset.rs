@@ -1,10 +1,9 @@
 use clap::Args;
 use color_eyre::{Result, eyre::Context as _};
 use colored::Colorize as _;
+use hurry::fs::{self, user_global_cache_path};
 use inquire::Confirm;
 use tracing::{instrument, warn};
-
-use crate::fs::{self, user_global_cache_path};
 
 #[derive(Clone, Args, Debug)]
 pub struct Options {

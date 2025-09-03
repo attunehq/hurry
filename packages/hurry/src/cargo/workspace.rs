@@ -1,37 +1,41 @@
-use std::{
-    collections::{HashMap, HashSet},
-    marker::PhantomData,
-    path::PathBuf,
-    str::FromStr,
-};
+use std::{fmt::Debug as StdDebug, marker::PhantomData, path::PathBuf, sync::Arc};
 
-use bon::{Builder, bon};
-use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
+use ahash::{HashMap, HashSet};
+use cargo_metadata::camino::Utf8PathBuf;
 use color_eyre::{
-    Result, Section, SectionExt,
-    eyre::{Context, OptionExt, eyre},
+    Result,
+    eyre::{Context, OptionExt},
 };
 use derive_more::{Debug, Display};
 use itertools::Itertools;
 use location_macros::workspace_dir;
-use relative_path::{PathExt, RelativePath, RelativePathBuf};
-use serde::Deserialize;
-use tap::{Pipe, TapFallible};
+use relative_path::{PathExt, RelativePathBuf};
+use tap::{Pipe, Tap, TapFallible};
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
 
 use crate::{
     Locked, Unlocked,
     cache::Artifact,
-    cargo::{Profile, read_argv},
     fs::{self, Index, LockFile},
     hash::Blake3,
 };
 
-/// A Cargo workspace.
+use super::{
+    Profile,
+    dependency::Dependency,
+    metadata::{Dotd, RustcMetadata},
+    read_argv,
+};
+
+/// Represents a Cargo workspace with caching metadata.
 ///
-/// Note that in Cargo, "workspace" projects are slightly different than
-/// standard projects; however for `hurry` they are not.
+/// A workspace is the root container for a Rust project, containing
+/// the `Cargo.toml`, `Cargo.lock`, and `target/` directory. This struct
+/// holds parsed metadata needed for intelligent caching of build artifacts.
+///
+/// Note: For hurry's purposes, workspace and non-workspace projects
+/// are treated identically.
 #[derive(Debug, Display)]
 #[display("{root}")]
 pub struct Workspace {
@@ -52,50 +56,58 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// Parse metadata about the current workspace.
+    /// Create a workspace by parsing metadata from the given directory.
     ///
-    /// "Current workspace" is discovered by parsing the arguments passed
-    /// to `hurry` and using `--manifest_path` if it is available;
-    /// if not then it uses the current working directory.
+    /// Loads and parses `Cargo.toml`, `Cargo.lock`, and rustc metadata
+    /// to build a complete picture of the workspace for caching purposes.
+    /// Only includes third-party dependencies from the default registry
+    /// in the dependencies map.
     //
     // TODO: A few of these setup steps could be parallelized...
     // I'm not certain they're worth the thread spawn cost
     // but this can be mitigated by using the rayon thread pool.
-    #[instrument(name = "Workspace::from_argv")]
-    pub async fn from_argv(argv: &[String]) -> Result<Self> {
+    #[instrument(name = "Workspace::from_argv_in_dir")]
+    pub async fn from_argv_in_dir(
+        path: impl Into<PathBuf> + StdDebug,
+        argv: &[String],
+    ) -> Result<Self> {
+        let path = path.into();
+
         // TODO: Maybe we should just replicate this logic and perform it
         // statically using filesystem operations instead of shelling out? This
         // costs something on the order of 200ms, which is not _terrible_ but
         // feels much slower than if we just did our own filesystem reads.
         let manifest_path = read_argv(argv, "--manifest-path").map(String::from);
         let metadata = spawn_blocking(move || -> Result<_> {
-            let mut cmd = cargo_metadata::MetadataCommand::new();
-            if let Some(p) = manifest_path {
-                cmd.manifest_path(p);
-            }
-            let metadata = cmd.exec().context("could not read cargo metadata")?;
-            debug!(?metadata, "cargo metadata");
-            Ok(metadata)
+            cargo_metadata::MetadataCommand::new()
+                .tap_mut(|cmd| {
+                    if let Some(p) = manifest_path {
+                        cmd.manifest_path(p);
+                    }
+                })
+                .current_dir(&path)
+                .exec()
+                .context("could not read cargo metadata")
         })
         .await
         .context("join task")?
+        .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
         .context("read cargo metadata")?;
 
         // TODO: This currently blows up if we have no lockfile.
         let cargo_lock = metadata.workspace_root.join("Cargo.lock");
         let lockfile = spawn_blocking(move || -> Result<_> {
-            let lockfile = cargo_lock::Lockfile::load(cargo_lock).context("load cargo lockfile")?;
-            debug!(?lockfile, "cargo lockfile");
-            Ok(lockfile)
+            cargo_lock::Lockfile::load(cargo_lock).context("load cargo lockfile")
         })
         .await
         .context("join task")?
+        .tap_ok(|lockfile| debug!(?lockfile, "cargo lockfile"))
         .context("read cargo lockfile")?;
 
         let rustc_meta = RustcMetadata::from_argv(&metadata.workspace_root, argv)
             .await
+            .tap_ok(|rustc_meta| debug!(?rustc_meta, "rustc metadata"))
             .context("read rustc metadata")?;
-        debug!(?rustc_meta, "rustc metadata");
 
         // We only care about third party packages for now.
         //
@@ -143,17 +155,31 @@ impl Workspace {
         })
     }
 
-    /// Ensure that the workspace `target/` directory
-    /// is created and well formed with the provided
-    /// profile directory created.
+    /// Create a workspace from the current working directory.
+    ///
+    /// Convenience method that calls `from_argv_in_dir`
+    /// using the current working directory as the workspace root.
+    #[instrument(name = "Workspace::from_argv")]
+    pub async fn from_argv(argv: &[String]) -> Result<Self> {
+        let pwd = std::env::current_dir().context("get working directory")?;
+        Self::from_argv_in_dir(pwd, argv).await
+    }
+
+    /// Initialize the target directory structure for a build profile.
+    ///
+    /// Creates the profile subdirectory under `target/` and writes a
+    /// `CACHEDIR.TAG` file to mark it as a cache directory.
+    ///
+    /// We don't currently have this as a distinct state transition for
+    /// workspace as it's unclear whether this is strictly required.
+    //
+    // TODO: Is this required?
     #[instrument(name = "Workspace::init_target")]
     pub async fn init_target(&self, profile: &Profile) -> Result<()> {
         const CACHEDIR_TAG_NAME: &str = "CACHEDIR.TAG";
         const CACHEDIR_TAG_CONTENT: &[u8] =
             include_bytes!(concat!(workspace_dir!(), "/static/cargo/CACHEDIR.TAG"));
 
-        // TODO: do we need to create `.rustc_info.json` to get cargo
-        // to recognize the target folder as valid when restoring caches?
         fs::create_dir_all(self.target.join(profile.as_str()))
             .await
             .context("create target directory")?;
@@ -162,12 +188,15 @@ impl Workspace {
             .context("write CACHEDIR.TAG")
     }
 
-    /// Open the given named profile directory in the workspace.
+    /// Open a profile directory for reading.
     pub async fn open_profile(&self, profile: &Profile) -> Result<ProfileDir<'_, Unlocked>> {
         ProfileDir::open(self, profile).await
     }
 
-    /// Open the given named profile directory in the workspace locked.
+    /// Open a profile directory with exclusive write access.
+    ///
+    /// Acquires a file lock and builds a file index of the profile directory.
+    /// Required for cache operations that modify the target directory.
     pub async fn open_profile_locked(&self, profile: &Profile) -> Result<ProfileDir<'_, Locked>> {
         self.open_profile(profile)
             .await
@@ -178,77 +207,20 @@ impl Workspace {
     }
 }
 
-/// A Cargo dependency.
+/// A build profile directory within a Cargo workspace.
 ///
-/// This isn't the full set of information about a dependency, but it's enough
-/// to identify it uniquely within a workspace for the purposes of caching.
+/// Represents a specific profile subdirectory
+/// (e.g., `target/debug/`, `target/release/`)
+/// within a workspace's target directory.
+/// Provides controlled access to the directory
+/// contents with proper locking to prevent conflicts
+/// with concurrent Cargo builds.
 ///
-/// Each piece of data in this struct is used to build the "cache key"
-/// for the dependency; the intention is that each dependency is cached
-/// independently and restored in other projects based on a matching
-/// cache key derived from other instances of `hurry` reading the
-/// `Cargo.lock` and other workspace/compiler/platform metadata.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Builder)]
-#[display("{name}@{version}")]
-pub struct Dependency {
-    /// The name of the dependency.
-    #[builder(into)]
-    pub name: String,
-
-    /// The version of the dependency.
-    #[builder(into)]
-    pub version: String,
-
-    /// The checksum of the dependency.
-    #[builder(into)]
-    pub checksum: String,
-
-    /// The target triple for which the dependency
-    /// is being or has been built.
-    ///
-    /// Examples:
-    /// ```not_rust
-    /// aarch64-apple-darwin
-    /// x86_64-unknown-linux-gnu
-    /// ```
-    #[builder(into)]
-    pub target: String,
-}
-
-impl Dependency {
-    /// Hash key for the dependency.
-    pub fn key(&self) -> Blake3 {
-        Self::key_for()
-            .checksum(&self.checksum)
-            .name(&self.name)
-            .target(&self.target)
-            .version(&self.version)
-            .call()
-    }
-}
-
-#[bon]
-impl Dependency {
-    /// Produce a hash key for all the fields of a dependency
-    /// without having to actually make a dependency instance
-    /// (which may involve cloning).
-    #[builder]
-    pub fn key_for(
-        name: impl AsRef<[u8]>,
-        version: impl AsRef<[u8]>,
-        checksum: impl AsRef<[u8]>,
-        target: impl AsRef<[u8]>,
-    ) -> Blake3 {
-        let name = name.as_ref();
-        let version = version.as_ref();
-        let checksum = checksum.as_ref();
-        let target = target.as_ref();
-        Blake3::from_fields([name, version, checksum, target])
-    }
-}
-
-/// A profile directory inside a [`Workspace`].
-#[derive(Debug)]
+/// ## State Management
+/// - `Unlocked`: No file operations allowed
+/// - `Locked`: Exclusive access with file index and directory
+/// - Locking is compatible with Cargo's own locking mechanism
+#[derive(Debug, Clone)]
 pub struct ProfileDir<'ws, State> {
     #[debug(skip)]
     state: PhantomData<State>,
@@ -275,7 +247,10 @@ pub struct ProfileDir<'ws, State> {
     /// Currently there's no explicit unlock mechanism for profiles since
     /// they're just dropped, but if we ever add one that's where we'd clear
     /// this and set it to `None`.
-    index: Option<Index>,
+    ///
+    /// This is in an `Arc` so that we don't have to clone the whole index
+    /// when we clone the `ProfileDir`.
+    index: Option<Arc<Index>>,
 
     /// The root of the directory,
     /// relative to [`workspace.target`](Workspace::target).
@@ -297,8 +272,7 @@ pub struct ProfileDir<'ws, State> {
 }
 
 impl<'ws> ProfileDir<'ws, Unlocked> {
-    /// Instantiate a new instance for the provided profile in the workspace.
-    /// If the directory doesn't already exist, it is created.
+    /// Open a profile directory in unlocked mode.
     #[instrument(name = "ProfileDir::open")]
     pub async fn open(workspace: &'ws Workspace, profile: &Profile) -> Result<Self> {
         workspace
@@ -324,13 +298,14 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
         })
     }
 
-    /// Lock the directory.
+    /// Acquire exclusive lock and build file index.
     #[instrument(name = "ProfileDir::lock")]
     pub async fn lock(self) -> Result<ProfileDir<'ws, Locked>> {
         let lock = self.lock.lock().await.context("lock profile")?;
         let root = self.root.to_path(&self.workspace.target);
         let index = Index::recursive(&root)
             .await
+            .map(Arc::new)
             .map(Some)
             .context("index target folder")?;
         Ok(ProfileDir {
@@ -345,15 +320,25 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
 }
 
 impl<'ws> ProfileDir<'ws, Locked> {
-    /// Enumerate cache artifacts in the target directory for the dependency.
+    /// Find all cache artifacts for a specific dependency.
     ///
-    /// For now in this context, a "cache artifact" is _any file_ inside the
-    /// profile directory that is inside the `.fingerprint`, `build`, or `deps`
-    /// directories, where the immediate subdirectory of that parent is prefixed
-    /// by the name of the dependency.
+    /// Scans the profile directory's file index to locate artifacts that belong
+    /// to the given dependency.
     ///
-    /// TODO: the above is probably overly broad for a cache; evaluate
-    /// what filtering mechanism to apply to reduce invalidations and rework.
+    /// Artifacts are identified by location and naming.
+    ///
+    /// ## Artifact Types
+    /// - **Fingerprint/Build**: Files in `.fingerprint/` or `build/`
+    ///   subdirectories where the subdirectory name starts with
+    ///   the dependency name.
+    /// - **Dependencies**: Files in `deps/` directory, discovered through
+    ///   `.d` files that list the actual outputs (`.rlib`, `.rmeta`, etc.)
+    ///
+    /// ## Contract
+    /// - Returns artifacts with paths relative to profile root
+    /// - Filters to dependency-specific files to avoid over-caching
+    ///
+    /// TODO: Evaluate more precise filtering to reduce cache invalidations
     #[instrument(name = "ProfileDir::enumerate_cache_artifacts")]
     pub async fn enumerate_cache_artifacts(
         &self,
@@ -441,117 +426,17 @@ impl<'ws> ProfileDir<'ws, Locked> {
         standard
             .into_iter()
             .chain(dependencies)
-            .map(|(path, entry)| {
-                Artifact::builder()
-                    .target(path)
-                    .hash(&entry.hash)
-                    .executable(entry.executable)
-                    .build()
-            })
+            .map(|(path, entry)| Artifact::builder().target(path).hash(&entry.hash).build())
             .inspect(|artifact| trace!(?artifact, "enumerated artifact"))
             .collect::<Vec<_>>()
             .pipe(Ok)
     }
 
-    /// The root of the profile directory.
+    /// Get the absolute path to the profile directory root.
+    ///
+    /// Converts the internal relative path to an absolute path
+    /// based on the workspace's target directory.
     pub fn root(&self) -> PathBuf {
         self.root.to_path(&self.workspace.target)
-    }
-}
-
-/// Rust's compiler options for the current platform.
-///
-/// This isn't the _full_ set of options,
-/// just what we need for caching.
-//
-// TODO: Support users cross compiling; probably need to parse argv?
-// TODO: Determine minimum compiler version.
-// TODO: Is there a better way to get this?
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize)]
-pub struct RustcMetadata {
-    /// The LLVM target triple.
-    #[serde(rename = "llvm-target")]
-    llvm_target: String,
-}
-
-impl RustcMetadata {
-    /// Get platform metadata from the current compiler.
-    #[instrument(name = "RustcMetadata::from_argv")]
-    pub async fn from_argv(workspace_root: &Utf8Path, _argv: &[String]) -> Result<Self> {
-        let mut cmd = tokio::process::Command::new("rustc");
-
-        // Bypasses the check that disallows using unstable commands on stable.
-        cmd.env("RUSTC_BOOTSTRAP", "1");
-        cmd.args(["-Z", "unstable-options", "--print", "target-spec-json"]);
-        cmd.current_dir(workspace_root);
-        let output = cmd.output().await.context("run rustc")?;
-        if !output.status.success() {
-            return Err(eyre!("invoke rustc"))
-                .with_section(|| {
-                    String::from_utf8_lossy(&output.stdout)
-                        .to_string()
-                        .header("Stdout:")
-                })
-                .with_section(|| {
-                    String::from_utf8_lossy(&output.stderr)
-                        .to_string()
-                        .header("Stderr:")
-                });
-        }
-
-        serde_json::from_slice::<RustcMetadata>(&output.stdout)
-            .context("parse rustc output")
-            .with_section(|| {
-                String::from_utf8_lossy(&output.stdout)
-                    .to_string()
-                    .header("Rustc Output:")
-            })
-    }
-}
-
-/// A parsed Cargo .d file.
-///
-/// `.d` files are structured a little like makefiles, where each output
-/// is on its own line followed by a colon followed by the inputs.
-#[derive(Debug)]
-pub struct Dotd {
-    /// Recorded output paths, relative to the profile root.
-    pub outputs: Vec<RelativePathBuf>,
-}
-
-impl Dotd {
-    /// Construct an instance by parsing the file.
-    #[instrument(name = "Dotd::from_file")]
-    pub async fn from_file(
-        profile: &ProfileDir<'_, Locked>,
-        target: &RelativePath,
-    ) -> Result<Self> {
-        const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta"];
-        let profile_root = profile.root();
-        let outputs = fs::read_buffered_utf8(target.to_path(&profile_root))
-            .await
-            .with_context(|| format!("read .d file: {target:?}"))?
-            .ok_or_eyre("file does not exist")?
-            .lines()
-            .filter_map(|line| {
-                let (output, _) = line.split_once(':')?;
-                if DEP_EXTS.iter().any(|ext| output.ends_with(ext)) {
-                    trace!(?line, ?output, "read .d line");
-                    Utf8PathBuf::from_str(output)
-                        .tap_err(|error| trace!(?line, ?output, ?error, "not a valid path"))
-                        .ok()
-                } else {
-                    trace!(?line, "skipped .d line");
-                    None
-                }
-            })
-            .map(|output| -> Result<RelativePathBuf> {
-                output
-                    .strip_prefix(&profile_root)
-                    .with_context(|| format!("make {output:?} relative to {profile_root:?}"))
-                    .and_then(|p| RelativePathBuf::from_path(p).context("read path as utf8"))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Self { outputs })
     }
 }

@@ -9,7 +9,6 @@ use atomic_time::AtomicInstant;
 use cargo_metadata::camino::Utf8PathBuf;
 use clap::{Parser, Subcommand, crate_version};
 use color_eyre::{Result, eyre::Context};
-use derive_more::Display;
 use git_version::git_version;
 use tap::Pipe;
 use tracing::{instrument, level_filters::LevelFilter};
@@ -23,21 +22,7 @@ use tracing_tree::time::FormatTime;
 // https://github.com/rust-lang/rust/issues/74970
 //
 // Relatedly, in this file specifically nothing should be `pub`.
-mod cache;
-mod cargo;
-mod ext;
-mod fs;
-mod hash;
-
-/// The associated type's state is unlocked.
-/// Used for the typestate pattern.
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Default)]
-struct Unlocked;
-
-/// The associated type's state is locked.
-/// Used for the typestate pattern.
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Default)]
-struct Locked;
+mod cmd;
 
 #[derive(Parser)]
 #[command(
@@ -58,13 +43,12 @@ struct Cli {
 enum Command {
     /// Fast `cargo` builds
     #[clap(subcommand)]
-    Cargo(cargo::Command),
+    Cargo(cmd::cargo::Command),
     // TODO: /// Manage remote authentication
     // Auth,
-
     /// Manage user cache
     #[clap(subcommand)]
-    Cache(cache::Command),
+    Cache(cmd::cache::Command),
 }
 
 #[instrument]
@@ -107,11 +91,11 @@ async fn main() -> Result<()> {
 
     let result = match cli.command {
         Command::Cache(cmd) => match cmd {
-            cache::Command::Reset(opts) => cache::reset::exec(opts).await,
+            cmd::cache::Command::Reset(opts) => cmd::cache::reset::exec(opts).await,
         },
         Command::Cargo(cmd) => match cmd {
-            cargo::Command::Build(opts) => cargo::build::exec(opts).await,
-            cargo::Command::Run(opts) => cargo::run::exec(opts).await,
+            cmd::cargo::Command::Build(opts) => cmd::cargo::build::exec(opts).await,
+            cmd::cargo::Command::Run(opts) => cmd::cargo::run::exec(opts).await,
         },
     };
 

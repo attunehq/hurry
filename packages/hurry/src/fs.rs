@@ -2,6 +2,22 @@
 //!
 //! Inside this module, we refer to `std::fs` or `tokio::fs` by its fully
 //! qualified path to make it maximally clear what we are using.
+//!
+//! ## Other IO implementations
+//!
+//! We may find that we want to swap to a different IO backend than tokio:
+//! - https://docs.rs/compio/latest/compio/
+//! - https://docs.rs/nuclei/latest/nuclei/
+//! - https://docs.rs/monoio/latest/monoio/
+//! - https://docs.rs/rio/latest/rio/
+//!
+//! Alternatively, we may want to swap to different library implementations:
+//! - https://docs.rs/io-uring/latest/io_uring/
+//! - https://docs.rs/reflink-copy/latest/reflink_copy/
+//!
+//! I've held off on this for now until/unless we can prove that
+//! tokio and its default way of interfacing with the file system is
+//! actually the bottleneck for us.
 
 #![allow(
     clippy::disallowed_methods,
@@ -10,7 +26,6 @@
 
 use std::{
     fmt::Debug as StdDebug,
-    fs::Metadata,
     marker::PhantomData,
     path::{Path, PathBuf},
     sync::Arc,
@@ -18,14 +33,16 @@ use std::{
 };
 
 use ahash::AHashMap;
+use async_walkdir::{DirEntry, WalkDir};
 use cargo_metadata::camino::Utf8PathBuf;
 use color_eyre::{
     Result,
-    eyre::{Context, OptionExt},
+    eyre::{Context, OptionExt, eyre},
 };
 use derive_more::{Debug, Display};
 use filetime::FileTime;
 use fslock::LockFile as FsLockFile;
+use futures::{Stream, TryStreamExt};
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use relative_path::RelativePathBuf;
 use tap::{Pipe, Tap, TapFallible, TryConv};
@@ -36,9 +53,14 @@ use tokio::{
     task::spawn_blocking,
 };
 use tracing::{debug, instrument, trace};
-use walkdir::WalkDir;
 
 use crate::{Locked, Unlocked, ext::then_context, hash::Blake3};
+
+/// The default level of concurrency used in hurry `fs` operations.
+///
+/// This number was chosen using the results of the `copytarget`
+/// benchmark in the hurry repository tested across machines on the team.
+pub const DEFAULT_CONCURRENCY: usize = 10;
 
 /// Shared lock file on the file system.
 ///
@@ -158,8 +180,10 @@ impl Index {
             let root = root.clone();
             let runtime = runtime.clone();
             move || {
-                WalkDir::new(&root).into_iter().par_bridge().try_for_each(
-                    move |entry| -> Result<()> {
+                walkdir::WalkDir::new(&root)
+                    .into_iter()
+                    .par_bridge()
+                    .try_for_each(move |entry| -> Result<()> {
                         let _guard = runtime.enter();
                         let entry = entry.context("walk files")?;
                         let path = entry.path();
@@ -183,8 +207,7 @@ impl Index {
                         // which should never happen but we'll handle it
                         // just in case.
                         tx.send((path, entry)).context("send entry to main thread")
-                    },
-                )
+                    })
             }
         });
 
@@ -221,9 +244,6 @@ impl Index {
 pub struct IndexEntry {
     /// The hash of the file's contents.
     pub hash: Blake3,
-
-    /// Whether the file is executable.
-    pub executable: bool,
 }
 
 impl IndexEntry {
@@ -231,11 +251,8 @@ impl IndexEntry {
     #[instrument(name = "IndexEntry::from_file")]
     pub async fn from_file(path: impl AsRef<Path> + StdDebug) -> Result<Self> {
         let path = path.as_ref();
-        let (hash, executable) = tokio::try_join!(
-            Blake3::from_file(path).then_context("hash file"),
-            is_executable(path).then_context("check executable"),
-        )?;
-        Ok(Self { hash, executable })
+        let hash = Blake3::from_file(path).then_context("hash file").await?;
+        Ok(Self { hash })
     }
 }
 
@@ -267,104 +284,123 @@ pub async fn create_dir_all(dir: impl AsRef<Path> + StdDebug) -> Result<()> {
         .tap_ok(|_| trace!(?dir, "create directory"))
 }
 
+/// Recursively copy the contents of `src` to `dst`.
+///
+/// Preserves metadata that cargo/rustc cares about during the copy.
+/// Returns the total number of bytes copied across all files.
+///
+/// Equivalent to [`copy_dir_with_concurrency`] with [`DEFAULT_CONCURRENCY`].
+#[instrument]
+pub async fn copy_dir(
+    src: impl AsRef<Path> + StdDebug,
+    dst: impl AsRef<Path> + StdDebug,
+) -> Result<u64> {
+    copy_dir_with_concurrency(DEFAULT_CONCURRENCY, src, dst).await
+}
+
+/// Walk files in a directory recursively.
+///
+/// Only emits regular files; symbolic links
+/// and directories are not emitted in the stream.
+#[instrument]
+pub fn walk_files(
+    root: impl AsRef<Path> + StdDebug,
+) -> impl Stream<Item = Result<DirEntry>> + Unpin {
+    let root = root.as_ref().to_path_buf();
+    WalkDir::new(&root)
+        .map_err(move |err| eyre!(err).wrap_err(format!("walk files in {root:?}")))
+        .try_filter_map(|entry| async move {
+            let src_file = entry.path();
+            let ft = entry
+                .file_type()
+                .await
+                .with_context(|| format!("get type of: {src_file:?}"))?;
+            if ft.is_file() {
+                Ok(Some(entry))
+            } else {
+                Ok(None)
+            }
+        })
+        .pipe(Box::pin)
+}
+
+/// Report whether the provided directory is empty.
+/// For the purpose of this function, the directory is empty
+/// if it has no regular files.
+#[instrument]
+pub async fn is_dir_empty(path: impl AsRef<Path> + StdDebug) -> Result<bool> {
+    let path = path.as_ref();
+    walk_files(path)
+        .try_any(|_| async { true })
+        .await
+        .map(|found| !found)
+}
+
+/// Recursively copy the contents of `src` to `dst` with specified concurrency.
+///
+/// Preserves metadata that cargo/rustc cares about during the copy.
+/// Returns the total number of bytes copied across all files.
+#[instrument]
+pub async fn copy_dir_with_concurrency(
+    concurrency: usize,
+    src: impl AsRef<Path> + StdDebug,
+    dst: impl AsRef<Path> + StdDebug,
+) -> Result<u64> {
+    let (src, dst) = (src.as_ref(), dst.as_ref());
+    walk_files(&src)
+        .map_ok(|entry| async move {
+            let src_file = entry.path();
+            let rel = src_file
+                .strip_prefix(&src)
+                .with_context(|| format!("make {src_file:?} relative to {src:?}"))?;
+
+            let dst_file = dst.join(rel);
+            copy_file(&src_file, &dst_file)
+                .await
+                .with_context(|| format!("copy {src_file:?} to {dst_file:?}"))
+        })
+        .try_buffer_unordered(concurrency)
+        .try_fold(0u64, |total, copied| async move { Ok(total + copied) })
+        .await
+}
+
 /// Copy the file from `src` to `dst`.
 ///
-/// Preserves some metadata from `src`:
-/// - `mtime`: used for `should_copy_file` and the rust compiler.
-/// - `atime`: used by the rust compiler(?)
-//
-// TODO: should we hold on to the `fs::metadata` result from `should_copy_file`
-// and reuse it here instead of statting again?
-//
-// TODO: use a reflink/fclonefileat/clonefile first, fall back to actual copy if that fails;
-// this action will only be supported on filesystems with copy-on-write support.
-//
-// TODO: optionally use `rustix::fs::copy_file_range` or similar to do linux copies
-// fully in kernel instead of passing through userspace(?)
+/// Preserves metadata that cargo/rustc cares about during the copy.
+/// Returns the number of bytes copied.
 #[instrument]
 pub async fn copy_file(
     src: impl AsRef<Path> + StdDebug,
     dst: impl AsRef<Path> + StdDebug,
-) -> Result<()> {
-    // Manually opening the source file allows us to access the stat info directly,
-    // without an additional syscall to stat directly.
-    let mut src = tokio::fs::File::open(src)
-        .await
-        .context("open source file")?;
-    let src_meta = src.metadata().await.context("get source metadata")?;
+) -> Result<u64> {
+    let (src, dst) = (src.as_ref(), dst.as_ref());
 
-    // If we can't read the actual times from the stat, default to unix epoch
-    // so that we don't break the build system.
-    //
-    // We could promote this to an actual error, but since the rust compiler is ultimately
-    // what's going to read this, this is simpler: it'll just transparently rebuild anything
-    // that we had to set like this (since the source file will obviously be newer).
-    //
-    // In other words, this forms a safe "fail closed" system since
-    // the rust compiler is the ultimate authority here.
-    let src_mtime = src_meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-    let src_atime = src_meta.accessed().unwrap_or(SystemTime::UNIX_EPOCH);
-    if let Some(parent) = dst.as_ref().parent() {
+    if let Some(parent) = dst.parent() {
         create_dir_all(parent)
             .await
             .context("create parent directory")?;
     }
+    let bytes = tokio::fs::copy(src, dst).await.context("copy file")?;
+    trace!(?src, ?dst, ?bytes, "copy file");
 
-    // Manually opening the destination file allows us to set the metadata directly,
-    // without the additional syscall to touch the file metadata.
+    // TODO: I'm keeping this for now behind this feature just in case it
+    // needs to come back... but if you're refactoring stuff and need to touch
+    // this code, go ahead and remove this feature and this block.
     //
-    // We don't currently care about any other metadata (e.g. permission bits, read only, etc)
-    // since the rust compiler is the ultimate arbiter of this data and will reject/rebuild
-    // anything that is out of sync.
-    //
-    // If we find that we have excessive rebuilds we can revisit this.
-    let mut dst = tokio::fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(dst)
-        .await
-        .context("open destination file")?;
-    let bytes = tokio::io::copy(&mut src, &mut dst)
-        .await
-        .context("copy file contents")?;
-
-    // Using the `filetime` crate here instead of the stdlib because it's cross platform.
-    let mtime = FileTime::from_system_time(src_mtime);
-    let atime = FileTime::from_system_time(src_atime);
-    trace!(?src, ?dst, ?mtime, ?atime, ?bytes, "copy file");
-
-    // We need to get the raw handle for filetime operations
-    let dst = set_file_handle_times(dst, Some(atime), Some(mtime))
-        .await
-        .context("set destination file times")?;
-
-    // And finally, we have to sync the file to disk so that we are sure it's actually finished copying
-    // before we move on. Technically we could leave this up to the FS, but this is safer.
-    dst.sync_all().await.context("sync destination file")
-}
-
-/// Update the `atime` and `mtime` of a file handle.
-/// Returns the same file handle after the update.
-#[instrument]
-pub async fn set_file_handle_times(
-    file: File,
-    atime: Option<FileTime>,
-    mtime: Option<FileTime>,
-) -> Result<File> {
-    match (mtime, atime) {
-        (None, None) => Ok(file),
-        (mtime, atime) => {
-            let file = file.into_std().await;
-            spawn_blocking(move || {
-                filetime::set_file_handle_times(&file, atime, mtime).map(|_| file)
-            })
+    // Now that we're doing proper OS-supported copies this doesn't seem
+    // to be needed; it seems to just slow everything down for no reason.
+    // The main reason I'm keeping it for now is in case that's wrong
+    // or to support network restores (which _may_ need to manually set
+    // this data, we'll see).
+    #[cfg(feature = "force-copy-metadata")]
+    if let Some(src_meta) = Metadata::from_file(src).await? {
+        src_meta
+            .set_file(dst)
             .await
-            .context("join thread")?
-            .context("update handle")
-            .map(File::from_std)
-        }
+            .context("update destination metadata")?;
     }
+
+    Ok(bytes)
 }
 
 /// Buffer the file content from disk.
@@ -430,62 +466,85 @@ pub async fn read_dir(path: impl AsRef<Path> + StdDebug) -> Result<ReadDir> {
         .tap_ok(|_| trace!(?path, "read directory"))
 }
 
-/// Report whether the file is executable.
-#[instrument]
-#[cfg(not(target_os = "windows"))]
-pub async fn is_executable(path: impl AsRef<Path> + StdDebug) -> Result<bool> {
-    use std::os::unix::fs::PermissionsExt;
-    let path = path.as_ref();
-    let metadata = tokio::fs::metadata(path).await.context("get metadata")?;
-    let is_executable = metadata.permissions().mode() & 0o111 != 0;
-    trace!(?is_executable, "is executable");
-    Ok(is_executable)
+/// The set of metadata that hurry cares about.
+///
+/// This has a few goals compared to the standard set of metadata:
+/// - Track only the fields hurry believes cargo/rustc care about.
+/// - Be comparable with other instances for testing/diffing.
+/// - Be cross platform (namely, on Windows).
+///
+/// We will probably need to add more fields as we find things that cargo/rustc
+/// care about that we overlooked; don't treat this as gospel if you think
+/// something is missing.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+pub struct Metadata {
+    /// The last time the file was modified.
+    ///
+    /// If the mtime is not available on the file, defaults to the unix epoch.
+    /// The intention here is that cargo/rustc use "is the mtime of the source
+    /// file newer than the mtime of the artifact in target" to determine if
+    /// the artifact needs to be rebuilt; since we want to have the system
+    /// "fail open" (meahing: we prefer to rebuild more if there is a question
+    /// instead of produce bad builds) this is an acceptable fallback.
+    pub mtime: SystemTime,
+
+    /// Whether the file is executable.
+    ///
+    /// On unix, this is set according to the executable bit.
+    /// On windows, this is set according to file extension.
+    pub executable: bool,
 }
 
-/// Set the file as executable.
-#[instrument]
-#[cfg(not(target_os = "windows"))]
-pub async fn set_executable(path: impl AsRef<Path> + StdDebug) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let path = path.as_ref();
-    let metadata = tokio::fs::metadata(path).await.context("get metadata")?;
-    let mut permissions = metadata.permissions();
-    permissions.set_mode(permissions.mode() | 0o111);
-    tokio::fs::set_permissions(path, permissions)
-        .await
-        .context("set permissions")
-        .tap_ok(|_| trace!("set executable"))
-}
+impl Metadata {
+    /// Read the metadata from the provided file.
+    #[instrument]
+    #[cfg(not(target_os = "windows"))]
+    pub async fn from_file(path: impl AsRef<Path> + StdDebug) -> Result<Option<Self>> {
+        use std::os::unix::fs::PermissionsExt;
+        let path = path.as_ref();
 
-/// Report whether the file is executable.
-/// On Windows, this is a simple executable check.
-#[instrument]
-#[cfg(target_os = "windows")]
-pub async fn is_executable(path: impl AsRef<Path> + StdDebug) -> Result<bool> {
-    path.as_ref()
-        .extension()
-        .is_some_and(|ext| ext == "exe")
-        .pipe(Ok)
-}
+        let metadata = match metadata(path).await? {
+            Some(metadata) => metadata,
+            None => return Ok(None),
+        };
+        let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let executable = metadata.permissions().mode() & 0o111 != 0;
+        Ok(Some(Self { mtime, executable }))
+    }
 
-/// Set the file as executable.
-/// On Windows this is a no-op.
-#[instrument]
-#[cfg(target_os = "windows")]
-pub async fn set_executable(path: impl AsRef<Path> + StdDebug) -> Result<()> {
-    Ok(())
-}
+    /// Set the metadata on the provided file.
+    #[instrument]
+    #[cfg(not(target_os = "windows"))]
+    pub async fn set_file(&self, path: impl AsRef<Path> + StdDebug) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let path = path.as_ref();
 
-/// Get the metadata for a file.
-pub async fn metadata(path: impl AsRef<Path> + StdDebug) -> Result<Option<Metadata>> {
-    let path = path.as_ref();
-    match tokio::fs::metadata(path).await {
-        Ok(metadata) => {
-            trace!(?path, ?metadata, "read metadata");
-            Ok(Some(metadata))
+        // We read the current metadata for the file so that we don't
+        // accidentally clobber other fields (although it's not clear
+        // that this is necessary- we mostly do this out of an abundance
+        // of caution as we want to avoid breaking things).
+        // If this ends up being too much of a performance hit we should
+        // revisit.
+        if self.executable {
+            let metadata = tokio::fs::metadata(path).await.context("get metadata")?;
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(permissions.mode() | 0o111);
+            tokio::fs::set_permissions(path, permissions.clone())
+                .await
+                .context("set permissions")
+                .tap_ok(|_| trace!(?path, ?permissions, "set permissions"))?;
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err).context(format!("read metadata: {path:?}")),
+
+        // Make sure to set the file times last so that other modifications to
+        // the metadata don't mess with these.
+        let mtime = FileTime::from_system_time(self.mtime);
+        let path = path.to_path_buf();
+        spawn_blocking(move || {
+            filetime::set_file_mtime(&path, mtime).tap_ok(|_| trace!(?path, ?mtime, "update mtime"))
+        })
+        .await
+        .context("join thread")?
+        .context("update handle")
     }
 }
 
@@ -502,5 +561,23 @@ pub async fn remove_dir_all(path: impl AsRef<Path> + StdDebug) -> Result<()> {
             Ok(())
         }
         Err(err) => Err(err).context(format!("remove directory: {path:?}")),
+    }
+}
+
+/// Get the standard metadata for the file.
+///
+/// Note: you probably want [`Metadata::from_file`] instead,
+/// although this function exists in case you need the standard metadata shape
+/// for some reason.
+#[instrument]
+pub async fn metadata(path: impl AsRef<Path> + StdDebug) -> Result<Option<std::fs::Metadata>> {
+    let path = path.as_ref();
+    match tokio::fs::metadata(path).await {
+        Ok(metadata) => {
+            trace!(?path, ?metadata, "read metadata");
+            Ok(Some(metadata))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).context(format!("read metadata: {path:?}")),
     }
 }

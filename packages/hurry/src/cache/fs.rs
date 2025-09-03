@@ -1,6 +1,10 @@
 //! Local file system implementation of cache and CAS traits.
 
-use std::{fmt::Debug as StdDebug, marker::PhantomData, path::Path};
+use std::{
+    fmt::Debug as StdDebug,
+    marker::PhantomData,
+    path::{Path, PathBuf},
+};
 
 use cargo_metadata::camino::Utf8PathBuf;
 use color_eyre::{Result, Section, SectionExt, eyre::Context};
@@ -41,12 +45,6 @@ pub struct FsCache<State> {
     /// is reading it.
     #[debug(skip)]
     lock: LockFile<State>,
-
-    /// The cache root of the workspace in the context
-    /// in which this cache exists.
-    /// For most kinds of projects, this is expected to be
-    /// the root of the project.
-    pub workspace: Utf8PathBuf,
 }
 
 /// Implementation for all valid lock states.
@@ -59,24 +57,40 @@ impl<L> FsCache<L> {
 impl FsCache<Unlocked> {
     /// Open the cache in the default location for the user.
     #[instrument(name = "FsCache::open_default")]
-    pub async fn open_default(workspace: impl Into<Utf8PathBuf> + StdDebug) -> Result<Self> {
-        let root = fs::user_global_cache_path()
+    pub async fn open_default() -> Result<Self> {
+        fs::user_global_cache_path()
             .await
             .context("find user cache path")?
-            .join("ws");
+            .join("ws")
+            .pipe(Self::open_dir)
+            .await
+    }
 
-        fs::create_dir_all(&root).await?;
+    /// Open the cache in the provided directory.
+    #[instrument(name = "FsCache::open_dir")]
+    pub async fn open_dir(root: impl Into<Utf8PathBuf> + StdDebug) -> Result<Self> {
+        let root = root.into();
+        fs::create_dir_all(&root)
+            .await
+            .context("create cache directory")?;
+
         let lock = root.join(Self::LOCKFILE_NAME);
         let lock = LockFile::open(lock.as_std_path())
             .await
             .context("open lockfile")?;
-
         Ok(Self {
             state: PhantomData,
-            workspace: workspace.into(),
             root,
             lock,
         })
+    }
+
+    /// Open the cache in the provided directory.
+    #[instrument(name = "FsCache::open_dir_std")]
+    pub async fn open_dir_std(root: impl Into<PathBuf> + StdDebug) -> Result<Self> {
+        let root = root.into();
+        let root = Utf8PathBuf::try_from(root).context("convert to utf8 path")?;
+        Self::open_dir(root).await
     }
 
     /// Lock the cache.
@@ -86,7 +100,6 @@ impl FsCache<Unlocked> {
         Ok(FsCache {
             state: PhantomData,
             root: self.root,
-            workspace: self.workspace,
             lock,
         })
     }
@@ -100,9 +113,14 @@ impl FsCache<Locked> {
         Ok(FsCache {
             state: PhantomData,
             root: self.root,
-            workspace: self.workspace,
             lock,
         })
+    }
+
+    /// Report whether there are items in the cache.
+    #[instrument(name = "FsCache::is_empty")]
+    pub async fn is_empty(&self) -> Result<bool> {
+        fs::is_dir_empty(&self.root).await
     }
 }
 
@@ -164,14 +182,35 @@ impl FsCas {
     /// Open an instance in the default location for the user.
     #[instrument(name = "FsCas::open_default")]
     pub async fn open_default() -> Result<Self> {
-        let root = fs::user_global_cache_path()
+        fs::user_global_cache_path()
             .await
             .context("find user cache path")?
-            .join("cas");
+            .join("cas")
+            .pipe(Self::open_dir)
+            .await
+    }
 
+    /// Open an instance in the provided directory.
+    #[instrument(name = "FsCas::open_dir")]
+    pub async fn open_dir(root: impl Into<Utf8PathBuf> + StdDebug) -> Result<Self> {
+        let root = root.into();
         fs::create_dir_all(&root).await?;
         trace!(?root, "open cas");
         Ok(Self { root })
+    }
+
+    /// Open an instance in the provided directory.
+    #[instrument(name = "FsCas::open_dir_std")]
+    pub async fn open_dir_std(root: impl Into<PathBuf> + StdDebug) -> Result<Self> {
+        let root = root.into();
+        let root = Utf8PathBuf::try_from(root).context("convert to utf8 path")?;
+        Self::open_dir(root).await
+    }
+
+    /// Report whether there are items in the CAS.
+    #[instrument(name = "FsCas::is_empty")]
+    pub async fn is_empty(&self) -> Result<bool> {
+        fs::is_dir_empty(&self.root).await
     }
 }
 
@@ -220,6 +259,6 @@ impl super::Cas for FsCas {
         destination: impl AsRef<Path> + StdDebug + Send,
     ) -> Result<()> {
         let src = self.root.join(kind.as_str()).join(key.as_ref().as_str());
-        fs::copy_file(src, destination.as_ref()).await
+        fs::copy_file(src, destination.as_ref()).await.map(drop)
     }
 }

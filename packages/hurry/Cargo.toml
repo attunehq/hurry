@@ -3,6 +3,20 @@ name = "hurry"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+
+# Manually sets metadata Cargo cares about when restoring files from the cache,
+# even when `hurry` doesn't think this is necessary.
+force-copy-metadata = []
+
+[[bench]]
+name = "cargo_copy_target"
+harness = false
+[[bench]]
+name = "cargo_cache"
+harness = false
+
 [dependencies]
 ahash = { workspace = true }
 atomic-time = { workspace = true }
@@ -36,9 +50,18 @@ tracing-tree = { workspace = true, features = ["time"] }
 tokio = { workspace = true, features = ["full"] }
 extfn = { workspace = true }
 async-walkdir = { workspace = true }
-clonelicious = { workspace = true }
 walkdir = { workspace = true }
 rayon = { workspace = true }
 inquire = {workspace = true }
 colored = {workspace = true }
 location-macros = {workspace = true }
+futures = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+async-walkdir.workspace = true
+divan = { workspace = true }
+jwalk = { workspace = true }
+pretty_assertions = { workspace = true }
+test-log = { workspace = true, features = ["trace"] }
+xshell = { workspace = true }
