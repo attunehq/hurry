@@ -57,6 +57,7 @@ colored = {workspace = true }
 location-macros = {workspace = true }
 futures = { workspace = true }
 tempfile = { workspace = true }
+jiff = "0.2.15"
 
 [dev-dependencies]
 async-walkdir.workspace = true

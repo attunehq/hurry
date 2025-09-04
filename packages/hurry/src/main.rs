@@ -44,11 +44,16 @@ enum Command {
     /// Fast `cargo` builds
     #[clap(subcommand)]
     Cargo(cmd::cargo::Command),
+
     // TODO: /// Manage remote authentication
     // Auth,
     /// Manage user cache
     #[clap(subcommand)]
     Cache(cmd::cache::Command),
+
+    /// Debug information
+    #[clap(subcommand)]
+    Debug(cmd::debug::Command),
 }
 
 #[instrument]
@@ -96,6 +101,9 @@ async fn main() -> Result<()> {
         Command::Cargo(cmd) => match cmd {
             cmd::cargo::Command::Build(opts) => cmd::cargo::build::exec(opts).await,
             cmd::cargo::Command::Run(opts) => cmd::cargo::run::exec(opts).await,
+        },
+        Command::Debug(cmd) => match cmd {
+            cmd::debug::Command::Metadata(opts) => cmd::debug::metadata::exec(opts).await,
         },
     };
 

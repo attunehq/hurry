@@ -43,6 +43,7 @@ use derive_more::{Debug, Display};
 use filetime::FileTime;
 use fslock::LockFile as FsLockFile;
 use futures::{Stream, TryStreamExt};
+use jiff::Timestamp;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use relative_path::RelativePathBuf;
 use tap::{Pipe, Tap, TapFallible, TryConv};
@@ -486,6 +487,7 @@ pub struct Metadata {
     /// the artifact needs to be rebuilt; since we want to have the system
     /// "fail open" (meahing: we prefer to rebuild more if there is a question
     /// instead of produce bad builds) this is an acceptable fallback.
+    #[debug("{}", Timestamp::try_from(mtime.clone()).map(|t| t.to_string()).unwrap_or_else(|_| format!("{mtime:?}")))]
     pub mtime: SystemTime,
 
     /// Whether the file is executable.
