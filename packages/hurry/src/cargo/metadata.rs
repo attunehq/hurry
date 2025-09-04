@@ -102,7 +102,7 @@ impl Dotd {
         profile: &ProfileDir<'_, Locked>,
         target: &RelativePath,
     ) -> Result<Self> {
-        const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta"];
+        const DEP_EXTS: [&str; 4] = [".d", ".rlib", ".rmeta", ".so"];
         let profile_root = profile.root();
         let outputs = fs::read_buffered_utf8(target.to_path(&profile_root))
             .await
