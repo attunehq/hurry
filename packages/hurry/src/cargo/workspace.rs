@@ -467,7 +467,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         // We find dependencies by looking for a `.d` file in the `deps` folder
         // whose name starts with the name of the dependency and parsing it.
         // This will include the `.rlib` and `.rmeta`.
-        let dependencies = index
+        let deps = index
             .files
             .iter()
             .filter(|(path, _)| {
@@ -476,25 +476,28 @@ impl<'ws> ProfileDir<'ws, Locked> {
                     .is_some_and(|part| part.as_str() == "deps")
             })
             .collect_vec();
-        let dotd = dependencies.iter().find(|(path, _)| {
-            path.components().nth(1).is_some_and(|part| {
-                part.as_str().ends_with(".d") && dotd_regex.is_match(part.as_str())
-            })
+        // We collect dependencies by finding the `.d` file and reading it.
+        //
+        // FIXME: If we can't reconstruct the expected hash, we can't actually
+        // find the _one_ `.d` file because we can't tell which file is for
+        // which package version in scenarios where our project has multiple
+        // versions of a dependency.
+        let dotds = deps.iter().filter(|(path, _)| {
+            path.components()
+                .nth(1)
+                .is_some_and(|part| dotd_regex.is_match(part.as_str()))
         });
-        let dependencies = if let Some((path, _)) = dotd {
-            let outputs = Dotd::from_file(self, path)
+
+        let mut dependencies = Vec::new();
+        for (dotd, _) in dotds {
+            let outputs = Dotd::from_file(self, dotd)
                 .await
                 .context("parse .d file")?
                 .outputs
                 .into_iter()
                 .collect::<HashSet<_>>();
-            dependencies
-                .into_iter()
-                .filter(|(path, _)| outputs.contains(*path))
-                .collect_vec()
-        } else {
-            Vec::new()
-        };
+            dependencies.extend(deps.iter().filter(|(path, _)| outputs.contains(*path)));
+        }
 
         // Now that we have our three sources of files,
         // we actually treat them all the same way!
