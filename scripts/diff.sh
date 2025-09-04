@@ -30,3 +30,6 @@ echo "Build restored"
 
 # Save a tree diff.
 diff --side-by-side --width 200 ./.scratch/trees/$RUN_ID/cargo-tree.txt ./.scratch/trees/$RUN_ID/hurry-tree.txt > ./.scratch/trees/$RUN_ID/diff.txt
+
+# # To view the latest tree diff:
+# less -S ./.scratch/trees/$(ls ./.scratch/trees | sort | tail -n 1)/diff.txt

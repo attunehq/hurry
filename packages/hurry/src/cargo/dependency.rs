@@ -27,11 +27,11 @@ use crate::hash::Blake3;
 /// - We aren't including things that should almost definitely be included,
 ///   for example active features.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Builder)]
-#[display("{name}@{version}")]
+#[display("{package_name}@{version}")]
 pub struct Dependency {
     /// The name of the dependency.
     #[builder(into)]
-    pub name: String,
+    pub package_name: String,
 
     /// The version of the dependency.
     #[builder(into)]
@@ -62,7 +62,7 @@ impl Dependency {
     pub fn key(&self) -> Blake3 {
         Self::key_for()
             .checksum(&self.checksum)
-            .name(&self.name)
+            .name(&self.package_name)
             .target(&self.target)
             .version(&self.version)
             .call()

@@ -9,6 +9,7 @@ use color_eyre::{
 use derive_more::{Debug, Display};
 use itertools::Itertools;
 use location_macros::workspace_dir;
+use regex::Regex;
 use relative_path::{PathExt, RelativePathBuf};
 use tap::{Pipe, Tap, TapFallible};
 use tokio::task::spawn_blocking;
@@ -132,7 +133,7 @@ impl Workspace {
                 (Some(source), Some(checksum)) if source.is_default_registry() => {
                     Dependency::builder()
                         .checksum(checksum.to_string())
-                        .name(package.name.to_string())
+                        .package_name(package.name.to_string())
                         .version(package.version.to_string())
                         .target(&rustc_meta.llvm_target)
                         .build()
@@ -322,71 +323,150 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
 impl<'ws> ProfileDir<'ws, Locked> {
     /// Find all cache artifacts for a specific dependency.
     ///
-    /// Scans the profile directory's file index to locate artifacts that belong
-    /// to the given dependency.
+    /// # Dependencies
     ///
-    /// Artifacts are identified by location and naming.
+    /// Each dependency is a single package, and the first-party project depends
+    /// on its library crate. When we talk about "_the_ crate" of a dependency,
+    /// we mean its library crate (as opposed to its binary crates or test
+    /// crates). Below, we notate the package name as `PACKAGE_NAME` and the
+    /// crate name as `CRATE_NAME` (the difference being that the crate name
+    /// must be a valid Rust identifier and therefore has hyphens replaced with
+    /// underscores).
     ///
-    /// ## Artifact Types
-    /// - **Fingerprint/Build**: Files in `.fingerprint/` or `build/`
-    ///   subdirectories where the subdirectory name starts with
-    ///   the dependency name.
-    /// - **Dependencies**: Files in `deps/` directory, discovered through
-    ///   `.d` files that list the actual outputs (`.rlib`, `.rmeta`, etc.)
+    /// These dependency library crates can come in two configurations: either
+    /// they _do_ have a build script or _do not_ have a build script.
     ///
-    /// ## Contract
-    /// - Returns artifacts with paths relative to profile root
-    /// - Filters to dependency-specific files to avoid over-caching
+    /// # Expected artifacts
     ///
-    /// TODO: Evaluate more precise filtering to reduce cache invalidations
+    /// For each package, here are the artifacts we expect:
+    ///
+    /// - Fingerprints: these are stored in `$PROFILE/.fingerprint/`.
+    ///   - For packages with build scripts, there are 3 fingerprint folders:
+    ///     - `{PACKAGE_NAME}-{HASH1}`, which contains the fingerprint for the
+    ///       library crate itself.
+    ///       - `dep-lib-{CRATE_NAME}` (TODO: what's this used for? It's some
+    ///         fixed 14-byte marker)
+    ///       - `invoked.timestamp`, whose mtime marks the start of the
+    ///         package's build
+    ///       - `lib-{CRATE_NAME}`, containing a hash (TODO: for what? It's not
+    ///         the PackageId or the package checksum)
+    ///       - `lib-{CRATE_NAME}.json`, containing unit information like the
+    ///         rustc version, features, dependencies, etc.
+    ///     - `{PACKAGE_NAME}-{HASH2}`, which contains the fingerprint for
+    ///       compiling the build script crate.
+    ///       - `dep-build-script-build-script-build`
+    ///       - `invoked.timestamp`
+    ///       - `build-script-build-script-build`
+    ///       - `build-script-build-script-build.json`
+    ///     - `{PACKAGE_NAME}-{HASH3}`, which contains the fingerprint for
+    ///       running the build script.
+    ///       - `run-build-script-build-script-build`
+    ///       - `run-build-script-build-script-build.json`, which among other
+    ///         things contains the conditions for re-running the build script
+    ///   - For packages without build scripts, only `{PACKAGE_NAME}-{HASH1}` is
+    ///     present.
+    /// - Build scripts: these are stored in `$PROFILE/build/`. For packages
+    ///   without build scripts, there are no entries in this folder. For
+    ///   packages with build scripts, there are 2 folders:
+    ///   - `{PACKAGE_NAME}-{HASH2}`, which contains the compiled build script.
+    ///     - `build-script-build`, an executable ELF.
+    ///     - `build_script_build-{HASH2}`, the exact same ELF.
+    ///     - `build_script_build-{HASH2}.d`, a `.d` file listing the input
+    ///       files.
+    ///   - `{PACKAGE_NAME}-{HASH3}`, which contains the outputs of running the
+    ///     build script.
+    ///     - `invoked.timestamp`, whose mtime marks when the build script
+    ///       compilation was started (I think?)
+    ///     - `out`, the build script output folder.
+    ///     - `output`, the STDOUT of the build script, containing e.g. printed
+    ///       `cargo:` directives.
+    ///     - `root-output`, a file containing the absolute path to the output
+    ///       folder of the build script.
+    ///     - `stderr`, the STDERR of the build script.
+    /// - Deps: these are stored in `$PROFILE/deps/`. See also:
+    ///   https://rustc-dev-guide.rust-lang.org/backend/libs-and-metadata.html
+    ///   - `{CRATE_NAME}-{HASH1}.d`, a `.d` file listing the inputs.
+    ///   - `lib{CRATE_NAME}-{HASH1}.rlib`
+    ///   - `lib{CRATE_NAME}-{HASH1}.rmeta`
+    ///
+    /// # Known weirdness
+    ///
+    /// ## Extra fingerprint and dep files
+    ///
+    /// When you examine your target folder after a build, you may see
+    /// additional instances of fingerprint and dep files? Why is this? It's
+    /// very likely because you have your IDE open, and rust-analyzer is running
+    /// `cargo check` which is checking the units in a different feature/profile
+    /// configuration than a regular `cargo build`, and therefore is creating
+    /// units with different `PackageId`s. See if these extra files still appear
+    /// after closing your IDE, killing all rust-analyzer processes, and running
+    /// `cargo clean` and then `cargo build`.
+    ///
+    /// ## Missing artifacts
+    ///
+    /// Some dependencies listed in the lockfile don't generate artifacts
+    /// because they aren't actually used. To check whether the artifact is
+    /// actually used, see if you can find it in the output of `cargo tree`. See
+    /// also: https://github.com/rust-lang/cargo/issues/10801
+    ///
+    /// FIXME: The right thing to do here is to read the dependency source from
+    /// `cargo tree` or whatever underlying mechanism it's using, rather than
+    /// from the lockfile or `cargo metadata`.
     #[instrument(name = "ProfileDir::enumerate_cache_artifacts")]
     pub async fn enumerate_cache_artifacts(
         &self,
         dependency: &Dependency,
     ) -> Result<Vec<Artifact>> {
+        // TODO: We could make these lookups faster. For example, we could build
+        // dedicated indexes for the fingerprint, deps, and build folders. We
+        // could also use a data structure that natively supports fast "look up
+        // by package name (i.e. file prefix)" rather than doing
+        // iter-then-filter.
         let index = self.index.as_ref().ok_or_eyre("files not indexed")?;
 
-        // Package names with hyphens are saved on disk with underscores.
-        let normalized_name = dependency.name.clone().replace("-", "_");
+        // Some artifacts are saved with _crate_ names, rather than package
+        // names.
+        let crate_name = dependency.package_name.clone().replace("-", "_");
+        // TODO: Figure out how to directly reconstruct the expected package
+        // hashes.
+        let package_regex = Regex::new(&format!("^{}-[0-9a-f]{{16}}$", dependency.package_name))?;
+        let dotd_regex = Regex::new(&format!("^{}-[0-9a-f]{{16}}\\.d$", crate_name))?;
 
-        // Fingerprint artifacts are straightforward:
-        // if they're inside the `.fingerprint` directory,
-        // and the subdirectory of `.fingerprint` starts with the name of
-        // the dependency, then they should be backed up.
-        //
-        // Builds are the same as fingerprints, just with a different root:
-        // instead of `.fingerprint`, they're looking for `build`.
-        let standard = index
+        // Save fingerprints.
+        let fingerprints = index
             .files
             .iter()
             .filter(|(path, _)| {
-                path.components()
-                    .tuple_windows()
-                    .next()
-                    .is_some_and(|(parent, child)| {
-                        child.as_str().starts_with(&normalized_name)
-                            && (parent.as_str() == ".fingerprint" || parent.as_str() == "build")
+                let mut components = path.components();
+                let parent = components.next();
+                let child = components.next();
+                parent.is_some_and(|parent| {
+                    child.is_some_and(|child| {
+                        parent.as_str() == ".fingerprint" && package_regex.is_match(child.as_str())
                     })
+                })
             })
             .collect_vec();
 
-        // Dependencies are totally different from the two above.
-        // This directory is flat; inside we're looking for one primary file:
-        // a `.d` file whose name starts with the name of the dependency.
-        //
-        // This file then lists other files (e.g. `*.rlib` and `*.rmeta`)
-        // that this dependency built; these are _often_ (but not always)
-        // named with a different prefix (often, but not always, "lib").
-        //
-        // Along the way we also grab any other random file in here that is
-        // prefixed with the name of the dependency; so far this has been
-        // `.rcgu.o` files which appear to be compiled codegen.
-        //
-        // Not all dependencies create `.d` files or indeed anything else
-        // in the `deps` folder- from observation, it seems that this is the
-        // case for purely proc-macro crates. This is honestly mostly ok,
-        // because we want those to run anyway for now (until we figure out
-        // a way to cache proc-macro invocations).
+        // Save build scripts.
+        let build_scripts = index
+            .files
+            .iter()
+            .filter(|(path, _)| {
+                let mut components = path.components();
+                let parent = components.next();
+                let child = components.next();
+                parent.is_some_and(|parent| {
+                    child.is_some_and(|child| {
+                        parent.as_str() == "build" && package_regex.is_match(child.as_str())
+                    })
+                })
+            })
+            .collect_vec();
+
+        // We find dependencies by looking for a `.d` file in the `deps` folder
+        // whose name starts with the name of the dependency and parsing it.
+        // This will include the `.rlib` and `.rmeta`.
         let dependencies = index
             .files
             .iter()
@@ -398,7 +478,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .collect_vec();
         let dotd = dependencies.iter().find(|(path, _)| {
             path.components().nth(1).is_some_and(|part| {
-                part.as_str().ends_with(".d") && part.as_str().starts_with(&normalized_name)
+                part.as_str().ends_with(".d") && dotd_regex.is_match(part.as_str())
             })
         });
         let dependencies = if let Some((path, _)) = dotd {
@@ -410,12 +490,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
                 .collect::<HashSet<_>>();
             dependencies
                 .into_iter()
-                .filter(|(path, _)| {
-                    outputs.contains(*path)
-                        || path
-                            .file_name()
-                            .is_some_and(|name| name.starts_with(&normalized_name))
-                })
+                .filter(|(path, _)| outputs.contains(*path))
                 .collect_vec()
         } else {
             Vec::new()
@@ -423,8 +498,9 @@ impl<'ws> ProfileDir<'ws, Locked> {
 
         // Now that we have our three sources of files,
         // we actually treat them all the same way!
-        standard
+        fingerprints
             .into_iter()
+            .chain(build_scripts)
             .chain(dependencies)
             .map(|(path, entry)| Artifact::builder().target(path).hash(&entry.hash).build())
             .inspect(|artifact| trace!(?artifact, "enumerated artifact"))

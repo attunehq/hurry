@@ -115,7 +115,7 @@ pub async fn cache_target_from_workspace(
                                 .await
                                 .with_context(|| format!("backup output file: {dst:?}"))
                                 .tap_ok(|key| {
-                                    trace!(?key, ?dependency, ?artifact, "restored artifact")
+                                    trace!(?key, ?dependency, ?artifact, "stored artifact")
                                 })
                                 .map(drop)
                         }
