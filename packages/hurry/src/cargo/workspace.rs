@@ -210,12 +210,12 @@ impl Workspace {
 
 /// A build profile directory within a Cargo workspace.
 ///
-/// Represents a specific profile subdirectory
-/// (e.g., `target/debug/`, `target/release/`)
-/// within a workspace's target directory.
-/// Provides controlled access to the directory
-/// contents with proper locking to prevent conflicts
-/// with concurrent Cargo builds.
+/// Represents a specific profile subdirectory (e.g., `target/debug/`,
+/// `target/release/`) within a workspace's target directory. Provides
+/// controlled access to the directory contents with proper locking to prevent
+/// conflicts with concurrent Cargo builds and with rust-analyzer, which will
+/// attempt to concurrently run `cargo check` if it is present (e.g. if a user
+/// has their IDE open).
 ///
 /// ## State Management
 /// - `Unlocked`: No file operations allowed

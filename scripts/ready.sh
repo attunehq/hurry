@@ -9,7 +9,7 @@ set -euxo pipefail
 # actual test suite at some point.
 
 # Install test binary.
-cargo install --path ./packages/hurry --locked
+cargo install --path ./packages/hurry --locked --features force-copy-metadata
 
 # Reset cache and build state.
 cargo clean
