@@ -11,6 +11,8 @@ use color_eyre::{Result, eyre::Context};
 use hurry::{
     cache::{Cache, Cas, FsCache, FsCas},
     cargo::{Profile, Workspace, cache_target_from_workspace, invoke, restore_target_from_cache},
+    fs,
+    hash::Blake3,
 };
 use tracing::{error, info, instrument, warn};
 
@@ -30,6 +32,12 @@ pub struct Options {
     /// Skip restoring the cache.
     #[arg(long = "hurry-skip-restore", default_value_t = false)]
     skip_restore: bool,
+
+    /// Backup and restore the `target/` folder by copying the entire
+    /// contents and storing it by hash of your `Cargo.lock` file
+    /// instead of doing dependency-based restoration.
+    #[arg(long = "hurry-simple-caching", default_value_t = false)]
+    simple_caching: bool,
 
     /// These arguments are passed directly to `cargo build` as provided.
     #[arg(
@@ -53,12 +61,18 @@ impl Options {
 pub async fn exec(options: Options) -> Result<()> {
     info!("Starting");
 
-    let cas = FsCas::open_default().await.context("open CAS")?;
-    let cache = FsCache::open_default().await.context("open cache")?;
-    let cache = cache.lock().await.context("lock cache")?;
     let workspace = Workspace::from_argv(&options.argv)
         .await
         .context("open workspace")?;
+
+    if options.simple_caching {
+        warn!("Simple caching enabled; simple caches have less reuse across builds.");
+        return exec_simple(options, &workspace).await;
+    }
+
+    let cas = FsCas::open_default().await.context("open CAS")?;
+    let cache = FsCache::open_default().await.context("open cache")?;
+    let cache = cache.lock().await.context("lock cache")?;
 
     // This is split into an inner function so that we can reliably
     // release the lock if it fails.
@@ -72,6 +86,62 @@ pub async fn exec(options: Options) -> Result<()> {
     result
         .inspect(|_| info!("finished"))
         .inspect_err(|error| error!(?error, "failed: {error:#?}"))
+}
+
+#[instrument]
+async fn exec_simple(options: Options, workspace: &Workspace) -> Result<()> {
+    let profile = options.profile();
+    let cache_root = fs::user_global_cache_path()
+        .await
+        .context("open cache")?
+        .join("simple");
+
+    if !options.skip_restore {
+        info!("Restoring target directory from cache");
+        let key = Blake3::from_file(workspace.root.join("Cargo.lock")).await?;
+        let cache_dir = cache_root.join(key.as_str()).join(profile.as_str());
+        let target = workspace.target.join(profile.as_str());
+
+        let has_cache = fs::metadata(&cache_dir)
+            .await
+            .is_ok_and(|meta| meta.is_some());
+        if has_cache {
+            let bytes = fs::copy_dir(&cache_dir, &target).await?;
+            info!(?bytes, ?key, ?cache_dir, "Restored cache");
+        } else {
+            info!(?key, "No existing cache found");
+        }
+    }
+
+    if !options.skip_build {
+        info!("Building target directory");
+        invoke("build", &options.argv)
+            .await
+            .context("build with cargo")?;
+    }
+
+    if !options.skip_backup {
+        info!("Caching target directory");
+
+        let key = Blake3::from_file(workspace.root.join("Cargo.lock")).await?;
+        let cache_dir = cache_root.join(key.as_str()).join(profile.as_str());
+        let target = workspace.target.join(profile.as_str());
+        fs::remove_dir_all(&cache_dir)
+            .await
+            .context("remove old cache")?;
+
+        // Only back up directories used in third party builds.
+        let mut bytes = 0u64;
+        for subdir in [".fingerprint", "build", "deps"] {
+            bytes += fs::copy_dir(target.join(subdir), cache_dir.join(subdir))
+                .await
+                .with_context(|| format!("back up {subdir:?}"))?;
+        }
+
+        info!(?bytes, ?key, ?cache_dir, "Cached target directory");
+    }
+
+    Ok(())
 }
 
 #[instrument]
