@@ -104,6 +104,7 @@ async fn main() -> Result<()> {
         },
         Command::Debug(cmd) => match cmd {
             cmd::debug::Command::Metadata(opts) => cmd::debug::metadata::exec(opts).await,
+            cmd::debug::Command::Copy(opts) => cmd::debug::copy::exec(opts).await,
         },
     };
 
