@@ -9,7 +9,7 @@ use hurry::fs::Metadata;
 use relative_path::PathExt;
 use tracing::instrument;
 
-/// Options for `debug cargo metadata`
+/// Options for `debug metadata`
 #[derive(Clone, Args, Debug)]
 pub struct Options {
     /// The directory to inspect.
