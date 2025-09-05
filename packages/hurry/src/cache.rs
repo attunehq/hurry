@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{fmt::Debug, future::Future, path::Path};
 use strum::Display;
 
-use crate::hash::Blake3;
+use crate::{fs::Metadata, hash::Blake3};
 
 mod fs;
 pub use fs::*;
@@ -145,9 +145,20 @@ pub struct Artifact {
     pub target: RelativePathBuf,
 
     /// The hash of the content of the artifact.
-    /// Intended to be used to reference the artifact in the CAS.
+    ///
+    /// This is used to find the artifact data in the CAS.
     #[builder(into)]
     pub hash: Blake3,
+
+    /// The file metadata of the artifact.
+    ///
+    /// When the artifact is restored from the CAS object in cache, this is used
+    /// to restore metadata like the mtime and permissions. Note that we cannot
+    /// simply leave the metadata on the CAS object because multiple artifacts
+    /// may map to the same CAS object (e.g. all files of size zero are the same
+    /// object).
+    #[builder(into)]
+    pub metadata: Metadata,
 }
 
 impl From<&Artifact> for Artifact {

@@ -6,10 +6,6 @@ edition = "2024"
 [features]
 default = []
 
-# Manually sets metadata Cargo cares about when copying files,
-# even when `hurry` doesn't think this is necessary.
-force-copy-metadata = []
-
 [[bench]]
 name = "cargo_copy_target"
 harness = false
