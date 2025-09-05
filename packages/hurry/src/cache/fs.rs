@@ -215,19 +215,6 @@ impl FsCas {
 }
 
 impl super::Cas for FsCas {
-    #[instrument(name = "FsCas::store")]
-    async fn store(
-        &self,
-        kind: Kind,
-        content: impl AsRef<[u8]> + StdDebug + Send,
-    ) -> Result<Blake3> {
-        let content = content.as_ref();
-        let key = Blake3::from_buffer(content);
-        let dst = self.root.join(kind.as_str()).join(key.as_str());
-        fs::write(dst, content).await?;
-        Ok(key)
-    }
-
     #[instrument(name = "FsCas::store_file")]
     async fn store_file(
         &self,
@@ -239,16 +226,6 @@ impl super::Cas for FsCas {
         let dst = self.root.join(kind.as_str()).join(key.as_str());
         fs::copy_file(src, dst).await?;
         Ok(key)
-    }
-
-    #[instrument(name = "FsCas::get")]
-    async fn get(
-        &self,
-        kind: Kind,
-        key: impl AsRef<Blake3> + StdDebug + Send,
-    ) -> Result<Option<Vec<u8>>> {
-        let src = self.root.join(kind.as_str()).join(key.as_ref().as_str());
-        fs::read_buffered(src).await
     }
 
     #[instrument(name = "FsCas::get_file")]
