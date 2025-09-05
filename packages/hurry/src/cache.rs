@@ -52,14 +52,6 @@ impl<T: Cache + Sync> Cache for &T {
 
 /// Conceptualizes "content addressed storage" across providers.
 pub trait Cas {
-    /// Store the content in the CAS.
-    /// Returns the key by which this content can be referred to in the future.
-    fn store(
-        &self,
-        kind: Kind,
-        content: impl AsRef<[u8]> + Debug + Send,
-    ) -> impl Future<Output = Result<Blake3>> + Send;
-
     /// Store the content at the provided local file path in the CAS.
     /// Returns the key by which this content can be referred to in the future.
     fn store_file(
@@ -67,13 +59,6 @@ pub trait Cas {
         kind: Kind,
         file: impl AsRef<Path> + Debug + Send,
     ) -> impl Future<Output = Result<Blake3>> + Send;
-
-    /// Get the content from the cache, if it exists.
-    fn get(
-        &self,
-        kind: Kind,
-        key: impl AsRef<Blake3> + Debug + Send,
-    ) -> impl Future<Output = Result<Option<Vec<u8>>>> + Send;
 
     /// Get the content from the cache, if it exists,
     /// and write it to the output location.
@@ -86,20 +71,8 @@ pub trait Cas {
 }
 
 impl<T: Cas + Sync> Cas for &T {
-    async fn store(&self, kind: Kind, content: impl AsRef<[u8]> + Debug + Send) -> Result<Blake3> {
-        Cas::store(*self, kind, content).await
-    }
-
     async fn store_file(&self, kind: Kind, src: impl AsRef<Path> + Debug + Send) -> Result<Blake3> {
         Cas::store_file(*self, kind, src).await
-    }
-
-    async fn get(
-        &self,
-        kind: Kind,
-        key: impl AsRef<Blake3> + Debug + Send,
-    ) -> Result<Option<Vec<u8>>> {
-        Cas::get(*self, kind, key).await
     }
 
     async fn get_file(
