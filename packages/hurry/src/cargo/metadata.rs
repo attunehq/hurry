@@ -6,14 +6,14 @@ use std::{
 use cargo_metadata::camino::Utf8Path;
 use color_eyre::{
     Result, Section, SectionExt,
-    eyre::{Context, bail, eyre},
+    eyre::{Context, OptionExt, bail, eyre},
 };
 use futures::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
 use relative_path::{PathExt, RelativePathBuf};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tracing::instrument;
+use tracing::{instrument, trace};
 
 use super::workspace::ProfileDir;
 use crate::{
@@ -96,30 +96,25 @@ impl Dotd {
     /// Reads the dependency file at the given path (relative to profile root),
     /// parses each line for the `output:` format, and filters for relevant
     /// file extensions. All returned paths are relative to the profile root.
-    ///
-    /// ## Contract
-    /// - Requires a locked [`ProfileDir`] to access the file system
-    /// - Target path must be relative to the profile root
-    /// - Only extracts outputs with extensions: `.d`, `.rlib`, `.rmeta`
-    /// - Returns paths relative to the profile root for cache consistency
     #[instrument(name = "Dotd::from_file")]
     pub async fn from_file(
         profile: &ProfileDir<'_, Locked>,
         dotd: impl AsRef<Path> + Debug,
     ) -> Result<Self> {
         let dotd = dotd.as_ref();
-        let handle = fs::open_file(dotd).await.context("open file")?;
-        let reader = BufReader::new(handle);
+        let content = fs::read_buffered_utf8(dotd)
+            .await
+            .context("read file")?
+            .ok_or_eyre("file does not exist")?;
+        let lines = stream::iter(content.lines())
+            .then(|line| {
+                DotdLine::parse(profile, &line)
+                    .then_with_context(move || format!("parse line: {line:?}"))
+            })
+            .try_collect::<Vec<_>>()
+            .await?;
 
-        let mut lines = Vec::new();
-        let mut reader = reader.lines();
-        while let Some(line) = reader.next_line().await.context("read line")? {
-            let parsed = DotdLine::parse(profile, &line)
-                .await
-                .with_context(move || format!("parse line: {line:?}"))?;
-            lines.push(parsed);
-        }
-
+        trace!(?dotd, ?content, ?lines, "parsed .d file");
         Ok(Self(lines))
     }
 
