@@ -110,17 +110,43 @@ impl Workspace {
             .tap_ok(|rustc_meta| debug!(?rustc_meta, "rustc metadata"))
             .context("read rustc metadata")?;
 
+        // We need to know which packages are first-party workspace members for
+        // two reasons:
+        //
+        // 1. We cache them differently in order to correctly handle incremental
+        //    compilation. (Right now, we don't cache them at all.)
+        // 2. Workspace members can be binary-only crates if they're
+        //    entrypoints. This means our normal library crate name resolution
+        //    won't (and _shouldn't_) work for them, so we need to handle them
+        //    as a special case. Note that not all workspace members are
+        //    binary-only crates! Some may have library crates, and some may be
+        //    used as dependencies.
+        let workspace_package_names = metadata
+            .workspace_members
+            .iter()
+            .map(|id| {
+                metadata
+                    .packages
+                    .iter()
+                    .find(|package| package.id == *id)
+                    .expect("workspace member not found")
+                    .name
+                    .clone()
+            })
+            .collect::<HashSet<_>>();
+
         // Construct a mapping of _package names_ to _library crate names_.
         let package_to_lib = metadata
             .packages
             .iter()
-            .map(|package| {
+            .filter_map(|package| {
                 let mut libs = package
                     .targets
                     .iter()
                     .filter_map(|target| {
                         if target.kind.contains(&TargetKind::Lib)
                             || target.kind.contains(&TargetKind::ProcMacro)
+                            || target.kind.contains(&TargetKind::RLib)
                         {
                             Some(target.name.clone())
                         } else {
@@ -128,6 +154,10 @@ impl Workspace {
                         }
                     })
                     .collect::<Vec<_>>();
+                // Workspace members might be binary-only crates.
+                if libs.len() < 1 && workspace_package_names.contains(&package.name) {
+                    return None;
+                }
                 assert_eq!(
                     libs.len(),
                     1,
@@ -137,11 +167,11 @@ impl Workspace {
                     package.targets
                 );
 
-                (
+                Some((
                     package.name.as_str(),
                     libs.pop()
                         .expect("package lib targets of length 1 has at least 1 element"),
-                )
+                ))
             })
             .collect::<HashMap<_, _>>();
 
@@ -166,14 +196,17 @@ impl Workspace {
             .into_iter()
             .filter_map(|package| match (&package.source, &package.checksum) {
                 (Some(source), Some(checksum)) if source.is_default_registry() => {
+                    // Ignore workspace members.
+                    if workspace_package_names.contains(package.name.as_str()) {
+                        return None;
+                    }
+
                     Dependency::builder()
                         .checksum(checksum.to_string())
                         .package_name(package.name.to_string())
-                        .lib_name(
-                            package_to_lib
-                                .get(package.name.as_str())
-                                .expect("package in lockfile should have lib from cargo metadata"),
-                        )
+                        .lib_name(package_to_lib.get(package.name.as_str()).expect(
+                            "dependency package in lockfile should have lib from cargo metadata",
+                        ))
                         .version(package.version.to_string())
                         .target(&rustc_meta.llvm_target)
                         .build()
