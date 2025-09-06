@@ -25,6 +25,7 @@
 )]
 
 use std::{
+    convert::identity,
     fmt::Debug as StdDebug,
     marker::PhantomData,
     path::{Path, PathBuf},
@@ -582,4 +583,15 @@ pub async fn metadata(path: impl AsRef<Path> + StdDebug) -> Result<Option<std::f
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err).context(format!("read metadata: {path:?}")),
     }
+}
+
+/// Check whether the file exists.
+///
+/// Returns `false` if there is an error checking whether the path exists.
+/// Note that this sort of check is prone to race conditions- if you plan
+/// to do anything with the file after checking, you should probably
+/// just try to do the operation and handle the case of the file not existing.
+#[instrument]
+pub async fn exists(path: impl AsRef<Path> + StdDebug) -> bool {
+    tokio::fs::try_exists(path).await.is_ok_and(identity)
 }

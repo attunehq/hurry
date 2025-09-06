@@ -46,6 +46,10 @@ pub struct Workspace {
     #[debug(skip)]
     pub target: Utf8PathBuf,
 
+    /// The $CARGO_HOME value.
+    #[debug(skip)]
+    pub cargo_home: Utf8PathBuf,
+
     /// Parsed `rustc` metadata relating to the current workspace.
     #[debug(skip)]
     pub rustc: RustcMetadata,
@@ -93,6 +97,16 @@ impl Workspace {
         .context("join task")?
         .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
         .context("read cargo metadata")?;
+
+        let cargo_home = {
+            let workspace_root = metadata.workspace_root.clone();
+            spawn_blocking(move || home::cargo_home_with_cwd(workspace_root.as_std_path()))
+        }
+        .await
+        .context("join background task")?
+        .context("get $CARGO_HOME")?
+        .pipe(Utf8PathBuf::try_from)
+        .context("parse path as utf8")?;
 
         // TODO: This currently blows up if we have no lockfile.
         let cargo_lock = metadata.workspace_root.join("Cargo.lock");
@@ -152,6 +166,7 @@ impl Workspace {
             target: metadata.target_directory,
             rustc: rustc_meta,
             dependencies,
+            cargo_home,
         })
     }
 
@@ -399,12 +414,10 @@ impl<'ws> ProfileDir<'ws, Locked> {
             })
         });
         let dependencies = if let Some((path, _)) = dotd {
-            let outputs = Dotd::from_file(self, path)
+            let parsed_dotd = Dotd::from_file(self, path.to_path(self.root()))
                 .await
-                .context("parse .d file")?
-                .outputs
-                .into_iter()
-                .collect::<HashSet<_>>();
+                .context("parse .d file")?;
+            let outputs = parsed_dotd.build_outputs().collect::<HashSet<_>>();
             dependencies
                 .into_iter()
                 .filter(|(path, _)| {
