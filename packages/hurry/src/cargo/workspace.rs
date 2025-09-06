@@ -1,7 +1,7 @@
 use std::{fmt::Debug as StdDebug, marker::PhantomData, path::PathBuf, sync::Arc};
 
 use ahash::{HashMap, HashSet};
-use cargo_metadata::camino::Utf8PathBuf;
+use cargo_metadata::{TargetKind, camino::Utf8PathBuf};
 use color_eyre::{
     Result,
     eyre::{Context, OptionExt},
@@ -110,6 +110,41 @@ impl Workspace {
             .tap_ok(|rustc_meta| debug!(?rustc_meta, "rustc metadata"))
             .context("read rustc metadata")?;
 
+        // Construct a mapping of _package names_ to _library crate names_.
+        let package_to_lib = metadata
+            .packages
+            .iter()
+            .map(|package| {
+                let mut libs = package
+                    .targets
+                    .iter()
+                    .filter_map(|target| {
+                        if target.kind.contains(&TargetKind::Lib)
+                            || target.kind.contains(&TargetKind::ProcMacro)
+                        {
+                            Some(target.name.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    libs.len(),
+                    1,
+                    "package {} has {} library targets but expected 1: {:?}",
+                    package.name,
+                    libs.len(),
+                    package.targets
+                );
+
+                (
+                    package.name.as_str(),
+                    libs.pop()
+                        .expect("package lib targets of length 1 has at least 1 element"),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
         // We only care about third party packages for now.
         //
         // From observation, first party packages seem to have
@@ -134,6 +169,11 @@ impl Workspace {
                     Dependency::builder()
                         .checksum(checksum.to_string())
                         .package_name(package.name.to_string())
+                        .lib_name(
+                            package_to_lib
+                                .get(package.name.as_str())
+                                .expect("package in lockfile should have lib from cargo metadata"),
+                        )
                         .version(package.version.to_string())
                         .target(&rustc_meta.llvm_target)
                         .build()
@@ -424,27 +464,22 @@ impl<'ws> ProfileDir<'ws, Locked> {
         // iter-then-filter.
         let index = self.index.as_ref().ok_or_eyre("files not indexed")?;
 
-        // Some artifacts are saved with _crate_ names, rather than package
-        // names.
-        let crate_name = dependency.package_name.clone().replace("-", "_");
         // TODO: Figure out how to directly reconstruct the expected package
         // hashes.
         let package_regex = Regex::new(&format!("^{}-[0-9a-f]{{16}}$", dependency.package_name))?;
-        let dotd_regex = Regex::new(&format!("^{}-[0-9a-f]{{16}}\\.d$", crate_name))?;
+        let dotd_regex = Regex::new(&format!("^{}-[0-9a-f]{{16}}\\.d$", dependency.lib_name))?;
 
         // Save fingerprints.
         let fingerprints = index
             .files
             .iter()
             .filter(|(path, _)| {
-                let mut components = path.components();
-                let parent = components.next();
-                let child = components.next();
-                parent.is_some_and(|parent| {
-                    child.is_some_and(|child| {
+                path.components()
+                    .tuple_windows()
+                    .next()
+                    .is_some_and(|(parent, child)| {
                         parent.as_str() == ".fingerprint" && package_regex.is_match(child.as_str())
                     })
-                })
             })
             .collect_vec();
 
@@ -453,14 +488,12 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .files
             .iter()
             .filter(|(path, _)| {
-                let mut components = path.components();
-                let parent = components.next();
-                let child = components.next();
-                parent.is_some_and(|parent| {
-                    child.is_some_and(|child| {
+                path.components()
+                    .tuple_windows()
+                    .next()
+                    .is_some_and(|(parent, child)| {
                         parent.as_str() == "build" && package_regex.is_match(child.as_str())
                     })
-                })
             })
             .collect_vec();
 
