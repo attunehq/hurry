@@ -583,3 +583,27 @@ pub async fn metadata(path: impl AsRef<Path> + StdDebug) -> Result<Option<std::f
         Err(err) => Err(err).context(format!("read metadata: {path:?}")),
     }
 }
+
+/// Return whether the path represents a directory.
+///
+/// Returns `false` if the directory doesn't exist
+/// or if there is an error checking the metadata;
+/// to differentiate this case use [`metadata`].
+#[instrument]
+pub async fn is_dir(path: impl AsRef<Path> + StdDebug) -> bool {
+    metadata(path)
+        .await
+        .map_or(false, |m| m.is_some_and(|m| m.is_dir()))
+}
+
+/// Return whether the path represents a normal file.
+///
+/// Returns `false` if the file doesn't exist;
+/// or if there is an error checking the metadata;
+/// to differentiate this case use [`metadata`].
+#[instrument]
+pub async fn is_file(path: impl AsRef<Path> + StdDebug) -> bool {
+    metadata(path)
+        .await
+        .map_or(false, |m| m.is_some_and(|m| m.is_file()))
+}
