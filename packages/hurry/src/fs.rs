@@ -260,7 +260,7 @@ impl IndexEntry {
         let metadata = Metadata::from_file(path)
             .then_context("get metadata")
             .await?
-            .expect(&format!("file {path:?} should exist"));
+            .ok_or_eyre(format!("file {path:?} should exist"))?;
         Ok(Self { hash, metadata })
     }
 }
@@ -502,7 +502,7 @@ impl Metadata {
         };
         let mtime = metadata
             .modified()
-            .expect(&format!("file {path:?} should have mtime"));
+            .context(format!("read file {path:?} mtime"))?;
         let executable = metadata.permissions().mode() & 0o111 != 0;
         Ok(Some(Self { mtime, executable }))
     }

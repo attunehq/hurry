@@ -7,7 +7,7 @@ use color_eyre::{
     eyre::{Context, OptionExt},
 };
 use derive_more::{Debug, Display};
-use itertools::Itertools;
+use itertools::{Itertools, process_results};
 use location_macros::workspace_dir;
 use regex::Regex;
 use relative_path::{PathExt, RelativePathBuf};
@@ -129,18 +129,17 @@ impl Workspace {
                     .packages
                     .iter()
                     .find(|package| package.id == *id)
-                    .expect("workspace member not found")
-                    .name
-                    .clone()
+                    .ok_or_eyre("workspace member not found")
+                    .map(|package| package.name.clone())
             })
-            .collect::<HashSet<_>>();
+            .collect::<Result<HashSet<_>>>()?;
 
         // Construct a mapping of _package names_ to _library crate names_.
         let package_to_lib = metadata
             .packages
             .iter()
             .filter_map(|package| {
-                let mut libs = package
+                let libs = package
                     .targets
                     .iter()
                     .filter_map(|target| {
@@ -154,26 +153,21 @@ impl Workspace {
                         }
                     })
                     .collect::<Vec<_>>();
+                let len = libs.len();
                 // Workspace members might be binary-only crates.
-                if libs.len() < 1 && workspace_package_names.contains(&package.name) {
+                if len < 1 && workspace_package_names.contains(&package.name) {
                     return None;
                 }
-                assert_eq!(
-                    libs.len(),
-                    1,
-                    "package {} has {} library targets but expected 1: {:?}",
-                    package.name,
-                    libs.len(),
-                    package.targets
-                );
-
-                Some((
-                    package.name.as_str(),
-                    libs.pop()
-                        .expect("package lib targets of length 1 has at least 1 element"),
-                ))
+                libs.into_iter()
+                    .exactly_one()
+                    .context(format!(
+                        "package {} has {} library targets but expected 1: {:?}",
+                        package.name, len, package.targets
+                    ))
+                    .map(|lib| (package.name.as_str(), lib))
+                    .pipe(Some)
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<Result<HashMap<_, _>>>()?;
 
         // We only care about third party packages for now.
         //
@@ -191,35 +185,42 @@ impl Workspace {
         // TODO: Support caching first party packages.
         // TODO: Support caching git etc packages.
         // TODO: How can we properly report `target` for cross compiled deps?
-        let dependencies = lockfile
-            .packages
-            .into_iter()
-            .filter_map(|package| match (&package.source, &package.checksum) {
+        let dependencies = lockfile.packages.into_iter().filter_map(|package| {
+            match (&package.source, &package.checksum) {
                 (Some(source), Some(checksum)) if source.is_default_registry() => {
                     // Ignore workspace members.
                     if workspace_package_names.contains(package.name.as_str()) {
                         return None;
                     }
 
-                    Dependency::builder()
-                        .checksum(checksum.to_string())
-                        .package_name(package.name.to_string())
-                        .lib_name(package_to_lib.get(package.name.as_str()).expect(
-                            "dependency package in lockfile should have lib from cargo metadata",
+                    package_to_lib
+                        .get(package.name.as_str())
+                        .ok_or_eyre(format!(
+                            "package {:?} has unknown library target",
+                            package.name.as_str()
                         ))
-                        .version(package.version.to_string())
-                        .target(&rustc_meta.llvm_target)
-                        .build()
+                        .map(|lib_name| {
+                            Dependency::builder()
+                                .checksum(checksum.to_string())
+                                .package_name(package.name.to_string())
+                                .lib_name(lib_name)
+                                .version(package.version.to_string())
+                                .target(&rustc_meta.llvm_target)
+                                .build()
+                        })
                         .pipe(Some)
                 }
                 _ => {
                     trace!(?package, "skipped indexing package for cache");
                     None
                 }
-            })
-            .map(|dependency| (dependency.key(), dependency))
-            .inspect(|(key, dependency)| trace!(?key, ?dependency, "indexed dependency"))
-            .collect::<HashMap<_, _>>();
+            }
+        });
+        let dependencies = process_results(dependencies, |iter| {
+            iter.map(|dependency| (dependency.key(), dependency))
+                .inspect(|(key, dependency)| trace!(?key, ?dependency, "indexed dependency"))
+                .collect::<HashMap<_, _>>()
+        })?;
 
         Ok(Self {
             root: metadata.workspace_root,
