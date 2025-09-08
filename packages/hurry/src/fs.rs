@@ -502,7 +502,7 @@ impl Metadata {
         };
         let mtime = metadata
             .modified()
-            .context(format!("read file {path:?} mtime"))?;
+            .with_context(|| format!("read file {path:?} mtime"))?;
         let executable = metadata.permissions().mode() & 0o111 != 0;
         Ok(Some(Self { mtime, executable }))
     }

@@ -160,7 +160,7 @@ impl Workspace {
                 }
                 libs.into_iter()
                     .exactly_one()
-                    .context(format!(
+                    .with_context(|| format!(
                         "package {} has {} library targets but expected 1: {:?}",
                         package.name, len, package.targets
                     ))
