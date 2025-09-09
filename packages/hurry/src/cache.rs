@@ -3,15 +3,13 @@
 use bon::Builder;
 use color_eyre::Result;
 use enum_assoc::Assoc;
-use relative_path::RelativePathBuf;
 use serde::{Deserialize, Serialize};
-use std::{fmt::Debug, future::Future, path::Path};
+use std::{fmt::Debug, future::Future};
 use strum::Display;
 
 use crate::{
     hash::Blake3,
-    mk_rel_dir,
-    path::{Abs, Dir, File, Rel, TypedPath},
+    path::{AbsFilePath, RelFilePath},
 };
 
 mod fs;
@@ -53,7 +51,7 @@ pub trait Cas {
     fn store_file(
         &self,
         kind: Kind,
-        file: &TypedPath<Abs, File>,
+        file: &AbsFilePath,
     ) -> impl Future<Output = Result<Blake3>> + Send;
 
     /// Get the content from the cache, if it exists,
@@ -62,21 +60,16 @@ pub trait Cas {
         &self,
         kind: Kind,
         key: &Blake3,
-        destination: &TypedPath<Abs, File>,
+        destination: &AbsFilePath,
     ) -> impl Future<Output = Result<()>> + Send;
 }
 
 impl<T: Cas + Sync> Cas for &T {
-    async fn store_file(&self, kind: Kind, src: &TypedPath<Abs, File>) -> Result<Blake3> {
+    async fn store_file(&self, kind: Kind, src: &AbsFilePath) -> Result<Blake3> {
         Cas::store_file(*self, kind, src).await
     }
 
-    async fn get_file(
-        &self,
-        kind: Kind,
-        key: &Blake3,
-        destination: &TypedPath<Abs, File>,
-    ) -> Result<()> {
+    async fn get_file(&self, kind: Kind, key: &Blake3, destination: &AbsFilePath) -> Result<()> {
         Cas::get_file(*self, kind, key, destination).await
     }
 }
@@ -91,11 +84,9 @@ impl<T: Cas + Sync> Cas for &T {
 )]
 #[serde(rename_all = "snake_case")]
 #[func(pub const fn as_str(&self) -> &str)]
-#[func(pub fn as_rel_dir(&self) -> TypedPath<Rel, Dir>)]
 pub enum Kind {
     /// A Rust project managed by Cargo.
     #[assoc(as_str = "cargo")]
-    #[assoc(as_rel_dir = mk_rel_dir!("cargo"))]
     Cargo,
 }
 
@@ -140,7 +131,7 @@ pub struct Artifact {
     /// what specifically the "cache root" is depends on the project type
     /// but is by default the root of the project.
     #[builder(into)]
-    pub target: TypedPath<Rel, File>,
+    pub target: RelFilePath,
 
     /// The hash of the content of the artifact.
     /// Intended to be used to reference the artifact in the CAS.

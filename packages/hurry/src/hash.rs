@@ -8,10 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tracing::{instrument, trace};
 
-use crate::{
-    fs,
-    path::{Abs, Dir, File, Rel, TypedPath},
-};
+use crate::{fs, path::AbsFilePath};
 
 /// A Blake3 hash.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Serialize, Deserialize)]
@@ -20,7 +17,7 @@ pub struct Blake3(String);
 impl Blake3 {
     /// Hash the contents of the file at the specified path.
     #[instrument(name = "Blake3::from_file")]
-    pub async fn from_file(path: &TypedPath<Abs, File>) -> Result<Self> {
+    pub async fn from_file(path: &AbsFilePath) -> Result<Self> {
         let path = path.as_ref();
         let mut file = fs::open_file(path).await.context("open file")?;
         let mut hasher = blake3::Hasher::new();
@@ -74,16 +71,6 @@ impl Blake3 {
     /// View the hash as a string.
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// Attempt to reference the hash as a relative directory.
-    pub fn as_rel_dir(&self) -> Result<TypedPath<Rel, Dir>> {
-        TypedPath::dangerously_make_rel_dir(self.as_str()).context("convert to rel dir")
-    }
-
-    /// Attempt to reference the hash as a relative file.
-    pub fn as_rel_file(&self) -> Result<TypedPath<Rel, File>> {
-        TypedPath::dangerously_make_rel_file(self.as_str()).context("convert to rel file")
     }
 }
 

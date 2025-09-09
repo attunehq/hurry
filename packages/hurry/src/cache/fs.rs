@@ -14,7 +14,7 @@ use crate::{
     fs::{self, LockFile},
     hash::Blake3,
     mk_rel_dir, mk_rel_file,
-    path::{Abs, Dir, File, JoinWith, Rel, TypedPath},
+    path::{AbsDirPath, AbsFilePath, JoinWith, RelDirPath, RelFilePath, TryJoinWith},
 };
 
 /// The local file system implementation of a cache.
@@ -32,7 +32,7 @@ pub struct FsCache<State> {
     ///
     /// The intention here is to minimize the chance of callers mutating or
     /// referencing the contents of the cache while it is locked.
-    root: TypedPath<Abs, Dir>,
+    root: AbsDirPath,
 
     /// Locks the workspace cache.
     ///
@@ -47,7 +47,7 @@ pub struct FsCache<State> {
 /// Implementation for all valid lock states.
 impl<L> FsCache<L> {
     /// The name of the lockfile.
-    fn lockfile() -> TypedPath<Rel, File> {
+    fn lockfile() -> RelFilePath {
         mk_rel_file!(".hurry-lock")
     }
 }
@@ -67,7 +67,7 @@ impl FsCache<Unlocked> {
 
     /// Open the cache in the provided directory.
     #[instrument(name = "FsCache::open_dir")]
-    pub async fn open_dir(root: impl Into<TypedPath<Abs, Dir>> + StdDebug) -> Result<Self> {
+    pub async fn open_dir(root: impl Into<AbsDirPath> + StdDebug) -> Result<Self> {
         let root = root.into();
         fs::create_dir_all(&root)
             .await
@@ -86,7 +86,7 @@ impl FsCache<Unlocked> {
     #[instrument(name = "FsCache::open_dir_std")]
     pub async fn open_dir_std(root: impl Into<std::path::PathBuf> + StdDebug) -> Result<Self> {
         let root = root.into();
-        TypedPath::new_abs_dir(root)
+        AbsDirPath::new(root)
             .context("parse as abs dir")?
             .pipe(Self::open_dir)
             .await
@@ -132,7 +132,12 @@ impl super::Cache for FsCache<Locked> {
         artifacts: impl IntoIterator<Item = impl Into<Artifact>> + StdDebug + Send,
     ) -> Result<()> {
         let artifacts = artifacts.into_iter().map(Into::into).collect_vec();
-        let name = self.root.join(kind.as_rel_dir()).join(key.as_rel_file()?);
+        // We don't know if this path exists, but we do know that if not,
+        // `fs::write` will create it.
+        let name = self
+            .root
+            .join(RelDirPath::new_unchecked(kind.as_str()))
+            .join(RelFilePath::new_unchecked(key.as_str()));
         let content = Record::builder()
             .key(key)
             .artifacts(artifacts)
@@ -145,7 +150,10 @@ impl super::Cache for FsCache<Locked> {
 
     #[instrument(name = "FsCache::get")]
     async fn get(&self, kind: Kind, key: &Blake3) -> Result<Option<Record>> {
-        let name = self.root.join(kind.as_rel_dir()).join(key.as_rel_file()?);
+        let name = self
+            .root
+            .try_join_dir(kind.as_str())?
+            .try_join_file(key.as_str())?;
         Ok(
             match fs::read_buffered_utf8(&name).await.context("read file")? {
                 Some(content) => serde_json::from_str(&content)
@@ -172,7 +180,7 @@ pub struct FsCas {
     /// (so that multiple instances of `hurry` correctly interact)
     /// and so that we can swap out the implementation for another one
     /// in the future if we desire (for example, a remote object store).
-    root: TypedPath<Abs, Dir>,
+    root: AbsDirPath,
 }
 
 impl FsCas {
@@ -189,7 +197,7 @@ impl FsCas {
 
     /// Open an instance in the provided directory.
     #[instrument(name = "FsCas::open_dir")]
-    pub async fn open_dir(root: impl Into<TypedPath<Abs, Dir>> + StdDebug) -> Result<Self> {
+    pub async fn open_dir(root: impl Into<AbsDirPath> + StdDebug) -> Result<Self> {
         let root = root.into();
         fs::create_dir_all(&root).await?;
         trace!(?root, "open cas");
@@ -200,7 +208,7 @@ impl FsCas {
     #[instrument(name = "FsCas::open_dir_std")]
     pub async fn open_dir_std(root: impl Into<std::path::PathBuf> + StdDebug) -> Result<Self> {
         let root = root.into();
-        TypedPath::new_abs_dir(root)
+        AbsDirPath::new(root)
             .context("parse path as abs dir")?
             .pipe(Self::open_dir)
             .await
@@ -215,22 +223,26 @@ impl FsCas {
 
 impl super::Cas for FsCas {
     #[instrument(name = "FsCas::store_file")]
-    async fn store_file(&self, kind: Kind, src: &TypedPath<Abs, File>) -> Result<Blake3> {
+    async fn store_file(&self, kind: Kind, src: &AbsFilePath) -> Result<Blake3> {
         let src = src.as_ref();
         let key = Blake3::from_file(src).await.context("hash file")?;
-        let dst = self.root.join(kind.as_rel_dir()).join(key.as_rel_file()?);
+
+        // We don't know if this path exists, but we do know that if not,
+        // `fs::copy_file` will create it.
+        let dst = self
+            .root
+            .join(RelDirPath::new_unchecked(kind.as_str()))
+            .join(RelFilePath::new_unchecked(key.as_str()));
         fs::copy_file(src, &dst).await?;
         Ok(key)
     }
 
     #[instrument(name = "FsCas::get_file")]
-    async fn get_file(
-        &self,
-        kind: Kind,
-        key: &Blake3,
-        destination: &TypedPath<Abs, File>,
-    ) -> Result<()> {
-        let src = self.root.join(kind.as_rel_dir()).join(key.as_rel_file()?);
+    async fn get_file(&self, kind: Kind, key: &Blake3, destination: &AbsFilePath) -> Result<()> {
+        let src = self
+            .root
+            .try_join_dir(kind.as_str())?
+            .try_join_file(key.as_str())?;
         fs::copy_file(&src, destination).await.map(drop)
     }
 }

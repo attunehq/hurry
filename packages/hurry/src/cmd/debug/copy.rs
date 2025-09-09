@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use clap::Args;
-use color_eyre::Result;
-use hurry::fs;
+use color_eyre::{Result, eyre::Context};
+use hurry::{fs, path::AbsDirPath};
 use tracing::instrument;
 
 /// Options for `debug copy`
@@ -17,7 +17,9 @@ pub struct Options {
 
 #[instrument]
 pub async fn exec(options: Options) -> Result<()> {
-    let bytes = fs::copy_dir(options.source, options.destination).await?;
+    let src = AbsDirPath::new(options.source).context("parse source dir")?;
+    let dst = AbsDirPath::new(options.destination).context("parse destination dir")?;
+    let bytes = fs::copy_dir(&src, &dst).await?;
     println!("copied {bytes} bytes");
     Ok(())
 }

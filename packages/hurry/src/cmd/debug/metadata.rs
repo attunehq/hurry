@@ -5,7 +5,7 @@ use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use colored::Colorize;
 use futures::StreamExt;
-use hurry::fs::Metadata;
+use hurry::{fs::Metadata, path::AbsFilePath};
 use relative_path::PathExt;
 use tracing::instrument;
 
@@ -36,9 +36,8 @@ pub async fn exec(options: Options) -> Result<()> {
         if ft.is_dir() {
             println!("{indent}{name}/");
         } else {
-            let metadata = Metadata::from_file(entry.path())
-                .await
-                .context("read metadata")?;
+            let path = AbsFilePath::new(entry.path()).context("parse entry path")?;
+            let metadata = Metadata::from_file(&path).await.context("read metadata")?;
             println!("{indent}{name} -> {metadata:?}");
         }
     }

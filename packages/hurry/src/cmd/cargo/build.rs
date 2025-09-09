@@ -14,7 +14,7 @@ use hurry::{
     fs,
     hash::Blake3,
     mk_rel_dir, mk_rel_file,
-    path::JoinWith,
+    path::{JoinWith, RelDirPath, TryJoinWith},
 };
 use tracing::{error, info, instrument, warn};
 
@@ -97,16 +97,15 @@ async fn exec_simple(options: Options, workspace: &Workspace) -> Result<()> {
         .await
         .context("open cache")?
         .join(mk_rel_dir!("simple"));
-    let key = Blake3::from_file(workspace.root.join(mk_rel_file!("Cargo.lock"))).await?;
-    let cache = cache_root
-        .join(key.as_rel_dir()?)
-        .join(profile.as_rel_dir()?);
-    let target = workspace.target.join(profile.as_rel_dir()?);
+    let key = Blake3::from_file(&workspace.root.join(mk_rel_file!("Cargo.lock"))).await?;
 
     if !options.skip_restore {
         info!("Restoring target directory from cache");
-        let has_cache = fs::metadata(&cache).await.is_ok_and(|meta| meta.is_some());
-        if has_cache {
+        if let Ok(cache) = cache_root.try_join_dirs([key.as_str(), profile.as_str()]) {
+            // If this doesn't exist, `fs::copy_dir` creates it.
+            let target = workspace
+                .target
+                .join(RelDirPath::new_unchecked(profile.as_str()));
             let bytes = fs::copy_dir(&cache, &target).await?;
             info!(?bytes, ?key, ?cache, "Restored cache");
         } else {
@@ -123,23 +122,33 @@ async fn exec_simple(options: Options, workspace: &Workspace) -> Result<()> {
 
     if !options.skip_backup {
         info!("Caching target directory");
-        fs::remove_dir_all(&cache)
-            .await
-            .context("remove old cache")?;
-
-        // Only back up directories used in third party builds.
-        let mut bytes = 0u64;
-        for subdir in [
-            mk_rel_dir!(".fingerprint"),
-            mk_rel_dir!("build"),
-            mk_rel_dir!("deps"),
-        ] {
-            bytes += fs::copy_dir(target.join(&subdir), cache.join(&subdir))
+        if let Ok(target) = workspace.target.try_join_dir(profile.as_str()) {
+            // If this doesn't exist, `fs::remove_dir_all` is a no-op
+            // and `fs::copy_dir` creates it.
+            let cache = cache_root
+                .join(RelDirPath::new_unchecked(key.as_str()))
+                .join(RelDirPath::new_unchecked(profile.as_str()));
+            fs::remove_dir_all(&cache)
                 .await
-                .with_context(|| format!("back up {subdir:?}"))?;
-        }
+                .context("remove old cache")?;
 
-        info!(?bytes, ?key, ?cache, "Cached target directory");
+            // Only back up directories used in third party builds.
+            let mut bytes = 0u64;
+            let subdirs = vec![
+                mk_rel_dir!(".fingerprint"),
+                mk_rel_dir!("build"),
+                mk_rel_dir!("deps"),
+            ];
+            for subdir in subdirs {
+                bytes += fs::copy_dir(&target.join(&subdir), &cache.join(&subdir))
+                    .await
+                    .with_context(|| format!("back up {subdir:?}"))?;
+            }
+
+            info!(?bytes, ?key, ?cache, "Cached target directory");
+        } else {
+            info!("No existing target directory found");
+        }
     }
 
     Ok(())

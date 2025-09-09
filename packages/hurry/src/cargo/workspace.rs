@@ -1,7 +1,6 @@
 use std::{fmt::Debug as StdDebug, marker::PhantomData, sync::Arc};
 
 use ahash::{HashMap, HashSet};
-use cargo_metadata::camino::Utf8PathBuf;
 use color_eyre::{
     Result,
     eyre::{Context, OptionExt},
@@ -9,7 +8,6 @@ use color_eyre::{
 use derive_more::{Debug, Display};
 use itertools::Itertools;
 use location_macros::workspace_dir;
-use relative_path::{PathExt, RelativePathBuf};
 use tap::{Pipe, Tap, TapFallible};
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
@@ -17,11 +15,10 @@ use tracing::{debug, instrument, trace};
 use crate::{
     Locked, Unlocked,
     cache::Artifact,
-    ext::then_context,
     fs::{self, Index, LockFile},
     hash::Blake3,
-    mk_rel_dir, mk_rel_file,
-    path::{Abs, Dir, JoinWith, TypedPath},
+    mk_rel_file,
+    path::{AbsDirPath, JoinWith, RelDirPath},
 };
 
 use super::{
@@ -43,11 +40,11 @@ use super::{
 #[display("{root}")]
 pub struct Workspace {
     /// The root directory of the workspace.
-    pub root: TypedPath<Abs, Dir>,
+    pub root: AbsDirPath,
 
     /// The target directory in the workspace.
     #[debug(skip)]
-    pub target: TypedPath<Abs, Dir>,
+    pub target: AbsDirPath,
 
     /// Parsed `rustc` metadata relating to the current workspace.
     #[debug(skip)]
@@ -97,22 +94,22 @@ impl Workspace {
         .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
         .context("read cargo metadata")?;
 
-        let workspace_root = TypedPath::new_abs_dir(&metadata.workspace_root)
-            .context("parse workspace root as abs dir")?;
-        let workspace_target = TypedPath::new_abs_dir(&metadata.target_directory)
-            .context("parse workspace target as abs dir")?;
+        let workspace_root = AbsDirPath::new(&metadata.workspace_root)
+            .context("parse workspace root as absolute directory")?;
+        let workspace_target = AbsDirPath::new(&metadata.target_directory)
+            .context("parse workspace target as absolute directory")?;
 
         // TODO: This currently blows up if we have no lockfile.
         let cargo_lock = workspace_root.join(mk_rel_file!("Cargo.lock"));
         let lockfile = spawn_blocking(move || -> Result<_> {
-            cargo_lock::Lockfile::load(cargo_lock).context("load cargo lockfile")
+            cargo_lock::Lockfile::load(cargo_lock.as_std_path()).context("load cargo lockfile")
         })
         .await
         .context("join task")?
         .tap_ok(|lockfile| debug!(?lockfile, "cargo lockfile"))
         .context("read cargo lockfile")?;
 
-        let rustc_meta = RustcMetadata::from_argv(&metadata.workspace_root, argv)
+        let rustc_meta = RustcMetadata::from_argv(&workspace_root, argv)
             .await
             .tap_ok(|rustc_meta| debug!(?rustc_meta, "rustc metadata"))
             .context("read rustc metadata")?;
@@ -176,19 +173,23 @@ impl Workspace {
     /// Initialize the target directory structure for a build profile.
     ///
     /// Creates the profile subdirectory under `target/` and writes a
-    /// `CACHEDIR.TAG` file to mark it as a cache directory.
+    /// `CACHEDIR.TAG` file to mark it as a cache directory,
+    /// then returns the path to the profile directory that was created.
     ///
     /// We don't currently have this as a distinct state transition for
     /// workspace as it's unclear whether this is strictly required.
     //
     // TODO: Is this required?
-    // #[instrument(name = "Workspace::init_target")]
-    pub async fn init_target(&self, profile: &Profile) -> Result<()> {
+    #[instrument(name = "Workspace::init_target")]
+    pub async fn init_target(&self, profile: &Profile) -> Result<AbsDirPath> {
         const CACHEDIR_TAG_CONTENT: &[u8] =
             include_bytes!(concat!(workspace_dir!(), "/static/cargo/CACHEDIR.TAG"));
 
-        let profile = profile.as_rel_dir()?;
-        fs::create_dir_all(&self.target.join(profile))
+        // We don't think the profile directory exists yet.
+        let profile = self
+            .target
+            .join(RelDirPath::new_unchecked(profile.as_str()));
+        fs::create_dir_all(&profile)
             .await
             .context("create target directory")?;
         fs::write(
@@ -196,7 +197,8 @@ impl Workspace {
             CACHEDIR_TAG_CONTENT,
         )
         .await
-        .context("write CACHEDIR.TAG")
+        .context("write CACHEDIR.TAG")?;
+        Ok(profile)
     }
 
     /// Open a profile directory for reading.
@@ -270,7 +272,7 @@ pub struct ProfileDir<'ws, State> {
     /// reference the `root` method in the locked implementation block.
     /// The intention here is to minimize the chance of callers mutating or
     /// referencing the contents of the cache while it is locked.
-    root: TypedPath<Abs, Dir>,
+    root: AbsDirPath,
 
     /// The profile to which this directory refers.
     ///
@@ -285,12 +287,11 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
     /// Open a profile directory in unlocked mode.
     #[instrument(name = "ProfileDir::open")]
     pub async fn open(workspace: &'ws Workspace, profile: &Profile) -> Result<Self> {
-        workspace
+        let root = workspace
             .init_target(profile)
             .await
             .context("init workspace target")?;
 
-        let root = workspace.target.join(profile.as_rel_dir()?);
         let lock = root.join(mk_rel_file!(".cargo-lock"));
         let lock = LockFile::open(lock).await.context("open lockfile")?;
 
@@ -404,7 +405,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
             })
         });
         let dependencies = if let Some((path, _)) = dotd {
-            let outputs = Dotd::from_file(self, path)
+            let outputs = Dotd::from_file(self, &self.root().join(*path))
                 .await
                 .context("parse .d file")?
                 .outputs
@@ -438,7 +439,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ///
     /// Converts the internal relative path to an absolute path
     /// based on the workspace's target directory.
-    pub fn root(&self) -> &TypedPath<Abs, Dir> {
+    pub fn root(&self) -> &AbsDirPath {
         &self.root
     }
 }

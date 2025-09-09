@@ -35,25 +35,25 @@
 
 use std::{
     borrow::Cow,
-    ffi::{OsStr, OsString},
     marker::PhantomData,
-    path::Component,
+    path::{Path, PathBuf},
 };
 
+use cargo_metadata::camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use color_eyre::{Result, eyre::Context};
 use derive_more::{Display, Error};
 use duplicate::{duplicate, duplicate_item};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use subenum::subenum;
 use tap::Pipe;
 
 use crate::fs;
 
-pub type RelFileBuf = TypedPath<Rel, File>;
-pub type RelDirBuf = TypedPath<Rel, Dir>;
-pub type AbsFileBuf = TypedPath<Abs, File>;
-pub type AbsDirBuf = TypedPath<Abs, Dir>;
-pub type GenericPathBuf = TypedPath<SomeBase, SomeType>;
+pub type RelFilePath = TypedPath<Rel, File>;
+pub type RelDirPath = TypedPath<Rel, Dir>;
+pub type AbsFilePath = TypedPath<Abs, File>;
+pub type AbsDirPath = TypedPath<Abs, Dir>;
+pub type GenericPath = TypedPath<SomeBase, SomeType>;
 
 /// Errors for path conversions in this module.
 ///
@@ -65,7 +65,8 @@ pub type GenericPathBuf = TypedPath<SomeBase, SomeType>;
     AbsFileError,
     RelDirError,
     RelFileError,
-    MakeRelativeError
+    MakeRelativeError,
+    MakeUtf8Error
 )]
 #[derive(Clone, Debug, Display, Error)]
 pub enum Error {
@@ -88,6 +89,11 @@ pub enum Error {
     #[subenum(AbsFileError, RelFileError)]
     #[display("not a file: {_0:?}")]
     NotFile(#[error(not(source))] std::path::PathBuf),
+
+    /// The path was not valid UTF8.
+    #[subenum(AbsDirError, AbsFileError, RelDirError, RelFileError, MakeUtf8Error)]
+    #[display("input path is not UTF8: {_0:?}")]
+    NotUtf8(#[error(not(source))] std::path::PathBuf),
 
     /// Path is not able to be made relative to another path.
     #[subenum(MakeRelativeError)]
@@ -132,7 +138,7 @@ macro_rules! bail {
 macro_rules! mk_rel_file {
     ($path:literal) => {{
         $crate::assert_relative!($path);
-        $crate::path::TypedPath::<$crate::path::Rel, $crate::path::File>::new($path.into())
+        $crate::path::RelFilePath::new_unchecked($path)
     }};
 }
 
@@ -153,7 +159,7 @@ macro_rules! mk_rel_file {
 macro_rules! mk_rel_dir {
     ($path:literal) => {{
         $crate::assert_relative!($path);
-        $crate::path::TypedPath::<$crate::path::Rel, $crate::path::Dir>::new($path.into())
+        $crate::path::RelDirPath::new_unchecked($path)
     }};
 }
 
@@ -248,17 +254,33 @@ pub struct File;
 /// so is safe to use in structs that are `Deserialize`/`Serialize` without
 /// any possibility of blocking I/O. You can then perform fallible conversion
 /// using `TryFrom` in a blocking thread.
+///
+//
+// TODO: This currently is not fully cross-platform as it does not attempt to
+// normalize components in the path; when we decide to add Windows support
+// we will need to handle this.
+//
+// TODO: We should really add async methods. Right now this isn't a huge deal
+// since we're running client side anyway so we don't have to worry about e.g.
+// "this blocking call stops the server from accepting a new connection"
+// but it does harm the ability to e.g. do operations concurrently.
+#[cfg(not(target_os = "windows"))]
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Display)]
-#[display("{}", self.inner.display())]
+#[display("{}", self.inner)]
 pub struct TypedPath<Base, Type> {
     base: PhantomData<Base>,
     ty: PhantomData<Type>,
-    inner: std::path::PathBuf,
+    inner: cargo_metadata::camino::Utf8PathBuf,
 }
 
 impl<Base, Type> TypedPath<Base, Type> {
     /// View the path as a standard path.
     pub fn as_std_path(&self) -> &std::path::Path {
+        self.inner.as_std_path()
+    }
+
+    /// View the path as a UTF8 normalized path.
+    pub fn as_utf8_path(&self) -> &cargo_metadata::camino::Utf8Path {
         &self.inner
     }
 
@@ -267,11 +289,11 @@ impl<Base, Type> TypedPath<Base, Type> {
         self.inner
             .parent()
             .map(ToOwned::to_owned)
-            .map(TypedPath::new)
+            .map(TypedPath::new_unchecked)
     }
 
     /// Iterate through the components of the path.
-    pub fn components<'a>(&'a self) -> impl Iterator<Item = Component<'a>> {
+    pub fn components<'a>(&'a self) -> impl Iterator<Item = Utf8Component<'a>> {
         self.inner.components()
     }
 
@@ -279,30 +301,24 @@ impl<Base, Type> TypedPath<Base, Type> {
     ///
     /// If the path is a file, this is the file name.
     /// If it's the path of a directory, this is the directory name.
-    pub fn file_name(&self) -> Option<&OsStr> {
+    pub fn file_name(&self) -> Option<&str> {
         self.inner.file_name()
     }
 
-    /// Convenience function to create an instance using the provided
-    /// inner path.
+    /// Create the type without actually validating that it exists.
     ///
-    /// This is only exported so that macros can call it;
-    /// do not call this as it has the potential to break invariants.
-    #[doc(hidden)]
-    pub const fn new(inner: std::path::PathBuf) -> Self {
+    /// This has the potential to break invariants, but is needed
+    /// in some cases (notably when you're creating things).
+    /// Try to minimize its use if at all possible.
+    pub fn new_unchecked(inner: impl Into<String>) -> Self {
         Self {
             base: PhantomData,
             ty: PhantomData,
-            inner,
+            inner: Utf8PathBuf::from(inner.into()),
         }
     }
 }
 
-impl<Base, Type> AsRef<std::path::Path> for TypedPath<Base, Type> {
-    fn as_ref(&self) -> &std::path::Path {
-        &self.inner
-    }
-}
 impl<Base, Type> AsRef<TypedPath<Base, Type>> for TypedPath<Base, Type> {
     fn as_ref(&self) -> &TypedPath<Base, Type> {
         self
@@ -310,12 +326,12 @@ impl<Base, Type> AsRef<TypedPath<Base, Type>> for TypedPath<Base, Type> {
 }
 impl<Base, Type> From<TypedPath<Base, Type>> for std::path::PathBuf {
     fn from(value: TypedPath<Base, Type>) -> Self {
-        value.inner
+        value.inner.into_std_path_buf()
     }
 }
 impl<Base, Type> From<&TypedPath<Base, Type>> for std::path::PathBuf {
     fn from(value: &TypedPath<Base, Type>) -> Self {
-        value.inner.clone()
+        value.inner.clone().into_std_path_buf()
     }
 }
 impl<Base: Clone, Type: Clone> From<&TypedPath<Base, Type>> for TypedPath<Base, Type> {
@@ -329,7 +345,6 @@ impl TypedPath<Abs, Dir> {
     pub fn current() -> Result<TypedPath<Abs, Dir>> {
         std::env::current_dir()
             .context("get current directory")
-            .map(TypedPath::<SomeBase, SomeType>::from)
             .and_then(|p| Self::try_from(p).context("convert to typed abs dir"))
     }
 }
@@ -350,63 +365,11 @@ impl ty {
     /// from a user-provided value prior to creating the path on disk,
     /// or to validate whether the path on disk exists.
     pub fn make(p: impl AsRef<str>) -> Result<ty, err> {
-        let path = std::path::PathBuf::from(p.as_ref());
+        let path = cargo_metadata::camino::Utf8PathBuf::from(p.as_ref());
         if !path.is_relative() {
             bail!(err::NotRelative => path);
         }
-        Ok(Self::new(path))
-    }
-}
-
-#[duplicate_item(
-    rel_ty abs_ty;
-    [ TypedPath<Rel, File> ] [ TypedPath<Abs, File> ];
-    [ TypedPath<Rel, Dir> ] [ TypedPath<Abs, Dir> ];
-)]
-impl rel_ty {
-    /// Make the path absolute by joining it with the provided absolute base.
-    pub fn abs(&self, anchor: impl AbsPathLike) -> abs_ty {
-        anchor
-            .as_path()
-            .join(self.as_std_path())
-            .pipe(TypedPath::new)
-    }
-}
-
-#[duplicate_item(
-    abs_ty rel_ty;
-    [ TypedPath<Abs, File> ] [ TypedPath<Rel, File> ];
-    [ TypedPath<Abs, Dir> ] [ TypedPath<Rel, Dir> ];
-)]
-impl abs_ty {
-    /// Make the path absolute by joining it with the provided absolute base.
-    pub fn rel_to(&self, anchor: impl AbsPathLike) -> Result<rel_ty, MakeRelativeError> {
-        self.inner
-            .strip_prefix(anchor.as_path())
-            .map_err(|err| MakeRelativeError::NotChild {
-                parent: anchor.as_path().to_path_buf(),
-                child: self.inner.clone(),
-                source: err,
-            })
-            .map(|p| TypedPath::new(p.to_path_buf()))
-    }
-}
-
-impl TypedPath<SomeBase, SomeType> {
-    /// Report whether the path is absolute.
-    ///
-    /// This exists mainly for compatibility with standard-like path types
-    /// so that we can reuse the logic for converting them.
-    fn is_absolute(&self) -> bool {
-        self.inner.is_absolute()
-    }
-
-    /// Report whether the path is relative.
-    ///
-    /// This exists mainly for compatibility with standard-like path types
-    /// so that we can reuse the logic for converting them.
-    fn is_relative(&self) -> bool {
-        self.inner.is_relative()
+        Ok(Self::new_unchecked(path))
     }
 }
 
@@ -415,20 +378,20 @@ impl<'de> Deserialize<'de> for TypedPath<SomeBase, SomeType> {
     where
         D: Deserializer<'de>,
     {
-        let p = std::path::PathBuf::deserialize(deserializer)?;
-        Ok(Self::new(p))
+        let p = cargo_metadata::camino::Utf8PathBuf::deserialize(deserializer)?;
+        Ok(Self::new_unchecked(p))
     }
 }
 
 duplicate! {
     [
-        ty new ty_err;
+        ty_self fn_new ty_err;
         [ TypedPath<Abs, Dir> ] [ new_abs_dir ] [ AbsDirError ];
         [ TypedPath<Abs, File> ] [ new_abs_file ] [ AbsFileError ];
         [ TypedPath<Rel, Dir> ] [ new_rel_dir ] [ RelDirError ];
         [ TypedPath<Rel, File> ] [ new_rel_file ] [ RelFileError ];
     ]
-    impl<'de> Deserialize<'de> for ty {
+    impl<'de> Deserialize<'de> for ty_self {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
         where
             D: Deserializer<'de>,
@@ -437,7 +400,7 @@ duplicate! {
             Self::try_from(p).map_err(serde::de::Error::custom)
         }
     }
-    impl Serialize for ty {
+    impl Serialize for ty_self {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where
             S: Serializer,
@@ -445,27 +408,42 @@ duplicate! {
             self.inner.serialize(serializer)
         }
     }
-    impl ty {
+
+    // Note: Both of these functions exist so that callers can use
+    // `TypedPath` and their aliases (e.g. `AbsDirPath`) interchangeably:
+    // - `TypedPath::new_abs_dir` -> Coerces to `TypedPath<Abs, Dir>`;
+    //   needed because methods on `TypedPath` alone are ambiguous
+    //   if we're trying to lean on type inference.
+    // - `AbsDirPath::new` -> Coerces to `TypedPath<Abs, Dir>`;
+    //   more natural to type than `AbsDirPath::new_abs_dir`.
+    // - `TypedPath::new` will then be ambiguous unless there's
+    //   another source of type inference (as it should be).
+    impl ty_self {
         /// Parse the provided path into the strongly typed path.
         ///
         /// This method validates that the path actually exists on disk
         /// and that it is the appropriate type.
-        pub fn new<'a>(p: impl PathLike<'a>) -> Result<Self, ty_err> {
-            TypedPath::<SomeBase, SomeType>::from(p)
-                .pipe(Self::try_from)
+        pub fn fn_new(p: impl AsRef<Path>) -> Result<Self, ty_err> {
+            p.as_ref().pipe(Self::try_from)
+        }
+        /// Parse the provided path into the strongly typed path.
+        ///
+        /// This method validates that the path actually exists on disk
+        /// and that it is the appropriate type.
+        pub fn new(p: impl AsRef<Path>) -> Result<Self, ty_err> {
+            Self::fn_new(p)
         }
     }
 }
 
 duplicate! {
     [
-        ty_from;
-        [ std::path::PathBuf ];
-        [ &std::path::Path ];
-        [ cargo_metadata::camino::Utf8PathBuf ];
-        [ &cargo_metadata::camino::Utf8Path ];
-        [ TypedPath<SomeBase, SomeType> ];
-        [ &TypedPath<SomeBase, SomeType> ];
+        ty_from ty_into_inner;
+        [ PathBuf ] [ |p: PathBuf| Utf8PathBuf::try_from(p).map_err(|err| err.into_path_buf()) ];
+        [ &Path ] [ |p: &Path| Utf8PathBuf::try_from(p.to_path_buf()).map_err(|err| err.into_path_buf()) ];
+        [ Cow<'_, Path> ] [ |p: Cow<'_, Path>| Utf8PathBuf::try_from(p.to_path_buf()).map_err(|err| err.into_path_buf()) ];
+        [ Utf8PathBuf ] [ |p: Utf8PathBuf| -> Result<_, PathBuf> { Ok(p) } ];
+        [ &Utf8Path ] [ |p: &Utf8Path| -> Result<_, PathBuf> { Ok(p.to_owned()) } ];
     ]
     impl TryFrom<ty_from> for TypedPath<Abs, Dir> {
         type Error = AbsDirError;
@@ -476,7 +454,10 @@ duplicate! {
             if !fs::is_dir_sync(&value) {
                 bail!(AbsDirError::NotDirectory => value);
             }
-            Ok(Self::new(value.into()))
+            match (ty_into_inner)(value) {
+                Ok(inner) => Ok(Self::new_unchecked(inner)),
+                Err(value) => bail!(AbsDirError::NotUtf8 => value),
+            }
         }
     }
     impl TryFrom<ty_from> for TypedPath<Abs, File> {
@@ -488,7 +469,10 @@ duplicate! {
             if !fs::is_file_sync(&value) {
                 bail!(AbsFileError::NotFile => value);
             }
-            Ok(Self::new(value.into()))
+            match (ty_into_inner)(value) {
+                Ok(inner) => Ok(Self::new_unchecked(inner)),
+                Err(value) => bail!(AbsFileError::NotUtf8 => value),
+            }
         }
     }
     impl TryFrom<ty_from> for TypedPath<Rel, Dir> {
@@ -500,7 +484,10 @@ duplicate! {
             if !fs::is_dir_sync(&value) {
                 bail!(RelDirError::NotDirectory => value);
             }
-            Ok(Self::new(value.into()))
+            match (ty_into_inner)(value) {
+                Ok(inner) => Ok(Self::new_unchecked(inner)),
+                Err(value) => bail!(RelDirError::NotUtf8 => value),
+            }
         }
     }
     impl TryFrom<ty_from> for TypedPath<Rel, File> {
@@ -512,12 +499,148 @@ duplicate! {
             if !fs::is_file_sync(&value) {
                 bail!(RelFileError::NotFile => value);
             }
-            Ok(Self::new(value.into()))
+            match (ty_into_inner)(value) {
+                Ok(inner) => Ok(Self::new_unchecked(inner)),
+                Err(value) => bail!(RelFileError::NotUtf8 => value),
+            }
+        }
+    }
+    impl TryFrom<ty_from> for TypedPath<SomeBase, SomeType> {
+        type Error = MakeUtf8Error;
+        fn try_from(value: ty_from) -> Result<Self, Self::Error> {
+            match (ty_into_inner)(value) {
+                Ok(inner) => Ok(Self::new_unchecked(inner)),
+                Err(value) => bail!(MakeUtf8Error::NotUtf8 => value),
+            }
         }
     }
 }
 
-/// Joins paths together, creating a different type.
+duplicate! {
+    [
+        ty_from;
+        [ TypedPath<SomeBase, SomeType> ];
+        [ &TypedPath<SomeBase, SomeType> ];
+    ]
+    #[duplicate_item(
+        ty_to ty_err;
+        [ TypedPath<Abs, Dir> ] [ AbsDirError ];
+        [ TypedPath<Abs, File> ] [ AbsFileError ];
+        [ TypedPath<Rel, Dir> ] [ RelDirError ];
+        [ TypedPath<Rel, File> ] [ RelFileError ];
+    )]
+    impl TryFrom<ty_from> for ty_to {
+        type Error = ty_err;
+        fn try_from(value: ty_from) -> Result<Self, Self::Error> {
+            value.inner.to_owned().pipe(Self::try_from)
+        }
+    }
+}
+
+/// Functionality for making a path relative using a base path.
+pub trait RelativeTo<Other> {
+    type Output;
+
+    /// Make `self` relative to `other` if possible.
+    fn relative_to(&self, other: Other) -> Self::Output;
+}
+
+duplicate! {
+    [
+        ty_other;
+        [ TypedPath<Abs, Dir> ];
+        [ TypedPath<Abs, File> ];
+        [ &TypedPath<Abs, Dir> ];
+        [ &TypedPath<Abs, File> ];
+    ]
+    #[duplicate_item(
+        ty_self ty_output;
+        [ TypedPath<Abs, Dir> ] [ TypedPath<Rel, Dir> ];
+        [ TypedPath<Abs, File> ] [ TypedPath<Rel, File> ];
+        [ &TypedPath<Abs, Dir> ] [ TypedPath<Rel, Dir> ];
+        [ &TypedPath<Abs, File> ] [ TypedPath<Rel, File> ];
+    )]
+    impl RelativeTo<ty_other> for ty_self {
+        type Output = Result<ty_output, MakeRelativeError>;
+
+        fn relative_to(&self, other: ty_other) -> Self::Output {
+            self.inner
+                .strip_prefix(&other.inner)
+                .map_err(|err| MakeRelativeError::NotChild {
+                    parent: other.inner.clone().into(),
+                    child: self.inner.clone().into(),
+                    source: err,
+                })
+                .map(|p| TypedPath::new_unchecked(p.to_path_buf()))
+        }
+    }
+}
+
+/// Creates and joins a path from the input and confirms that
+/// the overall path is valid.
+pub trait TryJoinWith {
+    /// Join `dir` to `self` as a directory.
+    ///
+    /// If joining multiple items, consider [`TryJoinWith::try_join_dirs`]
+    /// or [`TryJoinWith::try_join_combined`] as these are more efficient.
+    fn try_join_dir(&self, dir: impl AsRef<str>) -> Result<AbsDirPath, AbsDirError>;
+
+    /// Join `file` to `self` as a file.
+    ///
+    /// If joining multiple items, consider [`TryJoinWith::try_join_dirs`]
+    /// or [`TryJoinWith::try_join_combined`] as these are more efficient.
+    fn try_join_file(&self, file: impl AsRef<str>) -> Result<AbsFilePath, AbsFileError>;
+
+    /// Join multiple directories to `self`.
+    /// The overall path is checked at the end instead of piece by piece.
+    fn try_join_dirs(
+        &self,
+        dirs: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<AbsDirPath, AbsDirError>;
+
+    /// Join multiple directories, followed by a file, to `self`.
+    /// The overall path is checked at the end instead of piece by piece.
+    fn try_join_combined(
+        &self,
+        others: impl IntoIterator<Item = impl AsRef<str>>,
+        file: impl AsRef<str>,
+    ) -> Result<AbsFilePath, AbsFileError>;
+}
+
+impl TryJoinWith for TypedPath<Abs, Dir> {
+    fn try_join_dir(&self, other: impl AsRef<str>) -> Result<AbsDirPath, AbsDirError> {
+        self.inner.join(other.as_ref()).pipe(AbsDirPath::new)
+    }
+
+    fn try_join_file(&self, other: impl AsRef<str>) -> Result<AbsFilePath, AbsFileError> {
+        self.inner.join(other.as_ref()).pipe(AbsFilePath::new)
+    }
+
+    fn try_join_dirs(
+        &self,
+        others: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<AbsDirPath, AbsDirError> {
+        let mut inner = self.inner.clone();
+        for other in others {
+            inner = inner.join(other.as_ref());
+        }
+        AbsDirPath::new(inner)
+    }
+
+    fn try_join_combined(
+        &self,
+        others: impl IntoIterator<Item = impl AsRef<str>>,
+        file: impl AsRef<str>,
+    ) -> Result<AbsFilePath, AbsFileError> {
+        let mut inner = self.inner.clone();
+        for other in others {
+            inner = inner.join(other.as_ref());
+        }
+        inner.join(file.as_ref()).pipe(AbsFilePath::new)
+    }
+}
+
+/// Joins known valid paths together.
 pub trait JoinWith<Other> {
     type Output;
 
@@ -526,17 +649,19 @@ pub trait JoinWith<Other> {
 }
 
 #[duplicate_item(
-    ty;
-    [ TypedPath<Rel, Type> ];
-    [ &TypedPath<Rel, Type> ];
+    ty_other ty_output;
+    [ TypedPath<Rel, Dir> ] [ TypedPath<Abs, Dir> ];
+    [ &TypedPath<Rel, Dir> ] [ TypedPath<Abs, Dir> ];
+    [ TypedPath<Rel, File> ] [ TypedPath<Abs, File> ];
+    [ &TypedPath<Rel, File> ] [ TypedPath<Abs, File> ];
 )]
-impl<Type> JoinWith<ty> for TypedPath<Abs, Dir> {
-    type Output = TypedPath<Abs, Type>;
+impl JoinWith<ty_other> for TypedPath<Abs, Dir> {
+    type Output = ty_output;
 
-    fn join(&self, other: ty) -> Self::Output {
-        self.as_std_path()
-            .join(other.as_std_path())
-            .pipe(TypedPath::new)
+    fn join(&self, other: ty_other) -> Self::Output {
+        self.as_utf8_path()
+            .join(other.as_utf8_path())
+            .pipe(TypedPath::new_unchecked)
     }
 }
 
@@ -556,92 +681,60 @@ impl std::fmt::Debug for ty {
 
 /// Shared functionality for known typed paths.
 pub trait TypedPathLike {
-    fn as_path(&self) -> &std::path::Path;
+    fn as_path(&self) -> &cargo_metadata::camino::Utf8Path;
 }
 
 #[duplicate_item(
     ty;
-    [ AbsDirBuf ];
-    [ &AbsDirBuf ];
-    [ AbsFileBuf ];
-    [ &AbsFileBuf ];
-    [ RelDirBuf ];
-    [ &RelDirBuf ];
-    [ RelFileBuf ];
-    [ &RelFileBuf ];
-    [ GenericPathBuf ];
-    [ &GenericPathBuf ];
+    [ AbsDirPath ];
+    [ &AbsDirPath ];
+    [ AbsFilePath ];
+    [ &AbsFilePath ];
+    [ RelDirPath ];
+    [ &RelDirPath ];
+    [ RelFilePath ];
+    [ &RelFilePath ];
+    [ GenericPath ];
+    [ &GenericPath ];
 )]
 impl TypedPathLike for ty {
-    fn as_path(&self) -> &std::path::Path {
-        self.as_std_path()
+    fn as_path(&self) -> &cargo_metadata::camino::Utf8Path {
+        self.as_utf8_path()
     }
 }
 
 /// Functionality for known absolute paths.
 pub trait AbsPathLike {
-    fn as_path(&self) -> &std::path::Path;
+    fn as_path(&self) -> &cargo_metadata::camino::Utf8Path;
 }
 
 #[duplicate_item(
     ty;
-    [ AbsDirBuf ];
-    [ AbsFileBuf ];
-    [ &AbsDirBuf ];
-    [ &AbsFileBuf ];
+    [ AbsDirPath ];
+    [ AbsFilePath ];
+    [ &AbsDirPath ];
+    [ &AbsFilePath ];
 )]
 impl AbsPathLike for ty {
-    fn as_path(&self) -> &std::path::Path {
-        self.as_std_path()
+    fn as_path(&self) -> &cargo_metadata::camino::Utf8Path {
+        self.as_utf8_path()
     }
 }
 
 /// Functionality for known relative paths.
 pub trait RelPathLike {
-    fn as_path(&self) -> &std::path::Path;
+    fn as_path(&self) -> &cargo_metadata::camino::Utf8Path;
 }
 
 #[duplicate_item(
     ty;
-    [ RelDirBuf ];
-    [ &RelDirBuf ];
-    [ RelFileBuf ];
-    [ &RelFileBuf ];
+    [ RelDirPath ];
+    [ &RelDirPath ];
+    [ RelFilePath ];
+    [ &RelFilePath ];
 )]
 impl RelPathLike for ty {
-    fn as_path(&self) -> &std::path::Path {
-        self.as_std_path()
-    }
-}
-
-/// Implemented by types that can be trivially converted to [`std::path::Path`]
-/// and have the same or very similar semantics.
-pub trait PathLike<'a> {
-    fn as_path(self) -> Cow<'a, std::path::Path>;
-}
-
-#[duplicate_item(
-    ty expr;
-    [ &'a cargo_metadata::camino::Utf8Path ] [ Cow::Borrowed(self.as_std_path()) ];
-    [ &'a std::path::Path ] [ Cow::Borrowed(self) ];
-    [ cargo_metadata::camino::Utf8PathBuf ] [ Cow::Owned(self.into_std_path_buf()) ];
-    [ &'a cargo_metadata::camino::Utf8PathBuf ] [ Cow::Borrowed(self.as_std_path()) ];
-    [ std::path::PathBuf ] [ Cow::Owned(self) ];
-    [ &'a std::path::PathBuf ] [ Cow::Borrowed(self.as_path()) ];
-    [ Cow<'a, std::path::Path> ] [ self ];
-)]
-impl<'a> PathLike<'a> for ty {
-    fn as_path(self) -> Cow<'a, std::path::Path> {
-        expr
-    }
-}
-
-impl<'a, P: PathLike<'a>> From<P> for TypedPath<SomeBase, SomeType> {
-    fn from(value: P) -> Self {
-        Self {
-            base: PhantomData,
-            ty: PhantomData,
-            inner: value.as_path().into_owned(),
-        }
+    fn as_path(&self) -> &cargo_metadata::camino::Utf8Path {
+        self.as_utf8_path()
     }
 }

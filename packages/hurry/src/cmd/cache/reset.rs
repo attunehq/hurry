@@ -31,7 +31,7 @@ pub async fn exec(options: Options) -> Result<()> {
         .await
         .context("get user global cache path")?;
     println!("Clearing cache directory at {cache_path:?}");
-    match fs::metadata(&cache_path).await {
+    match fs::metadata(cache_path.as_std_path()).await {
         Ok(Some(metadata)) => {
             if !metadata.is_dir() {
                 warn!("Cache directory is not a directory: {metadata:?}");

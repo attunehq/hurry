@@ -1,12 +1,8 @@
-use std::str::FromStr;
-
-use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
 use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context, OptionExt, eyre},
 };
 use futures::{StreamExt, TryStreamExt, stream};
-use relative_path::{RelativePath, RelativePathBuf};
 use serde::Deserialize;
 use tap::{Pipe, TapFallible};
 use tracing::{instrument, trace};
@@ -14,7 +10,7 @@ use tracing::{instrument, trace};
 use super::workspace::ProfileDir;
 use crate::{
     Locked, fs,
-    path::{Abs, File, Rel, TypedPath},
+    path::{AbsDirPath, AbsFilePath, RelFilePath, RelativeTo},
 };
 
 /// Rust compiler metadata for cache key generation.
@@ -41,13 +37,13 @@ pub struct RustcMetadata {
 impl RustcMetadata {
     /// Get platform metadata from the current compiler.
     #[instrument(name = "RustcMetadata::from_argv")]
-    pub async fn from_argv(workspace_root: &Utf8Path, _argv: &[String]) -> Result<Self> {
+    pub async fn from_argv(workspace_root: &AbsDirPath, _argv: &[String]) -> Result<Self> {
         let mut cmd = tokio::process::Command::new("rustc");
 
         // Bypasses the check that disallows using unstable commands on stable.
         cmd.env("RUSTC_BOOTSTRAP", "1");
         cmd.args(["-Z", "unstable-options", "--print", "target-spec-json"]);
-        cmd.current_dir(workspace_root);
+        cmd.current_dir(workspace_root.as_std_path());
         let output = cmd.output().await.context("run rustc")?;
         if !output.status.success() {
             return Err(eyre!("invoke rustc"))
@@ -86,7 +82,7 @@ impl RustcMetadata {
 #[derive(Debug)]
 pub struct Dotd {
     /// Recorded output paths, relative to the profile root.
-    pub outputs: Vec<TypedPath<Rel, File>>,
+    pub outputs: Vec<RelFilePath>,
 }
 
 impl Dotd {
@@ -102,10 +98,7 @@ impl Dotd {
     /// - Only extracts outputs with extensions: `.d`, `.rlib`, `.rmeta`
     /// - Returns paths relative to the profile root for cache consistency
     #[instrument(name = "Dotd::from_file")]
-    pub async fn from_file(
-        profile: &ProfileDir<'_, Locked>,
-        target: &TypedPath<Abs, File>,
-    ) -> Result<Self> {
+    pub async fn from_file(profile: &ProfileDir<'_, Locked>, target: &AbsFilePath) -> Result<Self> {
         const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta"];
         let profile_root = profile.root();
         fs::read_buffered_utf8(target)
@@ -119,7 +112,7 @@ impl Dotd {
                 if DEP_EXTS.iter().any(|ext| output.ends_with(ext)) {
                     trace!(?line, ?output, "read .d line");
                     std::path::PathBuf::from(output)
-                        .pipe(TypedPath::new_abs_file)
+                        .pipe(AbsFilePath::new)
                         .tap_err(|error| trace!(?line, ?output, ?error, "not a valid path"))
                         .tap_ok(|output| trace!(?line, ?output, "read output path"))
                         .context("parse as typed path")
@@ -130,9 +123,11 @@ impl Dotd {
                     None
                 }
             })
-            .and_then(
-                |output| async move { output.rel_to(profile_root).context("make path relative") },
-            )
+            .and_then(|output| async move {
+                output
+                    .relative_to(profile_root)
+                    .context("make path relative")
+            })
             .try_collect::<Vec<_>>()
             .await
             .map(|outputs| Self { outputs })
