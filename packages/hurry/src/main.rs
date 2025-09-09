@@ -81,29 +81,27 @@ async fn main() -> Result<()> {
         (None, None)
     };
 
-    let tree_layer = {
-        let layer = tracing_tree::HierarchicalLayer::default()
-            .with_indent_lines(true)
-            .with_indent_amount(2)
-            .with_thread_ids(false)
-            .with_thread_names(false)
-            .with_verbose_exit(false)
-            .with_verbose_entry(false)
-            .with_deferred_spans(true)
-            .with_bracketed_fields(true)
-            .with_span_retrace(true)
-            .with_timer(Uptime::default())
-            .with_targets(false);
-        match cli.color {
-            WhenColor::Always => layer.with_ansi(true),
-            WhenColor::Never => layer.with_ansi(false),
-            WhenColor::Auto => layer,
-        }
-    };
-
     tracing_subscriber::registry()
         .with(ErrorLayer::default())
-        .with(tree_layer)
+        .with({
+            let layer = tracing_tree::HierarchicalLayer::default()
+                .with_indent_lines(true)
+                .with_indent_amount(2)
+                .with_thread_ids(false)
+                .with_thread_names(false)
+                .with_verbose_exit(false)
+                .with_verbose_entry(false)
+                .with_deferred_spans(true)
+                .with_bracketed_fields(true)
+                .with_span_retrace(true)
+                .with_timer(Uptime::default())
+                .with_targets(false);
+            match cli.color {
+                WhenColor::Always => layer.with_ansi(true),
+                WhenColor::Never => layer.with_ansi(false),
+                WhenColor::Auto => layer,
+            }
+        })
         .with(
             tracing_subscriber::EnvFilter::builder()
                 .with_default_directive(LevelFilter::INFO.into())
