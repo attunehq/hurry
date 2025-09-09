@@ -36,7 +36,7 @@ use color_eyre::{
 use derive_more::{Debug, Display};
 use filetime::FileTime;
 use fslock::LockFile as FsLockFile;
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, stream};
 use jiff::Timestamp;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use relative_path::RelativePathBuf;
@@ -48,7 +48,7 @@ use crate::{
     Locked, Unlocked,
     ext::then_context,
     hash::Blake3,
-    path::{Abs, Dir, File, JoinWith, TypedPath},
+    path::{Abs, Dir, File, JoinWith, Rel, TypedPath},
 };
 
 /// The default level of concurrency used in hurry `fs` operations.
@@ -137,7 +137,7 @@ impl LockFile<Locked> {
 #[derive(Clone, Debug)]
 pub struct Index {
     /// The root directory of the index.
-    pub root: Utf8PathBuf,
+    pub root: TypedPath<Abs, Dir>,
 
     /// Stores the index.
     /// Keys relative to `root`.
@@ -146,7 +146,7 @@ pub struct Index {
     // https://docs.rs/fs-tree/0.2.2/fs_tree/ looked like it might work,
     // but the API was sketchy so I didn't use it for now.
     #[debug("{}", files.len())]
-    pub files: AHashMap<RelativePathBuf, IndexEntry>,
+    pub files: AHashMap<TypedPath<Rel, File>, IndexEntry>,
 }
 
 impl Index {
@@ -156,78 +156,22 @@ impl Index {
     #[instrument(name = "Index::recursive")]
     pub async fn recursive(root: impl Into<TypedPath<Abs, Dir>> + StdDebug) -> Result<Self> {
         let root = root.into();
-        spawn_blocking(move || Self::recursive_sync(root))
-            .await
-            .context("join task")?
-    }
+        let files = walk_files(&root)
+            .try_fold(AHashMap::new(), |mut files, file| {
+                let root = root.clone();
+                async move {
+                    let entry = IndexEntry::from_file(&file)
+                        .await
+                        .with_context(|| format!("index {file:?}"))?;
+                    let rel = file
+                        .make_relative_to(&root)
+                        .with_context(|| format!("make {file:?} relative to {root:?}"))?;
+                    files.insert(rel, entry);
+                    Ok(files)
+                }
+            })
+            .await?;
 
-    /// Index the provided path recursively, blocking the current thread.
-    #[instrument(name = "Index::recursive_sync")]
-    fn recursive_sync(root: TypedPath<Abs, Dir>) -> Result<Self> {
-        // The `rayon` instance runs in its own threadpool, but its overall
-        // operation is still blocking, so we run it in a background thread that
-        // just waits for rayon to complete.
-        let (tx, rx) = flume::bounded::<(RelativePathBuf, IndexEntry)>(0);
-        let runtime = Handle::current();
-        let walker = std::thread::spawn({
-            let root = root.clone();
-            let runtime = runtime.clone();
-            move || {
-                walkdir::WalkDir::new(&root)
-                    .into_iter()
-                    .par_bridge()
-                    .try_for_each(move |entry| -> Result<()> {
-                        let _guard = runtime.enter();
-                        let entry = entry.context("walk files")?;
-                        let path = entry.path();
-                        if !entry.file_type().is_file() {
-                            trace!(?path, "skipped entry: not a file");
-                            return Ok(());
-                        }
-
-                        trace!(?path, "walked entry");
-                        let path = path
-                            .strip_prefix(&root)
-                            .with_context(|| format!("make {path:?} relative to {root:?}"))?
-                            .to_path_buf()
-                            .pipe(RelativePathBuf::from_path)
-                            .context("read path as utf8")?;
-                        let entry = runtime
-                            .block_on(IndexEntry::from_file(entry.path()))
-                            .context("index entry")?;
-
-                        // Only errors if the channel receivers have been dropped,
-                        // which should never happen but we'll handle it
-                        // just in case.
-                        tx.send((path, entry)).context("send entry to main thread")
-                    })
-            }
-        });
-
-        // When the directory walk finishes, the senders all drop.
-        // This causes the receiver channel to close, terminating the iterator.
-        let files = rx
-            .into_iter()
-            .inspect(|(path, entry)| trace!(?path, ?entry, "indexed file"))
-            .collect();
-
-        // Joining a fallible operation from a background thread (as we do here)
-        // has two levels of errors:
-        // - The thread could have panicked
-        // - The operation could have completed fallibly
-        //
-        // The `expect` call here is for the former case: if the thread panicks,
-        // the only really safe thing to do is also panic since panic implies
-        // a broken invariant or partially corrupt state.
-        //
-        // Then the `context` call wraps the result of the actual fallible
-        // operation that we were doing inside the thread (walking the files).
-        walker
-            .join()
-            .expect("join thread")
-            .context("walk directory")?;
-
-        debug!("indexed directory");
         Ok(Self { root, files })
     }
 }
@@ -546,9 +490,10 @@ pub async fn remove_dir_all(path: &TypedPath<Abs, Dir>) -> Result<()> {
 /// although this function exists in case you need the standard metadata shape
 /// for some reason.
 #[instrument]
-pub async fn metadata<Type: std::fmt::Debug>(
-    path: &TypedPath<Abs, Type>,
+pub async fn metadata(
+    path: impl AsRef<std::path::Path> + StdDebug,
 ) -> Result<Option<std::fs::Metadata>> {
+    let path = path.as_ref();
     match tokio::fs::metadata(path).await {
         Ok(metadata) => {
             trace!(?path, ?metadata, "read metadata");
@@ -565,7 +510,7 @@ pub async fn metadata<Type: std::fmt::Debug>(
 /// or if there is an error checking the metadata;
 /// to differentiate this case use [`metadata`].
 #[instrument]
-pub async fn is_dir(path: impl AsRef<Path> + StdDebug) -> bool {
+pub async fn is_dir(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
     metadata(path)
         .await
         .map_or(false, |m| m.is_some_and(|m| m.is_dir()))
@@ -577,7 +522,7 @@ pub async fn is_dir(path: impl AsRef<Path> + StdDebug) -> bool {
 /// or if there is an error checking the metadata;
 /// to differentiate this case use [`metadata`].
 #[instrument]
-pub async fn is_file(path: impl AsRef<Path> + StdDebug) -> bool {
+pub async fn is_file(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
     metadata(path)
         .await
         .map_or(false, |m| m.is_some_and(|m| m.is_file()))

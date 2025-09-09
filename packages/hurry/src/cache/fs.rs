@@ -1,8 +1,7 @@
 //! Local file system implementation of cache and CAS traits.
 
-use std::{fmt::Debug as StdDebug, marker::PhantomData, path::Path};
+use std::{fmt::Debug as StdDebug, marker::PhantomData};
 
-use cargo_metadata::camino::Utf8PathBuf;
 use color_eyre::{Result, Section, SectionExt, eyre::Context};
 use derive_more::{Debug, Display};
 use itertools::Itertools;
@@ -75,9 +74,7 @@ impl FsCache<Unlocked> {
             .context("create cache directory")?;
 
         let lock = root.join(Self::lockfile());
-        let lock = LockFile::open(lock.as_std_path())
-            .await
-            .context("open lockfile")?;
+        let lock = LockFile::open(lock).await.context("open lockfile")?;
         Ok(Self {
             state: PhantomData,
             root,
@@ -132,10 +129,9 @@ impl super::Cache for FsCache<Locked> {
     async fn store(
         &self,
         kind: Kind,
-        key: impl AsRef<Blake3> + StdDebug + Send,
+        key: &Blake3,
         artifacts: impl IntoIterator<Item = impl Into<Artifact>> + StdDebug + Send,
     ) -> Result<()> {
-        let key = key.as_ref();
         let artifacts = artifacts.into_iter().map(Into::into).collect_vec();
         let name = self.root.join(kind.as_rel_dir()).join(key.as_rel_file()?);
         let content = Record::builder()
@@ -145,15 +141,14 @@ impl super::Cache for FsCache<Locked> {
             .build()
             .pipe_ref(serde_json::to_string_pretty)
             .context("encode record")?;
-        fs::write(name, content).await.context("store record")
+        fs::write(&name, content).await.context("store record")
     }
 
     #[instrument(name = "FsCache::get")]
-    async fn get(&self, kind: Kind, key: impl AsRef<Blake3> + StdDebug) -> Result<Option<Record>> {
-        let key = key.as_ref();
+    async fn get(&self, kind: Kind, key: &Blake3) -> Result<Option<Record>> {
         let name = self.root.join(kind.as_rel_dir()).join(key.as_rel_file()?);
         Ok(
-            match fs::read_buffered_utf8(name).await.context("read file")? {
+            match fs::read_buffered_utf8(&name).await.context("read file")? {
                 Some(content) => serde_json::from_str(&content)
                     .context("decode record")
                     .with_section(|| content.header("Content:"))?,
@@ -222,15 +217,11 @@ impl FsCas {
 
 impl super::Cas for FsCas {
     #[instrument(name = "FsCas::store_file")]
-    async fn store_file(
-        &self,
-        kind: Kind,
-        src: impl AsRef<Path> + StdDebug + Send,
-    ) -> Result<Blake3> {
+    async fn store_file(&self, kind: Kind, src: &TypedPath<Abs, File>) -> Result<Blake3> {
         let src = src.as_ref();
         let key = Blake3::from_file(src).await.context("hash file")?;
-        let dst = self.root.join(kind.as_rel_dir()).join(key.as_rel_dir()?);
-        fs::copy_file(src, dst).await?;
+        let dst = self.root.join(kind.as_rel_dir()).join(key.as_rel_file()?);
+        fs::copy_file(src, &dst).await?;
         Ok(key)
     }
 
@@ -238,13 +229,10 @@ impl super::Cas for FsCas {
     async fn get_file(
         &self,
         kind: Kind,
-        key: impl AsRef<Blake3> + StdDebug + Send,
-        destination: impl AsRef<Path> + StdDebug + Send,
+        key: &Blake3,
+        destination: &TypedPath<Abs, File>,
     ) -> Result<()> {
-        let src = self
-            .root
-            .join(kind.as_rel_dir())
-            .join(key.as_ref().as_rel_dir()?);
-        fs::copy_file(src, destination.as_ref()).await.map(drop)
+        let src = self.root.join(kind.as_rel_dir()).join(key.as_rel_file()?);
+        fs::copy_file(&src, destination).await.map(drop)
     }
 }

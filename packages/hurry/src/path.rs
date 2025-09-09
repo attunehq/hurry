@@ -166,31 +166,31 @@ macro_rules! assert_relative {
 }
 
 /// Indicates an unknown value for this path base.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct SomeBase;
 
 /// Indicates an unknown value for this type of path.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct SomeType;
 
 /// An absolute path always begins from the absolute start of the filesystem
 /// and describes every step through the filesystem to end up at the target.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct Abs;
 
 /// A relative path is a "partial" path; it describes a path starting from
 /// an undefined point. Once the "starting location" is given, the relative
 /// path can take over, describing where to go from that location.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct Rel;
 
 /// A directory contains other file system entities,
 /// such as files or other directories.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct Dir;
 
 /// A file contains data.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct File;
 
 /// A location on the file system according to the type modifiers.
@@ -217,6 +217,12 @@ impl<Base, Type> AsRef<TypedPath<Base, Type>> for TypedPath<Base, Type> {
 impl<Type> From<TypedPath<Abs, Type>> for std::path::PathBuf {
     fn from(value: TypedPath<Abs, Type>) -> Self {
         value.inner
+    }
+}
+
+impl<Base: Clone, Type: Clone> From<&TypedPath<Base, Type>> for TypedPath<Base, Type> {
+    fn from(value: &TypedPath<Base, Type>) -> Self {
+        value.clone()
     }
 }
 

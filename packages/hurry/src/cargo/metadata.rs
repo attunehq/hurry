@@ -5,13 +5,17 @@ use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context, OptionExt, eyre},
 };
+use futures::{StreamExt, TryStreamExt, stream};
 use relative_path::{RelativePath, RelativePathBuf};
 use serde::Deserialize;
-use tap::TapFallible;
+use tap::{Pipe, TapFallible};
 use tracing::{instrument, trace};
 
 use super::workspace::ProfileDir;
-use crate::{Locked, fs};
+use crate::{
+    Locked, fs,
+    path::{Abs, File, Rel, TypedPath},
+};
 
 /// Rust compiler metadata for cache key generation.
 ///
@@ -82,7 +86,7 @@ impl RustcMetadata {
 #[derive(Debug)]
 pub struct Dotd {
     /// Recorded output paths, relative to the profile root.
-    pub outputs: Vec<RelativePathBuf>,
+    pub outputs: Vec<TypedPath<Rel, File>>,
 }
 
 impl Dotd {
@@ -100,34 +104,40 @@ impl Dotd {
     #[instrument(name = "Dotd::from_file")]
     pub async fn from_file(
         profile: &ProfileDir<'_, Locked>,
-        target: &RelativePath,
+        target: &TypedPath<Abs, File>,
     ) -> Result<Self> {
         const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta"];
         let profile_root = profile.root();
-        let outputs = fs::read_buffered_utf8(target.to_path(&profile_root))
+        fs::read_buffered_utf8(target)
             .await
             .with_context(|| format!("read .d file: {target:?}"))?
             .ok_or_eyre("file does not exist")?
             .lines()
-            .filter_map(|line| {
+            .pipe(stream::iter)
+            .filter_map(|line| async move {
                 let (output, _) = line.split_once(':')?;
                 if DEP_EXTS.iter().any(|ext| output.ends_with(ext)) {
                     trace!(?line, ?output, "read .d line");
-                    Utf8PathBuf::from_str(output)
+                    std::path::PathBuf::from(output)
+                        .pipe(TypedPath::new_abs_file)
+                        .await
                         .tap_err(|error| trace!(?line, ?output, ?error, "not a valid path"))
-                        .ok()
+                        .tap_ok(|output| trace!(?line, ?output, "read output path"))
+                        .context("parse as typed path")
+                        .map(Some)
+                        .transpose()
                 } else {
                     trace!(?line, "skipped .d line");
                     None
                 }
             })
-            .map(|output| -> Result<RelativePathBuf> {
+            .and_then(|output| async move {
                 output
-                    .strip_prefix(&profile_root)
+                    .make_relative_to(profile_root)
                     .with_context(|| format!("make {output:?} relative to {profile_root:?}"))
-                    .and_then(|p| RelativePathBuf::from_path(p).context("read path as utf8"))
             })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Self { outputs })
+            .try_collect::<Vec<_>>()
+            .await
+            .map(|outputs| Self { outputs })
     }
 }

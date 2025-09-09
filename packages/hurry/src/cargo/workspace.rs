@@ -190,11 +190,11 @@ impl Workspace {
 
         let profile = TypedPath::mk_rel_dir(profile.as_str())
             .context("make relative directory from profile")?;
-        fs::create_dir_all(self.target.join(profile))
+        fs::create_dir_all(&self.target.join(profile))
             .await
             .context("create target directory")?;
         fs::write(
-            self.target.join(mk_rel_file!("CACHEDIR.TAG")),
+            &self.target.join(&mk_rel_file!("CACHEDIR.TAG")),
             CACHEDIR_TAG_CONTENT,
         )
         .await
@@ -265,15 +265,14 @@ pub struct ProfileDir<'ws, State> {
     /// when we clone the `ProfileDir`.
     index: Option<Arc<Index>>,
 
-    /// The root of the directory,
-    /// relative to [`workspace.target`](Workspace::target).
+    /// The root of the profile directory inside [`Workspace::target`].
     ///
     /// Note: this is intentionally not `pub` because we only want to give
     /// callers access to the directory when the cache is locked;
     /// reference the `root` method in the locked implementation block.
     /// The intention here is to minimize the chance of callers mutating or
     /// referencing the contents of the cache while it is locked.
-    root: RelativePathBuf,
+    root: TypedPath<Abs, Dir>,
 
     /// The profile to which this directory refers.
     ///
@@ -297,10 +296,6 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
         let root = workspace.target.join(profile_dir);
         let lock = root.join(mk_rel_file!(".cargo-lock"));
         let lock = LockFile::open(lock).await.context("open lockfile")?;
-        let root = root
-            .as_std_path()
-            .relative_to(&workspace.target)
-            .context("make root relative")?;
 
         Ok(Self {
             state: PhantomData,
@@ -316,8 +311,7 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
     #[instrument(name = "ProfileDir::lock")]
     pub async fn lock(self) -> Result<ProfileDir<'ws, Locked>> {
         let lock = self.lock.lock().await.context("lock profile")?;
-        let root = self.root.to_path(&self.workspace.target);
-        let index = Index::recursive(&root)
+        let index = Index::recursive(&self.root)
             .await
             .map(Arc::new)
             .map(Some)
@@ -447,7 +441,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ///
     /// Converts the internal relative path to an absolute path
     /// based on the workspace's target directory.
-    pub fn root(&self) -> std::path::PathBuf {
-        self.root.to_path(&self.workspace.target)
+    pub fn root(&self) -> &TypedPath<Abs, Dir> {
+        &self.root
     }
 }
