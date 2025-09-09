@@ -5,7 +5,7 @@ use strum::{EnumIter, IntoEnumIterator};
 use subenum::subenum;
 use tracing::instrument;
 
-use crate::path::{Dir, File, TypedPath, Rel};
+use crate::path::{Dir, File, Rel, TypedPath};
 
 use super::read_argv;
 
@@ -85,14 +85,16 @@ impl Profile {
             .unwrap_or(Profile::Debug)
     }
 
-    /// Try to create a `PathBuf<Rel, Dir>` for this profile.
+    /// Try to create a typed relative directory for this profile.
+    #[instrument(name = "Profile::as_rel_dir")]
     pub fn as_rel_dir(&self) -> Result<TypedPath<Rel, Dir>> {
-        TypedPath::mk_rel_dir(self.as_str()).context("reference profile as a relative directory")
+        TypedPath::dangerously_make_rel_dir(self.as_str()).context("reference as relative dir")
     }
 
-    /// Try to create a `PathBuf<Rel, File>` for this profile.
+    /// Try to create a typed relative file for this profile.
+    #[instrument(name = "Profile::as_rel_file")]
     pub fn as_rel_file(&self) -> Result<TypedPath<Rel, File>> {
-        TypedPath::mk_rel_file(self.as_str()).context("reference profile as a relative file")
+        TypedPath::dangerously_make_rel_file(self.as_str()).context("reference as relative file")
     }
 }
 

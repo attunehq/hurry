@@ -33,11 +33,17 @@
 //! almost immediately, so we've created this module for our own path types
 //! that provide all the needs above and any others we find later.
 
-use std::{borrow::Cow, ffi::OsString, marker::PhantomData};
+use std::{
+    borrow::Cow,
+    ffi::{OsStr, OsString},
+    marker::PhantomData,
+    path::Component,
+};
 
 use color_eyre::{Result, eyre::Context};
 use derive_more::{Display, Error};
-use serde::{Deserialize, Deserializer, de::DeserializeOwned};
+use duplicate::{duplicate, duplicate_item};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
 use subenum::subenum;
 use tap::Pipe;
 
@@ -47,6 +53,7 @@ pub type RelFileBuf = TypedPath<Rel, File>;
 pub type RelDirBuf = TypedPath<Rel, Dir>;
 pub type AbsFileBuf = TypedPath<Abs, File>;
 pub type AbsDirBuf = TypedPath<Abs, Dir>;
+pub type GenericPathBuf = TypedPath<SomeBase, SomeType>;
 
 /// Errors for path conversions in this module.
 ///
@@ -108,7 +115,7 @@ macro_rules! bail {
     };
 }
 
-/// Make an instance of a [`Path<Rel, File>`] without validating
+/// Make an instance of a [`TypedPath<Rel, File>`] without validating
 /// that it exists and is a file on disk.
 ///
 /// This macro does perform compile-time validation that the path is not
@@ -129,7 +136,7 @@ macro_rules! mk_rel_file {
     }};
 }
 
-/// Make an instance of a [`Path<Rel, Dir>`] without validating
+/// Make an instance of a [`TypedPath<Rel, Dir>`] without validating
 /// that it exists and is a directory on disk.
 ///
 /// This macro does perform compile-time validation that the path is not
@@ -153,6 +160,7 @@ macro_rules! mk_rel_dir {
 /// Assert that the string provided indicates a relative path.
 ///
 /// TODO: make this work on Windows too.
+#[cfg(not(target_os = "windows"))]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! assert_relative {
@@ -194,36 +202,55 @@ pub struct Dir;
 pub struct File;
 
 /// A location on the file system according to the type modifiers.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display)]
+///
+/// This location is validated to exist and match the `Base` and `Type`
+/// constraints at construction/conversion time; in other words if you
+/// are working with a `TypedPath<Abs, Dir>` this type has been validated
+/// to actually reference a concrete directory on disk and point to it
+/// using an absolute path.
+///
+/// That being said, this isn't 100% foolproof as of course some other program
+/// (or a different part of this program) can technically remove or alter
+/// the path between when this type is constructed and when the type is
+/// accessed.
+///
+/// There are also intended exceptions to this: specifically the [`mk_rel_dir`]
+/// and [`mk_rel_file`] macros _do not_ validate that the path actually exists
+/// or that the path is the correct type. The reasoning here is that sometimes
+/// we have to have paths that reference things that don't yet exist
+/// (for example, so that we can create them) and as such these escape hatches
+/// sort of have to be present.
+///
+/// Still, perfect is the enemy of good, and there's only so much
+/// we can do with the giant ball of global mutable state that is a filesystem.
+///
+/// ## Path manipulation
+///
+/// With the standard path-like types, you're probably used to methods like
+/// `some_base.join("name")` or other similar operations.
+///
+/// Types in this module use strong types; in the above scenario prefer
+/// e.g. `some_base.join(mk_rel_file!("name"))` instead.
+/// Similar differences hold for other similar operations.
+///
+/// ## Deserialization and conversion
+///
+/// Since we have to check whether the path exists and is the right type
+/// at the time we construct this type, and the standard conversion (`TryFrom`)
+/// and `Deserialize` implementations unfortunately aren't async,
+/// we are forced to perform synchronous I/O. These operations _should_
+/// be quite fast on modern file systems as they just check file metadata.
+///
+/// If this is not acceptable, the workaround is to deserialize
+/// using the `SomeBase` and `SomeType` types (which do not require I/O)
+/// and then use the asynchronous `try_from_async` methods on the more
+/// concrete types to perform the fallible conversion without any blocking.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Display)]
 #[display("{}", self.inner.display())]
 pub struct TypedPath<Base, Type> {
     base: PhantomData<Base>,
     ty: PhantomData<Type>,
     inner: std::path::PathBuf,
-}
-
-impl<Type> AsRef<std::path::Path> for TypedPath<Abs, Type> {
-    fn as_ref(&self) -> &std::path::Path {
-        &self.inner
-    }
-}
-
-impl<Base, Type> AsRef<TypedPath<Base, Type>> for TypedPath<Base, Type> {
-    fn as_ref(&self) -> &TypedPath<Base, Type> {
-        self
-    }
-}
-
-impl<Type> From<TypedPath<Abs, Type>> for std::path::PathBuf {
-    fn from(value: TypedPath<Abs, Type>) -> Self {
-        value.inner
-    }
-}
-
-impl<Base: Clone, Type: Clone> From<&TypedPath<Base, Type>> for TypedPath<Base, Type> {
-    fn from(value: &TypedPath<Base, Type>) -> Self {
-        value.clone()
-    }
 }
 
 impl<Base, Type> TypedPath<Base, Type> {
@@ -238,6 +265,19 @@ impl<Base, Type> TypedPath<Base, Type> {
             .parent()
             .map(ToOwned::to_owned)
             .map(TypedPath::new)
+    }
+
+    /// Iterate through the components of the path.
+    pub fn components<'a>(&'a self) -> impl Iterator<Item = Component<'a>> {
+        self.inner.components()
+    }
+
+    /// Returns the final component of the path, if there is one.
+    ///
+    /// If the path is a file, this is the file name.
+    /// If it's the path of a directory, this is the directory name.
+    pub fn file_name(&self) -> Option<&OsStr> {
+        self.inner.file_name()
     }
 
     /// Convenience function to create an instance using the provided
@@ -255,89 +295,74 @@ impl<Base, Type> TypedPath<Base, Type> {
     }
 }
 
+impl<Base, Type> AsRef<std::path::Path> for TypedPath<Base, Type> {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.inner
+    }
+}
+impl<Base, Type> AsRef<TypedPath<Base, Type>> for TypedPath<Base, Type> {
+    fn as_ref(&self) -> &TypedPath<Base, Type> {
+        self
+    }
+}
+impl<Base, Type> From<TypedPath<Base, Type>> for std::path::PathBuf {
+    fn from(value: TypedPath<Base, Type>) -> Self {
+        value.inner
+    }
+}
+impl<Base, Type> From<&TypedPath<Base, Type>> for std::path::PathBuf {
+    fn from(value: &TypedPath<Base, Type>) -> Self {
+        value.inner.clone()
+    }
+}
+impl<Base: Clone, Type: Clone> From<&TypedPath<Base, Type>> for TypedPath<Base, Type> {
+    fn from(value: &TypedPath<Base, Type>) -> Self {
+        value.clone()
+    }
+}
+
 impl TypedPath<Abs, Dir> {
-    pub async fn current() -> Result<Self> {
+    /// Get the current working directory for the process.
+    pub fn current() -> Result<TypedPath<Abs, Dir>> {
         std::env::current_dir()
-            .map(Self::try_from_path)
-            .context("get current directory")?
-            .await
-            .context("parse current directory")
-    }
-
-    pub async fn new_abs_dir(p: impl PathLike<'_>) -> Result<TypedPath<Abs, Dir>, AbsDirError> {
-        TypedPath::<Abs, Dir>::try_from_path(p).await
-    }
-
-    pub fn make_relative_to(
-        &self,
-        anchor: impl AbsPathLike,
-    ) -> Result<TypedPath<Rel, Dir>, MakeRelativeError> {
-        let parent = anchor.as_path();
-        Ok(match self.inner.strip_prefix(parent) {
-            Ok(rel) => TypedPath::new(rel.to_path_buf()),
-            Err(err) => {
-                bail!(MakeRelativeError::NotChild => parent: parent, child: &self.inner, source: err);
-            }
-        })
-    }
-
-    pub async fn try_from_generic(
-        value: TypedPath<SomeBase, SomeType>,
-    ) -> Result<Self, AbsDirError> {
-        Self::try_from_path(value.as_std_path()).await
-    }
-
-    pub async fn try_from_path(value: impl PathLike<'_>) -> Result<Self, AbsDirError> {
-        let path = value.as_path();
-        if !path.is_absolute() {
-            bail!(AbsDirError::NotAbsolute => path);
-        }
-        if !fs::is_dir(&path).await {
-            bail!(AbsDirError::NotDirectory => path);
-        }
-        Ok(Self {
-            base: PhantomData,
-            ty: PhantomData,
-            inner: path.into_owned(),
-        })
+            .context("get current directory")
+            .map(TypedPath::<SomeBase, SomeType>::from)
+            .and_then(|p| Self::try_from(p).context("convert to typed abs dir"))
     }
 }
 
-impl TypedPath<Rel, Dir> {
-    pub async fn try_from_generic(
-        value: TypedPath<SomeBase, SomeType>,
-    ) -> Result<Self, RelDirError> {
-        Self::try_from_path(value.as_std_path()).await
-    }
-
-    pub async fn new_rel_dir(p: impl PathLike<'_>) -> Result<TypedPath<Rel, Dir>, RelDirError> {
-        TypedPath::<Rel, Dir>::try_from_path(p).await
-    }
-
-    pub fn mk_rel_dir(p: impl AsRef<str>) -> Result<TypedPath<Rel, Dir>, RelDirError> {
+#[duplicate_item(
+    ty make err;
+    [ TypedPath<Rel, File> ] [ dangerously_make_rel_file ] [ RelFileError ];
+    [ TypedPath<Rel, Dir> ] [ dangerously_make_rel_dir ] [ RelDirError ];
+)]
+impl ty {
+    /// Parse the provided path into the strongly typed path.
+    ///
+    /// This method validates that the path is not absolute, but does not
+    /// validate that the path on disk is the correct type.
+    ///
+    /// Most of the time, users should prefer the `new_` method for this type;
+    /// the intended use case for this function is when creating a type
+    /// from a user-provided value prior to creating the path on disk,
+    /// or to validate whether the path on disk exists.
+    pub fn make(p: impl AsRef<str>) -> Result<ty, err> {
         let path = std::path::PathBuf::from(p.as_ref());
-        if path.is_absolute() {
-            bail!(RelDirError::NotRelative => path);
+        if !path.is_relative() {
+            bail!(err::NotRelative => path);
         }
-        Ok(TypedPath::<Rel, Dir>::new(path))
+        Ok(Self::new(path))
     }
+}
 
-    pub async fn try_from_path(value: impl PathLike<'_>) -> Result<Self, RelDirError> {
-        let path = value.as_path();
-        if path.is_absolute() {
-            bail!(RelDirError::NotRelative => path);
-        }
-        if !fs::is_dir(&path).await {
-            bail!(RelDirError::NotDirectory => path);
-        }
-        Ok(Self {
-            base: PhantomData,
-            ty: PhantomData,
-            inner: path.into_owned(),
-        })
-    }
-
-    pub fn make_abs_from(&self, anchor: impl AbsPathLike) -> TypedPath<Abs, Dir> {
+#[duplicate_item(
+    rel_ty abs_ty;
+    [ TypedPath<Rel, File> ] [ TypedPath<Abs, File> ];
+    [ TypedPath<Rel, Dir> ] [ TypedPath<Abs, Dir> ];
+)]
+impl rel_ty {
+    /// Make the path absolute by joining it with the provided absolute base.
+    pub fn abs(&self, anchor: impl AbsPathLike) -> abs_ty {
         anchor
             .as_path()
             .join(self.as_std_path())
@@ -345,85 +370,40 @@ impl TypedPath<Rel, Dir> {
     }
 }
 
-impl TypedPath<Abs, File> {
-    pub fn make_relative_to(
-        &self,
-        anchor: impl AbsPathLike,
-    ) -> Result<TypedPath<Rel, File>, MakeRelativeError> {
-        let parent = anchor.as_path();
-        Ok(match self.inner.strip_prefix(parent) {
-            Ok(rel) => TypedPath::new(rel.to_path_buf()),
-            Err(err) => {
-                bail!(MakeRelativeError::NotChild => parent: parent, child: &self.inner, source: err);
-            }
-        })
-    }
-
-    pub async fn new_abs_file(p: impl PathLike<'_>) -> Result<TypedPath<Abs, File>, AbsFileError> {
-        TypedPath::<Abs, File>::try_from_path(p).await
-    }
-
-    pub async fn try_from_generic(
-        value: TypedPath<SomeBase, SomeType>,
-    ) -> Result<Self, AbsFileError> {
-        Self::try_from_path(value.as_std_path()).await
-    }
-
-    pub async fn try_from_path(value: impl PathLike<'_>) -> Result<Self, AbsFileError> {
-        let path = value.as_path();
-        if !path.is_absolute() {
-            bail!(AbsFileError::NotAbsolute => path);
-        }
-        if !fs::is_file(&path).await {
-            bail!(AbsFileError::NotFile => path);
-        }
-        Ok(Self {
-            base: PhantomData,
-            ty: PhantomData,
-            inner: path.into_owned(),
-        })
+#[duplicate_item(
+    abs_ty rel_ty;
+    [ TypedPath<Abs, File> ] [ TypedPath<Rel, File> ];
+    [ TypedPath<Abs, Dir> ] [ TypedPath<Rel, Dir> ];
+)]
+impl abs_ty {
+    /// Make the path absolute by joining it with the provided absolute base.
+    pub fn rel_to(&self, anchor: impl AbsPathLike) -> Result<rel_ty, MakeRelativeError> {
+        self.inner
+            .strip_prefix(anchor.as_path())
+            .map_err(|err| MakeRelativeError::NotChild {
+                parent: anchor.as_path().to_path_buf(),
+                child: self.inner.clone(),
+                source: err,
+            })
+            .map(|p| TypedPath::new(p.to_path_buf()))
     }
 }
 
-impl TypedPath<Rel, File> {
-    pub fn make_abs_from(&self, anchor: impl AbsPathLike) -> TypedPath<Abs, File> {
-        anchor
-            .as_path()
-            .join(self.as_std_path())
-            .pipe(TypedPath::new)
+impl TypedPath<SomeBase, SomeType> {
+    /// Report whether the path is absolute.
+    ///
+    /// This exists mainly for compatibility with standard-like path types
+    /// so that we can reuse the logic for converting them.
+    fn is_absolute(&self) -> bool {
+        self.inner.is_absolute()
     }
 
-    pub async fn new_rel_file(p: impl PathLike<'_>) -> Result<TypedPath<Rel, File>, RelFileError> {
-        TypedPath::<Rel, File>::try_from_path(p).await
-    }
-
-    pub fn mk_rel_file(p: impl AsRef<str>) -> Result<TypedPath<Rel, File>, RelFileError> {
-        let path = std::path::PathBuf::from(p.as_ref());
-        if path.is_absolute() {
-            bail!(RelFileError::NotRelative => path);
-        }
-        Ok(TypedPath::<Rel, File>::new(path))
-    }
-
-    pub async fn try_from_generic(
-        value: TypedPath<SomeBase, SomeType>,
-    ) -> Result<Self, RelFileError> {
-        Self::try_from_path(value.as_std_path()).await
-    }
-
-    pub async fn try_from_path(value: impl PathLike<'_>) -> Result<Self, RelFileError> {
-        let path = value.as_path();
-        if path.is_absolute() {
-            bail!(RelFileError::NotRelative => path);
-        }
-        if !fs::is_file(&path).await {
-            bail!(RelFileError::NotFile => path);
-        }
-        Ok(Self {
-            base: PhantomData,
-            ty: PhantomData,
-            inner: path.into_owned(),
-        })
+    /// Report whether the path is relative.
+    ///
+    /// This exists mainly for compatibility with standard-like path types
+    /// so that we can reuse the logic for converting them.
+    fn is_relative(&self) -> bool {
+        self.inner.is_relative()
     }
 }
 
@@ -432,52 +412,105 @@ impl<'de> Deserialize<'de> for TypedPath<SomeBase, SomeType> {
     where
         D: Deserializer<'de>,
     {
-        let s = std::path::PathBuf::deserialize(deserializer)?;
-        Ok(Self::new(s))
+        let p = std::path::PathBuf::deserialize(deserializer)?;
+        Ok(Self::new(p))
     }
 }
 
-/// Functionality for known absolute paths.
-pub trait AbsPathLike {
-    fn as_path(&self) -> &std::path::Path;
-}
-
-impl AbsPathLike for AbsDirBuf {
-    fn as_path(&self) -> &std::path::Path {
-        self.as_std_path()
+duplicate! {
+    [
+        ty new ty_err;
+        [ TypedPath<Abs, Dir> ] [ new_abs_dir ] [ AbsDirError ];
+        [ TypedPath<Abs, File> ] [ new_abs_file ] [ AbsFileError ];
+        [ TypedPath<Rel, Dir> ] [ new_rel_dir ] [ RelDirError ];
+        [ TypedPath<Rel, File> ] [ new_rel_file ] [ RelFileError ];
+    ]
+    impl<'de> Deserialize<'de> for ty {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let p = TypedPath::<SomeBase, SomeType>::deserialize(deserializer)?;
+            Self::try_from(p).map_err(serde::de::Error::custom)
+        }
+    }
+    impl Serialize for ty {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            self.inner.serialize(serializer)
+        }
+    }
+    impl ty {
+        /// Parse the provided path into the strongly typed path.
+        ///
+        /// This method validates that the path actually exists on disk
+        /// and that it is the appropriate type.
+        pub fn new<'a>(p: impl PathLike<'a>) -> Result<Self, ty_err> {
+            TypedPath::<SomeBase, SomeType>::from(p)
+                .pipe(Self::try_from)
+        }
     }
 }
-impl AbsPathLike for &AbsDirBuf {
-    fn as_path(&self) -> &std::path::Path {
-        self.as_std_path()
-    }
-}
 
-impl AbsPathLike for AbsFileBuf {
-    fn as_path(&self) -> &std::path::Path {
-        self.as_std_path()
+duplicate! {
+    [
+        ty_from;
+        [ std::path::PathBuf ];
+        [ &std::path::Path ];
+        [ cargo_metadata::camino::Utf8PathBuf ];
+        [ &cargo_metadata::camino::Utf8Path ];
+        [ TypedPath<SomeBase, SomeType> ];
+        [ &TypedPath<SomeBase, SomeType> ];
+    ]
+    impl TryFrom<ty_from> for TypedPath<Abs, Dir> {
+        type Error = AbsDirError;
+        fn try_from(value: ty_from) -> Result<Self, Self::Error> {
+            if !value.is_absolute() {
+                bail!(AbsDirError::NotAbsolute => value);
+            }
+            if !fs::is_dir_sync(&value) {
+                bail!(AbsDirError::NotDirectory => value);
+            }
+            Ok(Self::new(value.into()))
+        }
     }
-}
-impl AbsPathLike for &AbsFileBuf {
-    fn as_path(&self) -> &std::path::Path {
-        self.as_std_path()
+    impl TryFrom<ty_from> for TypedPath<Abs, File> {
+        type Error = AbsFileError;
+        fn try_from(value: ty_from) -> Result<Self, Self::Error> {
+            if !value.is_absolute() {
+                bail!(AbsFileError::NotAbsolute => value);
+            }
+            if !fs::is_file_sync(&value) {
+                bail!(AbsFileError::NotFile => value);
+            }
+            Ok(Self::new(value.into()))
+        }
     }
-}
-
-/// Functionality for known relative paths.
-pub trait RelPathLike {
-    fn as_path(&self) -> &std::path::Path;
-}
-
-impl RelPathLike for RelDirBuf {
-    fn as_path(&self) -> &std::path::Path {
-        self.as_std_path()
+    impl TryFrom<ty_from> for TypedPath<Rel, Dir> {
+        type Error = RelDirError;
+        fn try_from(value: ty_from) -> Result<Self, Self::Error> {
+            if !value.is_relative() {
+                bail!(RelDirError::NotRelative => value);
+            }
+            if !fs::is_dir_sync(&value) {
+                bail!(RelDirError::NotDirectory => value);
+            }
+            Ok(Self::new(value.into()))
+        }
     }
-}
-
-impl RelPathLike for RelFileBuf {
-    fn as_path(&self) -> &std::path::Path {
-        self.as_std_path()
+    impl TryFrom<ty_from> for TypedPath<Rel, File> {
+        type Error = RelFileError;
+        fn try_from(value: ty_from) -> Result<Self, Self::Error> {
+            if value.is_absolute() {
+                bail!(RelFileError::NotRelative => value);
+            }
+            if !fs::is_file_sync(&value) {
+                bail!(RelFileError::NotFile => value);
+            }
+            Ok(Self::new(value.into()))
+        }
     }
 }
 
@@ -489,67 +522,114 @@ pub trait JoinWith<Other> {
     fn join(&self, other: Other) -> Self::Output;
 }
 
-impl<Type> JoinWith<TypedPath<Rel, Type>> for TypedPath<Abs, Dir> {
+#[duplicate_item(
+    ty;
+    [ TypedPath<Rel, Type> ];
+    [ &TypedPath<Rel, Type> ];
+)]
+impl<Type> JoinWith<ty> for TypedPath<Abs, Dir> {
     type Output = TypedPath<Abs, Type>;
 
-    fn join(&self, other: TypedPath<Rel, Type>) -> Self::Output {
-        self.join(&other)
-    }
-}
-
-impl<Type> JoinWith<&TypedPath<Rel, Type>> for TypedPath<Abs, Dir> {
-    type Output = TypedPath<Abs, Type>;
-
-    fn join(&self, other: &TypedPath<Rel, Type>) -> Self::Output {
+    fn join(&self, other: ty) -> Self::Output {
         self.as_std_path()
             .join(other.as_std_path())
             .pipe(TypedPath::new)
     }
 }
 
+#[duplicate_item(
+    ty name;
+    [ TypedPath<SomeBase, SomeType> ] [ "Generic" ];
+    [ TypedPath<Abs, Dir> ] [ "AbsDir" ];
+    [ TypedPath<Abs, File> ] [ "AbsFile" ];
+    [ TypedPath<Rel, Dir> ] [ "RelDir" ];
+    [ TypedPath<Rel, File> ] [ "RelFile" ];
+)]
+impl std::fmt::Debug for ty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}({:?})", name, self.inner)
+    }
+}
+
+/// Shared functionality for known typed paths.
+pub trait TypedPathLike {
+    fn as_path(&self) -> &std::path::Path;
+}
+
+#[duplicate_item(
+    ty;
+    [ AbsDirBuf ];
+    [ &AbsDirBuf ];
+    [ AbsFileBuf ];
+    [ &AbsFileBuf ];
+    [ RelDirBuf ];
+    [ &RelDirBuf ];
+    [ RelFileBuf ];
+    [ &RelFileBuf ];
+    [ GenericPathBuf ];
+    [ &GenericPathBuf ];
+)]
+impl TypedPathLike for ty {
+    fn as_path(&self) -> &std::path::Path {
+        self.as_std_path()
+    }
+}
+
+/// Functionality for known absolute paths.
+pub trait AbsPathLike {
+    fn as_path(&self) -> &std::path::Path;
+}
+
+#[duplicate_item(
+    ty;
+    [ AbsDirBuf ];
+    [ AbsFileBuf ];
+    [ &AbsDirBuf ];
+    [ &AbsFileBuf ];
+)]
+impl AbsPathLike for ty {
+    fn as_path(&self) -> &std::path::Path {
+        self.as_std_path()
+    }
+}
+
+/// Functionality for known relative paths.
+pub trait RelPathLike {
+    fn as_path(&self) -> &std::path::Path;
+}
+
+#[duplicate_item(
+    ty;
+    [ RelDirBuf ];
+    [ &RelDirBuf ];
+    [ RelFileBuf ];
+    [ &RelFileBuf ];
+)]
+impl RelPathLike for ty {
+    fn as_path(&self) -> &std::path::Path {
+        self.as_std_path()
+    }
+}
+
 /// Implemented by types that can be trivially converted to [`std::path::Path`]
 /// and have the same or very similar semantics.
-///
-/// Note that [`PathBuf`] _does not_ implement this trait; this is because
-/// it has deeper semantics than `std::path::Path` and also to avoid
-/// conflicting with `std`-provided blanket `Into` implementations.
 pub trait PathLike<'a> {
     fn as_path(self) -> Cow<'a, std::path::Path>;
 }
 
-impl<'a> PathLike<'a> for &'a cargo_metadata::camino::Utf8Path {
+#[duplicate_item(
+    ty expr;
+    [ &'a cargo_metadata::camino::Utf8Path ] [ Cow::Borrowed(self.as_std_path()) ];
+    [ &'a std::path::Path ] [ Cow::Borrowed(self) ];
+    [ cargo_metadata::camino::Utf8PathBuf ] [ Cow::Owned(self.into_std_path_buf()) ];
+    [ &'a cargo_metadata::camino::Utf8PathBuf ] [ Cow::Borrowed(self.as_std_path()) ];
+    [ std::path::PathBuf ] [ Cow::Owned(self) ];
+    [ &'a std::path::PathBuf ] [ Cow::Borrowed(self.as_path()) ];
+    [ Cow<'a, std::path::Path> ] [ self ];
+)]
+impl<'a> PathLike<'a> for ty {
     fn as_path(self) -> Cow<'a, std::path::Path> {
-        Cow::Borrowed(self.as_std_path())
-    }
-}
-
-impl<'a> PathLike<'a> for cargo_metadata::camino::Utf8PathBuf {
-    fn as_path(self) -> Cow<'a, std::path::Path> {
-        Cow::Owned(self.into_std_path_buf())
-    }
-}
-
-impl<'a> PathLike<'a> for &'a cargo_metadata::camino::Utf8PathBuf {
-    fn as_path(self) -> Cow<'a, std::path::Path> {
-        Cow::Borrowed(self.as_std_path())
-    }
-}
-
-impl<'a> PathLike<'a> for &'a std::path::Path {
-    fn as_path(self) -> Cow<'a, std::path::Path> {
-        Cow::Borrowed(self)
-    }
-}
-
-impl<'a> PathLike<'a> for std::path::PathBuf {
-    fn as_path(self) -> Cow<'a, std::path::Path> {
-        Cow::Owned(self)
-    }
-}
-
-impl<'a> PathLike<'a> for &'a std::path::PathBuf {
-    fn as_path(self) -> Cow<'a, std::path::Path> {
-        Cow::Borrowed(self.as_path())
+        expr
     }
 }
 

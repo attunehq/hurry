@@ -132,7 +132,7 @@ impl AsRef<Record> for Record {
 }
 
 /// A recorded cache artifact.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Builder)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize, Builder)]
 pub struct Artifact {
     /// The target path for the artifact.
     ///

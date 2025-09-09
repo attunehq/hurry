@@ -62,6 +62,7 @@ derive-new = "0.7.0"
 const_format = { version = "0.2.34", features = ["all"] }
 const-str = { version = "0.7.0", features = ["std", "all"] }
 build_assert = "0.0.1"
+duplicate = "2.0.0"
 
 [dev-dependencies]
 async-walkdir.workspace = true

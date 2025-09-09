@@ -120,7 +120,6 @@ impl Dotd {
                     trace!(?line, ?output, "read .d line");
                     std::path::PathBuf::from(output)
                         .pipe(TypedPath::new_abs_file)
-                        .await
                         .tap_err(|error| trace!(?line, ?output, ?error, "not a valid path"))
                         .tap_ok(|output| trace!(?line, ?output, "read output path"))
                         .context("parse as typed path")
@@ -131,11 +130,9 @@ impl Dotd {
                     None
                 }
             })
-            .and_then(|output| async move {
-                output
-                    .make_relative_to(profile_root)
-                    .with_context(|| format!("make {output:?} relative to {profile_root:?}"))
-            })
+            .and_then(
+                |output| async move { output.rel_to(profile_root).context("make path relative") },
+            )
             .try_collect::<Vec<_>>()
             .await
             .map(|outputs| Self { outputs })

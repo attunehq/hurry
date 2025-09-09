@@ -78,12 +78,12 @@ impl Blake3 {
 
     /// Attempt to reference the hash as a relative directory.
     pub fn as_rel_dir(&self) -> Result<TypedPath<Rel, Dir>> {
-        TypedPath::mk_rel_dir(self.as_str()).context("convert to rel dir")
+        TypedPath::dangerously_make_rel_dir(self.as_str()).context("convert to rel dir")
     }
 
     /// Attempt to reference the hash as a relative file.
     pub fn as_rel_file(&self) -> Result<TypedPath<Rel, File>> {
-        TypedPath::mk_rel_file(self.as_str()).context("convert to rel file")
+        TypedPath::dangerously_make_rel_file(self.as_str()).context("convert to rel file")
     }
 }
 

@@ -163,9 +163,7 @@ impl Index {
                     let entry = IndexEntry::from_file(&file)
                         .await
                         .with_context(|| format!("index {file:?}"))?;
-                    let rel = file
-                        .make_relative_to(&root)
-                        .with_context(|| format!("make {file:?} relative to {root:?}"))?;
+                    let rel = file.rel_to(&root).context("make relative")?;
                     files.insert(rel, entry);
                     Ok(files)
                 }
@@ -205,7 +203,6 @@ pub async fn user_global_cache_path() -> Result<TypedPath<Abs, Dir>> {
         .join("hurry")
         .join("v2")
         .pipe(TypedPath::new_abs_dir)
-        .await
         .tap_ok(|dir| trace!(?dir, "read user global cache path"))
         .context("convert to strongly typed path")
 }
@@ -249,8 +246,7 @@ pub fn walk_files(
             if ft.is_file() {
                 let path = entry.path();
                 TypedPath::new_abs_file(&path)
-                    .await
-                    .with_context(|| format!("parse as absolute file path: {path:?}"))
+                    .context("parse as abs file")
                     .map(Some)
             } else {
                 Ok(None)
@@ -282,9 +278,7 @@ pub async fn copy_dir_with_concurrency(
 ) -> Result<u64> {
     walk_files(&src)
         .map_ok(|src_file| async move {
-            let rel = src_file
-                .make_relative_to(src)
-                .with_context(|| format!("make {src_file:?} relative to {src:?}"))?;
+            let rel = src_file.rel_to(src).context("make relative")?;
 
             let dst_file = dst.join(rel);
             copy_file(&src_file, &dst_file)
@@ -526,4 +520,44 @@ pub async fn is_file(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
     metadata(path)
         .await
         .map_or(false, |m| m.is_some_and(|m| m.is_file()))
+}
+
+/// Synchronously get the standard metadata for the file.
+///
+/// Note: you probably want [`Metadata::from_file`] instead,
+/// although this function exists in case you need the standard metadata shape
+/// for some reason.
+#[instrument]
+pub fn metadata_sync(
+    path: impl AsRef<std::path::Path> + StdDebug,
+) -> Result<Option<std::fs::Metadata>> {
+    let path = path.as_ref();
+    match std::fs::metadata(path) {
+        Ok(metadata) => {
+            trace!(?path, ?metadata, "read metadata");
+            Ok(Some(metadata))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).context(format!("read metadata: {path:?}")),
+    }
+}
+
+/// Synchronously return whether the path represents a directory.
+///
+/// Returns `false` if the directory doesn't exist
+/// or if there is an error checking the metadata;
+/// to differentiate this case use [`metadata_sync`].
+#[instrument]
+pub fn is_dir_sync(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
+    metadata_sync(path).map_or(false, |m| m.is_some_and(|m| m.is_dir()))
+}
+
+/// Synchronously return whether the path represents a normal file.
+///
+/// Returns `false` if the file doesn't exist;
+/// or if there is an error checking the metadata;
+/// to differentiate this case use [`metadata_sync`].
+#[instrument]
+pub fn is_file_sync(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
+    metadata_sync(path).map_or(false, |m| m.is_some_and(|m| m.is_file()))
 }

@@ -97,11 +97,10 @@ impl Workspace {
         .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
         .context("read cargo metadata")?;
 
-        let (workspace_root, workspace_target) = tokio::try_join!(
-            TypedPath::new_abs_dir(&metadata.workspace_root).then_context("read workspace root"),
-            TypedPath::new_abs_dir(&metadata.target_directory)
-                .then_context("read workspace target"),
-        )?;
+        let workspace_root = TypedPath::new_abs_dir(&metadata.workspace_root)
+            .context("parse workspace root as abs dir")?;
+        let workspace_target = TypedPath::new_abs_dir(&metadata.target_directory)
+            .context("parse workspace target as abs dir")?;
 
         // TODO: This currently blows up if we have no lockfile.
         let cargo_lock = workspace_root.join(mk_rel_file!("Cargo.lock"));
@@ -188,8 +187,7 @@ impl Workspace {
         const CACHEDIR_TAG_CONTENT: &[u8] =
             include_bytes!(concat!(workspace_dir!(), "/static/cargo/CACHEDIR.TAG"));
 
-        let profile = TypedPath::mk_rel_dir(profile.as_str())
-            .context("make relative directory from profile")?;
+        let profile = profile.as_rel_dir()?;
         fs::create_dir_all(&self.target.join(profile))
             .await
             .context("create target directory")?;
@@ -292,8 +290,7 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
             .await
             .context("init workspace target")?;
 
-        let profile_dir = TypedPath::mk_rel_dir(profile.as_str()).context("make profile dir")?;
-        let root = workspace.target.join(profile_dir);
+        let root = workspace.target.join(profile.as_rel_dir()?);
         let lock = root.join(mk_rel_file!(".cargo-lock"));
         let lock = LockFile::open(lock).await.context("open lockfile")?;
 

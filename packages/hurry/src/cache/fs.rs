@@ -87,7 +87,6 @@ impl FsCache<Unlocked> {
     pub async fn open_dir_std(root: impl Into<std::path::PathBuf> + StdDebug) -> Result<Self> {
         let root = root.into();
         TypedPath::new_abs_dir(root)
-            .await
             .context("parse as abs dir")?
             .pipe(Self::open_dir)
             .await
@@ -202,7 +201,6 @@ impl FsCas {
     pub async fn open_dir_std(root: impl Into<std::path::PathBuf> + StdDebug) -> Result<Self> {
         let root = root.into();
         TypedPath::new_abs_dir(root)
-            .await
             .context("parse path as abs dir")?
             .pipe(Self::open_dir)
             .await
