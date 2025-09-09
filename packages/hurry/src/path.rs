@@ -203,7 +203,7 @@ pub struct File;
 
 /// A location on the file system according to the type modifiers.
 ///
-/// This location is validated to exist and match the `Base` and `Type`
+/// This location is usually validated to exist and match the `Base` and `Type`
 /// constraints at construction/conversion time; in other words if you
 /// are working with a `TypedPath<Abs, Dir>` this type has been validated
 /// to actually reference a concrete directory on disk and point to it
@@ -219,7 +219,8 @@ pub struct File;
 /// or that the path is the correct type. The reasoning here is that sometimes
 /// we have to have paths that reference things that don't yet exist
 /// (for example, so that we can create them) and as such these escape hatches
-/// sort of have to be present.
+/// sort of have to be present. There are a couple methods that do similar
+/// operations for similar reasons.
 ///
 /// Still, perfect is the enemy of good, and there's only so much
 /// we can do with the giant ball of global mutable state that is a filesystem.
@@ -241,10 +242,12 @@ pub struct File;
 /// we are forced to perform synchronous I/O. These operations _should_
 /// be quite fast on modern file systems as they just check file metadata.
 ///
-/// If this is not acceptable, the workaround is to deserialize
-/// using the `SomeBase` and `SomeType` types (which do not require I/O)
-/// and then use the asynchronous `try_from_async` methods on the more
-/// concrete types to perform the fallible conversion without any blocking.
+/// If this is not acceptable, the workaround is to use a blocking thread
+/// e.g. via [`tokio::task::spawn_blocking`]. Note that as a special case,
+/// [`TypedPath<SomeBase, SomeType>`] does not require I/O at all,
+/// so is safe to use in structs that are `Deserialize`/`Serialize` without
+/// any possibility of blocking I/O. You can then perform fallible conversion
+/// using `TryFrom` in a blocking thread.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Display)]
 #[display("{}", self.inner.display())]
 pub struct TypedPath<Base, Type> {
