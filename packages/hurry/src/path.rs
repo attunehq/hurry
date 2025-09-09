@@ -35,6 +35,7 @@
 
 use std::{
     borrow::Cow,
+    ffi::OsStr,
     marker::PhantomData,
     path::{Path, PathBuf},
 };
@@ -277,6 +278,16 @@ impl<Base, Type> TypedPath<Base, Type> {
     /// View the path as a standard path.
     pub fn as_std_path(&self) -> &std::path::Path {
         self.inner.as_std_path()
+    }
+
+    /// View the path as a string.
+    pub fn as_str(&self) -> &str {
+        self.inner.as_str()
+    }
+
+    /// View the path as an OS string.
+    pub fn as_os_str(&self) -> &OsStr {
+        self.inner.as_os_str()
     }
 
     /// View the path as a UTF8 normalized path.

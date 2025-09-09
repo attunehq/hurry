@@ -66,6 +66,7 @@ impl FsCache<Unlocked> {
     }
 
     /// Open the cache in the provided directory.
+    /// If the directory does not already exist, it is created.
     #[instrument(name = "FsCache::open_dir")]
     pub async fn open_dir(root: impl Into<AbsDirPath> + StdDebug) -> Result<Self> {
         let root = root.into();
@@ -80,16 +81,6 @@ impl FsCache<Unlocked> {
             root,
             lock,
         })
-    }
-
-    /// Open the cache in the provided directory.
-    #[instrument(name = "FsCache::open_dir_std")]
-    pub async fn open_dir_std(root: impl Into<std::path::PathBuf> + StdDebug) -> Result<Self> {
-        let root = root.into();
-        AbsDirPath::new(root)
-            .context("parse as abs dir")?
-            .pipe(Self::open_dir)
-            .await
     }
 
     /// Lock the cache.
@@ -196,22 +187,13 @@ impl FsCas {
     }
 
     /// Open an instance in the provided directory.
+    /// If the directory does not already exist, it is created.
     #[instrument(name = "FsCas::open_dir")]
     pub async fn open_dir(root: impl Into<AbsDirPath> + StdDebug) -> Result<Self> {
         let root = root.into();
         fs::create_dir_all(&root).await?;
         trace!(?root, "open cas");
         Ok(Self { root })
-    }
-
-    /// Open an instance in the provided directory.
-    #[instrument(name = "FsCas::open_dir_std")]
-    pub async fn open_dir_std(root: impl Into<std::path::PathBuf> + StdDebug) -> Result<Self> {
-        let root = root.into();
-        AbsDirPath::new(root)
-            .context("parse path as abs dir")?
-            .pipe(Self::open_dir)
-            .await
     }
 
     /// Report whether there are items in the CAS.
