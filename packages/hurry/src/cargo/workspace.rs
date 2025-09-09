@@ -1,4 +1,4 @@
-use std::{fmt::Debug as StdDebug, marker::PhantomData, path::PathBuf, sync::Arc};
+use std::{fmt::Debug as StdDebug, marker::PhantomData, sync::Arc};
 
 use ahash::{HashMap, HashSet};
 use cargo_metadata::camino::Utf8PathBuf;
@@ -17,8 +17,11 @@ use tracing::{debug, instrument, trace};
 use crate::{
     Locked, Unlocked,
     cache::Artifact,
+    ext::then_context,
     fs::{self, Index, LockFile},
     hash::Blake3,
+    mk_rel_dir, mk_rel_file,
+    path::{Abs, Dir, JoinWith, TypedPath},
 };
 
 use super::{
@@ -40,11 +43,11 @@ use super::{
 #[display("{root}")]
 pub struct Workspace {
     /// The root directory of the workspace.
-    pub root: Utf8PathBuf,
+    pub root: TypedPath<Abs, Dir>,
 
     /// The target directory in the workspace.
     #[debug(skip)]
-    pub target: Utf8PathBuf,
+    pub target: TypedPath<Abs, Dir>,
 
     /// Parsed `rustc` metadata relating to the current workspace.
     #[debug(skip)]
@@ -68,7 +71,7 @@ impl Workspace {
     // but this can be mitigated by using the rayon thread pool.
     #[instrument(name = "Workspace::from_argv_in_dir")]
     pub async fn from_argv_in_dir(
-        path: impl Into<PathBuf> + StdDebug,
+        path: impl Into<std::path::PathBuf> + StdDebug,
         argv: &[String],
     ) -> Result<Self> {
         let path = path.into();
@@ -94,8 +97,14 @@ impl Workspace {
         .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
         .context("read cargo metadata")?;
 
+        let (workspace_root, workspace_target) = tokio::try_join!(
+            TypedPath::new_abs_dir(&metadata.workspace_root).then_context("read workspace root"),
+            TypedPath::new_abs_dir(&metadata.target_directory)
+                .then_context("read workspace target"),
+        )?;
+
         // TODO: This currently blows up if we have no lockfile.
-        let cargo_lock = metadata.workspace_root.join("Cargo.lock");
+        let cargo_lock = workspace_root.join(mk_rel_file!("Cargo.lock"));
         let lockfile = spawn_blocking(move || -> Result<_> {
             cargo_lock::Lockfile::load(cargo_lock).context("load cargo lockfile")
         })
@@ -148,8 +157,8 @@ impl Workspace {
             .collect::<HashMap<_, _>>();
 
         Ok(Self {
-            root: metadata.workspace_root,
-            target: metadata.target_directory,
+            root: workspace_root,
+            target: workspace_target,
             rustc: rustc_meta,
             dependencies,
         })
@@ -174,18 +183,22 @@ impl Workspace {
     /// workspace as it's unclear whether this is strictly required.
     //
     // TODO: Is this required?
-    #[instrument(name = "Workspace::init_target")]
+    // #[instrument(name = "Workspace::init_target")]
     pub async fn init_target(&self, profile: &Profile) -> Result<()> {
-        const CACHEDIR_TAG_NAME: &str = "CACHEDIR.TAG";
         const CACHEDIR_TAG_CONTENT: &[u8] =
             include_bytes!(concat!(workspace_dir!(), "/static/cargo/CACHEDIR.TAG"));
 
-        fs::create_dir_all(self.target.join(profile.as_str()))
+        let profile = TypedPath::mk_rel_dir(profile.as_str())
+            .context("make relative directory from profile")?;
+        fs::create_dir_all(self.target.join(profile))
             .await
             .context("create target directory")?;
-        fs::write(self.target.join(CACHEDIR_TAG_NAME), CACHEDIR_TAG_CONTENT)
-            .await
-            .context("write CACHEDIR.TAG")
+        fs::write(
+            self.target.join(mk_rel_file!("CACHEDIR.TAG")),
+            CACHEDIR_TAG_CONTENT,
+        )
+        .await
+        .context("write CACHEDIR.TAG")
     }
 
     /// Open a profile directory for reading.
@@ -280,8 +293,9 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
             .await
             .context("init workspace target")?;
 
-        let root = workspace.target.join(profile.as_str());
-        let lock = root.join(".cargo-lock");
+        let profile_dir = TypedPath::mk_rel_dir(profile.as_str()).context("make profile dir")?;
+        let root = workspace.target.join(profile_dir);
+        let lock = root.join(mk_rel_file!(".cargo-lock"));
         let lock = LockFile::open(lock).await.context("open lockfile")?;
         let root = root
             .as_std_path()
@@ -433,7 +447,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ///
     /// Converts the internal relative path to an absolute path
     /// based on the workspace's target directory.
-    pub fn root(&self) -> PathBuf {
+    pub fn root(&self) -> std::path::PathBuf {
         self.root.to_path(&self.workspace.target)
     }
 }

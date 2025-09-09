@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tracing::{instrument, trace};
 
-use crate::fs;
+use crate::{
+    fs,
+    path::{Dir, File, TypedPath, Rel},
+};
 
 /// A Blake3 hash.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Serialize, Deserialize)]
@@ -71,6 +74,16 @@ impl Blake3 {
     /// View the hash as a string.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Attempt to reference the hash as a relative directory.
+    pub fn as_rel_dir(&self) -> Result<TypedPath<Rel, Dir>> {
+        TypedPath::mk_rel_dir(self.as_str()).context("convert to rel dir")
+    }
+
+    /// Attempt to reference the hash as a relative file.
+    pub fn as_rel_file(&self) -> Result<TypedPath<Rel, File>> {
+        TypedPath::mk_rel_file(self.as_str()).context("convert to rel file")
     }
 }
 

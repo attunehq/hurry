@@ -1,8 +1,11 @@
+use color_eyre::{Result, eyre::Context};
+use enum_assoc::Assoc;
 use itertools::Itertools;
 use strum::{EnumIter, IntoEnumIterator};
 use subenum::subenum;
-use enum_assoc::Assoc;
 use tracing::instrument;
+
+use crate::path::{Dir, File, TypedPath, Rel};
 
 use super::read_argv;
 
@@ -60,7 +63,7 @@ impl Profile {
     ///
     /// ## Parsing Rules
     /// - `--profile <name>` → Profile::from(name)
-    /// - `--release` → Profile::Release  
+    /// - `--release` → Profile::Release
     /// - No flags → Profile::Debug
     #[instrument(name = "Profile::from_argv")]
     pub fn from_argv(argv: &[String]) -> Profile {
@@ -80,6 +83,16 @@ impl Profile {
                 }
             })
             .unwrap_or(Profile::Debug)
+    }
+
+    /// Try to create a `PathBuf<Rel, Dir>` for this profile.
+    pub fn as_rel_dir(&self) -> Result<TypedPath<Rel, Dir>> {
+        TypedPath::mk_rel_dir(self.as_str()).context("reference profile as a relative directory")
+    }
+
+    /// Try to create a `PathBuf<Rel, File>` for this profile.
+    pub fn as_rel_file(&self) -> Result<TypedPath<Rel, File>> {
+        TypedPath::mk_rel_file(self.as_str()).context("reference profile as a relative file")
     }
 }
 

@@ -13,6 +13,8 @@ use hurry::{
     cargo::{Profile, Workspace, cache_target_from_workspace, invoke, restore_target_from_cache},
     fs,
     hash::Blake3,
+    mk_rel_dir, mk_rel_file,
+    path::JoinWith,
 };
 use tracing::{error, info, instrument, warn};
 
@@ -94,20 +96,19 @@ async fn exec_simple(options: Options, workspace: &Workspace) -> Result<()> {
     let cache_root = fs::user_global_cache_path()
         .await
         .context("open cache")?
-        .join("simple");
+        .join(mk_rel_dir!("simple"));
+    let key = Blake3::from_file(workspace.root.join(mk_rel_file!("Cargo.lock"))).await?;
+    let cache = cache_root
+        .join(key.as_rel_dir()?)
+        .join(profile.as_rel_dir()?);
+    let target = workspace.target.join(profile.as_rel_dir()?);
 
     if !options.skip_restore {
         info!("Restoring target directory from cache");
-        let key = Blake3::from_file(workspace.root.join("Cargo.lock")).await?;
-        let cache_dir = cache_root.join(key.as_str()).join(profile.as_str());
-        let target = workspace.target.join(profile.as_str());
-
-        let has_cache = fs::metadata(&cache_dir)
-            .await
-            .is_ok_and(|meta| meta.is_some());
+        let has_cache = fs::metadata(&cache).await.is_ok_and(|meta| meta.is_some());
         if has_cache {
-            let bytes = fs::copy_dir(&cache_dir, &target).await?;
-            info!(?bytes, ?key, ?cache_dir, "Restored cache");
+            let bytes = fs::copy_dir(&cache, &target).await?;
+            info!(?bytes, ?key, ?cache, "Restored cache");
         } else {
             info!(?key, "No existing cache found");
         }
@@ -122,23 +123,23 @@ async fn exec_simple(options: Options, workspace: &Workspace) -> Result<()> {
 
     if !options.skip_backup {
         info!("Caching target directory");
-
-        let key = Blake3::from_file(workspace.root.join("Cargo.lock")).await?;
-        let cache_dir = cache_root.join(key.as_str()).join(profile.as_str());
-        let target = workspace.target.join(profile.as_str());
-        fs::remove_dir_all(&cache_dir)
+        fs::remove_dir_all(&cache)
             .await
             .context("remove old cache")?;
 
         // Only back up directories used in third party builds.
         let mut bytes = 0u64;
-        for subdir in [".fingerprint", "build", "deps"] {
-            bytes += fs::copy_dir(target.join(subdir), cache_dir.join(subdir))
+        for subdir in [
+            mk_rel_dir!(".fingerprint"),
+            mk_rel_dir!("build"),
+            mk_rel_dir!("deps"),
+        ] {
+            bytes += fs::copy_dir(target.join(&subdir), cache.join(&subdir))
                 .await
                 .with_context(|| format!("back up {subdir:?}"))?;
         }
 
-        info!(?bytes, ?key, ?cache_dir, "Cached target directory");
+        info!(?bytes, ?key, ?cache, "Cached target directory");
     }
 
     Ok(())

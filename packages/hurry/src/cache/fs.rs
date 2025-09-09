@@ -1,10 +1,6 @@
 //! Local file system implementation of cache and CAS traits.
 
-use std::{
-    fmt::Debug as StdDebug,
-    marker::PhantomData,
-    path::{Path, PathBuf},
-};
+use std::{fmt::Debug as StdDebug, marker::PhantomData, path::Path};
 
 use cargo_metadata::camino::Utf8PathBuf;
 use color_eyre::{Result, Section, SectionExt, eyre::Context};
@@ -18,6 +14,8 @@ use crate::{
     cache::{Artifact, Kind, Record},
     fs::{self, LockFile},
     hash::Blake3,
+    mk_rel_dir, mk_rel_file,
+    path::{Abs, Dir, File, JoinWith, Rel, TypedPath},
 };
 
 /// The local file system implementation of a cache.
@@ -35,7 +33,7 @@ pub struct FsCache<State> {
     ///
     /// The intention here is to minimize the chance of callers mutating or
     /// referencing the contents of the cache while it is locked.
-    root: Utf8PathBuf,
+    root: TypedPath<Abs, Dir>,
 
     /// Locks the workspace cache.
     ///
@@ -49,8 +47,10 @@ pub struct FsCache<State> {
 
 /// Implementation for all valid lock states.
 impl<L> FsCache<L> {
-    /// The filename of the lockfile.
-    const LOCKFILE_NAME: &'static str = ".hurry-lock";
+    /// The name of the lockfile.
+    fn lockfile() -> TypedPath<Rel, File> {
+        mk_rel_file!(".hurry-lock")
+    }
 }
 
 /// Implementation for all lifetimes and the unlocked state only.
@@ -61,20 +61,20 @@ impl FsCache<Unlocked> {
         fs::user_global_cache_path()
             .await
             .context("find user cache path")?
-            .join("ws")
+            .join(mk_rel_dir!("ws"))
             .pipe(Self::open_dir)
             .await
     }
 
     /// Open the cache in the provided directory.
     #[instrument(name = "FsCache::open_dir")]
-    pub async fn open_dir(root: impl Into<Utf8PathBuf> + StdDebug) -> Result<Self> {
+    pub async fn open_dir(root: impl Into<TypedPath<Abs, Dir>> + StdDebug) -> Result<Self> {
         let root = root.into();
         fs::create_dir_all(&root)
             .await
             .context("create cache directory")?;
 
-        let lock = root.join(Self::LOCKFILE_NAME);
+        let lock = root.join(Self::lockfile());
         let lock = LockFile::open(lock.as_std_path())
             .await
             .context("open lockfile")?;
@@ -87,10 +87,13 @@ impl FsCache<Unlocked> {
 
     /// Open the cache in the provided directory.
     #[instrument(name = "FsCache::open_dir_std")]
-    pub async fn open_dir_std(root: impl Into<PathBuf> + StdDebug) -> Result<Self> {
+    pub async fn open_dir_std(root: impl Into<std::path::PathBuf> + StdDebug) -> Result<Self> {
         let root = root.into();
-        let root = Utf8PathBuf::try_from(root).context("convert to utf8 path")?;
-        Self::open_dir(root).await
+        TypedPath::new_abs_dir(root)
+            .await
+            .context("parse as abs dir")?
+            .pipe(Self::open_dir)
+            .await
     }
 
     /// Lock the cache.
@@ -134,7 +137,7 @@ impl super::Cache for FsCache<Locked> {
     ) -> Result<()> {
         let key = key.as_ref();
         let artifacts = artifacts.into_iter().map(Into::into).collect_vec();
-        let name = self.root.join(kind.as_str()).join(key.as_str());
+        let name = self.root.join(kind.as_rel_dir()).join(key.as_rel_file()?);
         let content = Record::builder()
             .key(key)
             .artifacts(artifacts)
@@ -148,7 +151,7 @@ impl super::Cache for FsCache<Locked> {
     #[instrument(name = "FsCache::get")]
     async fn get(&self, kind: Kind, key: impl AsRef<Blake3> + StdDebug) -> Result<Option<Record>> {
         let key = key.as_ref();
-        let name = self.root.join(kind.as_str()).join(key.as_str());
+        let name = self.root.join(kind.as_rel_dir()).join(key.as_rel_file()?);
         Ok(
             match fs::read_buffered_utf8(name).await.context("read file")? {
                 Some(content) => serde_json::from_str(&content)
@@ -175,7 +178,7 @@ pub struct FsCas {
     /// (so that multiple instances of `hurry` correctly interact)
     /// and so that we can swap out the implementation for another one
     /// in the future if we desire (for example, a remote object store).
-    root: Utf8PathBuf,
+    root: TypedPath<Abs, Dir>,
 }
 
 impl FsCas {
@@ -185,14 +188,14 @@ impl FsCas {
         fs::user_global_cache_path()
             .await
             .context("find user cache path")?
-            .join("cas")
+            .join(mk_rel_dir!("cas"))
             .pipe(Self::open_dir)
             .await
     }
 
     /// Open an instance in the provided directory.
     #[instrument(name = "FsCas::open_dir")]
-    pub async fn open_dir(root: impl Into<Utf8PathBuf> + StdDebug) -> Result<Self> {
+    pub async fn open_dir(root: impl Into<TypedPath<Abs, Dir>> + StdDebug) -> Result<Self> {
         let root = root.into();
         fs::create_dir_all(&root).await?;
         trace!(?root, "open cas");
@@ -201,10 +204,13 @@ impl FsCas {
 
     /// Open an instance in the provided directory.
     #[instrument(name = "FsCas::open_dir_std")]
-    pub async fn open_dir_std(root: impl Into<PathBuf> + StdDebug) -> Result<Self> {
+    pub async fn open_dir_std(root: impl Into<std::path::PathBuf> + StdDebug) -> Result<Self> {
         let root = root.into();
-        let root = Utf8PathBuf::try_from(root).context("convert to utf8 path")?;
-        Self::open_dir(root).await
+        TypedPath::new_abs_dir(root)
+            .await
+            .context("parse path as abs dir")?
+            .pipe(Self::open_dir)
+            .await
     }
 
     /// Report whether there are items in the CAS.
@@ -223,7 +229,7 @@ impl super::Cas for FsCas {
     ) -> Result<Blake3> {
         let src = src.as_ref();
         let key = Blake3::from_file(src).await.context("hash file")?;
-        let dst = self.root.join(kind.as_str()).join(key.as_str());
+        let dst = self.root.join(kind.as_rel_dir()).join(key.as_rel_dir()?);
         fs::copy_file(src, dst).await?;
         Ok(key)
     }
@@ -235,7 +241,10 @@ impl super::Cas for FsCas {
         key: impl AsRef<Blake3> + StdDebug + Send,
         destination: impl AsRef<Path> + StdDebug + Send,
     ) -> Result<()> {
-        let src = self.root.join(kind.as_str()).join(key.as_ref().as_str());
+        let src = self
+            .root
+            .join(kind.as_rel_dir())
+            .join(key.as_ref().as_rel_dir()?);
         fs::copy_file(src, destination.as_ref()).await.map(drop)
     }
 }

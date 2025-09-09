@@ -8,7 +8,11 @@ use serde::{Deserialize, Serialize};
 use std::{fmt::Debug, future::Future, path::Path};
 use strum::Display;
 
-use crate::hash::Blake3;
+use crate::{
+    hash::Blake3,
+    mk_rel_dir,
+    path::{Dir, Rel, TypedPath},
+};
 
 mod fs;
 pub use fs::*;
@@ -95,9 +99,11 @@ impl<T: Cas + Sync> Cas for &T {
 )]
 #[serde(rename_all = "snake_case")]
 #[func(pub const fn as_str(&self) -> &str)]
+#[func(pub fn as_rel_dir(&self) -> TypedPath<Rel, Dir>)]
 pub enum Kind {
     /// A Rust project managed by Cargo.
     #[assoc(as_str = "cargo")]
+    #[assoc(as_rel_dir = mk_rel_dir!("cargo"))]
     Cargo,
 }
 
