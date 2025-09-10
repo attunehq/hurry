@@ -389,6 +389,7 @@ impl<B, T> std::fmt::Debug for TypedPath<B, T> {
     ty method;
     [ File ] [ fs::is_file ];
     [ Dir ] [ fs::is_dir ];
+    [ SomeType ] [ fs::exists ];
 )]
 impl<B> TypedPath<B, ty> {
     /// Validate that the item exists on disk and is the correct type.

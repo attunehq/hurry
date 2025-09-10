@@ -50,7 +50,7 @@ pub struct Workspace {
 
     /// The $CARGO_HOME value.
     #[debug(skip)]
-    pub cargo_home: Utf8PathBuf,
+    pub cargo_home: AbsDirPath,
 
     /// Parsed `rustc` metadata relating to the current workspace.
     #[debug(skip)]
@@ -96,19 +96,20 @@ impl Workspace {
         .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
         .context("read cargo metadata")?;
 
-        let cargo_home = {
-            let workspace_root = metadata.workspace_root.clone();
-            spawn_blocking(move || home::cargo_home_with_cwd(workspace_root.as_std_path()))
-        }
-        .await
-        .context("join background task")?
-        .context("get $CARGO_HOME")?
-        .pipe(Utf8PathBuf::try_from)
-        .context("parse path as utf8")?;
         let workspace_root = AbsDirPath::try_from(&metadata.workspace_root)
             .context("parse workspace root as absolute directory")?;
         let workspace_target = AbsDirPath::try_from(&metadata.target_directory)
             .context("parse workspace target as absolute directory")?;
+
+        let cargo_home = spawn_blocking({
+            let workspace_root = workspace_root.clone();
+            move || home::cargo_home_with_cwd(workspace_root.as_std_path())
+        })
+        .await
+        .context("join background task")?
+        .context("get $CARGO_HOME")?
+        .pipe(AbsDirPath::try_from)
+        .context("parse path as utf8")?;
 
         // TODO: This currently blows up if we have no lockfile.
         let cargo_lock = workspace_root.join(mk_rel_file!("Cargo.lock"));
@@ -571,23 +572,15 @@ impl<'ws> ProfileDir<'ws, Locked> {
                 .nth(1)
                 .is_some_and(|part| dotd_regex.is_match(&part))
         });
-        let dependencies = if let Some((path, _)) = dotd {
-            let parsed_dotd = Dotd::from_file(self, path.to_path(self.root()))
+
+        let mut dependencies = Vec::new();
+        for (dotd, _) in dotds {
+            let parsed = Dotd::from_file(self, &self.root().join(*dotd))
                 .await
                 .context("parse .d file")?;
-            let outputs = parsed_dotd.build_outputs().collect::<HashSet<_>>();
-            dependencies
-                .into_iter()
-                .filter(|(path, _)| {
-                    outputs.contains(*path)
-                        || path
-                            .file_name()
-                            .is_some_and(|name| name.starts_with(&dependency.name))
-                })
-                .collect_vec()
-        } else {
-            Vec::new()
-        };
+            let outputs = parsed.build_outputs().into_iter().collect::<HashSet<_>>();
+            dependencies.extend(deps.iter().filter(|(path, _)| outputs.contains(*path)));
+        }
 
         // Now that we have our three sources of files,
         // we actually treat them all the same way!

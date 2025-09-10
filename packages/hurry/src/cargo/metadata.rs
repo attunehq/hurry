@@ -1,18 +1,12 @@
-use std::{
-    fmt::Debug,
-    path::{Path, PathBuf},
-};
+use std::fmt::Debug;
 
-use cargo_metadata::camino::Utf8Path;
 use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context, OptionExt, bail, eyre},
 };
 use futures::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
-use relative_path::{PathExt, RelativePathBuf};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{instrument, trace};
 
 use super::workspace::ProfileDir;
@@ -20,7 +14,7 @@ use crate::{
     Locked,
     ext::{then_context, then_with_context},
     fs::{self, DEFAULT_CONCURRENCY},
-    path::{AbsDirPath, AbsFilePath, RelFilePath, RelativeTo},
+    path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, RelativeTo},
 };
 
 /// Rust compiler metadata for cache key generation.
@@ -98,11 +92,7 @@ impl Dotd {
     /// parses each line for the `output:` format, and filters for relevant
     /// file extensions. All returned paths are relative to the profile root.
     #[instrument(name = "Dotd::from_file")]
-    pub async fn from_file(
-        profile: &ProfileDir<'_, Locked>,
-        dotd: impl AsRef<Path> + Debug,
-    ) -> Result<Self> {
-        let dotd = dotd.as_ref();
+    pub async fn from_file(profile: &ProfileDir<'_, Locked>, dotd: &AbsFilePath) -> Result<Self> {
         let content = fs::read_buffered_utf8(dotd)
             .await
             .context("read file")?
@@ -124,7 +114,7 @@ impl Dotd {
     pub async fn reconstruct(
         &self,
         profile: &ProfileDir<'_, Locked>,
-        dotd: impl AsRef<Path> + Debug,
+        dotd: &AbsFilePath,
     ) -> Result<()> {
         let dotd = dotd.as_ref();
         let content = self
@@ -143,7 +133,7 @@ impl Dotd {
 
     /// Iterate over builds parsed in the file.
     #[instrument(name = "Dotd::builds")]
-    pub fn builds(&self) -> impl Iterator<Item = (&RelativePathBuf, &[DotdDependencyPath])> {
+    pub fn builds(&self) -> impl Iterator<Item = (&RelFilePath, &[DotdDependencyPath])> {
         self.0.iter().filter_map(|line| match line {
             DotdLine::Build(output, inputs) => Some((output, inputs.as_slice())),
             _ => None,
@@ -152,7 +142,7 @@ impl Dotd {
 
     /// Iterate over build outputs parsed in the file.
     #[instrument(name = "Dotd::build_outputs")]
-    pub fn build_outputs(&self) -> impl Iterator<Item = &RelativePathBuf> {
+    pub fn build_outputs(&self) -> impl Iterator<Item = &RelFilePath> {
         self.0.iter().filter_map(|line| match line {
             DotdLine::Build(output, _) => Some(output),
             _ => None,
@@ -173,7 +163,7 @@ pub enum DotdLine {
 
     /// An output and the set of its inputs.
     /// The output is relative to the profile root directory.
-    Build(RelativePathBuf, Vec<DotdDependencyPath>),
+    Build(RelFilePath, Vec<DotdDependencyPath>),
 }
 
 impl DotdLine {
@@ -187,18 +177,20 @@ impl DotdLine {
         } else if let Some(comment) = line.strip_prefix('#') {
             Self::Comment(comment.to_string())
         } else if let Some(output) = line.strip_suffix(':') {
-            let output = PathBuf::from(output)
+            let output = AbsFilePath::try_from(output)
+                .context("parse output as abs file")?
                 .relative_to(profile.root())
-                .with_context(|| format!("make {output:?} relative to {profile:?}"))?;
+                .context("make output relative to profile root")?;
             Self::Build(output, Vec::new())
         } else {
             let Some((output, inputs)) = line.split_once(": ") else {
                 bail!("no output/input separator");
             };
 
-            let output = PathBuf::from(output)
+            let output = AbsFilePath::try_from(output)
+                .context("parse output as abs file")?
                 .relative_to(profile.root())
-                .with_context(|| format!("make {output:?} relative to {profile:?}"))?;
+                .context("make output relative to profile root")?;
             let inputs = stream::iter(inputs.trim().split_whitespace())
                 .map(|input| {
                     DotdDependencyPath::parse(profile, input)
@@ -216,7 +208,7 @@ impl DotdLine {
     fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
         match self {
             Self::Build(output, inputs) => {
-                let output = output.to_path(profile.root()).to_string_lossy().to_string();
+                let output = profile.root().join(output).to_string();
                 let inputs = inputs
                     .iter()
                     .map(|input| input.reconstruct(profile))
@@ -238,25 +230,25 @@ impl DotdLine {
 #[serde(tag = "t", content = "c")]
 pub enum DotdDependencyPath {
     /// The path is relative to the workspace target profile directory.
-    RelativeTargetProfile(RelativePathBuf),
+    RelativeTargetProfile(RelFilePath),
 
     /// The path is relative to `$CARGO_HOME` for the user.
-    RelativeCargoHome(RelativePathBuf),
+    RelativeCargoHome(RelFilePath),
 }
 
 impl DotdDependencyPath {
     #[instrument(name = "DotdPathBuf::parse")]
     async fn parse(profile: &ProfileDir<'_, Locked>, path: &str) -> Result<Self> {
-        let path = PathBuf::from(path);
-        Ok(if let Ok(rel) = RelativePathBuf::from_path(&path) {
-            if fs::exists(rel.to_path(profile.root())).await {
+        Ok(if let Ok(rel) = RelFilePath::try_from(path) {
+            if fs::exists(profile.root().join(&rel).as_std_path()).await {
                 Self::RelativeTargetProfile(rel)
-            } else if fs::exists(rel.to_path(&profile.workspace.cargo_home)).await {
+            } else if fs::exists(profile.workspace.cargo_home.join(&rel).as_std_path()).await {
                 Self::RelativeCargoHome(rel)
             } else {
                 bail!("unknown root for relative path: {rel:?}");
             }
         } else {
+            let path = AbsFilePath::try_from(path).context("parse as abs file")?;
             if let Ok(rel) = path.relative_to(profile.root()) {
                 Self::RelativeTargetProfile(rel)
             } else if let Ok(rel) = path.relative_to(&profile.workspace.cargo_home) {
@@ -268,17 +260,15 @@ impl DotdDependencyPath {
     }
 
     #[instrument(name = "DotdPathBuf::to_path")]
-    fn to_path(&self, profile: &ProfileDir<'_, Locked>) -> PathBuf {
+    fn to_path(&self, profile: &ProfileDir<'_, Locked>) -> AbsFilePath {
         match self {
-            DotdDependencyPath::RelativeTargetProfile(rel) => rel.to_path(profile.root()),
-            DotdDependencyPath::RelativeCargoHome(rel) => {
-                rel.to_path(&profile.workspace.cargo_home)
-            }
+            DotdDependencyPath::RelativeTargetProfile(rel) => profile.root().join(rel),
+            DotdDependencyPath::RelativeCargoHome(rel) => profile.workspace.cargo_home.join(rel),
         }
     }
 
     #[instrument(name = "DotdPathBuf::reconstruct")]
     fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
-        self.to_path(profile).to_string_lossy().to_string()
+        self.to_path(profile).to_string()
     }
 }
