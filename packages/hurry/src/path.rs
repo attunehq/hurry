@@ -613,7 +613,7 @@ pub trait TryJoinWith {
     /// The overall path is checked at the end instead of piece by piece.
     fn try_join_combined(
         &self,
-        others: impl IntoIterator<Item = impl AsRef<str>>,
+        dirs: impl IntoIterator<Item = impl AsRef<str>>,
         file: impl AsRef<str>,
     ) -> Result<AbsFilePath, AbsFileError>;
 }
@@ -629,10 +629,10 @@ impl TryJoinWith for TypedPath<Abs, Dir> {
 
     fn try_join_dirs(
         &self,
-        others: impl IntoIterator<Item = impl AsRef<str>>,
+        dirs: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<AbsDirPath, AbsDirError> {
         let mut inner = self.inner.clone();
-        for other in others {
+        for other in dirs {
             inner = inner.join(other.as_ref());
         }
         AbsDirPath::new(inner)
@@ -640,11 +640,11 @@ impl TryJoinWith for TypedPath<Abs, Dir> {
 
     fn try_join_combined(
         &self,
-        others: impl IntoIterator<Item = impl AsRef<str>>,
+        dirs: impl IntoIterator<Item = impl AsRef<str>>,
         file: impl AsRef<str>,
     ) -> Result<AbsFilePath, AbsFileError> {
         let mut inner = self.inner.clone();
-        for other in others {
+        for other in dirs {
             inner = inner.join(other.as_ref());
         }
         inner.join(file.as_ref()).pipe(AbsFilePath::new)

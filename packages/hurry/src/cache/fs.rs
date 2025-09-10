@@ -141,10 +141,9 @@ impl super::Cache for FsCache<Locked> {
 
     #[instrument(name = "FsCache::get")]
     async fn get(&self, kind: Kind, key: &Blake3) -> Result<Option<Record>> {
-        let name = self
-            .root
-            .try_join_dir(kind.as_str())?
-            .try_join_file(key.as_str())?;
+        let Ok(name) = self.root.try_join_combined([kind.as_str()], key.as_str()) else {
+            return Ok(None);
+        };
         Ok(
             match fs::read_buffered_utf8(&name).await.context("read file")? {
                 Some(content) => serde_json::from_str(&content)
@@ -221,10 +220,7 @@ impl super::Cas for FsCas {
 
     #[instrument(name = "FsCas::get_file")]
     async fn get_file(&self, kind: Kind, key: &Blake3, destination: &AbsFilePath) -> Result<()> {
-        let src = self
-            .root
-            .try_join_dir(kind.as_str())?
-            .try_join_file(key.as_str())?;
+        let src = self.root.try_join_combined([kind.as_str()], key.as_str())?;
         fs::copy_file(&src, destination).await.map(drop)
     }
 }
