@@ -14,7 +14,7 @@ use hurry::{
     fs,
     hash::Blake3,
     mk_rel_dir, mk_rel_file,
-    path::{JoinWith, RelDirPath, TryJoinWith},
+    path::{JoinWith, TryJoinWith},
 };
 use tracing::{error, info, instrument, warn};
 
@@ -98,14 +98,12 @@ async fn exec_simple(options: Options, workspace: &Workspace) -> Result<()> {
         .context("open cache")?
         .join(mk_rel_dir!("simple"));
     let key = Blake3::from_file(&workspace.root.join(mk_rel_file!("Cargo.lock"))).await?;
+    let target = workspace.target.try_join_dir(profile.as_str())?;
+    let cache = cache_root.try_join_dirs([key.as_str(), profile.as_str()])?;
 
     if !options.skip_restore {
-        info!("Restoring target directory from cache");
-        if let Ok(cache) = cache_root.try_join_dirs([key.as_str(), profile.as_str()]) {
-            // If this doesn't exist, `fs::copy_dir` creates it.
-            let target = workspace
-                .target
-                .join(RelDirPath::new_unchecked(profile.as_str()));
+        if cache.exists().await {
+            info!("Restoring target directory from cache");
             let bytes = fs::copy_dir(&cache, &target).await?;
             info!(?bytes, ?key, ?cache, "Restored cache");
         } else {
@@ -121,18 +119,12 @@ async fn exec_simple(options: Options, workspace: &Workspace) -> Result<()> {
     }
 
     if !options.skip_backup {
-        info!("Caching target directory");
-        if let Ok(target) = workspace.target.try_join_dir(profile.as_str()) {
-            // If this doesn't exist, `fs::remove_dir_all` is a no-op
-            // and `fs::copy_dir` creates it.
-            let cache = cache_root
-                .join(RelDirPath::new_unchecked(key.as_str()))
-                .join(RelDirPath::new_unchecked(profile.as_str()));
+        if target.exists().await {
+            info!("Caching target directory");
             fs::remove_dir_all(&cache)
                 .await
                 .context("remove old cache")?;
 
-            // Only back up directories used in third party builds.
             let mut bytes = 0u64;
             let subdirs = vec![
                 mk_rel_dir!(".fingerprint"),

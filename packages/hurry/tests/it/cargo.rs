@@ -7,7 +7,7 @@ use hurry::{
     fs,
     hash::Blake3,
     mk_rel_dir,
-    path::{JoinWith, RelDirPath, TryJoinWith},
+    path::{JoinWith, TryJoinWith},
 };
 use tap::Pipe;
 
@@ -74,8 +74,8 @@ async fn backup_workspace() -> Result<()> {
 async fn restore_workspace() -> Result<()> {
     let local_workspace = current_workspace();
     let (_temp_cache, cache) = temporary_directory();
-    let cas_root = cache.join(RelDirPath::new_unchecked("cas"));
-    let cache_root = cache.join(RelDirPath::new_unchecked("ws"));
+    let cas_root = cache.join(mk_rel_dir!("cas"));
+    let cache_root = cache.join(mk_rel_dir!("ws"));
     let (_temp_ws, temp_workspace) = temporary_directory();
 
     // We don't want to mess with the current workspace.

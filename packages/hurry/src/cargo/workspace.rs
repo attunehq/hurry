@@ -1,7 +1,7 @@
-use std::{fmt::Debug as StdDebug, marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, sync::Arc};
 
 use ahash::{HashMap, HashSet};
-use cargo_metadata::{TargetKind, camino::Utf8PathBuf};
+use cargo_metadata::TargetKind;
 use color_eyre::{
     Result,
     eyre::{Context, OptionExt},
@@ -10,7 +10,6 @@ use derive_more::{Debug, Display};
 use itertools::{Itertools, process_results};
 use location_macros::workspace_dir;
 use regex::Regex;
-use relative_path::{PathExt, RelativePathBuf};
 use tap::{Pipe, Tap, TapFallible};
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
@@ -21,7 +20,7 @@ use crate::{
     fs::{self, Index, LockFile},
     hash::Blake3,
     mk_rel_file,
-    path::{AbsDirPath, JoinWith, RelDirPath},
+    path::{AbsDirPath, JoinWith, TryJoinWith},
 };
 
 use super::{
@@ -70,17 +69,13 @@ impl Workspace {
     // I'm not certain they're worth the thread spawn cost
     // but this can be mitigated by using the rayon thread pool.
     #[instrument(name = "Workspace::from_argv_in_dir")]
-    pub async fn from_argv_in_dir(
-        path: impl Into<std::path::PathBuf> + StdDebug,
-        argv: &[String],
-    ) -> Result<Self> {
-        let path = path.into();
-
+    pub async fn from_argv_in_dir(path: &AbsDirPath, argv: &[String]) -> Result<Self> {
         // TODO: Maybe we should just replicate this logic and perform it
         // statically using filesystem operations instead of shelling out? This
         // costs something on the order of 200ms, which is not _terrible_ but
         // feels much slower than if we just did our own filesystem reads.
         let manifest_path = read_argv(argv, "--manifest-path").map(String::from);
+        let cmd_current_dir = path.as_std_path().to_path_buf();
         let metadata = spawn_blocking(move || -> Result<_> {
             cargo_metadata::MetadataCommand::new()
                 .tap_mut(|cmd| {
@@ -88,7 +83,7 @@ impl Workspace {
                         cmd.manifest_path(p);
                     }
                 })
-                .current_dir(&path)
+                .current_dir(cmd_current_dir)
                 .exec()
                 .context("could not read cargo metadata")
         })
@@ -97,9 +92,9 @@ impl Workspace {
         .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
         .context("read cargo metadata")?;
 
-        let workspace_root = AbsDirPath::new(&metadata.workspace_root)
+        let workspace_root = AbsDirPath::try_from(&metadata.workspace_root)
             .context("parse workspace root as absolute directory")?;
-        let workspace_target = AbsDirPath::new(&metadata.target_directory)
+        let workspace_target = AbsDirPath::try_from(&metadata.target_directory)
             .context("parse workspace target as absolute directory")?;
 
         // TODO: This currently blows up if we have no lockfile.
@@ -245,8 +240,8 @@ impl Workspace {
     /// using the current working directory as the workspace root.
     #[instrument(name = "Workspace::from_argv")]
     pub async fn from_argv(argv: &[String]) -> Result<Self> {
-        let pwd = std::env::current_dir().context("get working directory")?;
-        Self::from_argv_in_dir(pwd, argv).await
+        let pwd = AbsDirPath::current().context("get working directory")?;
+        Self::from_argv_in_dir(&pwd, argv).await
     }
 
     /// Initialize the target directory structure for a build profile.
@@ -265,9 +260,7 @@ impl Workspace {
             include_bytes!(concat!(workspace_dir!(), "/static/cargo/CACHEDIR.TAG"));
 
         // We don't think the profile directory exists yet.
-        let profile = self
-            .target
-            .join(RelDirPath::new_unchecked(profile.as_str()));
+        let profile = self.target.try_join_dir(profile.as_str())?;
         fs::create_dir_all(&profile)
             .await
             .context("create target directory")?;
@@ -566,7 +559,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         });
         let mut dependencies = Vec::new();
         for (dotd, _) in dotds {
-            let outputs = Dotd::from_file(self, &self.root().join(*path))
+            let outputs = Dotd::from_file(self, &self.root().join(*dotd))
                 .await
                 .context("parse .d file")?
                 .outputs

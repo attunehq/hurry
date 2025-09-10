@@ -1,6 +1,7 @@
-use std::path::PathBuf;
-
-use hurry::path::{AbsDirPath, TryJoinWith};
+use hurry::{
+    mk_rel_dir,
+    path::{AbsDirPath, JoinWith},
+};
 use location_macros::workspace_dir;
 use tempfile::TempDir;
 
@@ -10,15 +11,12 @@ pub mod fs;
 #[track_caller]
 pub fn current_workspace() -> AbsDirPath {
     let ws = workspace_dir!();
-    AbsDirPath::new(PathBuf::from(ws))
-        .unwrap_or_else(|err| panic!("parse {ws:?} as abs dir: {err:?}"))
+    AbsDirPath::try_from(ws).unwrap_or_else(|err| panic!("parse {ws:?} as abs dir: {err:?}"))
 }
 
 #[track_caller]
 fn current_target() -> AbsDirPath {
-    current_workspace()
-        .try_join_dir("target")
-        .expect("parse target directory")
+    current_workspace().join(mk_rel_dir!("target"))
 }
 
 #[track_caller]

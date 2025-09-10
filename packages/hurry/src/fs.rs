@@ -37,16 +37,9 @@ use filetime::FileTime;
 use fslock::LockFile as FsLockFile;
 use futures::{Stream, TryStreamExt};
 use jiff::Timestamp;
-use rayon::iter::{ParallelBridge, ParallelIterator};
-use relative_path::RelativePathBuf;
 use serde::{Deserialize, Serialize};
-use tap::{Pipe, Tap, TapFallible, TryConv};
-use tokio::{
-    fs::{File, ReadDir},
-    runtime::Handle,
-    sync::Mutex,
-    task::spawn_blocking,
-};
+use tap::{Pipe, TapFallible};
+use tokio::{fs::ReadDir, sync::Mutex, task::spawn_blocking};
 use tracing::{debug, instrument, trace};
 
 use crate::{
@@ -214,9 +207,8 @@ pub async fn user_global_cache_path() -> Result<AbsDirPath> {
         .join(".cache")
         .join("hurry")
         .join("v2")
-        .pipe(AbsDirPath::new)
+        .pipe(AbsDirPath::try_from)
         .tap_ok(|dir| trace!(?dir, "read user global cache path"))
-        .context("convert to strongly typed path")
 }
 
 /// Create the directory and all its parents, if they don't already exist.
@@ -255,9 +247,7 @@ pub fn walk_files(root: &AbsDirPath) -> impl Stream<Item = Result<AbsFilePath>> 
                 .with_context(|| format!("get type of: {src_file:?}"))?;
             if ft.is_file() {
                 let path = entry.path();
-                AbsFilePath::new(&path)
-                    .context("parse as abs file")
-                    .map(Some)
+                AbsFilePath::try_from(path).map(Some)
             } else {
                 Ok(None)
             }
@@ -519,44 +509,4 @@ pub async fn is_file(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
     metadata(path)
         .await
         .map_or(false, |m| m.is_some_and(|m| m.is_file()))
-}
-
-/// Synchronously get the standard metadata for the file.
-///
-/// Note: you probably want [`Metadata::from_file`] instead,
-/// although this function exists in case you need the standard metadata shape
-/// for some reason.
-#[instrument]
-pub fn metadata_sync(
-    path: impl AsRef<std::path::Path> + StdDebug,
-) -> Result<Option<std::fs::Metadata>> {
-    let path = path.as_ref();
-    match std::fs::metadata(path) {
-        Ok(metadata) => {
-            trace!(?path, ?metadata, "read metadata");
-            Ok(Some(metadata))
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err).context(format!("read metadata: {path:?}")),
-    }
-}
-
-/// Synchronously return whether the path represents a directory.
-///
-/// Returns `false` if the directory doesn't exist
-/// or if there is an error checking the metadata;
-/// to differentiate this case use [`metadata_sync`].
-#[instrument]
-pub fn is_dir_sync(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
-    metadata_sync(path).map_or(false, |m| m.is_some_and(|m| m.is_dir()))
-}
-
-/// Synchronously return whether the path represents a normal file.
-///
-/// Returns `false` if the file doesn't exist;
-/// or if there is an error checking the metadata;
-/// to differentiate this case use [`metadata_sync`].
-#[instrument]
-pub fn is_file_sync(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
-    metadata_sync(path).map_or(false, |m| m.is_some_and(|m| m.is_file()))
 }

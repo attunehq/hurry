@@ -14,7 +14,7 @@ use crate::{
     fs::{self, LockFile},
     hash::Blake3,
     mk_rel_dir, mk_rel_file,
-    path::{AbsDirPath, AbsFilePath, JoinWith, RelDirPath, RelFilePath, TryJoinWith},
+    path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, TryJoinWith},
 };
 
 /// The local file system implementation of a cache.
@@ -123,12 +123,7 @@ impl super::Cache for FsCache<Locked> {
         artifacts: impl IntoIterator<Item = impl Into<Artifact>> + StdDebug + Send,
     ) -> Result<()> {
         let artifacts = artifacts.into_iter().map(Into::into).collect_vec();
-        // We don't know if this path exists, but we do know that if not,
-        // `fs::write` will create it.
-        let name = self
-            .root
-            .join(RelDirPath::new_unchecked(kind.as_str()))
-            .join(RelFilePath::new_unchecked(key.as_str()));
+        let name = self.root.try_join_combined([kind.as_str()], key.as_str())?;
         let content = Record::builder()
             .key(key)
             .artifacts(artifacts)
@@ -141,9 +136,7 @@ impl super::Cache for FsCache<Locked> {
 
     #[instrument(name = "FsCache::get")]
     async fn get(&self, kind: Kind, key: &Blake3) -> Result<Option<Record>> {
-        let Ok(name) = self.root.try_join_combined([kind.as_str()], key.as_str()) else {
-            return Ok(None);
-        };
+        let name = self.root.try_join_combined([kind.as_str()], key.as_str())?;
         Ok(
             match fs::read_buffered_utf8(&name).await.context("read file")? {
                 Some(content) => serde_json::from_str(&content)
@@ -205,15 +198,8 @@ impl FsCas {
 impl super::Cas for FsCas {
     #[instrument(name = "FsCas::store_file")]
     async fn store_file(&self, kind: Kind, src: &AbsFilePath) -> Result<Blake3> {
-        let src = src.as_ref();
         let key = Blake3::from_file(src).await.context("hash file")?;
-
-        // We don't know if this path exists, but we do know that if not,
-        // `fs::copy_file` will create it.
-        let dst = self
-            .root
-            .join(RelDirPath::new_unchecked(kind.as_str()))
-            .join(RelFilePath::new_unchecked(key.as_str()));
+        let dst = self.root.try_join_combined([kind.as_str()], key.as_str())?;
         fs::copy_file(src, &dst).await?;
         Ok(key)
     }

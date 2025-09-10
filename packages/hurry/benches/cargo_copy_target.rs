@@ -4,10 +4,11 @@
 //! as such the benchmark changing doesn't _automatically_ mean that
 //! performance actually changed as the `target/` folder may have also changed.
 
-use std::path::PathBuf;
-
 use color_eyre::Result;
-use hurry::path::{AbsDirPath, TryJoinWith};
+use hurry::{
+    mk_rel_dir,
+    path::{AbsDirPath, JoinWith},
+};
 use location_macros::workspace_dir;
 use tempfile::TempDir;
 
@@ -375,17 +376,14 @@ mod using_tokio {
 }
 
 #[track_caller]
-fn current_target() -> AbsDirPath {
-    current_workspace()
-        .try_join_dir("target")
-        .expect("parse target directory")
+pub fn current_workspace() -> AbsDirPath {
+    let ws = workspace_dir!();
+    AbsDirPath::try_from(ws).unwrap_or_else(|err| panic!("parse {ws:?} as abs dir: {err:?}"))
 }
 
 #[track_caller]
-fn current_workspace() -> AbsDirPath {
-    let ws = workspace_dir!();
-    AbsDirPath::new(PathBuf::from(ws))
-        .unwrap_or_else(|err| panic!("parse {ws:?} as abs dir: {err:?}"))
+fn current_target() -> AbsDirPath {
+    current_workspace().join(mk_rel_dir!("target"))
 }
 
 #[track_caller]

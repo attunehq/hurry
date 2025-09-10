@@ -99,7 +99,7 @@ impl Dotd {
     /// - Returns paths relative to the profile root for cache consistency
     #[instrument(name = "Dotd::from_file")]
     pub async fn from_file(profile: &ProfileDir<'_, Locked>, target: &AbsFilePath) -> Result<Self> {
-        const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta", ".so"];
+        const DEP_EXTS: [&str; 4] = [".d", ".rlib", ".rmeta", ".so"];
         let profile_root = profile.root();
         fs::read_buffered_utf8(target)
             .await
@@ -111,11 +111,9 @@ impl Dotd {
                 let (output, _) = line.split_once(':')?;
                 if DEP_EXTS.iter().any(|ext| output.ends_with(ext)) {
                     trace!(?line, ?output, "read .d line");
-                    std::path::PathBuf::from(output)
-                        .pipe(AbsFilePath::new)
+                    AbsFilePath::try_from(output)
                         .tap_err(|error| trace!(?line, ?output, ?error, "not a valid path"))
                         .tap_ok(|output| trace!(?line, ?output, "read output path"))
-                        .context("parse as typed path")
                         .map(Some)
                         .transpose()
                 } else {

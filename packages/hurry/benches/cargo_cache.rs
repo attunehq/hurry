@@ -1,7 +1,5 @@
 //! Benchmarks for caching cargo projects.
 
-use std::path::PathBuf;
-
 use color_eyre::{Result, eyre::Context};
 use divan::Bencher;
 use hurry::{
@@ -176,10 +174,9 @@ fn restore(bencher: Bencher) {
 fn progress_noop(_key: &Blake3, _dep: &Dependency) {}
 
 #[track_caller]
-fn current_workspace() -> AbsDirPath {
+pub fn current_workspace() -> AbsDirPath {
     let ws = workspace_dir!();
-    AbsDirPath::new(PathBuf::from(ws))
-        .unwrap_or_else(|err| panic!("parse {ws:?} as abs dir: {err:?}"))
+    AbsDirPath::try_from(ws).unwrap_or_else(|err| panic!("parse {ws:?} as abs dir: {err:?}"))
 }
 
 #[track_caller]
