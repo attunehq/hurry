@@ -11,6 +11,7 @@ pub mod cargo;
 pub mod ext;
 pub mod fs;
 pub mod hash;
+pub mod path;
 
 /// The associated type's state is unlocked.
 /// Used for the typestate pattern.

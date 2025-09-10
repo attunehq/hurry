@@ -20,6 +20,7 @@ use crate::{
     Locked,
     ext::{then_context, then_with_context},
     fs::{self, DEFAULT_CONCURRENCY},
+    path::{AbsDirPath, AbsFilePath, RelFilePath, RelativeTo},
 };
 
 /// Rust compiler metadata for cache key generation.
@@ -46,13 +47,13 @@ pub struct RustcMetadata {
 impl RustcMetadata {
     /// Get platform metadata from the current compiler.
     #[instrument(name = "RustcMetadata::from_argv")]
-    pub async fn from_argv(workspace_root: &Utf8Path, _argv: &[String]) -> Result<Self> {
+    pub async fn from_argv(workspace_root: &AbsDirPath, _argv: &[String]) -> Result<Self> {
         let mut cmd = tokio::process::Command::new("rustc");
 
         // Bypasses the check that disallows using unstable commands on stable.
         cmd.env("RUSTC_BOOTSTRAP", "1");
         cmd.args(["-Z", "unstable-options", "--print", "target-spec-json"]);
-        cmd.current_dir(workspace_root);
+        cmd.current_dir(workspace_root.as_std_path());
         let output = cmd.output().await.context("run rustc")?;
         if !output.status.success() {
             return Err(eyre!("invoke rustc"))

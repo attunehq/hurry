@@ -34,8 +34,7 @@ use std::{
 };
 
 use ahash::AHashMap;
-use async_walkdir::{DirEntry, WalkDir};
-use cargo_metadata::camino::Utf8PathBuf;
+use async_walkdir::WalkDir;
 use color_eyre::{
     Result,
     eyre::{Context, OptionExt, eyre},
@@ -45,18 +44,17 @@ use filetime::FileTime;
 use fslock::LockFile as FsLockFile;
 use futures::{Stream, TryStreamExt};
 use jiff::Timestamp;
-use rayon::iter::{ParallelBridge, ParallelIterator};
-use relative_path::RelativePathBuf;
-use tap::{Pipe, Tap, TapFallible, TryConv};
-use tokio::{
-    fs::{File, ReadDir},
-    runtime::Handle,
-    sync::Mutex,
-    task::spawn_blocking,
-};
+use serde::{Deserialize, Serialize};
+use tap::{Pipe, TapFallible};
+use tokio::{fs::ReadDir, sync::Mutex, task::spawn_blocking};
 use tracing::{debug, instrument, trace};
 
-use crate::{Locked, Unlocked, ext::then_context, hash::Blake3};
+use crate::{
+    Locked, Unlocked,
+    ext::then_context,
+    hash::Blake3,
+    path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, RelativeTo},
+};
 
 /// The default level of concurrency used in hurry `fs` operations.
 ///
@@ -69,21 +67,22 @@ pub const DEFAULT_CONCURRENCY: usize = 10;
 /// Lock the file with [`LockFile::lock`]. Unlock it with [`LockFile::unlock`],
 /// or by dropping the locked instance.
 #[derive(Debug, Clone, Display)]
-#[display("{}", path.display())]
+#[display("{path}")]
 pub struct LockFile<State> {
     state: PhantomData<State>,
-    path: PathBuf,
+    path: AbsFilePath,
     inner: Arc<Mutex<FsLockFile>>,
 }
 
 impl LockFile<Unlocked> {
     /// Create a new instance at the provided path.
-    pub async fn open(path: impl AsRef<Path> + StdDebug) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        let (file, path) = spawn_blocking(move || FsLockFile::open(&path).map(|file| (file, path)))
-            .await
-            .context("join task")?
-            .context("open lock file")?;
+    pub async fn open(path: impl Into<AbsFilePath> + StdDebug) -> Result<Self> {
+        let path = path.into();
+        let (file, path) =
+            spawn_blocking(move || FsLockFile::open(path.as_std_path()).map(|file| (file, path)))
+                .await
+                .context("join task")?
+                .context("open lock file")?;
         Ok(Self {
             state: PhantomData,
             inner: Arc::new(Mutex::new(file)),
@@ -143,7 +142,7 @@ impl LockFile<Locked> {
 #[derive(Clone, Debug)]
 pub struct Index {
     /// The root directory of the index.
-    pub root: Utf8PathBuf,
+    pub root: AbsDirPath,
 
     /// Stores the index.
     /// Keys relative to `root`.
@@ -152,7 +151,7 @@ pub struct Index {
     // https://docs.rs/fs-tree/0.2.2/fs_tree/ looked like it might work,
     // but the API was sketchy so I didn't use it for now.
     #[debug("{}", files.len())]
-    pub files: AHashMap<RelativePathBuf, IndexEntry>,
+    pub files: AHashMap<RelFilePath, IndexEntry>,
 }
 
 impl Index {
@@ -160,83 +159,22 @@ impl Index {
     //
     // TODO: move this to use async natively.
     #[instrument(name = "Index::recursive")]
-    pub async fn recursive(root: impl AsRef<Path> + StdDebug) -> Result<Self> {
-        let root = root.as_ref().to_path_buf();
-        spawn_blocking(move || Self::recursive_sync(root))
-            .await
-            .context("join task")?
-    }
+    pub async fn recursive(root: impl Into<AbsDirPath> + StdDebug) -> Result<Self> {
+        let root = root.into();
+        let files = walk_files(&root)
+            .try_fold(AHashMap::new(), |mut files, file| {
+                let root = root.clone();
+                async move {
+                    let entry = IndexEntry::from_file(&file)
+                        .await
+                        .with_context(|| format!("index {file:?}"))?;
+                    let rel = file.relative_to(root).context("make relative")?;
+                    files.insert(rel, entry);
+                    Ok(files)
+                }
+            })
+            .await?;
 
-    /// Index the provided path recursively, blocking the current thread.
-    #[instrument(name = "Index::recursive_sync")]
-    fn recursive_sync(root: impl AsRef<Path> + StdDebug) -> Result<Self> {
-        let root = root.as_ref().to_path_buf();
-        let root = Utf8PathBuf::try_from(root).context("path as utf8")?;
-
-        // The `rayon` instance runs in its own threadpool, but its overall
-        // operation is still blocking, so we run it in a background thread that
-        // just waits for rayon to complete.
-        let (tx, rx) = flume::bounded::<(RelativePathBuf, IndexEntry)>(0);
-        let runtime = Handle::current();
-        let walker = std::thread::spawn({
-            let root = root.clone();
-            let runtime = runtime.clone();
-            move || {
-                walkdir::WalkDir::new(&root)
-                    .into_iter()
-                    .par_bridge()
-                    .try_for_each(move |entry| -> Result<()> {
-                        let _guard = runtime.enter();
-                        let entry = entry.context("walk files")?;
-                        let path = entry.path();
-                        if !entry.file_type().is_file() {
-                            trace!(?path, "skipped entry: not a file");
-                            return Ok(());
-                        }
-
-                        trace!(?path, "walked entry");
-                        let path = path
-                            .strip_prefix(&root)
-                            .with_context(|| format!("make {path:?} relative to {root:?}"))?
-                            .to_path_buf()
-                            .pipe(RelativePathBuf::from_path)
-                            .context("read path as utf8")?;
-                        let entry = runtime
-                            .block_on(IndexEntry::from_file(entry.path()))
-                            .context("index entry")?;
-
-                        // Only errors if the channel receivers have been dropped,
-                        // which should never happen but we'll handle it
-                        // just in case.
-                        tx.send((path, entry)).context("send entry to main thread")
-                    })
-            }
-        });
-
-        // When the directory walk finishes, the senders all drop.
-        // This causes the receiver channel to close, terminating the iterator.
-        let files = rx
-            .into_iter()
-            .inspect(|(path, entry)| trace!(?path, ?entry, "indexed file"))
-            .collect();
-
-        // Joining a fallible operation from a background thread (as we do here)
-        // has two levels of errors:
-        // - The thread could have panicked
-        // - The operation could have completed fallibly
-        //
-        // The `expect` call here is for the former case: if the thread panicks,
-        // the only really safe thing to do is also panic since panic implies
-        // a broken invariant or partially corrupt state.
-        //
-        // Then the `context` call wraps the result of the actual fallible
-        // operation that we were doing inside the thread (walking the files).
-        walker
-            .join()
-            .expect("join thread")
-            .context("walk directory")?;
-
-        debug!("indexed directory");
         Ok(Self { root, files })
     }
 }
@@ -246,15 +184,21 @@ impl Index {
 pub struct IndexEntry {
     /// The hash of the file's contents.
     pub hash: Blake3,
+
+    /// The metadata of the file.
+    pub metadata: Metadata,
 }
 
 impl IndexEntry {
     /// Construct the entry from the provided file on disk.
     #[instrument(name = "IndexEntry::from_file")]
-    pub async fn from_file(path: impl AsRef<Path> + StdDebug) -> Result<Self> {
-        let path = path.as_ref();
+    pub async fn from_file(path: &AbsFilePath) -> Result<Self> {
         let hash = Blake3::from_file(path).then_context("hash file").await?;
-        Ok(Self { hash })
+        let metadata = Metadata::from_file(path)
+            .then_context("get metadata")
+            .await?
+            .ok_or_eyre(format!("file {path:?} should exist"))?;
+        Ok(Self { hash, metadata })
     }
 }
 
@@ -263,24 +207,21 @@ impl IndexEntry {
 /// This can fail if the user has no home directory,
 /// or if the home directory cannot be accessed.
 #[instrument]
-pub async fn user_global_cache_path() -> Result<Utf8PathBuf> {
+pub async fn user_global_cache_path() -> Result<AbsDirPath> {
     homedir::my_home()
         .context("get user home directory")?
         .ok_or_eyre("user has no home directory")?
-        .try_conv::<Utf8PathBuf>()
-        .context("user home directory is not utf8")?
         .join(".cache")
         .join("hurry")
         .join("v2")
-        .tap(|dir| trace!(?dir, "read user global cache path"))
-        .pipe(Ok)
+        .pipe(AbsDirPath::try_from)
+        .tap_ok(|dir| trace!(?dir, "read user global cache path"))
 }
 
 /// Create the directory and all its parents, if they don't already exist.
 #[instrument]
-pub async fn create_dir_all(dir: impl AsRef<Path> + StdDebug) -> Result<()> {
-    let dir = dir.as_ref();
-    tokio::fs::create_dir_all(dir)
+pub async fn create_dir_all(dir: &AbsDirPath) -> Result<()> {
+    tokio::fs::create_dir_all(dir.as_std_path())
         .await
         .with_context(|| format!("create dir: {dir:?}"))
         .tap_ok(|_| trace!(?dir, "create directory"))
@@ -293,10 +234,7 @@ pub async fn create_dir_all(dir: impl AsRef<Path> + StdDebug) -> Result<()> {
 ///
 /// Equivalent to [`copy_dir_with_concurrency`] with [`DEFAULT_CONCURRENCY`].
 #[instrument]
-pub async fn copy_dir(
-    src: impl AsRef<Path> + StdDebug,
-    dst: impl AsRef<Path> + StdDebug,
-) -> Result<u64> {
+pub async fn copy_dir(src: &AbsDirPath, dst: &AbsDirPath) -> Result<u64> {
     copy_dir_with_concurrency(DEFAULT_CONCURRENCY, src, dst).await
 }
 
@@ -305,11 +243,8 @@ pub async fn copy_dir(
 /// Only emits regular files; symbolic links
 /// and directories are not emitted in the stream.
 #[instrument]
-pub fn walk_files(
-    root: impl AsRef<Path> + StdDebug,
-) -> impl Stream<Item = Result<DirEntry>> + Unpin {
-    let root = root.as_ref().to_path_buf();
-    WalkDir::new(&root)
+pub fn walk_files(root: &AbsDirPath) -> impl Stream<Item = Result<AbsFilePath>> + Unpin {
+    WalkDir::new(root.as_std_path())
         .map_err(move |err| eyre!(err).wrap_err(format!("walk files in {root:?}")))
         .try_filter_map(|entry| async move {
             let src_file = entry.path();
@@ -318,7 +253,8 @@ pub fn walk_files(
                 .await
                 .with_context(|| format!("get type of: {src_file:?}"))?;
             if ft.is_file() {
-                Ok(Some(entry))
+                let path = entry.path();
+                AbsFilePath::try_from(path).map(Some)
             } else {
                 Ok(None)
             }
@@ -330,8 +266,7 @@ pub fn walk_files(
 /// For the purpose of this function, the directory is empty
 /// if it has no regular files.
 #[instrument]
-pub async fn is_dir_empty(path: impl AsRef<Path> + StdDebug) -> Result<bool> {
-    let path = path.as_ref();
+pub async fn is_dir_empty(path: &AbsDirPath) -> Result<bool> {
     walk_files(path)
         .try_any(|_| async { true })
         .await
@@ -345,16 +280,12 @@ pub async fn is_dir_empty(path: impl AsRef<Path> + StdDebug) -> Result<bool> {
 #[instrument]
 pub async fn copy_dir_with_concurrency(
     concurrency: usize,
-    src: impl AsRef<Path> + StdDebug,
-    dst: impl AsRef<Path> + StdDebug,
+    src: &AbsDirPath,
+    dst: &AbsDirPath,
 ) -> Result<u64> {
-    let (src, dst) = (src.as_ref(), dst.as_ref());
     walk_files(&src)
-        .map_ok(|entry| async move {
-            let src_file = entry.path();
-            let rel = src_file
-                .strip_prefix(&src)
-                .with_context(|| format!("make {src_file:?} relative to {src:?}"))?;
+        .map_ok(|src_file| async move {
+            let rel = src_file.relative_to(src).context("make relative")?;
 
             let dst_file = dst.join(rel);
             copy_file(&src_file, &dst_file)
@@ -371,45 +302,24 @@ pub async fn copy_dir_with_concurrency(
 /// Preserves metadata that cargo/rustc cares about during the copy.
 /// Returns the number of bytes copied.
 #[instrument]
-pub async fn copy_file(
-    src: impl AsRef<Path> + StdDebug,
-    dst: impl AsRef<Path> + StdDebug,
-) -> Result<u64> {
-    let (src, dst) = (src.as_ref(), dst.as_ref());
-
+pub async fn copy_file(src: &AbsFilePath, dst: &AbsFilePath) -> Result<u64> {
     if let Some(parent) = dst.parent() {
-        create_dir_all(parent)
+        create_dir_all(&parent)
             .await
             .context("create parent directory")?;
     }
-    let bytes = tokio::fs::copy(src, dst).await.context("copy file")?;
+    let bytes = tokio::fs::copy(src.as_std_path(), dst.as_std_path())
+        .await
+        .context("copy file")?;
     trace!(?src, ?dst, ?bytes, "copy file");
-
-    // TODO: I'm keeping this for now behind this feature just in case it
-    // needs to come back... but if you're refactoring stuff and need to touch
-    // this code, go ahead and remove this feature and this block.
-    //
-    // Now that we're doing proper OS-supported copies this doesn't seem
-    // to be needed; it seems to just slow everything down for no reason.
-    // The main reason I'm keeping it for now is in case that's wrong
-    // or to support network restores (which _may_ need to manually set
-    // this data, we'll see).
-    #[cfg(feature = "force-copy-metadata")]
-    if let Some(src_meta) = Metadata::from_file(src).await? {
-        src_meta
-            .set_file(dst)
-            .await
-            .context("update destination metadata")?;
-    }
 
     Ok(bytes)
 }
 
 /// Buffer the file content from disk.
 #[instrument]
-pub async fn read_buffered(path: impl AsRef<Path> + StdDebug) -> Result<Option<Vec<u8>>> {
-    let path = path.as_ref();
-    match tokio::fs::read(path).await {
+pub async fn read_buffered(path: &AbsFilePath) -> Result<Option<Vec<u8>>> {
+    match tokio::fs::read(path.as_std_path()).await {
         Ok(buf) => {
             trace!(?path, bytes = buf.len(), "read file");
             Ok(Some(buf))
@@ -421,9 +331,8 @@ pub async fn read_buffered(path: impl AsRef<Path> + StdDebug) -> Result<Option<V
 
 /// Buffer the file content from disk and parse it as UTF8.
 #[instrument]
-pub async fn read_buffered_utf8(path: impl AsRef<Path> + StdDebug) -> Result<Option<String>> {
-    let path = path.as_ref();
-    match tokio::fs::read_to_string(path).await {
+pub async fn read_buffered_utf8(path: &AbsFilePath) -> Result<Option<String>> {
+    match tokio::fs::read_to_string(path.as_std_path()).await {
         Ok(buf) => {
             trace!(?path, bytes = buf.len(), "read file as string");
             Ok(Some(buf))
@@ -435,14 +344,14 @@ pub async fn read_buffered_utf8(path: impl AsRef<Path> + StdDebug) -> Result<Opt
 
 /// Write the provided file content to disk.
 #[instrument(skip(content))]
-pub async fn write(path: impl AsRef<Path> + StdDebug, content: impl AsRef<[u8]>) -> Result<()> {
-    let (path, content) = (path.as_ref(), content.as_ref());
+pub async fn write(path: &AbsFilePath, content: impl AsRef<[u8]>) -> Result<()> {
+    let content = content.as_ref();
     if let Some(parent) = path.parent() {
-        create_dir_all(parent)
+        create_dir_all(&parent)
             .await
             .context("create parent directory")?;
     }
-    tokio::fs::write(path, content)
+    tokio::fs::write(path.as_std_path(), content)
         .await
         .with_context(|| format!("write file: {path:?}"))
         .tap_ok(|_| trace!(?path, bytes = content.len(), "write file"))
@@ -450,9 +359,8 @@ pub async fn write(path: impl AsRef<Path> + StdDebug, content: impl AsRef<[u8]>)
 
 /// Open a file for reading.
 #[instrument]
-pub async fn open_file(path: impl AsRef<Path> + StdDebug) -> Result<File> {
-    let path = path.as_ref();
-    File::open(path)
+pub async fn open_file(path: &AbsFilePath) -> Result<tokio::fs::File> {
+    tokio::fs::File::open(path.as_std_path())
         .await
         .with_context(|| format!("open file: {path:?}"))
         .tap_ok(|_| trace!(?path, "open file"))
@@ -460,9 +368,8 @@ pub async fn open_file(path: impl AsRef<Path> + StdDebug) -> Result<File> {
 
 /// Read directory entries.
 #[instrument]
-pub async fn read_dir(path: impl AsRef<Path> + StdDebug) -> Result<ReadDir> {
-    let path = path.as_ref();
-    tokio::fs::read_dir(path)
+pub async fn read_dir(path: &AbsDirPath) -> Result<ReadDir> {
+    tokio::fs::read_dir(path.as_std_path())
         .await
         .with_context(|| format!("read directory: {path:?}"))
         .tap_ok(|_| trace!(?path, "read directory"))
@@ -478,7 +385,7 @@ pub async fn read_dir(path: impl AsRef<Path> + StdDebug) -> Result<ReadDir> {
 /// We will probably need to add more fields as we find things that cargo/rustc
 /// care about that we overlooked; don't treat this as gospel if you think
 /// something is missing.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
 pub struct Metadata {
     /// The last time the file was modified.
     ///
@@ -502,15 +409,15 @@ impl Metadata {
     /// Read the metadata from the provided file.
     #[instrument]
     #[cfg(not(target_os = "windows"))]
-    pub async fn from_file(path: impl AsRef<Path> + StdDebug) -> Result<Option<Self>> {
+    pub async fn from_file(path: &AbsFilePath) -> Result<Option<Self>> {
         use std::os::unix::fs::PermissionsExt;
-        let path = path.as_ref();
-
-        let metadata = match metadata(path).await? {
+        let metadata = match metadata(path.as_std_path()).await? {
             Some(metadata) => metadata,
             None => return Ok(None),
         };
-        let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let mtime = metadata
+            .modified()
+            .with_context(|| format!("read file {path:?} mtime"))?;
         let executable = metadata.permissions().mode() & 0o111 != 0;
         Ok(Some(Self { mtime, executable }))
     }
@@ -518,9 +425,8 @@ impl Metadata {
     /// Set the metadata on the provided file.
     #[instrument]
     #[cfg(not(target_os = "windows"))]
-    pub async fn set_file(&self, path: impl AsRef<Path> + StdDebug) -> Result<()> {
+    pub async fn set_file(&self, path: &AbsFilePath) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
-        let path = path.as_ref();
 
         // We read the current metadata for the file so that we don't
         // accidentally clobber other fields (although it's not clear
@@ -529,10 +435,12 @@ impl Metadata {
         // If this ends up being too much of a performance hit we should
         // revisit.
         if self.executable {
-            let metadata = tokio::fs::metadata(path).await.context("get metadata")?;
+            let metadata = tokio::fs::metadata(path.as_std_path())
+                .await
+                .context("get metadata")?;
             let mut permissions = metadata.permissions();
             permissions.set_mode(permissions.mode() | 0o111);
-            tokio::fs::set_permissions(path, permissions.clone())
+            tokio::fs::set_permissions(path.as_std_path(), permissions.clone())
                 .await
                 .context("set permissions")
                 .tap_ok(|_| trace!(?path, ?permissions, "set permissions"))?;
@@ -541,7 +449,7 @@ impl Metadata {
         // Make sure to set the file times last so that other modifications to
         // the metadata don't mess with these.
         let mtime = FileTime::from_system_time(self.mtime);
-        let path = path.to_path_buf();
+        let path = path.as_std_path().to_path_buf();
         spawn_blocking(move || {
             filetime::set_file_mtime(&path, mtime).tap_ok(|_| trace!(?path, ?mtime, "update mtime"))
         })
@@ -552,9 +460,8 @@ impl Metadata {
 }
 
 /// Remove the directory and all its contents.
-pub async fn remove_dir_all(path: impl AsRef<Path> + StdDebug) -> Result<()> {
-    let path = path.as_ref();
-    match tokio::fs::remove_dir_all(path).await {
+pub async fn remove_dir_all(path: &AbsDirPath) -> Result<()> {
+    match tokio::fs::remove_dir_all(path.as_std_path()).await {
         Ok(()) => {
             trace!(?path, "removed directory");
             Ok(())
@@ -573,15 +480,17 @@ pub async fn remove_dir_all(path: impl AsRef<Path> + StdDebug) -> Result<()> {
 /// although this function exists in case you need the standard metadata shape
 /// for some reason.
 #[instrument]
-pub async fn metadata(path: impl AsRef<Path> + StdDebug) -> Result<Option<std::fs::Metadata>> {
+pub async fn metadata(
+    path: impl AsRef<std::path::Path> + StdDebug,
+) -> Result<Option<std::fs::Metadata>> {
     let path = path.as_ref();
     match tokio::fs::metadata(path).await {
         Ok(metadata) => {
-            trace!(?path, ?metadata, "read metadata");
+            trace!(?path, ?metadata, "stat metadata");
             Ok(Some(metadata))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err).context(format!("read metadata: {path:?}")),
+        Err(err) => Err(err).context(format!("stat metadata: {path:?}")),
     }
 }
 
@@ -594,4 +503,28 @@ pub async fn metadata(path: impl AsRef<Path> + StdDebug) -> Result<Option<std::f
 #[instrument]
 pub async fn exists(path: impl AsRef<Path> + StdDebug) -> bool {
     tokio::fs::try_exists(path).await.is_ok_and(identity)
+}
+
+/// Return whether the path represents a directory.
+///
+/// Returns `false` if the directory doesn't exist
+/// or if there is an error checking the metadata;
+/// to differentiate this case use [`metadata`].
+#[instrument]
+pub async fn is_dir(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
+    metadata(path)
+        .await
+        .map_or(false, |m| m.is_some_and(|m| m.is_dir()))
+}
+
+/// Return whether the path represents a normal file.
+///
+/// Returns `false` if the file doesn't exist;
+/// or if there is an error checking the metadata;
+/// to differentiate this case use [`metadata`].
+#[instrument]
+pub async fn is_file(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
+    metadata(path)
+        .await
+        .map_or(false, |m| m.is_some_and(|m| m.is_file()))
 }

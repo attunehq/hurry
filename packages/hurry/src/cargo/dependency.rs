@@ -27,11 +27,30 @@ use crate::hash::Blake3;
 /// - We aren't including things that should almost definitely be included,
 ///   for example active features.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Builder)]
-#[display("{name}@{version}")]
+#[display("{package_name}@{version}")]
 pub struct Dependency {
     /// The name of the dependency.
     #[builder(into)]
-    pub name: String,
+    pub package_name: String,
+
+    /// The name of the dependency's library crate target.
+    ///
+    /// This is often the same as the name of the dependency package. However,
+    /// it can be different in two cases:
+    /// 1. Users can customize this name in their `Cargo.toml`[^1]. For example,
+    ///    the package `xml-rs` names its library crate `xml`, which compiles to
+    ///    an rlib called `libxml`[^2] and the package `build-rs` used to name
+    ///    its library crate `build`[^3].
+    /// 2. In packages whose names are not valid Rust identifiers (in
+    ///    particular, packages with hyphens in their names), Cargo will
+    ///    automatically convert the library crate name into a Rust identifier
+    ///    by converting hyphens into underscores[^1].
+    ///
+    /// [^1]: https://doc.rust-lang.org/cargo/reference/cargo-targets.html#the-name-field
+    /// [^2]: https://github.com/kornelski/xml-rs/blob/9ce8c90821a7ea1d3cb82753caab88482788a1d0/Cargo.toml#L2
+    /// [^3]: https://github.com/rust-lang/cargo/blob/6655e485135d1c339864b4e4f4147cb60144ec48/Cargo.toml#L13
+    #[builder(into)]
+    pub lib_name: String,
 
     /// The version of the dependency.
     #[builder(into)]
@@ -62,7 +81,7 @@ impl Dependency {
     pub fn key(&self) -> Blake3 {
         Self::key_for()
             .checksum(&self.checksum)
-            .name(&self.name)
+            .name(&self.package_name)
             .target(&self.target)
             .version(&self.version)
             .call()

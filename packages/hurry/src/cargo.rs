@@ -13,6 +13,7 @@ use crate::{
     Locked,
     cache::{Cache, Cas, Kind},
     hash::Blake3,
+    path::JoinWith,
 };
 
 mod dependency;
@@ -26,10 +27,10 @@ pub use profile::*;
 pub use workspace::*;
 
 /// Execute a Cargo subcommand with specified arguments.
-#[instrument(skip_all)]
+#[instrument]
 pub async fn invoke(
-    subcommand: impl AsRef<str>,
-    args: impl IntoIterator<Item = impl AsRef<str>>,
+    subcommand: impl AsRef<str> + StdDebug,
+    args: impl IntoIterator<Item = impl AsRef<str>> + StdDebug,
 ) -> Result<()> {
     let subcommand = subcommand.as_ref();
     let args = args.into_iter().collect::<Vec<_>>();
@@ -53,20 +54,13 @@ pub async fn invoke(
 
 /// Cache build artifacts from a workspace target directory.
 ///
-/// Enumerates and stores all build artifacts for third-party dependencies
-/// in the content-addressable storage (CAS) and updates the cache index.
+/// Enumerates and stores all build artifacts for third-party dependencies in
+/// the content-addressable storage (CAS) and updates the cache index.
 ///
-/// ## Process
 /// For each dependency in the workspace:
-///   1. Enumerate its artifacts (`.rlib`, `.rmeta`, fingerprints, etc.)
-///   2. Store each artifact file in the CAS
-///   3. Create a cache record mapping dependency key to artifact hashes
-///
-/// ## Caching Strategy
-/// The cache assumes the current `target/` directory is valid and trustworthy.
-/// It stores sufficient metadata to recreate the dependency artifacts in a
-/// fresh environment without relying on Cargo's internal state files.
-///
+/// 1. Enumerate its artifacts (`.rlib`, `.rmeta`, fingerprints, etc.).
+/// 2. Store each artifact file in the CAS.
+/// 3. Create a cache record mapping dependency key to artifact hashes.
 #[instrument(skip(progress))]
 pub async fn cache_target_from_workspace(
     cas: impl Cas + StdDebug + Clone,
@@ -74,13 +68,13 @@ pub async fn cache_target_from_workspace(
     target: &ProfileDir<'_, Locked>,
     progress: impl Fn(&Blake3, &Dependency) + Clone,
 ) -> Result<()> {
-    // The concurrency limits below are currently just vibes;
-    // we want to avoid opening too many file handles at a time
-    // because that can have a negative effect on performance
-    // but we obviously want to have enough running that we saturate the disk.
+    // The concurrency limits below are currently just vibes from staring at
+    // benchmarks; we want to avoid opening too many file handles at a time
+    // because that can have a negative effect on performance but we obviously
+    // want to have enough running that we saturate the disk.
     //
-    // TODO: this currently assumes that the entire `target/` folder
-    // doesn't have any _outdated_ data; this may not be correct.
+    // TODO: this currently assumes that the entire `target/` folder doesn't
+    // have any _outdated_ data; this may not be correct.
     stream::iter(&target.workspace.dependencies)
         .filter_map(|(key, dependency)| {
             let target = target.clone();
@@ -110,12 +104,12 @@ pub async fn cache_target_from_workspace(
                     .try_for_each_concurrent(Some(100), |artifact| {
                         let (cas, target) = (cas.clone(), target.clone());
                         async move {
-                            let dst = artifact.target.to_path(target.root());
+                            let dst = target.root().join(&artifact.target);
                             cas.store_file(Kind::Cargo, &dst)
                                 .await
                                 .with_context(|| format!("backup output file: {dst:?}"))
                                 .tap_ok(|key| {
-                                    trace!(?key, ?dependency, ?artifact, "restored artifact")
+                                    trace!(?key, ?dependency, ?artifact, "stored artifact")
                                 })
                                 .map(drop)
                         }
@@ -192,13 +186,21 @@ pub async fn restore_target_from_cache(
                     .try_for_each_concurrent(Some(100), |artifact| {
                         let (cas, target) = (cas.clone(), target.clone());
                         async move {
-                            let dst = artifact.target.to_path(target.root());
+                            let dst = target.root().join(&artifact.target);
                             cas.get_file(Kind::Cargo, &artifact.hash, &dst)
                                 .await
                                 .context("extract crate")
                                 .tap_ok(|_| {
                                     trace!(?key, ?dependency, ?artifact, "restored artifact")
-                                })
+                                })?;
+                            // TODO: We don't _always_ need to update this
+                            // metadata on CoW filesystems (such as macOS's
+                            // APFS) if the CAS object has the original's
+                            // metadata and is unique within the CAS (i.e. the
+                            // metadata has not been clobbered). We should
+                            // implement a way to determine if this is the case.
+                            artifact.metadata.set_file(&dst).await?;
+                            Ok(())
                         }
                     })
                     .await

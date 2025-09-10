@@ -1,7 +1,8 @@
+use color_eyre::Result;
+use enum_assoc::Assoc;
 use itertools::Itertools;
 use strum::{EnumIter, IntoEnumIterator};
 use subenum::subenum;
-use enum_assoc::Assoc;
 use tracing::instrument;
 
 use super::read_argv;
@@ -60,7 +61,7 @@ impl Profile {
     ///
     /// ## Parsing Rules
     /// - `--profile <name>` → Profile::from(name)
-    /// - `--release` → Profile::Release  
+    /// - `--release` → Profile::Release
     /// - No flags → Profile::Debug
     #[instrument(name = "Profile::from_argv")]
     pub fn from_argv(argv: &[String]) -> Profile {
