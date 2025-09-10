@@ -154,8 +154,8 @@ impl Index {
     //
     // TODO: move this to use async natively.
     #[instrument(name = "Index::recursive")]
-    pub async fn recursive(root: impl Into<AbsDirPath> + StdDebug) -> Result<Self> {
-        let root = root.into();
+    pub async fn recursive(root: &AbsDirPath) -> Result<Self> {
+        let root = root.clone();
         let files = walk_files(&root)
             .try_fold(AHashMap::new(), |mut files, file| {
                 let root = root.clone();

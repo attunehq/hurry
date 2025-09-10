@@ -70,7 +70,7 @@ impl FsCache<Unlocked> {
     /// If the directory does not already exist, it is created.
     #[instrument(name = "FsCache::open_dir")]
     pub async fn open_dir(root: &AbsDirPath) -> Result<Self> {
-        let root = root.into();
+        let root = root.clone();
         fs::create_dir_all(&root)
             .await
             .context("create cache directory")?;
@@ -183,7 +183,7 @@ impl FsCas {
     /// If the directory does not already exist, it is created.
     #[instrument(name = "FsCas::open_dir")]
     pub async fn open_dir(root: &AbsDirPath) -> Result<Self> {
-        let root = root.into();
+        let root = root.clone();
         fs::create_dir_all(&root).await?;
         trace!(?root, "open cas");
         Ok(Self { root })
