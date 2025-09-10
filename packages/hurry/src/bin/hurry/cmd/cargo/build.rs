@@ -10,7 +10,7 @@ use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use hurry::{
     cache::{Cache, Cas, FsCache, FsCas},
-    cargo::{Profile, Workspace, cache_target_from_workspace, invoke, restore_target_from_cache},
+    cargo::{self, Profile, Workspace, cache_target_from_workspace, restore_target_from_cache},
     fs,
     hash::Blake3,
 };
@@ -115,7 +115,7 @@ async fn exec_simple(options: Options, workspace: &Workspace) -> Result<()> {
 
     if !options.skip_build {
         info!("Building target directory");
-        invoke("build", &options.argv)
+        cargo::invoke("build", &options.argv)
             .await
             .context("build with cargo")?;
     }
@@ -180,10 +180,42 @@ async fn exec_inner(
     // this is because we currently only cache based on lockfile hash;
     // if the first-party code has changed we'll need to rebuild.
     if !options.skip_build {
+        // Ensure that the Hurry build cache within `target` is created for the
+        // invocation, and that the build is run with the Hurry wrapper.
+        let cargo_invocation_id = uuid::Uuid::new_v4();
+        fs::create_dir_all(
+            workspace
+                .target
+                .join("hurry")
+                .join("invocations")
+                .join(cargo_invocation_id.to_string()),
+        )
+        .await
+        .context("create build-scoped Hurry cache")?;
+        let cwd = std::env::current_dir().context("load build root")?;
+
         info!("Building target directory");
-        invoke("build", &options.argv)
-            .await
-            .context("build with cargo")?;
+        // TODO: Handle the case where the user has already defined a
+        // `RUSTC_WRAPPER` (e.g. if they're using `sccache`).
+        //
+        // TODO: Figure out how to properly distribute the wrapper. Maybe we'll
+        // embed it into the binary, and write it out? See example[^1].
+        //
+        // [^1]: https://zameermanji.com/blog/2021/6/17/embedding-a-rust-binary-in-another-rust-binary/
+        cargo::invoke_env(
+            "build",
+            &options.argv,
+            [
+                ("RUSTC_WRAPPER", "hurry-cargo-rustc-wrapper"),
+                (
+                    "HURRY_CARGO_INVOCATION_ID",
+                    &cargo_invocation_id.to_string(),
+                ),
+                ("HURRY_CARGO_INVOCATION_ROOT", &cwd.to_string_lossy()),
+            ],
+        )
+        .await
+        .context("build with cargo")?;
     }
 
     // If we didn't have a cache, we cache the target directory

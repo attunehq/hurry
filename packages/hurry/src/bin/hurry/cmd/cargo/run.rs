@@ -1,6 +1,6 @@
 use clap::Args;
 use color_eyre::Result;
-use hurry::cargo::invoke;
+use hurry::cargo;
 use tracing::instrument;
 
 /// Options for `cargo run`
@@ -19,5 +19,5 @@ pub struct Options {
 
 #[instrument]
 pub async fn exec(options: Options) -> Result<()> {
-    invoke("run", options.argv).await
+    cargo::invoke("run", options.argv).await
 }

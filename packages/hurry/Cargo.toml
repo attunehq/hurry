@@ -55,6 +55,7 @@ futures = { workspace = true }
 tempfile = { workspace = true }
 regex = { workspace = true }
 jiff = "0.2.15"
+uuid = { version = "1.18.1", features = ["v4"] }
 
 [dev-dependencies]
 async-walkdir.workspace = true

@@ -88,17 +88,17 @@ impl Workspace {
                 })
                 .current_dir(&path)
                 .exec()
-                .context("could not read cargo metadata")
+                .context("exec and parse cargo metadata")
         })
         .await
         .context("join task")?
         .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
-        .context("read cargo metadata")?;
+        .context("get cargo metadata")?;
 
         // TODO: This currently blows up if we have no lockfile.
         let cargo_lock = metadata.workspace_root.join("Cargo.lock");
         let lockfile = spawn_blocking(move || -> Result<_> {
-            cargo_lock::Lockfile::load(cargo_lock).context("load cargo lockfile")
+            cargo_lock::Lockfile::load(cargo_lock).context("parse cargo lockfile")
         })
         .await
         .context("join task")?
