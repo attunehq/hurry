@@ -70,23 +70,12 @@ async fn backup_workspace() -> Result<()> {
 }
 
 #[test_log::test(tokio::test)]
-#[ignore = "Issue #17 blocks this from working now that we have proper typed paths"]
 async fn restore_workspace() -> Result<()> {
-    let local_workspace = current_workspace();
+    let local_workspace_root = current_workspace();
+    let (_temp_ws, temp_workspace_root) = temporary_directory();
     let (_temp_cache, cache) = temporary_directory();
     let cas_root = cache.join(mk_rel_dir!("cas"));
     let cache_root = cache.join(mk_rel_dir!("ws"));
-    let (_temp_ws, temp_workspace) = temporary_directory();
-
-    // We don't want to mess with the current workspace.
-    fs::copy_dir(&local_workspace, &temp_workspace)
-        .await
-        .context("copy current workspace to temp workspace")?;
-    assert!(
-        !fs::is_dir_empty(&temp_workspace).await?,
-        "must have copied workspace"
-    );
-
     let cas = FsCas::open_dir(&cas_root).await.context("open CAS")?;
     let cache = FsCache::open_dir(&cache_root)
         .await
@@ -95,11 +84,11 @@ async fn restore_workspace() -> Result<()> {
         .await
         .context("lock cache")?;
 
-    let workspace = Workspace::from_argv_in_dir(&temp_workspace, &[])
-        .await
-        .context("open workspace")?;
     {
-        let target = workspace
+        let local_workspace = Workspace::from_argv_in_dir(&local_workspace_root, &[])
+            .await
+            .context("open local workspace")?;
+        let target = local_workspace
             .open_profile_locked(&Profile::Debug)
             .await
             .context("open profile")?;
@@ -108,26 +97,27 @@ async fn restore_workspace() -> Result<()> {
             .context("backup target")?;
         assert!(!cas.is_empty().await?, "must have backed up files in CAS");
         assert!(!cache.is_empty().await?, "must have backed up files in CAS");
-    }
-    fs::remove_dir_all(&workspace.target)
-        .await
-        .context("remove workspace target folder")?;
 
-    let target = workspace
+        fs::copy_dir(&local_workspace_root, &temp_workspace_root)
+            .await
+            .context("copy workspace")?;
+        fs::remove_dir_all(&temp_workspace_root.join(mk_rel_dir!("target")))
+            .await
+            .context("remove temp target")?;
+    }
+
+    let temp_workspace = Workspace::from_argv_in_dir(&temp_workspace_root, &[])
+        .await
+        .context("open temp workspace")?;
+    let target = temp_workspace
         .open_profile_locked(&Profile::Debug)
         .await
-        .context("open profile")?;
+        .context("open temp profile")?;
     restore_target_from_cache(&cas, &cache, &target, progress_noop)
         .await
-        .context("restore target")?;
+        .context("restore temp target")?;
 
-    assert!(!cas.is_empty().await?, "cas must have files");
-    assert!(!cache.is_empty().await?, "cas must have files");
-
-    // TODO: currently, we don't actually restore anything to `deps` or `build`
-    // because we fail to parse the .d files since the project is moved.
-    // This may need to be fixed as part of #17.
-    for name in [/*"deps", "build",*/ ".fingerprint"] {
+    for name in ["deps", "build", ".fingerprint"] {
         let subdir = target
             .root()
             .try_join_dir(name)
@@ -137,5 +127,6 @@ async fn restore_workspace() -> Result<()> {
             "{subdir:?} must have been restored",
         );
     }
+
     Ok(())
 }
