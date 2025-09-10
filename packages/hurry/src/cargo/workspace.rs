@@ -511,11 +511,11 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .files
             .iter()
             .filter(|(path, _)| {
-                path.components()
+                path.component_strs_lossy()
                     .tuple_windows()
                     .next()
                     .is_some_and(|(parent, child)| {
-                        parent.as_str() == ".fingerprint" && package_regex.is_match(child.as_str())
+                        parent == ".fingerprint" && package_regex.is_match(&child)
                     })
             })
             .collect_vec();
@@ -525,11 +525,11 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .files
             .iter()
             .filter(|(path, _)| {
-                path.components()
+                path.component_strs_lossy()
                     .tuple_windows()
                     .next()
                     .is_some_and(|(parent, child)| {
-                        parent.as_str() == "build" && package_regex.is_match(child.as_str())
+                        parent == "build" && package_regex.is_match(&child)
                     })
             })
             .collect_vec();
@@ -541,9 +541,9 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .files
             .iter()
             .filter(|(path, _)| {
-                path.components()
+                path.component_strs_lossy()
                     .next()
-                    .is_some_and(|part| part.as_str() == "deps")
+                    .is_some_and(|part| part == "deps")
             })
             .collect_vec();
         // We collect dependencies by finding the `.d` file and reading it.
@@ -553,9 +553,9 @@ impl<'ws> ProfileDir<'ws, Locked> {
         // which package version in scenarios where our project has multiple
         // versions of a dependency.
         let dotds = deps.iter().filter(|(path, _)| {
-            path.components()
+            path.component_strs_lossy()
                 .nth(1)
-                .is_some_and(|part| dotd_regex.is_match(part.as_str()))
+                .is_some_and(|part| dotd_regex.is_match(&part))
         });
         let mut dependencies = Vec::new();
         for (dotd, _) in dotds {

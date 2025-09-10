@@ -11,9 +11,7 @@
 //! - Most FS APIs need `std::path` variants.
 //! - Paths we reference are nearly always relative to the project workspace.
 //! - We need to serialize paths to disk, and they need to be cross-platform.
-//! - We aren't working with filesystems that support non-UTF8 paths,
-//!   so we want to take advantage of these for pretty printing and
-//!   string operations like "does this path contain this string".
+//! - We used `Utf8Path` and friends because it was convenient.
 //!
 //! We also had some needs that no path-like type provided:
 //! - We want all FS operations to go through the `fs` module,
@@ -32,16 +30,17 @@
 
 use std::{
     any::type_name,
+    borrow::Cow,
     ffi::{OsStr, OsString},
     marker::PhantomData,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     str::FromStr,
 };
 
-use cargo_metadata::camino::{Utf8Component, Utf8Path, Utf8PathBuf};
+use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
 use color_eyre::{
     Report, Result,
-    eyre::{Context, bail, eyre},
+    eyre::{Context, bail},
 };
 use derive_more::Display;
 use duplicate::{duplicate, duplicate_item};
@@ -164,33 +163,53 @@ pub struct File;
 /// e.g. `some_base.join(mk_rel_file!("name"))` (which has compile-time
 /// validation) or `some_base.try_join_file("name")` (which has runtime
 /// validation) or other similar methods.
+///
+/// ## Fallibility
+///
+/// Fallible methods on `TypedPath` variants are powered by instances of
+/// the [`Validator`] trait on the `Base` and `Type` generics.
+/// For example, the `Validator` implementation for [`Rel`] validates that
+/// the path appears to be a relative path (e.g., it doesn't start with a `/`
+/// on unix systems).
+///
+/// This is what powers fallible functionality: in all cases, the operation
+/// succeeds if _all_ validators succeed, and fails if they do not.
+///
+/// Note: this does mean that in the future we could theoretically create
+/// additional bases/types of paths with different validators and they would
+/// effectively just slot in (although we currently generate most methods
+/// using macros, not generics, so if we want plugin types to be supported
+/// we'll need to revisit that).
 //
 // TODO: This currently is not fully cross-platform as it does not attempt to
 // normalize components in the path; when we decide to add Windows support
 // we will need to handle this.
 #[cfg(not(target_os = "windows"))]
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Display)]
-#[display("{}", self.inner)]
-pub struct TypedPath<B, T> {
+#[display("{}", self.inner.display())]
+pub struct TypedPath<Base, Type> {
     /// The base of the path.
-    base: PhantomData<B>,
+    base: PhantomData<Base>,
 
     /// The type of the path.
-    ty: PhantomData<T>,
+    ty: PhantomData<Type>,
 
     /// The inner path.
-    inner: Utf8PathBuf,
+    inner: PathBuf,
 }
 
 impl<B, T> TypedPath<B, T> {
     /// View the path as a standard path.
     pub fn as_std_path(&self) -> &std::path::Path {
-        self.inner.as_std_path()
+        &self.inner
     }
 
-    /// View the path as a string.
-    pub fn as_str(&self) -> &str {
-        self.inner.as_str()
+    /// View the path as a lossily-converted string.
+    ///
+    /// Any non-UTF-8 sequences are replaced with `U+FFFD REPLACEMENT CHARACTER`
+    /// so be careful using this to construct _new_ paths.
+    pub fn as_str_lossy(&self) -> Cow<'_, str> {
+        self.inner.to_string_lossy()
     }
 
     /// View the path as an OS string.
@@ -198,33 +217,60 @@ impl<B, T> TypedPath<B, T> {
         self.inner.as_os_str()
     }
 
-    /// View the path as a UTF8 normalized path.
-    pub fn as_utf8_path(&self) -> &cargo_metadata::camino::Utf8Path {
-        &self.inner
-    }
-
     /// Get the parent of the provided path, if one exists.
+    ///
+    /// Unlike the standard library, this method returns `None`
+    /// if you request the parent of a relative path with one component.
     pub fn parent(&self) -> Option<TypedPath<B, Dir>> {
         self.inner
             .parent()
+            .and_then(|p| {
+                if p.as_os_str().is_empty() {
+                    None
+                } else {
+                    Some(p)
+                }
+            })
             .map(ToOwned::to_owned)
             .map(TypedPath::new_unchecked)
     }
 
     /// Iterate through the components of the path.
-    pub fn components<'a>(&'a self) -> impl Iterator<Item = Utf8Component<'a>> {
+    pub fn components<'a>(&'a self) -> impl Iterator<Item = Component<'a>> {
         self.inner.components()
+    }
+
+    /// Iterate through the components of the path as lossily-converted strings.
+    ///
+    /// Any non-UTF-8 sequences are replaced with `U+FFFD REPLACEMENT CHARACTER`
+    /// so be careful using this to construct _new_ paths.
+    pub fn component_strs_lossy<'a>(&'a self) -> impl Iterator<Item = Cow<'a, str>> {
+        self.inner
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
     }
 
     /// Returns the final component of the path, if there is one.
     ///
     /// If the path is a file, this is the file name.
     /// If it's the path of a directory, this is the directory name.
-    pub fn file_name(&self) -> Option<&str> {
+    pub fn file_name(&self) -> Option<&OsStr> {
         self.inner.file_name()
     }
 
-    fn new_unchecked(inner: impl Into<Utf8PathBuf>) -> Self {
+    /// Returns the final component of the path, if there is one,
+    /// as a lossily-converted string.
+    ///
+    /// If the path is a file, this is the file name.
+    /// If it's the path of a directory, this is the directory name.
+    ///
+    /// Any non-UTF-8 sequences are replaced with `U+FFFD REPLACEMENT CHARACTER`
+    /// so be careful using this to construct _new_ paths.
+    pub fn file_name_str_lossy(&self) -> Option<Cow<'_, str>> {
+        self.inner.file_name().map(|s| s.to_string_lossy())
+    }
+
+    fn new_unchecked(inner: impl Into<PathBuf>) -> Self {
         Self {
             base: PhantomData,
             ty: PhantomData,
@@ -233,22 +279,15 @@ impl<B, T> TypedPath<B, T> {
     }
 }
 
-#[duplicate_item(
-    ty_from;
-    [ Utf8PathBuf ];
-    [ &Utf8PathBuf ];
-    [ &Utf8Path ];
-)]
-impl<B: Validator, T: Validator> TryFrom<ty_from> for TypedPath<B, T> {
-    type Error = Report;
-
-    fn try_from(value: ty_from) -> Result<Self, Self::Error> {
-        B::validate(&value).with_context(|| format!("validate base {:?}", B::type_name()))?;
-        T::validate(&value).with_context(|| format!("validate type {:?}", T::type_name()))?;
-        Ok(Self::new_unchecked(value))
-    }
-}
-
+// We use a macro here instead of merely writing out "impl TryFrom for all T
+// where T can be converted into PathBuf" so that we can allow `TypedPath` to
+// be converted into `PathBuf` (otherwise we conflict with the existing
+// `impl From<T> for T` in `std`).
+//
+// We don't implement `AsRef<Path>` with `TypedPath`, so we _could_ use that,
+// but then we'd be forced to uneccesarily clone paths that were moved.
+// That's not a horrible tradeoff though if we ever find this list to be
+// too restrictive.
 #[duplicate_item(
     ty_from;
     [ PathBuf ];
@@ -260,13 +299,15 @@ impl<B: Validator, T: Validator> TryFrom<ty_from> for TypedPath<B, T> {
     [ OsString ];
     [ &OsString ];
     [ &OsStr ];
+    [ Utf8PathBuf ];
+    [ &Utf8PathBuf ];
+    [ &Utf8Path ];
 )]
 impl<B: Validator, T: Validator> TryFrom<ty_from> for TypedPath<B, T> {
     type Error = Report;
 
     fn try_from(value: ty_from) -> Result<Self, Self::Error> {
-        let value = Utf8PathBuf::from_path_buf(value.into())
-            .or_else(|path| Err(eyre!("path is not utf8: {path:?}")))?;
+        let value = PathBuf::from(value);
         B::validate(&value).with_context(|| format!("validate base {:?}", B::type_name()))?;
         T::validate(&value).with_context(|| format!("validate type {:?}", T::type_name()))?;
         Ok(Self::new_unchecked(value))
@@ -286,16 +327,19 @@ impl<B, T> AsRef<TypedPath<B, T>> for TypedPath<B, T> {
         self
     }
 }
+
 impl<B, T> From<TypedPath<B, T>> for std::path::PathBuf {
     fn from(value: TypedPath<B, T>) -> Self {
-        value.inner.into_std_path_buf()
+        value.inner
     }
 }
+
 impl<B, T> From<&TypedPath<B, T>> for std::path::PathBuf {
     fn from(value: &TypedPath<B, T>) -> Self {
-        value.inner.clone().into_std_path_buf()
+        value.inner.clone()
     }
 }
+
 impl<B: Clone, T: Clone> From<&TypedPath<B, T>> for TypedPath<B, T> {
     fn from(value: &TypedPath<B, T>) -> Self {
         value.clone()
@@ -325,7 +369,7 @@ impl<B, T> Serialize for TypedPath<B, T> {
     where
         S: Serializer,
     {
-        self.inner.as_std_path().serialize(serializer)
+        self.inner.serialize(serializer)
     }
 }
 
@@ -352,11 +396,15 @@ impl<B> TypedPath<B, ty> {
     /// Returns false if the item does not exist, or if there is an error
     /// checking whether the item exists. To disambiguate this case,
     /// use `fs` methods.
+    ///
+    /// Note that this method, like any similar method, is very susceptible to
+    /// TOCTOU (time-of-check/time-of-use) bugs.
     pub async fn exists(&self) -> bool {
         method(self.as_std_path()).await
     }
 }
 
+// All paths can be converted to generic paths infallibly.
 duplicate! {
     [
         from_base;
@@ -380,6 +428,8 @@ duplicate! {
     }
 }
 
+// All combinations of bases and types can be _fallibly_ converted to
+// `Abs`/`Rel` bases and `Dir`/`File` types.
 duplicate! {
     [
         from_base;
@@ -419,6 +469,9 @@ duplicate! {
     }
 }
 
+// Relative or generic bases of all types can be fallibly converted
+// to absolute bases of the same or less generic type
+// using the process CWD if they are not currently absolute.
 duplicate! {
     [
         from_base;
@@ -427,36 +480,31 @@ duplicate! {
     ]
     duplicate!{
         [
-            from_ty;
-            [ Dir ];
-            [ File ];
-            [ SomeType ];
+            from_ty to_ty to_ty_name;
+            [ Dir ] [ Dir ] [ dir ];
+            [ File ] [ File ] [ file ];
+            [ SomeType ] [ SomeType ] [ generic ];
+            [ SomeType ] [ Dir ] [ dir ];
+            [ SomeType ] [ File ] [ file ];
         ]
-        duplicate! {
-            [
-                to_base to_base_name;
-                [ Abs ] [ abs ];
-            ]
-            duplicate!{
-                [
-                    to_ty to_ty_name;
-                    [ Dir ] [ dir ];
-                    [ File ] [ file ];
-                ]
-                impl TypedPath<from_base, from_ty> {
-                    paste! {
-                        /// Try to convert into the specified type,
-                        /// using the current working directory to promote
-                        /// the path if needed.
-                        pub fn [<try_as_ to_base_name _ to_ty_name _using_cwd>](&self) -> Result<TypedPath<to_base, to_ty>> {
-                            if let Ok(p) = TypedPath::<to_base, to_ty>::try_from(&self.inner) {
-                                return Ok(p);
-                            }
-
-                            let cwd = AbsDirPath::current()?;
-                            TypedPath::<to_base, to_ty>::try_from(&cwd.inner.join(&self.inner))
-                        }
+        impl TypedPath<from_base, from_ty> {
+            paste! {
+                /// Try to convert into the specified type,
+                /// using the current working directory to promote
+                /// the path if needed.
+                ///
+                /// ## Fallibility
+                ///
+                /// Along with the standard fallibility via the `Validator`
+                /// trait explained in the docs for [`TypedPath`], this method
+                /// also fails if [`AbsDirPath::current`] fails.
+                pub fn [<try_as_abs_ to_ty_name _using_cwd>](&self) -> Result<TypedPath<Abs, to_ty>> {
+                    if let Ok(p) = TypedPath::<Abs, to_ty>::try_from(&self.inner) {
+                        return Ok(p);
                     }
+
+                    let cwd = AbsDirPath::current()?;
+                    TypedPath::<Abs, to_ty>::try_from(&cwd.inner.join(&self.inner))
                 }
             }
         }
@@ -502,8 +550,19 @@ duplicate! {
     }
 }
 
-/// Creates and joins a path from the input and confirms that
-/// the overall path is valid.
+/// Creates and joins a path from the input.
+///
+/// ## Fallibility
+///
+/// This trait takes strings for path segments; this means we don't know
+/// whether the inputs are actually valid for the path being joined.
+///
+/// These methods are fallible to reflect this fact. The intention is that
+/// implementations of this trait construct a `TypedPath` using the inputs,
+/// and in the course of doing so they run the [`Validator`] implementations
+/// for that path.
+///
+/// For more details on how `Validator` works, view the docs for [`TypedPath`].
 pub trait TryJoinWith {
     /// Join `dir` to `self` as a directory.
     ///
@@ -568,6 +627,8 @@ pub trait JoinWith<Other> {
     fn join(&self, other: Other) -> Self::Output;
 }
 
+// We can always join typed relative paths of any type with absolute dir paths,
+// and the output is always an absolute path of the same type.
 #[duplicate_item(
     ty_other ty_output;
     [ TypedPath<Rel, Dir> ] [ TypedPath<Abs, Dir> ];
@@ -579,17 +640,24 @@ impl JoinWith<ty_other> for TypedPath<Abs, Dir> {
     type Output = ty_output;
 
     fn join(&self, other: ty_other) -> Self::Output {
-        self.as_utf8_path()
-            .join(other.as_utf8_path())
+        self.as_std_path()
+            .join(other.as_std_path())
             .pipe(TypedPath::new_unchecked)
     }
 }
 
-/// Provides validators for the inner path.
+/// Fallible methods on [`TypedPath`] variants are powered by instances of
+/// the `Validator` trait on the `Base` and `Type` generics.
+/// For example, the `Validator` implementation for [`Rel`] validates that
+/// the path appears to be a relative path (e.g., it doesn't start with a `/`
+/// on unix systems).
+///
+/// This is what powers fallible functionality: in all cases, the operation
+/// succeeds if _all_ validators succeed, and fails if they do not.
 pub trait Validator {
     /// Validate that the inner path for a [`TypedPath`] type matches
     /// the constraints of the validator, or return an error.
-    fn validate(path: &Utf8Path) -> Result<()>;
+    fn validate(path: &Path) -> Result<()>;
 
     /// The name of the validator, for use in error messages.
     fn type_name() -> &'static str {
@@ -598,7 +666,7 @@ pub trait Validator {
 }
 
 impl Validator for Rel {
-    fn validate(path: &Utf8Path) -> Result<()> {
+    fn validate(path: &Path) -> Result<()> {
         if !path.is_relative() {
             bail!("path is not relative: {path:?}");
         }
@@ -607,7 +675,7 @@ impl Validator for Rel {
 }
 
 impl Validator for Abs {
-    fn validate(path: &Utf8Path) -> Result<()> {
+    fn validate(path: &Path) -> Result<()> {
         if !path.is_absolute() {
             bail!("path is not absolute: {path:?}");
         }
@@ -615,6 +683,8 @@ impl Validator for Abs {
     }
 }
 
+// To comply with the contract of `TypedPath` these need validators,
+// but the validators are currently unconditionally passing.
 #[duplicate_item(
     ty_self;
     [ Dir ];
@@ -623,7 +693,7 @@ impl Validator for Abs {
     [ SomeBase ];
 )]
 impl Validator for ty_self {
-    fn validate(_: &Utf8Path) -> Result<()> {
+    fn validate(_: &Path) -> Result<()> {
         Ok(())
     }
 }
