@@ -4,14 +4,15 @@ use color_eyre::{
     Result,
     eyre::{Context, bail},
 };
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{StreamExt, TryFutureExt, TryStreamExt, stream};
 use itertools::Itertools;
-use tap::{Pipe, TapFallible};
+use tap::Pipe;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     Locked,
-    cache::{FsCache, FsCas, Kind},
+    cache::{Artifact, FsCache, FsCas, Kind},
+    fs::{self, DEFAULT_CONCURRENCY},
     hash::Blake3,
     path::JoinWith,
 };
@@ -66,7 +67,7 @@ pub async fn cache_target_from_workspace(
     cas: &FsCas,
     cache: &FsCache<Locked>,
     target: &ProfileDir<'_, Locked>,
-    progress: impl Fn(&Blake3, &Dependency) + Clone,
+    progress: impl Fn(&Blake3, &Dependency),
 ) -> Result<()> {
     // The concurrency limits below are currently just vibes from staring at
     // benchmarks; we want to avoid opening too many file handles at a time
@@ -75,63 +76,53 @@ pub async fn cache_target_from_workspace(
     //
     // TODO: this currently assumes that the entire `target/` folder doesn't
     // have any _outdated_ data; this may not be correct.
-    stream::iter(&target.workspace.dependencies)
-        .filter_map(|(key, dependency)| {
-            let target = target.clone();
-            async move {
-                debug!(?key, ?dependency, "restoring dependency");
-                target
-                    .enumerate_cache_artifacts(dependency)
-                    .await
-                    .map(|artifacts| (key, dependency, artifacts))
-                    .tap_err(|err| {
-                        warn!(
-                            ?err,
-                            "Failed to enumerate cache artifacts for dependency: {dependency}"
-                        )
-                    })
-                    .ok()
-                    .map(Ok)
+    for (key, dependency) in &target.workspace.dependencies {
+        debug!(?key, ?dependency, "restoring dependency");
+        let artifacts = match target.enumerate_cache_artifacts(dependency).await {
+            Ok(artifacts) => artifacts,
+            Err(error) => {
+                warn!(
+                    ?error,
+                    "Failed to enumerate cache artifacts for dependency: {dependency}"
+                );
+                continue;
             }
-        })
-        .try_for_each_concurrent(Some(10), |(key, dependency, artifacts)| {
-            let (cas, target, cache, progress) =
-                (cas.clone(), target.clone(), cache.clone(), progress.clone());
-            async move {
-                debug!(?key, ?dependency, ?artifacts, "caching artifacts");
-                stream::iter(&artifacts)
-                    .map(|artifact| Ok(artifact))
-                    .try_for_each_concurrent(Some(100), |artifact| {
-                        let (cas, target) = (cas.clone(), target.clone());
-                        async move {
-                            let dst = target.root().join(&artifact.target);
-                            cas.store_file(Kind::Cargo, &dst)
-                                .await
-                                .with_context(|| format!("backup output file: {dst:?}"))
-                                .tap_ok(|key| {
-                                    trace!(?key, ?dependency, ?artifact, "stored artifact")
-                                })
-                                .map(drop)
-                        }
-                    })
-                    .await
-                    .pipe(|_| {
-                        let cache = cache.clone();
-                        async move {
-                            cache
-                                .store(Kind::Cargo, key, &artifacts)
-                                .await
-                                .context("store cache record")
-                                .tap_ok(|_| {
-                                    debug!(?key, ?dependency, ?artifacts, "stored cache record")
-                                })
-                        }
-                    })
-                    .await
-                    .map(|_| progress(key, dependency))
-            }
-        })
-        .await
+        };
+
+        debug!(?key, ?dependency, ?artifacts, "caching artifacts");
+        let artifacts = stream::iter(artifacts)
+            .map(|artifact| async move {
+                let dst = target.root().join(&artifact.target);
+                let key = if dst.extension_str_lossy().as_deref() == Some("d") {
+                    let dotd = Dotd::from_file(&target, &dst).await?;
+                    cas.store(Kind::Cargo, dotd).await?
+                } else {
+                    let content = fs::must_read_buffered(&dst).await?;
+                    cas.store(Kind::Cargo, content).await?
+                };
+
+                trace!(?key, ?dependency, ?artifact, "stored artifact");
+                Artifact::builder()
+                    .hash(key)
+                    .metadata(artifact.metadata)
+                    .target(artifact.target)
+                    .build()
+                    .pipe(Result::<_>::Ok)
+            })
+            .buffer_unordered(DEFAULT_CONCURRENCY)
+            .try_collect::<Vec<_>>()
+            .await
+            .context("cache artifacts")?;
+
+        cache
+            .store(Kind::Cargo, key, &artifacts)
+            .await
+            .context("store cache record")?;
+        debug!(?key, ?dependency, ?artifacts, "stored cache record");
+        progress(key, dependency);
+    }
+
+    Ok(())
 }
 
 /// Restore build artifacts from cache to the target directory.
@@ -164,50 +155,66 @@ pub async fn restore_target_from_cache(
     // because that can have a negative effect on performance
     // but we obviously want to have enough running that we saturate the disk.
     debug!(dependencies = ?target.workspace.dependencies, "restoring dependencies");
-    stream::iter(&target.workspace.dependencies)
-        .filter_map(|(key, dependency)| {
-            let cache = cache.clone();
-            async move {
-                debug!(?key, ?dependency, "restoring dependency");
-                cache
-                    .get(Kind::Cargo, key)
-                    .await
-                    .with_context(|| format!("retrieve cache record for dependency: {dependency}"))
-                    .map(|lookup| lookup.map(|record| (key, dependency, record)))
-                    .transpose()
+    for (key, dependency) in &target.workspace.dependencies {
+        debug!(?key, ?dependency, "restoring dependency");
+        let record = match cache.get(Kind::Cargo, key).await {
+            Ok(Some(record)) => record,
+            Ok(None) => {
+                debug!(?key, ?dependency, "no record found for key");
+                continue;
             }
-        })
-        .try_for_each_concurrent(Some(10), |(key, dependency, record)| {
-            let (cas, target, progress) = (cas.clone(), target.clone(), progress.clone());
-            async move {
-                debug!(?key, ?dependency, artifacts = ?record.artifacts, "restoring artifacts");
-                stream::iter(record.artifacts)
-                    .map(|artifact| Ok(artifact))
-                    .try_for_each_concurrent(Some(100), |artifact| {
-                        let (cas, target) = (cas.clone(), target.clone());
-                        async move {
-                            let dst = target.root().join(&artifact.target);
-                            cas.get_file(Kind::Cargo, &artifact.hash, &dst)
-                                .await
-                                .context("extract crate")
-                                .tap_ok(|_| {
-                                    trace!(?key, ?dependency, ?artifact, "restored artifact")
-                                })?;
-                            // TODO: We don't _always_ need to update this
-                            // metadata on CoW filesystems (such as macOS's
-                            // APFS) if the CAS object has the original's
-                            // metadata and is unique within the CAS (i.e. the
-                            // metadata has not been clobbered). We should
-                            // implement a way to determine if this is the case.
-                            artifact.metadata.set_file(&dst).await?;
-                            Ok(())
+            Err(error) => {
+                warn!(
+                    ?error,
+                    "Failed to read cache record for dependency: {dependency}"
+                );
+                continue;
+            }
+        };
+
+        debug!(?key, ?dependency, artifacts = ?record.artifacts, "restoring artifacts");
+        stream::iter(&record.artifacts)
+            .for_each_concurrent(Some(DEFAULT_CONCURRENCY), |artifact| async move {
+                let dst = target.root().join(&artifact.target);
+                let key = &artifact.hash;
+                let content = if dst.extension_str_lossy().as_deref() == Some("d") {
+                    cas.get::<Dotd>(Kind::Cargo, target, key).await
+                } else {
+                    cas.get::<Vec<u8>>(Kind::Cargo, target, key).await
+                };
+                match content {
+                    Ok(Some(content)) => {
+                        let restore = fs::write(&dst, content)
+                            .and_then(|_| artifact.metadata.set_file(&dst))
+                            .await;
+                        match restore {
+                            Ok(_) => trace!(?key, ?dependency, ?artifact, "restored artifact"),
+                            Err(error) => {
+                                warn!(
+                                    ?error,
+                                    ?key,
+                                    "Failed to restore artifact for dependency: {dependency}"
+                                );
+                            }
                         }
-                    })
-                    .await
-                    .map(|_| progress(key, dependency))
-            }
-        })
-        .await
+                    }
+                    Ok(None) => trace!(?key, ?dependency, ?artifact, "artifact not found in cache"),
+                    Err(error) => {
+                        warn!(
+                            ?error,
+                            ?key,
+                            "Failed to read artifact for dependency: {dependency}"
+                        );
+                    }
+                }
+            })
+            .await;
+
+        debug!(?key, ?dependency, ?record, "restored cache record");
+        progress(key, dependency);
+    }
+
+    Ok(())
 }
 
 /// Extract the value of a command line flag from argument vector.

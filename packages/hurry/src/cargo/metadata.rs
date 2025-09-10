@@ -124,20 +124,13 @@ impl Dotd {
         Ok(Self(lines))
     }
 
-    /// Reconstruct the `.d` file at the provided path.
+    /// Reconstruct the `.d` file in the context of the profile directory.
     #[instrument(name = "Dotd::reconstruct")]
-    pub async fn reconstruct(
-        &self,
-        profile: &ProfileDir<'_, Locked>,
-        dotd: &AbsFilePath,
-    ) -> Result<()> {
-        let dotd = dotd.as_ref();
-        let content = self
-            .0
+    pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
+        self.0
             .iter()
             .map(|line| line.reconstruct(profile))
-            .join("\n");
-        fs::write(dotd, content).await
+            .join("\n")
     }
 
     /// Iterate over the lines in the file.
@@ -162,6 +155,18 @@ impl Dotd {
             DotdLine::Build(output, _) => Some(output),
             _ => None,
         })
+    }
+}
+
+impl crate::cache::Entry for Dotd {
+    async fn rewrite_store(self) -> Result<Vec<u8>> {
+        serde_json::to_vec(&self).context("serialize")
+    }
+
+    async fn rewrite_get(profile: &ProfileDir<'_, Locked>, stored: Vec<u8>) -> Result<Vec<u8>> {
+        serde_json::from_slice::<Self>(&stored)
+            .context("deserialize")
+            .map(|dotd| dotd.reconstruct(profile).into_bytes())
     }
 }
 

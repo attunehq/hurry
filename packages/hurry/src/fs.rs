@@ -324,6 +324,16 @@ pub async fn read_buffered(path: &AbsFilePath) -> Result<Option<Vec<u8>>> {
     }
 }
 
+/// Buffer the file content from disk.
+/// Unlike [`read_buffered`], this function returns an error if the file
+/// doesn't exist.
+#[instrument]
+pub async fn must_read_buffered(path: &AbsFilePath) -> Result<Vec<u8>> {
+    tokio::fs::read(path.as_std_path())
+        .await
+        .with_context(|| format!("read file: {path:?}"))
+}
+
 /// Buffer the file content from disk and parse it as UTF8.
 #[instrument]
 pub async fn read_buffered_utf8(path: &AbsFilePath) -> Result<Option<String>> {
@@ -335,6 +345,16 @@ pub async fn read_buffered_utf8(path: &AbsFilePath) -> Result<Option<String>> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err).context(format!("read file: {path:?}")),
     }
+}
+
+/// Buffer the file content from disk and parse it as UTF8.
+/// Unlike [`read_buffered_utf8`], this function returns an error if the file
+/// doesn't exist.
+#[instrument]
+pub async fn must_read_buffered_utf8(path: &AbsFilePath) -> Result<String> {
+    tokio::fs::read_to_string(path.as_std_path())
+        .await
+        .with_context(|| format!("read file: {path:?}"))
 }
 
 /// Write the provided file content to disk.

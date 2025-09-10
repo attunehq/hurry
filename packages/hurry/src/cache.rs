@@ -7,11 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{fmt::Debug, future::Future};
 use strum::Display;
 
-use crate::{
-    fs::Metadata,
-    hash::Blake3,
-    path::{AbsFilePath, RelFilePath},
-};
+use crate::{Locked, cargo::ProfileDir, fs::Metadata, hash::Blake3, path::RelFilePath};
 
 mod fs;
 pub use fs::*;
@@ -30,6 +26,34 @@ pub enum Kind {
     /// A Rust project managed by Cargo.
     #[assoc(as_str = "cargo")]
     Cargo,
+}
+
+/// The CAS is global; it stores content by its hash.
+/// Sometimes this content needs to be fully or partially rewritten when
+/// being put into or taken out of the cache.
+///
+/// This trait allows callers to customize the behavior of the items
+/// they're storing in the CAS accordingly.
+pub trait Entry: Sized {
+    /// Convert the content from its source bytes prior to storing.
+    fn rewrite_store(self) -> impl Future<Output = Result<Vec<u8>>> + Send;
+
+    /// Read the content in the CAS and rewrite into the destination format
+    /// prior to restoring.
+    fn rewrite_get(
+        profile: &ProfileDir<'_, Locked>,
+        stored: Vec<u8>,
+    ) -> impl Future<Output = Result<Vec<u8>>> + Send;
+}
+
+impl Entry for Vec<u8> {
+    async fn rewrite_store(self) -> Result<Vec<u8>> {
+        Ok(self)
+    }
+
+    async fn rewrite_get(_: &ProfileDir<'_, Locked>, stored: Vec<u8>) -> Result<Vec<u8>> {
+        Ok(stored)
+    }
 }
 
 /// A record of artifacts in the cache for a given key.

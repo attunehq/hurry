@@ -279,6 +279,19 @@ impl<B, T> TypedPath<B, T> {
     }
 }
 
+impl<B> TypedPath<B, File> {
+    /// Returns the final extension of the file, if there is one.
+    pub fn extension(&self) -> Option<&OsStr> {
+        self.inner.extension()
+    }
+
+    /// Returns the final extension of the file, if there is one,
+    /// as a lossily-converted string.
+    pub fn extension_str_lossy<'a>(&'a self) -> Option<Cow<'a, str>> {
+        self.inner.extension().map(|s| s.to_string_lossy())
+    }
+}
+
 // We use a macro here instead of merely writing out "impl TryFrom for all T
 // where T can be converted into PathBuf" so that we can allow `TypedPath` to
 // be converted into `PathBuf` (otherwise we conflict with the existing

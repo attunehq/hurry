@@ -10,11 +10,12 @@ use tracing::{instrument, trace};
 
 use crate::{
     Locked, Unlocked,
-    cache::{Artifact, Kind, Record},
+    cache::{Artifact, Entry, Kind, Record},
+    cargo::ProfileDir,
     fs::{self, LockFile},
     hash::Blake3,
     mk_rel_dir, mk_rel_file,
-    path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, TryJoinWith},
+    path::{AbsDirPath, JoinWith, RelFilePath, TryJoinWith},
 };
 
 /// The local file system implementation of a cache.
@@ -194,19 +195,34 @@ impl FsCas {
         fs::is_dir_empty(&self.root).await
     }
 
-    /// Store the file in the CAS.
-    #[instrument(name = "FsCas::store_file")]
-    pub async fn store_file(&self, kind: Kind, src: &AbsFilePath) -> Result<Blake3> {
-        let key = Blake3::from_file(src).await.context("hash file")?;
+    /// Store the entry in the CAS.
+    #[instrument(name = "FsCas::store")]
+    pub async fn store(&self, kind: Kind, entry: impl Entry + Debug) -> Result<Blake3> {
+        let content = entry.rewrite_store().await.context("rewrite entry")?;
+        let key = Blake3::from_buffer(&content);
         let dst = self.root.try_join_combined([kind.as_str()], key.as_str())?;
-        fs::copy_file(src, &dst).await?;
+        fs::write(&dst, content).await?;
         Ok(key)
     }
 
-    /// Get the file out of the CAS.
-    #[instrument(name = "FsCas::get_file")]
-    pub async fn get_file(&self, kind: Kind, key: &Blake3, dst: &AbsFilePath) -> Result<()> {
+    /// Get the entry out of the CAS.
+    //
+    // TODO: The use of `ProfileDir` here binds this type to `cargo`;
+    // we should find a generic way to represent this.
+    #[instrument(name = "FsCas::get")]
+    pub async fn get<T: Entry>(
+        &self,
+        kind: Kind,
+        profile: &ProfileDir<'_, Locked>,
+        key: &Blake3,
+    ) -> Result<Option<Vec<u8>>> {
         let src = self.root.try_join_combined([kind.as_str()], key.as_str())?;
-        fs::copy_file(&src, dst).await.map(drop)
+        match fs::read_buffered(&src).await? {
+            Some(content) => T::rewrite_get(profile, content)
+                .await
+                .context("rewrite entry")
+                .map(Some),
+            None => Ok(None),
+        }
     }
 }
