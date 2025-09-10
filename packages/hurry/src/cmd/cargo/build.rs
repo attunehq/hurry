@@ -11,10 +11,6 @@ use color_eyre::{Result, eyre::Context};
 use hurry::{
     cache::{Cache, Cas, FsCache, FsCas},
     cargo::{Profile, Workspace, cache_target_from_workspace, invoke, restore_target_from_cache},
-    fs,
-    hash::Blake3,
-    mk_rel_dir, mk_rel_file,
-    path::{JoinWith, TryJoinWith},
 };
 use tracing::{error, info, instrument, warn};
 
@@ -34,12 +30,6 @@ pub struct Options {
     /// Skip restoring the cache.
     #[arg(long = "hurry-skip-restore", default_value_t = false)]
     skip_restore: bool,
-
-    /// Backup and restore the `target/` folder by copying the entire
-    /// contents and storing it by hash of your `Cargo.lock` file
-    /// instead of doing dependency-based restoration.
-    #[arg(long = "hurry-simple-caching", default_value_t = false)]
-    simple_caching: bool,
 
     /// These arguments are passed directly to `cargo build` as provided.
     #[arg(
@@ -67,11 +57,6 @@ pub async fn exec(options: Options) -> Result<()> {
         .await
         .context("open workspace")?;
 
-    if options.simple_caching {
-        warn!("Simple caching enabled; simple caches have less reuse across builds.");
-        return exec_simple(options, &workspace).await;
-    }
-
     let cas = FsCas::open_default().await.context("open CAS")?;
     let cache = FsCache::open_default().await.context("open cache")?;
     let cache = cache.lock().await.context("lock cache")?;
@@ -88,62 +73,6 @@ pub async fn exec(options: Options) -> Result<()> {
     result
         .inspect(|_| info!("finished"))
         .inspect_err(|error| error!(?error, "failed: {error:#?}"))
-}
-
-#[instrument]
-async fn exec_simple(options: Options, workspace: &Workspace) -> Result<()> {
-    let profile = options.profile();
-    let cache_root = fs::user_global_cache_path()
-        .await
-        .context("open cache")?
-        .join(mk_rel_dir!("simple"));
-    let key = Blake3::from_file(&workspace.root.join(mk_rel_file!("Cargo.lock"))).await?;
-    let target = workspace.target.try_join_dir(profile.as_str())?;
-    let cache = cache_root.try_join_dirs([key.as_str(), profile.as_str()])?;
-
-    if !options.skip_restore {
-        if cache.exists().await {
-            info!("Restoring target directory from cache");
-            let bytes = fs::copy_dir(&cache, &target).await?;
-            info!(?bytes, ?key, ?cache, "Restored cache");
-        } else {
-            info!(?key, "No existing cache found");
-        }
-    }
-
-    if !options.skip_build {
-        info!("Building target directory");
-        invoke("build", &options.argv)
-            .await
-            .context("build with cargo")?;
-    }
-
-    if !options.skip_backup {
-        if target.exists().await {
-            info!("Caching target directory");
-            fs::remove_dir_all(&cache)
-                .await
-                .context("remove old cache")?;
-
-            let mut bytes = 0u64;
-            let subdirs = vec![
-                mk_rel_dir!(".fingerprint"),
-                mk_rel_dir!("build"),
-                mk_rel_dir!("deps"),
-            ];
-            for subdir in subdirs {
-                bytes += fs::copy_dir(&target.join(&subdir), &cache.join(&subdir))
-                    .await
-                    .with_context(|| format!("back up {subdir:?}"))?;
-            }
-
-            info!(?bytes, ?key, ?cache, "Cached target directory");
-        } else {
-            info!("No existing target directory found");
-        }
-    }
-
-    Ok(())
 }
 
 #[instrument]
