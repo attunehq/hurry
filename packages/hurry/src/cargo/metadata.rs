@@ -99,7 +99,7 @@ impl Dotd {
     /// - Returns paths relative to the profile root for cache consistency
     #[instrument(name = "Dotd::from_file")]
     pub async fn from_file(profile: &ProfileDir<'_, Locked>, target: &AbsFilePath) -> Result<Self> {
-        const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta"];
+        const DEP_EXTS: [&str; 3] = [".d", ".rlib", ".rmeta", ".so"];
         let profile_root = profile.root();
         fs::read_buffered_utf8(target)
             .await

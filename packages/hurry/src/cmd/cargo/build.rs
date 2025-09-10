@@ -172,7 +172,7 @@ async fn exec_inner(
 
         let restore = restore_target_from_cache(cas, cache, &target, |key, dependency| {
             info!(
-                name = %dependency.name,
+                name = %dependency.package_name,
                 version = %dependency.version,
                 target = %dependency.target,
                 %key,
@@ -214,7 +214,7 @@ async fn exec_inner(
 
         let backup = cache_target_from_workspace(cas, cache, &target, |key, dependency| {
             info!(
-                name = %dependency.name,
+                name = %dependency.package_name,
                 version = %dependency.version,
                 target = %dependency.target,
                 %key,

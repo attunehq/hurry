@@ -7,7 +7,7 @@ use std::{
 
 use atomic_time::AtomicInstant;
 use cargo_metadata::camino::Utf8PathBuf;
-use clap::{Parser, Subcommand, crate_version};
+use clap::{Parser, Subcommand, ValueEnum, crate_version};
 use color_eyre::{Result, eyre::Context};
 use git_version::git_version;
 use tap::Pipe;
@@ -37,6 +37,17 @@ struct Cli {
     /// Emit flamegraph profiling data
     #[arg(short, long, hide(true))]
     profile: Option<Utf8PathBuf>,
+
+    /// When to colorize output
+    #[arg(long, value_enum, default_value_t = WhenColor::Auto)]
+    color: WhenColor,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum WhenColor {
+    Always,
+    Never,
+    Auto,
 }
 
 #[derive(Clone, Subcommand)]
@@ -72,8 +83,8 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::registry()
         .with(ErrorLayer::default())
-        .with(
-            tracing_tree::HierarchicalLayer::default()
+        .with({
+            let layer = tracing_tree::HierarchicalLayer::default()
                 .with_indent_lines(true)
                 .with_indent_amount(2)
                 .with_thread_ids(false)
@@ -84,8 +95,13 @@ async fn main() -> Result<()> {
                 .with_bracketed_fields(true)
                 .with_span_retrace(true)
                 .with_timer(Uptime::default())
-                .with_targets(false),
-        )
+                .with_targets(false);
+            match cli.color {
+                WhenColor::Always => layer.with_ansi(true),
+                WhenColor::Never => layer.with_ansi(false),
+                WhenColor::Auto => layer,
+            }
+        })
         .with(
             tracing_subscriber::EnvFilter::builder()
                 .with_default_directive(LevelFilter::INFO.into())

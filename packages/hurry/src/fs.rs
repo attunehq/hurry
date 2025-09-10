@@ -37,8 +37,16 @@ use filetime::FileTime;
 use fslock::LockFile as FsLockFile;
 use futures::{Stream, TryStreamExt};
 use jiff::Timestamp;
-use tap::{Pipe, TapFallible};
-use tokio::{fs::ReadDir, sync::Mutex, task::spawn_blocking};
+use rayon::iter::{ParallelBridge, ParallelIterator};
+use relative_path::RelativePathBuf;
+use serde::{Deserialize, Serialize};
+use tap::{Pipe, Tap, TapFallible, TryConv};
+use tokio::{
+    fs::{File, ReadDir},
+    runtime::Handle,
+    sync::Mutex,
+    task::spawn_blocking,
+};
 use tracing::{debug, instrument, trace};
 
 use crate::{
@@ -176,6 +184,9 @@ impl Index {
 pub struct IndexEntry {
     /// The hash of the file's contents.
     pub hash: Blake3,
+
+    /// The metadata of the file.
+    pub metadata: Metadata,
 }
 
 impl IndexEntry {
@@ -183,7 +194,11 @@ impl IndexEntry {
     #[instrument(name = "IndexEntry::from_file")]
     pub async fn from_file(path: &AbsFilePath) -> Result<Self> {
         let hash = Blake3::from_file(path).then_context("hash file").await?;
-        Ok(Self { hash })
+        let metadata = Metadata::from_file(path)
+            .then_context("get metadata")
+            .await?
+            .ok_or_eyre(format!("file {path:?} should exist"))?;
+        Ok(Self { hash, metadata })
     }
 }
 
@@ -301,23 +316,6 @@ pub async fn copy_file(src: &AbsFilePath, dst: &AbsFilePath) -> Result<u64> {
         .context("copy file")?;
     trace!(?src, ?dst, ?bytes, "copy file");
 
-    // TODO: I'm keeping this for now behind this feature just in case it
-    // needs to come back... but if you're refactoring stuff and need to touch
-    // this code, go ahead and remove this feature and this block.
-    //
-    // Now that we're doing proper OS-supported copies this doesn't seem
-    // to be needed; it seems to just slow everything down for no reason.
-    // The main reason I'm keeping it for now is in case that's wrong
-    // or to support network restores (which _may_ need to manually set
-    // this data, we'll see).
-    #[cfg(feature = "force-copy-metadata")]
-    if let Some(src_meta) = Metadata::from_file(src).await? {
-        src_meta
-            .set_file(dst)
-            .await
-            .context("update destination metadata")?;
-    }
-
     Ok(bytes)
 }
 
@@ -390,7 +388,7 @@ pub async fn read_dir(path: &AbsDirPath) -> Result<ReadDir> {
 /// We will probably need to add more fields as we find things that cargo/rustc
 /// care about that we overlooked; don't treat this as gospel if you think
 /// something is missing.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
 pub struct Metadata {
     /// The last time the file was modified.
     ///
@@ -420,7 +418,9 @@ impl Metadata {
             Some(metadata) => metadata,
             None => return Ok(None),
         };
-        let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let mtime = metadata
+            .modified()
+            .with_context(|| format!("read file {path:?} mtime"))?;
         let executable = metadata.permissions().mode() & 0o111 != 0;
         Ok(Some(Self { mtime, executable }))
     }
@@ -489,11 +489,11 @@ pub async fn metadata(
     let path = path.as_ref();
     match tokio::fs::metadata(path).await {
         Ok(metadata) => {
-            trace!(?path, ?metadata, "read metadata");
+            trace!(?path, ?metadata, "stat metadata");
             Ok(Some(metadata))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err).context(format!("read metadata: {path:?}")),
+        Err(err) => Err(err).context(format!("stat metadata: {path:?}")),
     }
 }
 
