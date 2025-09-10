@@ -82,6 +82,21 @@ impl RustcMetadata {
 /// On disk, each output and input in the file is recorded using an
 /// absolute path, but this isn't portable across projects or machines.
 /// For this reason, the parsed representation here uses relative paths.
+///
+/// ## Example
+///
+/// ```not_rust
+/// /Users/jess/projects/hurry-tests/target/debug/deps/humantime-1c46d64671e0aaa7.d: /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/lib.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/date.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/duration.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/wrapper.rs
+///
+/// /Users/jess/projects/hurry-tests/target/debug/deps/libhumantime-1c46d64671e0aaa7.rlib: /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/lib.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/date.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/duration.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/wrapper.rs
+///
+/// /Users/jess/projects/hurry-tests/target/debug/deps/libhumantime-1c46d64671e0aaa7.rmeta: /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/lib.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/date.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/duration.rs /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/wrapper.rs
+///
+/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/lib.rs:
+/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/date.rs:
+/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/duration.rs:
+/// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/wrapper.rs:
+/// ```
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
 pub struct Dotd(Vec<DotdLine>);
 
@@ -133,7 +148,7 @@ impl Dotd {
 
     /// Iterate over builds parsed in the file.
     #[instrument(name = "Dotd::builds")]
-    pub fn builds(&self) -> impl Iterator<Item = (&RelFilePath, &[DotdDependencyPath])> {
+    pub fn builds(&self) -> impl Iterator<Item = (&DotdDependencyPath, &[DotdDependencyPath])> {
         self.0.iter().filter_map(|line| match line {
             DotdLine::Build(output, inputs) => Some((output, inputs.as_slice())),
             _ => None,
@@ -142,7 +157,7 @@ impl Dotd {
 
     /// Iterate over build outputs parsed in the file.
     #[instrument(name = "Dotd::build_outputs")]
-    pub fn build_outputs(&self) -> impl Iterator<Item = &RelFilePath> {
+    pub fn build_outputs(&self) -> impl Iterator<Item = &DotdDependencyPath> {
         self.0.iter().filter_map(|line| match line {
             DotdLine::Build(output, _) => Some(output),
             _ => None,
@@ -162,8 +177,11 @@ pub enum DotdLine {
     Comment(String),
 
     /// An output and the set of its inputs.
-    /// The output is relative to the profile root directory.
-    Build(RelFilePath, Vec<DotdDependencyPath>),
+    ///
+    /// Note that every input is _also_ an output, just with an empty
+    /// set of inputs.
+    /// Outputs are usually only relative to $CARGO_HOME in this case.
+    Build(DotdDependencyPath, Vec<DotdDependencyPath>),
 }
 
 impl DotdLine {
@@ -177,20 +195,17 @@ impl DotdLine {
         } else if let Some(comment) = line.strip_prefix('#') {
             Self::Comment(comment.to_string())
         } else if let Some(output) = line.strip_suffix(':') {
-            let output = AbsFilePath::try_from(output)
-                .context("parse output as abs file")?
-                .relative_to(profile.root())
-                .context("make output relative to profile root")?;
+            let output = DotdDependencyPath::parse(profile, output)
+                .then_with_context(move || format!("parse output path: {output:?}"))
+                .await?;
             Self::Build(output, Vec::new())
         } else {
             let Some((output, inputs)) = line.split_once(": ") else {
                 bail!("no output/input separator");
             };
 
-            let output = AbsFilePath::try_from(output)
-                .context("parse output as abs file")?
-                .relative_to(profile.root())
-                .context("make output relative to profile root")?;
+            let output = DotdDependencyPath::parse(profile, output)
+                .then_with_context(move || format!("parse output path: {output:?}"));
             let inputs = stream::iter(inputs.trim().split_whitespace())
                 .map(|input| {
                     DotdDependencyPath::parse(profile, input)
@@ -198,8 +213,8 @@ impl DotdLine {
                 })
                 .buffer_unordered(DEFAULT_CONCURRENCY)
                 .try_collect::<Vec<_>>()
-                .then_context("parse input paths")
-                .await?;
+                .then_context("parse input paths");
+            let (output, inputs) = tokio::try_join!(output, inputs)?;
             Self::Build(output, inputs)
         })
     }
@@ -208,7 +223,7 @@ impl DotdLine {
     fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
         match self {
             Self::Build(output, inputs) => {
-                let output = profile.root().join(output).to_string();
+                let output = output.reconstruct(profile);
                 let inputs = inputs
                     .iter()
                     .map(|input| input.reconstruct(profile))

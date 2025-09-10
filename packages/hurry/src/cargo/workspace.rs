@@ -17,6 +17,7 @@ use tracing::{debug, instrument, trace};
 use crate::{
     Locked, Unlocked,
     cache::Artifact,
+    cargo::DotdDependencyPath,
     fs::{self, Index, LockFile},
     hash::Blake3,
     mk_rel_file,
@@ -578,7 +579,18 @@ impl<'ws> ProfileDir<'ws, Locked> {
             let parsed = Dotd::from_file(self, &self.root().join(*dotd))
                 .await
                 .context("parse .d file")?;
-            let outputs = parsed.build_outputs().into_iter().collect::<HashSet<_>>();
+
+            // For the purpose of this check, we only care about the outputs
+            // that are relative to the local project; we don't need to
+            // or want to cache items that are in the global cargo cache.
+            let outputs = parsed
+                .build_outputs()
+                .into_iter()
+                .filter_map(|output| match output {
+                    DotdDependencyPath::RelativeTargetProfile(p) => Some(p),
+                    DotdDependencyPath::RelativeCargoHome(_) => None,
+                })
+                .collect::<HashSet<_>>();
             dependencies.extend(deps.iter().filter(|(path, _)| outputs.contains(*path)));
         }
 
