@@ -1,16 +1,16 @@
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
-use hurry::{fs, path::GenericPath};
+use hurry::{fs, path::SomeDirPath};
 use tracing::instrument;
 
 /// Options for `debug copy`
 #[derive(Clone, Args, Debug)]
 pub struct Options {
     /// The source directory.
-    source: GenericPath,
+    source: SomeDirPath,
 
     /// The destination directory.
-    destination: GenericPath,
+    destination: SomeDirPath,
 }
 
 #[instrument]
