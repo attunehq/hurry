@@ -9,7 +9,8 @@ use std::fmt::Debug;
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use hurry::{
-    cache::{Cache, Cas, FsCache, FsCas},
+    Locked,
+    cache::{FsCache, FsCas},
     cargo::{Profile, Workspace, cache_target_from_workspace, invoke, restore_target_from_cache},
 };
 use tracing::{error, info, instrument, warn};
@@ -78,9 +79,9 @@ pub async fn exec(options: Options) -> Result<()> {
 #[instrument]
 async fn exec_inner(
     options: Options,
-    cas: impl Cas + Debug + Copy,
+    cas: &FsCas,
     workspace: &Workspace,
-    cache: impl Cache + Debug + Copy,
+    cache: &FsCache<Locked>,
 ) -> Result<()> {
     let profile = options.profile();
 

@@ -44,8 +44,8 @@ async fn backup_workspace() -> Result<()> {
     let cas_root = tempdir.join(mk_rel_dir!("cas"));
     let cache_root = tempdir.join(mk_rel_dir!("ws"));
 
-    let cas = FsCas::open_dir(cas_root).await.context("open CAS")?;
-    let cache = FsCache::open_dir(cache_root)
+    let cas = FsCas::open_dir(&cas_root).await.context("open CAS")?;
+    let cache = FsCache::open_dir(&cache_root)
         .await
         .context("open cache")?
         .pipe(FsCache::lock)
@@ -87,8 +87,8 @@ async fn restore_workspace() -> Result<()> {
         "must have copied workspace"
     );
 
-    let cas = FsCas::open_dir(cas_root).await.context("open CAS")?;
-    let cache = FsCache::open_dir(cache_root)
+    let cas = FsCas::open_dir(&cas_root).await.context("open CAS")?;
+    let cache = FsCache::open_dir(&cache_root)
         .await
         .context("open cache")?
         .pipe(FsCache::lock)

@@ -11,7 +11,7 @@ use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     Locked,
-    cache::{Cache, Cas, Kind},
+    cache::{FsCache, FsCas, Kind},
     hash::Blake3,
     path::JoinWith,
 };
@@ -63,8 +63,8 @@ pub async fn invoke(
 /// 3. Create a cache record mapping dependency key to artifact hashes.
 #[instrument(skip(progress))]
 pub async fn cache_target_from_workspace(
-    cas: impl Cas + StdDebug + Clone,
-    cache: impl Cache + StdDebug + Clone,
+    cas: &FsCas,
+    cache: &FsCache<Locked>,
     target: &ProfileDir<'_, Locked>,
     progress: impl Fn(&Blake3, &Dependency) + Clone,
 ) -> Result<()> {
@@ -147,8 +147,8 @@ pub async fn cache_target_from_workspace(
 ///   3. Call progress callback when dependency is complete
 #[instrument(skip(progress))]
 pub async fn restore_target_from_cache(
-    cas: impl Cas + StdDebug + Clone,
-    cache: impl Cache + StdDebug + Clone,
+    cas: &FsCas,
+    cache: &FsCache<Locked>,
     target: &ProfileDir<'_, Locked>,
     progress: impl Fn(&Blake3, &Dependency) + Clone,
 ) -> Result<()> {

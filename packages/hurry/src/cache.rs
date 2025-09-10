@@ -16,65 +16,6 @@ use crate::{
 mod fs;
 pub use fs::*;
 
-/// Conceptualizes file caching across providers and codebases.
-pub trait Cache {
-    /// Store the record in the cache.
-    fn store(
-        &self,
-        kind: Kind,
-        key: &Blake3,
-        artifacts: impl IntoIterator<Item = impl Into<Artifact>> + Debug + Send,
-    ) -> impl Future<Output = Result<()>> + Send;
-
-    /// Get the record from the cache, if it exists.
-    fn get(&self, kind: Kind, key: &Blake3) -> impl Future<Output = Result<Option<Record>>> + Send;
-}
-
-impl<T: Cache + Sync> Cache for &T {
-    async fn store(
-        &self,
-        kind: Kind,
-        key: &Blake3,
-        artifacts: impl IntoIterator<Item = impl Into<Artifact>> + Debug + Send,
-    ) -> Result<()> {
-        Cache::store(*self, kind, key, artifacts).await
-    }
-
-    async fn get(&self, kind: Kind, key: &Blake3) -> Result<Option<Record>> {
-        Cache::get(*self, kind, key).await
-    }
-}
-
-/// Conceptualizes "content addressed storage" across providers.
-pub trait Cas {
-    /// Store the content at the provided local file path in the CAS.
-    /// Returns the key by which this content can be referred to in the future.
-    fn store_file(
-        &self,
-        kind: Kind,
-        file: &AbsFilePath,
-    ) -> impl Future<Output = Result<Blake3>> + Send;
-
-    /// Get the content from the cache, if it exists,
-    /// and write it to the output location.
-    fn get_file(
-        &self,
-        kind: Kind,
-        key: &Blake3,
-        destination: &AbsFilePath,
-    ) -> impl Future<Output = Result<()>> + Send;
-}
-
-impl<T: Cas + Sync> Cas for &T {
-    async fn store_file(&self, kind: Kind, src: &AbsFilePath) -> Result<Blake3> {
-        Cas::store_file(*self, kind, src).await
-    }
-
-    async fn get_file(&self, kind: Kind, key: &Blake3, destination: &AbsFilePath) -> Result<()> {
-        Cas::get_file(*self, kind, key, destination).await
-    }
-}
-
 /// The kind of project corresponding to the cache and CAS.
 ///
 /// Generally, prefer naming these by build system rather than by language,

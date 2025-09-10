@@ -25,12 +25,7 @@
 )]
 
 use std::{
-    convert::identity,
-    fmt::Debug as StdDebug,
-    marker::PhantomData,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::SystemTime,
+    convert::identity, fmt::Debug as StdDebug, marker::PhantomData, sync::Arc, time::SystemTime,
 };
 
 use ahash::AHashMap;
@@ -501,7 +496,7 @@ pub async fn metadata(
 /// to do anything with the file after checking, you should probably
 /// just try to do the operation and handle the case of the file not existing.
 #[instrument]
-pub async fn exists(path: impl AsRef<Path> + StdDebug) -> bool {
+pub async fn exists(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
     tokio::fs::try_exists(path).await.is_ok_and(identity)
 }
 
