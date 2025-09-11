@@ -2,7 +2,7 @@ use std::{ffi::OsStr, fmt, iter::once};
 
 use color_eyre::{
     Result,
-    eyre::{Context, bail},
+    eyre::{Context, OptionExt, bail},
 };
 use futures::{StreamExt, TryFutureExt, TryStreamExt, stream};
 use itertools::Itertools;
@@ -12,7 +12,7 @@ use tracing::{debug, instrument, trace, warn};
 use crate::{
     Locked,
     cache::{Artifact, FsCache, FsCas, Kind},
-    fs::DEFAULT_CONCURRENCY,
+    fs::{DEFAULT_CONCURRENCY, Metadata},
     hash::Blake3,
 };
 
@@ -103,12 +103,17 @@ pub async fn cache_target_from_workspace(
         debug!(?key, ?dependency, ?artifacts, "caching artifacts");
         let artifacts = stream::iter(artifacts)
             .map(|artifact| async move {
-                let key = target.store_cas(cas, &artifact.target).await?;
+                let (key, file) = target.store_cas(cas, &artifact).await?;
                 trace!(?key, ?dependency, ?artifact, "stored artifact");
+
+                let meta = Metadata::from_file(&file)
+                    .await
+                    .context("read metadata")?
+                    .ok_or_eyre("file does not exist")?;
                 Artifact::builder()
                     .hash(key)
-                    .metadata(artifact.metadata)
-                    .target(artifact.target)
+                    .metadata(meta)
+                    .target(artifact)
                     .build()
                     .pipe(Result::<_>::Ok)
             })

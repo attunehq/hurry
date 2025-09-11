@@ -16,7 +16,7 @@ use tracing::{debug, instrument, trace};
 
 use crate::{
     Locked, Unlocked,
-    cache::{Artifact, FsCas, Kind},
+    cache::{FsCas, Kind},
     cargo::DepInfoDependencyPath,
     fs::{self, Index, LockFile},
     hash::Blake3,
@@ -509,7 +509,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     pub async fn enumerate_cache_artifacts(
         &self,
         dependency: &Dependency,
-    ) -> Result<Vec<Artifact>> {
+    ) -> Result<Vec<&RelFilePath>> {
         // TODO: We could make these lookups faster. For example, we could build
         // dedicated indexes for the fingerprint, deps, and build folders. We
         // could also use a data structure that natively supports fast "look up
@@ -526,7 +526,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         let fingerprints = index
             .files
             .iter()
-            .filter(|(path, _)| {
+            .filter(|path| {
                 path.component_strs_lossy()
                     .tuple_windows()
                     .next()
@@ -540,7 +540,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         let build_scripts = index
             .files
             .iter()
-            .filter(|(path, _)| {
+            .filter(|path| {
                 path.component_strs_lossy()
                     .tuple_windows()
                     .next()
@@ -556,7 +556,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         let deps = index
             .files
             .iter()
-            .filter(|(path, _)| {
+            .filter(|path| {
                 path.component_strs_lossy()
                     .next()
                     .is_some_and(|part| part == "deps")
@@ -568,15 +568,15 @@ impl<'ws> ProfileDir<'ws, Locked> {
         // find the _one_ `DepInfo` file because we can't tell which file is for
         // which package version in scenarios where our project has multiple
         // versions of a dependency.
-        let dotds = deps.iter().filter(|(path, _)| {
+        let dotds = deps.iter().filter(|path| {
             path.component_strs_lossy()
                 .nth(1)
                 .is_some_and(|part| dotd_regex.is_match(&part))
         });
 
         let mut dependencies = Vec::new();
-        for (dotd, _) in dotds {
-            let parsed = DepInfo::from_file(self, &self.root().join(*dotd))
+        for &dotd in dotds {
+            let parsed = DepInfo::from_file(self, &self.root().join(dotd))
                 .await
                 .context("parse `DepInfo` file")?;
 
@@ -597,7 +597,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
                     DepInfoDependencyPath::RelativeCargoHome(_) => None,
                 })
                 .collect::<HashSet<_>>();
-            dependencies.extend(deps.iter().filter(|(path, _)| outputs.contains(*path)));
+            dependencies.extend(deps.iter().filter(|&path| outputs.contains(path)));
         }
 
         // Now that we have our three sources of files,
@@ -606,13 +606,6 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .into_iter()
             .chain(build_scripts)
             .chain(dependencies)
-            .map(|(path, entry)| {
-                Artifact::builder()
-                    .target(path)
-                    .hash(&entry.hash)
-                    .metadata(entry.metadata.clone())
-                    .build()
-            })
             .inspect(|artifact| trace!(?artifact, "enumerated artifact"))
             .collect::<Vec<_>>()
             .pipe(Ok)
@@ -628,7 +621,11 @@ impl<'ws> ProfileDir<'ws, Locked> {
 
     /// Store the contents of the file referenced by the path in the CAS.
     #[instrument(name = "ProfileDir::store_cas")]
-    pub async fn store_cas(&self, cas: &FsCas, file: &RelFilePath) -> Result<Blake3> {
+    pub async fn store_cas(
+        &self,
+        cas: &FsCas,
+        file: &RelFilePath,
+    ) -> Result<(Blake3, AbsFilePath)> {
         let file = self.root.join(file);
         let raw = fs::must_read_buffered(&file).await.context("read file")?;
         let content = match CasRewrite::parse(&file) {
@@ -643,6 +640,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         cas.store(Kind::Cargo, &content)
             .await
             .context("store content in CAS")
+            .map(|key| (key, file))
     }
 
     /// Get the content from the CAS referenced by the key and restore it
