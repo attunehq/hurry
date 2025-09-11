@@ -4,7 +4,7 @@ use color_eyre::{
     Result,
     eyre::{Context, bail},
 };
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{StreamExt, TryFutureExt, TryStreamExt, stream};
 use itertools::Itertools;
 use tap::Pipe;
 use tracing::{debug, instrument, trace, warn};
@@ -179,7 +179,10 @@ pub async fn restore_target_from_cache(
         stream::iter(&record.artifacts)
             .for_each_concurrent(Some(DEFAULT_CONCURRENCY), |artifact| async move {
                 let key = &artifact.hash;
-                match target.restore_cas(cas, key, &artifact.target).await {
+                let restore = target
+                    .restore_cas(cas, key, &artifact.target)
+                    .and_then(|path| async move { artifact.metadata.set_file(&path).await });
+                match restore.await {
                     Ok(_) => debug!(?key, ?artifact, ?dependency, "restored file"),
                     Err(error) => {
                         warn!(

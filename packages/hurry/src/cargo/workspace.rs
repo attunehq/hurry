@@ -21,7 +21,7 @@ use crate::{
     fs::{self, Index, LockFile},
     hash::Blake3,
     mk_rel_file,
-    path::{AbsDirPath, JoinWith, RelFilePath, TryJoinWith},
+    path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, TryJoinWith},
 };
 
 use super::{
@@ -643,7 +643,12 @@ impl<'ws> ProfileDir<'ws, Locked> {
     /// Get the content from the CAS referenced by the key and restore it
     /// to the provided path.
     #[instrument(name = "ProfileDir::restore_cas")]
-    pub async fn restore_cas(&self, cas: &FsCas, key: &Blake3, file: &RelFilePath) -> Result<()> {
+    pub async fn restore_cas(
+        &self,
+        cas: &FsCas,
+        key: &Blake3,
+        file: &RelFilePath,
+    ) -> Result<AbsFilePath> {
         let file = self.root.join(file);
         let content = cas
             .must_get(Kind::Cargo, key)
@@ -655,6 +660,9 @@ impl<'ws> ProfileDir<'ws, Locked> {
                 .map(|dotd| dotd.reconstruct(self).into_bytes())?,
             _ => content,
         };
-        fs::write(&file, &raw).await.context("write file").map(drop)
+        fs::write(&file, &raw)
+            .await
+            .context("write file")
+            .map(|_| file)
     }
 }
