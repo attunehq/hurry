@@ -10,7 +10,7 @@ use tracing::{instrument, trace};
 
 use crate::{
     Locked, Unlocked,
-    cache::{Artifact, Kind, Record},
+    cache::{Record, RecordArtifact, RecordKind},
     fs::{self, LockFile},
     hash::Blake3,
     mk_rel_dir, mk_rel_file,
@@ -117,9 +117,9 @@ impl FsCache<Locked> {
     #[instrument(name = "FsCache::store")]
     pub async fn store(
         &self,
-        kind: Kind,
+        kind: RecordKind,
         key: &Blake3,
-        artifacts: impl IntoIterator<Item = impl Into<Artifact>> + Debug + Send,
+        artifacts: impl IntoIterator<Item = impl Into<RecordArtifact>> + Debug + Send,
     ) -> Result<()> {
         let artifacts = artifacts.into_iter().map(Into::into).collect_vec();
         let name = self.root.try_join_combined([kind.as_str()], key.as_str())?;
@@ -135,7 +135,7 @@ impl FsCache<Locked> {
 
     /// Retrieve the artifact record from the cache.
     #[instrument(name = "FsCache::get")]
-    pub async fn get(&self, kind: Kind, key: &Blake3) -> Result<Option<Record>> {
+    pub async fn get(&self, kind: RecordKind, key: &Blake3) -> Result<Option<Record>> {
         let name = self.root.try_join_combined([kind.as_str()], key.as_str())?;
         Ok(
             match fs::read_buffered_utf8(&name).await.context("read file")? {
@@ -149,6 +149,11 @@ impl FsCache<Locked> {
 }
 
 /// The content-addressed storage area shared by all `hurry` cache instances.
+///
+/// The intention of the CAS is that it should be as "stupid" as possible:
+/// - Globally stored.
+/// - Purely concerned with storing/retrieving bytes, keyed by their hash.
+/// - Does not contain implementation details for specific build systems.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display)]
 #[display("{root}")]
 pub struct FsCas {
@@ -196,25 +201,25 @@ impl FsCas {
 
     /// Store the entry in the CAS.
     #[instrument(name = "FsCas::store")]
-    pub async fn store(&self, kind: Kind, content: &[u8]) -> Result<Blake3> {
+    pub async fn store(&self, content: &[u8]) -> Result<Blake3> {
         let key = Blake3::from_buffer(&content);
-        let dst = self.root.try_join_combined([kind.as_str()], key.as_str())?;
+        let dst = self.root.try_join_file(key.as_str())?;
         fs::write(&dst, content).await?;
         Ok(key)
     }
 
     /// Get the entry out of the CAS.
     #[instrument(name = "FsCas::get")]
-    pub async fn get(&self, kind: Kind, key: &Blake3) -> Result<Option<Vec<u8>>> {
-        let src = self.root.try_join_combined([kind.as_str()], key.as_str())?;
+    pub async fn get(&self, key: &Blake3) -> Result<Option<Vec<u8>>> {
+        let src = self.root.try_join_file(key.as_str())?;
         fs::read_buffered(&src).await
     }
 
     /// Get the entry out of the CAS.
     /// Errors if the entry is not available.
     #[instrument(name = "FsCas::get")]
-    pub async fn must_get(&self, kind: Kind, key: &Blake3) -> Result<Vec<u8>> {
-        let src = self.root.try_join_combined([kind.as_str()], key.as_str())?;
+    pub async fn must_get(&self, key: &Blake3) -> Result<Vec<u8>> {
+        let src = self.root.try_join_file(key.as_str())?;
         fs::must_read_buffered(&src).await
     }
 }

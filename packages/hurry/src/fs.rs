@@ -28,7 +28,7 @@ use std::{
     convert::identity, fmt::Debug as StdDebug, marker::PhantomData, sync::Arc, time::SystemTime,
 };
 
-use ahash::AHashMap;
+use ahash::AHashSet;
 use async_walkdir::WalkDir;
 use color_eyre::{
     Result,
@@ -37,7 +37,7 @@ use color_eyre::{
 use derive_more::{Debug, Display};
 use filetime::FileTime;
 use fslock::LockFile as FsLockFile;
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, TryStreamExt, future};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tap::{Pipe, TapFallible};
@@ -139,35 +139,23 @@ pub struct Index {
     /// The root directory of the index.
     pub root: AbsDirPath,
 
-    /// Stores the index.
-    /// Keys relative to `root`.
+    /// Files are relative to `root`.
     //
     // TODO: May want to make this a trie or something.
     // https://docs.rs/fs-tree/0.2.2/fs_tree/ looked like it might work,
     // but the API was sketchy so I didn't use it for now.
     #[debug("{}", files.len())]
-    pub files: AHashMap<RelFilePath, IndexEntry>,
+    pub files: AHashSet<RelFilePath>,
 }
 
 impl Index {
     /// Index the provided path recursively.
-    //
-    // TODO: move this to use async natively.
     #[instrument(name = "Index::recursive")]
     pub async fn recursive(root: &AbsDirPath) -> Result<Self> {
         let root = root.clone();
         let files = walk_files(&root)
-            .try_fold(AHashMap::new(), |mut files, file| {
-                let root = root.clone();
-                async move {
-                    let entry = IndexEntry::from_file(&file)
-                        .await
-                        .with_context(|| format!("index {file:?}"))?;
-                    let rel = file.relative_to(root).context("make relative")?;
-                    files.insert(rel, entry);
-                    Ok(files)
-                }
-            })
+            .and_then(|entry| future::ready(entry.relative_to(&root)))
+            .try_collect::<AHashSet<_>>()
             .await?;
 
         Ok(Self { root, files })

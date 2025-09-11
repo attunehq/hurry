@@ -11,7 +11,7 @@ use crate::{fs::Metadata, hash::Blake3, path::RelFilePath};
 mod fs;
 pub use fs::*;
 
-/// The kind of project corresponding to the cache and CAS.
+/// The kind of project represented by a cache [`Record`].
 ///
 /// Generally, prefer naming these by build system rather than by language,
 /// since most languages have more than one build system and the build systems
@@ -21,7 +21,7 @@ pub use fs::*;
 )]
 #[serde(rename_all = "snake_case")]
 #[func(pub const fn as_str(&self) -> &str)]
-pub enum Kind {
+pub enum RecordKind {
     /// A Rust project managed by Cargo.
     #[assoc(as_str = "cargo")]
     Cargo,
@@ -36,7 +36,7 @@ pub enum Kind {
 pub struct Record {
     /// The kind of project being cached.
     #[builder(into)]
-    pub kind: Kind,
+    pub kind: RecordKind,
 
     /// The cache key for this record.
     #[builder(into)]
@@ -44,7 +44,7 @@ pub struct Record {
 
     /// The artifacts in this record.
     #[builder(default, into)]
-    pub artifacts: Vec<Artifact>,
+    pub artifacts: Vec<RecordArtifact>,
 }
 
 impl From<&Record> for Record {
@@ -59,10 +59,11 @@ impl AsRef<Record> for Record {
     }
 }
 
-/// A recorded cache artifact.
+/// A recorded artifact in a cache [`Record`].
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize, Builder)]
-pub struct Artifact {
-    /// The target path for the artifact.
+pub struct RecordArtifact {
+    /// The target path from which the artifact was backed up (and therefore,
+    /// to which the artifact should be restored).
     ///
     /// This is expected to be relative to the "cache root" for the project;
     /// what specifically the "cache root" is depends on the project type
@@ -70,11 +71,10 @@ pub struct Artifact {
     #[builder(into)]
     pub target: RelFilePath,
 
-    /// The hash of the content of the artifact.
-    ///
-    /// This is used to find the artifact data in the CAS.
+    /// The CAS key for the content of the artifact.
+    /// This is the [`Blake3`] of the content.
     #[builder(into)]
-    pub hash: Blake3,
+    pub cas_key: Blake3,
 
     /// The file metadata of the artifact.
     ///
@@ -87,14 +87,14 @@ pub struct Artifact {
     pub metadata: Metadata,
 }
 
-impl From<&Artifact> for Artifact {
-    fn from(value: &Artifact) -> Self {
+impl From<&RecordArtifact> for RecordArtifact {
+    fn from(value: &RecordArtifact) -> Self {
         value.clone()
     }
 }
 
-impl AsRef<Artifact> for Artifact {
-    fn as_ref(&self) -> &Artifact {
+impl AsRef<RecordArtifact> for RecordArtifact {
+    fn as_ref(&self) -> &RecordArtifact {
         self
     }
 }
