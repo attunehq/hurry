@@ -83,7 +83,7 @@ pub async fn main() -> Result<()> {
                     .expect("current time is after Unix epoch")
                     .as_secs(),
                 std::process::id(),
-                rustc_invocation_id.to_string(),
+                rustc_invocation_id,
             ))
             .expect("rustc invocation filename should be a valid filename"),
         ),
