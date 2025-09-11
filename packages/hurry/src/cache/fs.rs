@@ -18,6 +18,12 @@ use crate::{
 };
 
 /// The local file system implementation of a cache.
+///
+/// The intention of the cache is that it should be as "stupid" as possible:
+/// - Globally stored.
+/// - Purely concerned with storing/retreiving [`Record`]s.
+/// - Does not contain implementation details for specific build systems,
+///   other than being keyed by build system.
 #[derive(Clone, DebugExt, Display)]
 #[display("{root}")]
 pub struct FsCache<State> {
@@ -149,6 +155,11 @@ impl FsCache<Locked> {
 }
 
 /// The content-addressed storage area shared by all `hurry` cache instances.
+///
+/// The intention of the CAS is that it should be as "stupid" as possible:
+/// - Globally stored.
+/// - Purely concerned with storing/retreiving bytes, keyed by their hash.
+/// - Does not contain implementation details for specific build systems.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display)]
 #[display("{root}")]
 pub struct FsCas {
@@ -196,25 +207,25 @@ impl FsCas {
 
     /// Store the entry in the CAS.
     #[instrument(name = "FsCas::store")]
-    pub async fn store(&self, kind: RecordKind, content: &[u8]) -> Result<Blake3> {
+    pub async fn store(&self, content: &[u8]) -> Result<Blake3> {
         let key = Blake3::from_buffer(&content);
-        let dst = self.root.try_join_combined([kind.as_str()], key.as_str())?;
+        let dst = self.root.try_join_file(key.as_str())?;
         fs::write(&dst, content).await?;
         Ok(key)
     }
 
     /// Get the entry out of the CAS.
     #[instrument(name = "FsCas::get")]
-    pub async fn get(&self, kind: RecordKind, key: &Blake3) -> Result<Option<Vec<u8>>> {
-        let src = self.root.try_join_combined([kind.as_str()], key.as_str())?;
+    pub async fn get(&self, key: &Blake3) -> Result<Option<Vec<u8>>> {
+        let src = self.root.try_join_file(key.as_str())?;
         fs::read_buffered(&src).await
     }
 
     /// Get the entry out of the CAS.
     /// Errors if the entry is not available.
     #[instrument(name = "FsCas::get")]
-    pub async fn must_get(&self, kind: RecordKind, key: &Blake3) -> Result<Vec<u8>> {
-        let src = self.root.try_join_combined([kind.as_str()], key.as_str())?;
+    pub async fn must_get(&self, key: &Blake3) -> Result<Vec<u8>> {
+        let src = self.root.try_join_file(key.as_str())?;
         fs::must_read_buffered(&src).await
     }
 }

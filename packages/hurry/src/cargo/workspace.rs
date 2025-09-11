@@ -16,7 +16,7 @@ use tracing::{debug, instrument, trace};
 
 use crate::{
     Locked, Unlocked,
-    cache::{FsCas, RecordKind},
+    cache::FsCas,
     cargo::DepInfoDependencyPath,
     fs::{self, Index, LockFile},
     hash::Blake3,
@@ -637,7 +637,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
                 .context("serialize depinfo")?,
         };
 
-        cas.store(RecordKind::Cargo, &content)
+        cas.store(&content)
             .await
             .context("store content in CAS")
             .map(|key| (key, file))
@@ -653,10 +653,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         file: &RelFilePath,
     ) -> Result<AbsFilePath> {
         let file = self.root.join(file);
-        let content = cas
-            .must_get(RecordKind::Cargo, key)
-            .await
-            .context("get content from CAS")?;
+        let content = cas.must_get(key).await.context("get content from CAS")?;
         let raw = match CasRewrite::parse(&file) {
             CasRewrite::None => content,
             CasRewrite::DepInfo => serde_json::from_slice::<DepInfo>(&content)
