@@ -21,7 +21,7 @@ use crate::{
 ///
 /// The intention of the cache is that it should be as "stupid" as possible:
 /// - Globally stored.
-/// - Purely concerned with storing/retreiving [`Record`]s.
+/// - Purely concerned with storing/retrieving [`Record`]s.
 /// - Does not contain implementation details for specific build systems,
 ///   other than being keyed by build system.
 #[derive(Clone, DebugExt, Display)]
@@ -158,7 +158,7 @@ impl FsCache<Locked> {
 ///
 /// The intention of the CAS is that it should be as "stupid" as possible:
 /// - Globally stored.
-/// - Purely concerned with storing/retreiving bytes, keyed by their hash.
+/// - Purely concerned with storing/retrieving bytes, keyed by their hash.
 /// - Does not contain implementation details for specific build systems.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display)]
 #[display("{root}")]
