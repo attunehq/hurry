@@ -18,12 +18,6 @@ use crate::{
 };
 
 /// The local file system implementation of a cache.
-///
-/// ## Original design context
-///
-/// The intention of this cache when it was written was that it should be
-/// generic across build systems by storing [`Record`] types per build system.
-/// We will likely change this going forward.
 #[derive(Clone, DebugExt, Display)]
 #[display("{root}")]
 pub struct FsCache<State> {
