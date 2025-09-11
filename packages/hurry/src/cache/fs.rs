@@ -1,24 +1,24 @@
 //! Local file system implementation of cache and CAS traits.
 
-use std::{fmt::Debug as StdDebug, marker::PhantomData};
+use std::{fmt::Debug, marker::PhantomData};
 
 use color_eyre::{Result, Section, SectionExt, eyre::Context};
-use derive_more::{Debug, Display};
+use derive_more::{Debug as DebugExt, Display};
 use itertools::Itertools;
 use tap::Pipe;
 use tracing::{instrument, trace};
 
 use crate::{
     Locked, Unlocked,
-    cache::{Artifact, Kind, Record},
+    cache::{Record, RecordArtifact, RecordKind},
     fs::{self, LockFile},
     hash::Blake3,
     mk_rel_dir, mk_rel_file,
-    path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, TryJoinWith},
+    path::{AbsDirPath, JoinWith, RelFilePath, TryJoinWith},
 };
 
 /// The local file system implementation of a cache.
-#[derive(Clone, Debug, Display)]
+#[derive(Clone, DebugExt, Display)]
 #[display("{root}")]
 pub struct FsCache<State> {
     #[debug(skip)]
@@ -61,15 +61,15 @@ impl FsCache<Unlocked> {
             .await
             .context("find user cache path")?
             .join(mk_rel_dir!("ws"))
-            .pipe(Self::open_dir)
+            .pipe_ref(Self::open_dir)
             .await
     }
 
     /// Open the cache in the provided directory.
     /// If the directory does not already exist, it is created.
     #[instrument(name = "FsCache::open_dir")]
-    pub async fn open_dir(root: impl Into<AbsDirPath> + StdDebug) -> Result<Self> {
-        let root = root.into();
+    pub async fn open_dir(root: &AbsDirPath) -> Result<Self> {
+        let root = root.clone();
         fs::create_dir_all(&root)
             .await
             .context("create cache directory")?;
@@ -112,15 +112,14 @@ impl FsCache<Locked> {
     pub async fn is_empty(&self) -> Result<bool> {
         fs::is_dir_empty(&self.root).await
     }
-}
 
-impl super::Cache for FsCache<Locked> {
+    /// Store the artifact(s) in the cache as a single cache record.
     #[instrument(name = "FsCache::store")]
-    async fn store(
+    pub async fn store(
         &self,
-        kind: Kind,
+        kind: RecordKind,
         key: &Blake3,
-        artifacts: impl IntoIterator<Item = impl Into<Artifact>> + StdDebug + Send,
+        artifacts: impl IntoIterator<Item = impl Into<RecordArtifact>> + Debug + Send,
     ) -> Result<()> {
         let artifacts = artifacts.into_iter().map(Into::into).collect_vec();
         let name = self.root.try_join_combined([kind.as_str()], key.as_str())?;
@@ -134,8 +133,9 @@ impl super::Cache for FsCache<Locked> {
         fs::write(&name, content).await.context("store record")
     }
 
+    /// Retrieve the artifact record from the cache.
     #[instrument(name = "FsCache::get")]
-    async fn get(&self, kind: Kind, key: &Blake3) -> Result<Option<Record>> {
+    pub async fn get(&self, kind: RecordKind, key: &Blake3) -> Result<Option<Record>> {
         let name = self.root.try_join_combined([kind.as_str()], key.as_str())?;
         Ok(
             match fs::read_buffered_utf8(&name).await.context("read file")? {
@@ -149,6 +149,11 @@ impl super::Cache for FsCache<Locked> {
 }
 
 /// The content-addressed storage area shared by all `hurry` cache instances.
+///
+/// The intention of the CAS is that it should be as "stupid" as possible:
+/// - Globally stored.
+/// - Purely concerned with storing/retrieving bytes, keyed by their hash.
+/// - Does not contain implementation details for specific build systems.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display)]
 #[display("{root}")]
 pub struct FsCas {
@@ -174,15 +179,15 @@ impl FsCas {
             .await
             .context("find user cache path")?
             .join(mk_rel_dir!("cas"))
-            .pipe(Self::open_dir)
+            .pipe_ref(Self::open_dir)
             .await
     }
 
     /// Open an instance in the provided directory.
     /// If the directory does not already exist, it is created.
     #[instrument(name = "FsCas::open_dir")]
-    pub async fn open_dir(root: impl Into<AbsDirPath> + StdDebug) -> Result<Self> {
-        let root = root.into();
+    pub async fn open_dir(root: &AbsDirPath) -> Result<Self> {
+        let root = root.clone();
         fs::create_dir_all(&root).await?;
         trace!(?root, "open cas");
         Ok(Self { root })
@@ -193,20 +198,28 @@ impl FsCas {
     pub async fn is_empty(&self) -> Result<bool> {
         fs::is_dir_empty(&self.root).await
     }
-}
 
-impl super::Cas for FsCas {
-    #[instrument(name = "FsCas::store_file")]
-    async fn store_file(&self, kind: Kind, src: &AbsFilePath) -> Result<Blake3> {
-        let key = Blake3::from_file(src).await.context("hash file")?;
-        let dst = self.root.try_join_combined([kind.as_str()], key.as_str())?;
-        fs::copy_file(src, &dst).await?;
+    /// Store the entry in the CAS.
+    #[instrument(name = "FsCas::store")]
+    pub async fn store(&self, content: &[u8]) -> Result<Blake3> {
+        let key = Blake3::from_buffer(&content);
+        let dst = self.root.try_join_file(key.as_str())?;
+        fs::write(&dst, content).await?;
         Ok(key)
     }
 
-    #[instrument(name = "FsCas::get_file")]
-    async fn get_file(&self, kind: Kind, key: &Blake3, destination: &AbsFilePath) -> Result<()> {
-        let src = self.root.try_join_combined([kind.as_str()], key.as_str())?;
-        fs::copy_file(&src, destination).await.map(drop)
+    /// Get the entry out of the CAS.
+    #[instrument(name = "FsCas::get")]
+    pub async fn get(&self, key: &Blake3) -> Result<Option<Vec<u8>>> {
+        let src = self.root.try_join_file(key.as_str())?;
+        fs::read_buffered(&src).await
+    }
+
+    /// Get the entry out of the CAS.
+    /// Errors if the entry is not available.
+    #[instrument(name = "FsCas::get")]
+    pub async fn must_get(&self, key: &Blake3) -> Result<Vec<u8>> {
+        let src = self.root.try_join_file(key.as_str())?;
+        fs::must_read_buffered(&src).await
     }
 }

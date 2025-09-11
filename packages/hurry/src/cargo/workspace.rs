@@ -16,17 +16,18 @@ use tracing::{debug, instrument, trace};
 
 use crate::{
     Locked, Unlocked,
-    cache::Artifact,
+    cache::FsCas,
+    cargo::DepInfoDependencyPath,
     fs::{self, Index, LockFile},
     hash::Blake3,
     mk_rel_file,
-    path::{AbsDirPath, JoinWith, TryJoinWith},
+    path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, TryJoinWith},
 };
 
 use super::{
     Profile,
     dependency::Dependency,
-    metadata::{Dotd, RustcMetadata},
+    metadata::{DepInfo, RustcMetadata},
     read_argv,
 };
 
@@ -47,6 +48,10 @@ pub struct Workspace {
     /// The target directory in the workspace.
     #[debug(skip)]
     pub target: AbsDirPath,
+
+    /// The $CARGO_HOME value.
+    #[debug(skip)]
+    pub cargo_home: AbsDirPath,
 
     /// Parsed `rustc` metadata relating to the current workspace.
     #[debug(skip)]
@@ -96,6 +101,16 @@ impl Workspace {
             .context("parse workspace root as absolute directory")?;
         let workspace_target = AbsDirPath::try_from(&metadata.target_directory)
             .context("parse workspace target as absolute directory")?;
+
+        let cargo_home = spawn_blocking({
+            let workspace_root = workspace_root.clone();
+            move || home::cargo_home_with_cwd(workspace_root.as_std_path())
+        })
+        .await
+        .context("join background task")?
+        .context("get $CARGO_HOME")?
+        .pipe(AbsDirPath::try_from)
+        .context("parse path as utf8")?;
 
         // TODO: This currently blows up if we have no lockfile.
         let cargo_lock = workspace_root.join(mk_rel_file!("Cargo.lock"));
@@ -231,6 +246,7 @@ impl Workspace {
             target: workspace_target,
             rustc: rustc_meta,
             dependencies,
+            cargo_home,
         })
     }
 
@@ -448,7 +464,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ///   - `{PACKAGE_NAME}-{HASH2}`, which contains the compiled build script.
     ///     - `build-script-build`, an executable ELF.
     ///     - `build_script_build-{HASH2}`, the exact same ELF.
-    ///     - `build_script_build-{HASH2}.d`, a `.d` file listing the input
+    ///     - `build_script_build-{HASH2}.d`, a "dep-info" file listing the input
     ///       files.
     ///   - `{PACKAGE_NAME}-{HASH3}`, which contains the outputs of running the
     ///     build script.
@@ -462,7 +478,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ///     - `stderr`, the STDERR of the build script.
     /// - Deps: these are stored in `$PROFILE/deps/`. See also:
     ///   https://rustc-dev-guide.rust-lang.org/backend/libs-and-metadata.html
-    ///   - `{CRATE_NAME}-{HASH1}.d`, a `.d` file listing the inputs.
+    ///   - `{CRATE_NAME}-{HASH1}.d`, a "dep-info" file listing the inputs.
     ///   - `lib{CRATE_NAME}-{HASH1}.rlib`
     ///   - `lib{CRATE_NAME}-{HASH1}.rmeta`
     ///
@@ -493,7 +509,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     pub async fn enumerate_cache_artifacts(
         &self,
         dependency: &Dependency,
-    ) -> Result<Vec<Artifact>> {
+    ) -> Result<Vec<&RelFilePath>> {
         // TODO: We could make these lookups faster. For example, we could build
         // dedicated indexes for the fingerprint, deps, and build folders. We
         // could also use a data structure that natively supports fast "look up
@@ -510,7 +526,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         let fingerprints = index
             .files
             .iter()
-            .filter(|(path, _)| {
+            .filter(|path| {
                 path.component_strs_lossy()
                     .tuple_windows()
                     .next()
@@ -524,7 +540,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         let build_scripts = index
             .files
             .iter()
-            .filter(|(path, _)| {
+            .filter(|path| {
                 path.component_strs_lossy()
                     .tuple_windows()
                     .next()
@@ -534,38 +550,54 @@ impl<'ws> ProfileDir<'ws, Locked> {
             })
             .collect_vec();
 
-        // We find dependencies by looking for a `.d` file in the `deps` folder
+        // We find dependencies by looking for a "dep-info" file in the `deps` folder
         // whose name starts with the name of the dependency and parsing it.
         // This will include the `.rlib` and `.rmeta`.
         let deps = index
             .files
             .iter()
-            .filter(|(path, _)| {
+            .filter(|path| {
                 path.component_strs_lossy()
                     .next()
                     .is_some_and(|part| part == "deps")
             })
             .collect_vec();
-        // We collect dependencies by finding the `.d` file and reading it.
+        // We collect dependencies by finding the "dep-info" file and reading it.
         //
         // FIXME: If we can't reconstruct the expected hash, we can't actually
-        // find the _one_ `.d` file because we can't tell which file is for
-        // which package version in scenarios where our project has multiple
+        // find the _one_ "dep-info" file because we can't tell which file is
+        // for which package version in scenarios where our project has multiple
         // versions of a dependency.
-        let dotds = deps.iter().filter(|(path, _)| {
+        let dotds = deps.iter().filter(|path| {
             path.component_strs_lossy()
                 .nth(1)
                 .is_some_and(|part| dotd_regex.is_match(&part))
         });
+
         let mut dependencies = Vec::new();
-        for (dotd, _) in dotds {
-            let outputs = Dotd::from_file(self, &self.root().join(*dotd))
+        for &dotd in dotds {
+            let parsed = DepInfo::from_file(self, &self.root().join(dotd))
                 .await
-                .context("parse .d file")?
-                .outputs
+                .context("parse 'dep-info' file")?;
+
+            // For the purpose of this check, we only care about the outputs
+            // that are relative to the local project; we don't need to
+            // or want to cache items that are in the global cargo cache.
+            // This is because if the file is in the global cargo cache
+            // it's crate source, and today restoring this is considered
+            // out of scope for `hurry`.
+            //
+            // Note that the "dep-info" file lists itself, so we don't need
+            // to do anything special for it.
+            let outputs = parsed
+                .build_outputs()
                 .into_iter()
+                .filter_map(|output| match output {
+                    DepInfoDependencyPath::RelativeTargetProfile(p) => Some(p),
+                    DepInfoDependencyPath::RelativeCargoHome(_) => None,
+                })
                 .collect::<HashSet<_>>();
-            dependencies.extend(deps.iter().filter(|(path, _)| outputs.contains(*path)));
+            dependencies.extend(deps.iter().filter(|&path| outputs.contains(path)));
         }
 
         // Now that we have our three sources of files,
@@ -574,13 +606,6 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .into_iter()
             .chain(build_scripts)
             .chain(dependencies)
-            .map(|(path, entry)| {
-                Artifact::builder()
-                    .target(path)
-                    .hash(&entry.hash)
-                    .metadata(entry.metadata.clone())
-                    .build()
-            })
             .inspect(|artifact| trace!(?artifact, "enumerated artifact"))
             .collect::<Vec<_>>()
             .pipe(Ok)
@@ -592,5 +617,81 @@ impl<'ws> ProfileDir<'ws, Locked> {
     /// based on the workspace's target directory.
     pub fn root(&self) -> &AbsDirPath {
         &self.root
+    }
+
+    /// Store the contents of the file referenced by the path in the CAS.
+    #[instrument(name = "ProfileDir::store_cas")]
+    pub async fn store_cas(
+        &self,
+        cas: &FsCas,
+        file: &RelFilePath,
+    ) -> Result<(Blake3, AbsFilePath)> {
+        let file = self.root.join(file);
+        let raw = fs::must_read_buffered(&file).await.context("read file")?;
+        let content = match CasRewrite::from_path(&file) {
+            CasRewrite::None => raw,
+            CasRewrite::DepInfo => DepInfo::from_file(self, &file)
+                .await
+                .context("parse depinfo")?
+                .pipe_ref(serde_json::to_vec)
+                .context("serialize depinfo")?,
+        };
+
+        cas.store(&content)
+            .await
+            .context("store content in CAS")
+            .map(|key| (key, file))
+    }
+
+    /// Get the content from the CAS referenced by the key and restore it
+    /// to the provided path.
+    #[instrument(name = "ProfileDir::restore_cas")]
+    pub async fn restore_cas(
+        &self,
+        cas: &FsCas,
+        key: &Blake3,
+        file: &RelFilePath,
+    ) -> Result<AbsFilePath> {
+        let file = self.root.join(file);
+        let content = cas.must_get(key).await.context("get content from CAS")?;
+        let raw = match CasRewrite::from_path(&file) {
+            CasRewrite::None => content,
+            CasRewrite::DepInfo => serde_json::from_slice::<DepInfo>(&content)
+                .context("deserialize depinfo")
+                .map(|dotd| dotd.reconstruct(self).into_bytes())?,
+        };
+        fs::write(&file, &raw)
+            .await
+            .context("write file")
+            .map(|_| file)
+    }
+}
+
+/// Some files need to be rewritten when stored in or restored from the CAS.
+/// This type supports parsing a path to determine whether it should be
+/// rewritten, and if so using what strategy.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
+enum CasRewrite {
+    /// No rewriting should take place.
+    #[default]
+    None,
+
+    /// This is a "dep-info" file, so use the "dep-info" rewrite strategy.
+    DepInfo,
+}
+
+impl CasRewrite {
+    /// Determine the rewrite strategy from the file path.
+    fn from_path(target: &AbsFilePath) -> Self {
+        let Some(name) = target.file_name_str_lossy() else {
+            return Self::default();
+        };
+        let Some((_, ext)) = name.rsplit_once('.') else {
+            return Self::default();
+        };
+        match ext {
+            "d" => Self::DepInfo,
+            _ => Self::default(),
+        }
     }
 }

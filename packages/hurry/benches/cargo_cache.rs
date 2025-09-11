@@ -63,8 +63,8 @@ fn backup(bencher: Bencher) {
             tokio::runtime::Runtime::new()
                 .expect("set up tokio runtime")
                 .block_on(async move {
-                    let cas = FsCas::open_dir(cas_root).await.context("open CAS")?;
-                    let cache = FsCache::open_dir(cache_root)
+                    let cas = FsCas::open_dir(&cas_root).await.context("open CAS")?;
+                    let cache = FsCache::open_dir(&cache_root)
                         .await
                         .context("open cache")?
                         .pipe(FsCache::lock)
@@ -122,8 +122,8 @@ fn restore(bencher: Bencher) {
                         .await
                         .context("copy current workspace to temp workspace")?;
 
-                    let cas = FsCas::open_dir(cas_root).await.context("open CAS")?;
-                    let cache = FsCache::open_dir(cache_root)
+                    let cas = FsCas::open_dir(&cas_root).await.context("open CAS")?;
+                    let cache = FsCache::open_dir(&cache_root)
                         .await
                         .context("open cache")?
                         .pipe(FsCache::lock)

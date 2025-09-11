@@ -51,6 +51,7 @@ colored = {workspace = true }
 location-macros = {workspace = true }
 futures = { workspace = true }
 tempfile = { workspace = true }
+home = { workspace = true }
 regex = { workspace = true }
 uuid = { version = "1.18.1", features = ["v4"] }
 jiff = { workspace = true }

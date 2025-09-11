@@ -9,10 +9,11 @@ use std::fmt::Debug;
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use hurry::{
-    cache::{Cache, Cas, FsCache, FsCas},
+    Locked,
+    cache::{FsCache, FsCas},
     cargo::{self, Profile, Workspace, cache_target_from_workspace, restore_target_from_cache},
     fs,
-    path::TryJoinWith as _,
+    path::TryJoinWith,
 };
 use tracing::{error, info, instrument, warn};
 
@@ -80,9 +81,9 @@ pub async fn exec(options: Options) -> Result<()> {
 #[instrument]
 async fn exec_inner(
     options: Options,
-    cas: impl Cas + Debug + Copy,
+    cas: &FsCas,
     workspace: &Workspace,
-    cache: impl Cache + Debug + Copy,
+    cache: &FsCache<Locked>,
 ) -> Result<()> {
     let profile = options.profile();
 
@@ -119,11 +120,7 @@ async fn exec_inner(
         fs::create_dir_all(
             &workspace
                 .target
-                .try_join_dirs(vec![
-                    "hurry",
-                    "invocations",
-                    &cargo_invocation_id.to_string(),
-                ])
+                .try_join_dirs(["hurry", "invocations", &cargo_invocation_id.to_string()])
                 .context("invalid cargo invocation cache dirname")?,
         )
         .await

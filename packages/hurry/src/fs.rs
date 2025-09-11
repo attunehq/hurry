@@ -24,9 +24,11 @@
     reason = "The methods are disallowed elsewhere, but we need them here!"
 )]
 
-use std::{fmt::Debug as StdDebug, marker::PhantomData, sync::Arc, time::SystemTime};
+use std::{
+    convert::identity, fmt::Debug as StdDebug, marker::PhantomData, sync::Arc, time::SystemTime,
+};
 
-use ahash::AHashMap;
+use ahash::AHashSet;
 use async_walkdir::WalkDir;
 use color_eyre::{
     Result,
@@ -35,7 +37,7 @@ use color_eyre::{
 use derive_more::{Debug, Display};
 use filetime::FileTime;
 use fslock::LockFile as FsLockFile;
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, TryStreamExt, future};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tap::{Pipe, TapFallible};
@@ -137,35 +139,23 @@ pub struct Index {
     /// The root directory of the index.
     pub root: AbsDirPath,
 
-    /// Stores the index.
-    /// Keys relative to `root`.
+    /// Files are relative to `root`.
     //
     // TODO: May want to make this a trie or something.
     // https://docs.rs/fs-tree/0.2.2/fs_tree/ looked like it might work,
     // but the API was sketchy so I didn't use it for now.
     #[debug("{}", files.len())]
-    pub files: AHashMap<RelFilePath, IndexEntry>,
+    pub files: AHashSet<RelFilePath>,
 }
 
 impl Index {
     /// Index the provided path recursively.
-    //
-    // TODO: move this to use async natively.
     #[instrument(name = "Index::recursive")]
-    pub async fn recursive(root: impl Into<AbsDirPath> + StdDebug) -> Result<Self> {
-        let root = root.into();
+    pub async fn recursive(root: &AbsDirPath) -> Result<Self> {
+        let root = root.clone();
         let files = walk_files(&root)
-            .try_fold(AHashMap::new(), |mut files, file| {
-                let root = root.clone();
-                async move {
-                    let entry = IndexEntry::from_file(&file)
-                        .await
-                        .with_context(|| format!("index {file:?}"))?;
-                    let rel = file.relative_to(root).context("make relative")?;
-                    files.insert(rel, entry);
-                    Ok(files)
-                }
-            })
+            .and_then(|entry| future::ready(entry.relative_to(&root)))
+            .try_collect::<AHashSet<_>>()
             .await?;
 
         Ok(Self { root, files })
@@ -322,6 +312,16 @@ pub async fn read_buffered(path: &AbsFilePath) -> Result<Option<Vec<u8>>> {
     }
 }
 
+/// Buffer the file content from disk.
+/// Unlike [`read_buffered`], this function returns an error if the file
+/// doesn't exist.
+#[instrument]
+pub async fn must_read_buffered(path: &AbsFilePath) -> Result<Vec<u8>> {
+    tokio::fs::read(path.as_std_path())
+        .await
+        .with_context(|| format!("read file: {path:?}"))
+}
+
 /// Buffer the file content from disk and parse it as UTF8.
 #[instrument]
 pub async fn read_buffered_utf8(path: &AbsFilePath) -> Result<Option<String>> {
@@ -333,6 +333,16 @@ pub async fn read_buffered_utf8(path: &AbsFilePath) -> Result<Option<String>> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err).context(format!("read file: {path:?}")),
     }
+}
+
+/// Buffer the file content from disk and parse it as UTF8.
+/// Unlike [`read_buffered_utf8`], this function returns an error if the file
+/// doesn't exist.
+#[instrument]
+pub async fn must_read_buffered_utf8(path: &AbsFilePath) -> Result<String> {
+    tokio::fs::read_to_string(path.as_std_path())
+        .await
+        .with_context(|| format!("read file: {path:?}"))
 }
 
 /// Write the provided file content to disk.
@@ -485,6 +495,17 @@ pub async fn metadata(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err).context(format!("stat metadata: {path:?}")),
     }
+}
+
+/// Check whether the file exists.
+///
+/// Returns `false` if there is an error checking whether the path exists.
+/// Note that this sort of check is prone to race conditions- if you plan
+/// to do anything with the file after checking, you should probably
+/// just try to do the operation and handle the case of the file not existing.
+#[instrument]
+pub async fn exists(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
+    tokio::fs::try_exists(path).await.is_ok_and(identity)
 }
 
 /// Return whether the path represents a directory.

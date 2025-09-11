@@ -1,81 +1,17 @@
 //! Contains implementations of caches, and related infrastructure like CAS.
 
 use bon::Builder;
-use color_eyre::Result;
 use enum_assoc::Assoc;
 use serde::{Deserialize, Serialize};
-use std::{fmt::Debug, future::Future};
+use std::fmt::Debug;
 use strum::Display;
 
-use crate::{
-    fs::Metadata,
-    hash::Blake3,
-    path::{AbsFilePath, RelFilePath},
-};
+use crate::{fs::Metadata, hash::Blake3, path::RelFilePath};
 
 mod fs;
 pub use fs::*;
 
-/// Conceptualizes file caching across providers and codebases.
-pub trait Cache {
-    /// Store the record in the cache.
-    fn store(
-        &self,
-        kind: Kind,
-        key: &Blake3,
-        artifacts: impl IntoIterator<Item = impl Into<Artifact>> + Debug + Send,
-    ) -> impl Future<Output = Result<()>> + Send;
-
-    /// Get the record from the cache, if it exists.
-    fn get(&self, kind: Kind, key: &Blake3) -> impl Future<Output = Result<Option<Record>>> + Send;
-}
-
-impl<T: Cache + Sync> Cache for &T {
-    async fn store(
-        &self,
-        kind: Kind,
-        key: &Blake3,
-        artifacts: impl IntoIterator<Item = impl Into<Artifact>> + Debug + Send,
-    ) -> Result<()> {
-        Cache::store(*self, kind, key, artifacts).await
-    }
-
-    async fn get(&self, kind: Kind, key: &Blake3) -> Result<Option<Record>> {
-        Cache::get(*self, kind, key).await
-    }
-}
-
-/// Conceptualizes "content addressed storage" across providers.
-pub trait Cas {
-    /// Store the content at the provided local file path in the CAS.
-    /// Returns the key by which this content can be referred to in the future.
-    fn store_file(
-        &self,
-        kind: Kind,
-        file: &AbsFilePath,
-    ) -> impl Future<Output = Result<Blake3>> + Send;
-
-    /// Get the content from the cache, if it exists,
-    /// and write it to the output location.
-    fn get_file(
-        &self,
-        kind: Kind,
-        key: &Blake3,
-        destination: &AbsFilePath,
-    ) -> impl Future<Output = Result<()>> + Send;
-}
-
-impl<T: Cas + Sync> Cas for &T {
-    async fn store_file(&self, kind: Kind, src: &AbsFilePath) -> Result<Blake3> {
-        Cas::store_file(*self, kind, src).await
-    }
-
-    async fn get_file(&self, kind: Kind, key: &Blake3, destination: &AbsFilePath) -> Result<()> {
-        Cas::get_file(*self, kind, key, destination).await
-    }
-}
-
-/// The kind of project corresponding to the cache and CAS.
+/// The kind of project represented by a cache [`Record`].
 ///
 /// Generally, prefer naming these by build system rather than by language,
 /// since most languages have more than one build system and the build systems
@@ -85,7 +21,7 @@ impl<T: Cas + Sync> Cas for &T {
 )]
 #[serde(rename_all = "snake_case")]
 #[func(pub const fn as_str(&self) -> &str)]
-pub enum Kind {
+pub enum RecordKind {
     /// A Rust project managed by Cargo.
     #[assoc(as_str = "cargo")]
     Cargo,
@@ -100,7 +36,7 @@ pub enum Kind {
 pub struct Record {
     /// The kind of project being cached.
     #[builder(into)]
-    pub kind: Kind,
+    pub kind: RecordKind,
 
     /// The cache key for this record.
     #[builder(into)]
@@ -108,7 +44,7 @@ pub struct Record {
 
     /// The artifacts in this record.
     #[builder(default, into)]
-    pub artifacts: Vec<Artifact>,
+    pub artifacts: Vec<RecordArtifact>,
 }
 
 impl From<&Record> for Record {
@@ -123,10 +59,11 @@ impl AsRef<Record> for Record {
     }
 }
 
-/// A recorded cache artifact.
+/// A recorded artifact in a cache [`Record`].
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize, Builder)]
-pub struct Artifact {
-    /// The target path for the artifact.
+pub struct RecordArtifact {
+    /// The target path from which the artifact was backed up (and therefore,
+    /// to which the artifact should be restored).
     ///
     /// This is expected to be relative to the "cache root" for the project;
     /// what specifically the "cache root" is depends on the project type
@@ -134,11 +71,10 @@ pub struct Artifact {
     #[builder(into)]
     pub target: RelFilePath,
 
-    /// The hash of the content of the artifact.
-    ///
-    /// This is used to find the artifact data in the CAS.
+    /// The CAS key for the content of the artifact.
+    /// This is the [`Blake3`] of the content.
     #[builder(into)]
-    pub hash: Blake3,
+    pub cas_key: Blake3,
 
     /// The file metadata of the artifact.
     ///
@@ -151,14 +87,14 @@ pub struct Artifact {
     pub metadata: Metadata,
 }
 
-impl From<&Artifact> for Artifact {
-    fn from(value: &Artifact) -> Self {
+impl From<&RecordArtifact> for RecordArtifact {
+    fn from(value: &RecordArtifact) -> Self {
         value.clone()
     }
 }
 
-impl AsRef<Artifact> for Artifact {
-    fn as_ref(&self) -> &Artifact {
+impl AsRef<RecordArtifact> for RecordArtifact {
+    fn as_ref(&self) -> &RecordArtifact {
         self
     }
 }
