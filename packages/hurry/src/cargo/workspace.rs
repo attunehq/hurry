@@ -625,14 +625,13 @@ impl<'ws> ProfileDir<'ws, Locked> {
     pub async fn store_cas(&self, cas: &FsCas, file: &RelFilePath) -> Result<Blake3> {
         let file = self.root.join(file);
         let raw = fs::must_read_buffered(&file).await.context("read file")?;
-        let content = match file.extension_str_lossy().as_deref() {
-            Some("d") => {
-                let dotd = DepInfo::from_file(self, &file)
-                    .await
-                    .context("parse depinfo")?;
-                serde_json::to_vec(&dotd).context("serialize depinfo")?
-            }
-            _ => raw,
+        let content = match CasRewrite::parse(&file) {
+            CasRewrite::None => raw,
+            CasRewrite::DepInfo => DepInfo::from_file(self, &file)
+                .await
+                .context("parse depinfo")?
+                .pipe_ref(serde_json::to_vec)
+                .context("serialize depinfo")?,
         };
 
         cas.store(Kind::Cargo, &content)
@@ -654,15 +653,43 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .must_get(Kind::Cargo, key)
             .await
             .context("get content from CAS")?;
-        let raw = match file.extension_str_lossy().as_deref() {
-            Some("d") => serde_json::from_slice::<DepInfo>(&content)
+        let raw = match CasRewrite::parse(&file) {
+            CasRewrite::None => content,
+            CasRewrite::DepInfo => serde_json::from_slice::<DepInfo>(&content)
                 .context("deserialize depinfo")
                 .map(|dotd| dotd.reconstruct(self).into_bytes())?,
-            _ => content,
         };
         fs::write(&file, &raw)
             .await
             .context("write file")
             .map(|_| file)
+    }
+}
+
+/// Some files need to be rewritten when stored in or restored from the CAS.
+/// This type supports parsing a path to determine whether it should be
+/// rewritten, and if so using what strategy.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
+enum CasRewrite {
+    /// No rewriting should take place.
+    #[default]
+    None,
+
+    /// This is a `DepInfo` file, so use the `DepInfo` rewrite strategy.
+    DepInfo,
+}
+
+impl CasRewrite {
+    fn parse(target: &AbsFilePath) -> Self {
+        let Some(name) = target.file_name_str_lossy() else {
+            return Self::default();
+        };
+        let Some((_, ext)) = name.rsplit_once('.') else {
+            return Self::default();
+        };
+        match ext {
+            "d" => Self::DepInfo,
+            _ => Self::default(),
+        }
     }
 }
