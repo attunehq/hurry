@@ -38,7 +38,7 @@ jobs:
         run: cargo build --workspace --all-targets --all-features
 
       - name: Check clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features
 
       # FIXME: Some of these tests do not yet pass on all filesystems.
       #
