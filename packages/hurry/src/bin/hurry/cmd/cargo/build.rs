@@ -11,7 +11,9 @@ use color_eyre::{Result, eyre::Context};
 use hurry::{
     Locked,
     cache::{FsCache, FsCas},
-    cargo::{Profile, Workspace, cache_target_from_workspace, invoke, restore_target_from_cache},
+    cargo::{self, Profile, Workspace, cache_target_from_workspace, restore_target_from_cache},
+    fs,
+    path::TryJoinWith,
 };
 use tracing::{error, info, instrument, warn};
 
@@ -118,11 +120,7 @@ async fn exec_inner(
         fs::create_dir_all(
             &workspace
                 .target
-                .try_join_dirs(vec![
-                    "hurry",
-                    "invocations",
-                    &cargo_invocation_id.to_string(),
-                ])
+                .try_join_dirs(["hurry", "invocations", &cargo_invocation_id.to_string()])
                 .context("invalid cargo invocation cache dirname")?,
         )
         .await
