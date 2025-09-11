@@ -90,12 +90,12 @@ impl Workspace {
                 })
                 .current_dir(cmd_current_dir)
                 .exec()
-                .context("could not read cargo metadata")
+                .context("exec and parse cargo metadata")
         })
         .await
         .context("join task")?
         .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
-        .context("read cargo metadata")?;
+        .context("get cargo metadata")?;
 
         let workspace_root = AbsDirPath::try_from(&metadata.workspace_root)
             .context("parse workspace root as absolute directory")?;
@@ -115,7 +115,7 @@ impl Workspace {
         // TODO: This currently blows up if we have no lockfile.
         let cargo_lock = workspace_root.join(mk_rel_file!("Cargo.lock"));
         let lockfile = spawn_blocking(move || -> Result<_> {
-            cargo_lock::Lockfile::load(cargo_lock.as_std_path()).context("load cargo lockfile")
+            cargo_lock::Lockfile::load(cargo_lock.as_std_path()).context("parse cargo lockfile")
         })
         .await
         .context("join task")?

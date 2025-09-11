@@ -1,4 +1,4 @@
-use std::{fmt::Debug as StdDebug, iter::once};
+use std::{ffi::OsStr, fmt, iter::once};
 
 use color_eyre::{
     Result,
@@ -29,15 +29,28 @@ pub use workspace::*;
 /// Execute a Cargo subcommand with specified arguments.
 #[instrument]
 pub async fn invoke(
-    subcommand: impl AsRef<str> + StdDebug,
-    args: impl IntoIterator<Item = impl AsRef<str>> + StdDebug,
+    subcommand: impl AsRef<str> + fmt::Debug,
+    args: impl IntoIterator<Item = impl AsRef<str>> + fmt::Debug,
+) -> Result<()> {
+    invoke_env(subcommand, args, [] as [(&OsStr, &OsStr); 0]).await
+}
+
+/// Execute a Cargo subcommand with specified arguments and environment
+/// variables.
+#[instrument]
+pub async fn invoke_env(
+    subcommand: impl AsRef<str> + fmt::Debug,
+    args: impl IntoIterator<Item = impl AsRef<str>> + fmt::Debug,
+    env: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)> + fmt::Debug,
 ) -> Result<()> {
     let subcommand = subcommand.as_ref();
     let args = args.into_iter().collect::<Vec<_>>();
     let args = args.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
 
+    trace!(?subcommand, ?args, "invoke cargo");
     let mut cmd = tokio::process::Command::new("cargo");
     cmd.args(once(subcommand).chain(args.iter().copied()));
+    cmd.envs(env);
     let status = cmd
         .spawn()
         .context("could not spawn cargo")?
@@ -45,7 +58,6 @@ pub async fn invoke(
         .await
         .context("could complete cargo execution")?;
     if status.success() {
-        trace!(?subcommand, ?args, "invoke cargo");
         Ok(())
     } else {
         bail!("cargo exited with status: {status}");
