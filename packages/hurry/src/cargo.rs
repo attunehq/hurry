@@ -11,7 +11,7 @@ use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     Locked,
-    cache::{Artifact, FsCache, FsCas, Kind},
+    cache::{FsCache, FsCas, RecordArtifact, RecordKind},
     fs::{DEFAULT_CONCURRENCY, Metadata},
     hash::Blake3,
 };
@@ -110,8 +110,8 @@ pub async fn cache_target_from_workspace(
                     .await
                     .context("read metadata")?
                     .ok_or_eyre("file does not exist")?;
-                Artifact::builder()
-                    .hash(key)
+                RecordArtifact::builder()
+                    .cas_key(key)
                     .metadata(meta)
                     .target(artifact)
                     .build()
@@ -123,7 +123,7 @@ pub async fn cache_target_from_workspace(
             .context("cache artifacts")?;
 
         cache
-            .store(Kind::Cargo, key, &artifacts)
+            .store(RecordKind::Cargo, key, &artifacts)
             .await
             .context("store cache record")?;
         debug!(?key, ?dependency, ?artifacts, "stored cache record");
@@ -165,7 +165,7 @@ pub async fn restore_target_from_cache(
     debug!(dependencies = ?target.workspace.dependencies, "restoring dependencies");
     for (key, dependency) in &target.workspace.dependencies {
         debug!(?key, ?dependency, "restoring dependency");
-        let record = match cache.get(Kind::Cargo, key).await {
+        let record = match cache.get(RecordKind::Cargo, key).await {
             Ok(Some(record)) => record,
             Ok(None) => {
                 debug!(?key, ?dependency, "no record found for key");
@@ -183,7 +183,7 @@ pub async fn restore_target_from_cache(
         debug!(?key, ?dependency, artifacts = ?record.artifacts, "restoring artifacts");
         stream::iter(&record.artifacts)
             .for_each_concurrent(Some(DEFAULT_CONCURRENCY), |artifact| async move {
-                let key = &artifact.hash;
+                let key = &artifact.cas_key;
                 let restore = target
                     .restore_cas(cas, key, &artifact.target)
                     .and_then(|path| async move { artifact.metadata.set_file(&path).await });
