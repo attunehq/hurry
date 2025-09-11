@@ -16,12 +16,12 @@ use tracing::{debug, instrument, trace};
 
 use crate::{
     Locked, Unlocked,
-    cache::Artifact,
+    cache::{Artifact, FsCas, Kind},
     cargo::DepInfoDependencyPath,
     fs::{self, Index, LockFile},
     hash::Blake3,
     mk_rel_file,
-    path::{AbsDirPath, JoinWith, TryJoinWith},
+    path::{AbsDirPath, JoinWith, RelFilePath, TryJoinWith},
 };
 
 use super::{
@@ -618,5 +618,43 @@ impl<'ws> ProfileDir<'ws, Locked> {
     /// based on the workspace's target directory.
     pub fn root(&self) -> &AbsDirPath {
         &self.root
+    }
+
+    /// Store the contents of the file referenced by the path in the CAS.
+    #[instrument(name = "ProfileDir::store_cas")]
+    pub async fn store_cas(&self, cas: &FsCas, file: &RelFilePath) -> Result<Blake3> {
+        let file = self.root.join(file);
+        let raw = fs::must_read_buffered(&file).await.context("read file")?;
+        let content = match file.extension_str_lossy().as_deref() {
+            Some("d") => {
+                let dotd = DepInfo::from_file(self, &file)
+                    .await
+                    .context("parse depinfo")?;
+                serde_json::to_vec(&dotd).context("serialize depinfo")?
+            }
+            _ => raw,
+        };
+
+        cas.store(Kind::Cargo, &content)
+            .await
+            .context("store content in CAS")
+    }
+
+    /// Get the content from the CAS referenced by the key and restore it
+    /// to the provided path.
+    #[instrument(name = "ProfileDir::restore_cas")]
+    pub async fn restore_cas(&self, cas: &FsCas, key: &Blake3, file: &RelFilePath) -> Result<()> {
+        let file = self.root.join(file);
+        let content = cas
+            .must_get(Kind::Cargo, key)
+            .await
+            .context("get content from CAS")?;
+        let raw = match file.extension_str_lossy().as_deref() {
+            Some("d") => serde_json::from_slice::<DepInfo>(&content)
+                .context("deserialize depinfo")
+                .map(|dotd| dotd.reconstruct(self).into_bytes())?,
+            _ => content,
+        };
+        fs::write(&file, &raw).await.context("write file").map(drop)
     }
 }

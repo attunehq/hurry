@@ -10,8 +10,7 @@ use tracing::{instrument, trace};
 
 use crate::{
     Locked, Unlocked,
-    cache::{Artifact, Entry, Kind, Record},
-    cargo::ProfileDir,
+    cache::{Artifact, Kind, Record},
     fs::{self, LockFile},
     hash::Blake3,
     mk_rel_dir, mk_rel_file,
@@ -197,8 +196,7 @@ impl FsCas {
 
     /// Store the entry in the CAS.
     #[instrument(name = "FsCas::store")]
-    pub async fn store(&self, kind: Kind, entry: impl Entry + Debug) -> Result<Blake3> {
-        let content = entry.rewrite_store().await.context("rewrite entry")?;
+    pub async fn store(&self, kind: Kind, content: &[u8]) -> Result<Blake3> {
         let key = Blake3::from_buffer(&content);
         let dst = self.root.try_join_combined([kind.as_str()], key.as_str())?;
         fs::write(&dst, content).await?;
@@ -206,23 +204,17 @@ impl FsCas {
     }
 
     /// Get the entry out of the CAS.
-    //
-    // TODO: The use of `ProfileDir` here binds this type to `cargo`;
-    // we should find a generic way to represent this.
     #[instrument(name = "FsCas::get")]
-    pub async fn get<T: Entry>(
-        &self,
-        kind: Kind,
-        profile: &ProfileDir<'_, Locked>,
-        key: &Blake3,
-    ) -> Result<Option<Vec<u8>>> {
+    pub async fn get(&self, kind: Kind, key: &Blake3) -> Result<Option<Vec<u8>>> {
         let src = self.root.try_join_combined([kind.as_str()], key.as_str())?;
-        match fs::read_buffered(&src).await? {
-            Some(content) => T::rewrite_get(profile, content)
-                .await
-                .context("rewrite entry")
-                .map(Some),
-            None => Ok(None),
-        }
+        fs::read_buffered(&src).await
+    }
+
+    /// Get the entry out of the CAS.
+    /// Errors if the entry is not available.
+    #[instrument(name = "FsCas::get")]
+    pub async fn must_get(&self, kind: Kind, key: &Blake3) -> Result<Vec<u8>> {
+        let src = self.root.try_join_combined([kind.as_str()], key.as_str())?;
+        fs::must_read_buffered(&src).await
     }
 }

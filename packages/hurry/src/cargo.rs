@@ -4,7 +4,7 @@ use color_eyre::{
     Result,
     eyre::{Context, bail},
 };
-use futures::{StreamExt, TryFutureExt, TryStreamExt, stream};
+use futures::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
 use tap::Pipe;
 use tracing::{debug, instrument, trace, warn};
@@ -12,9 +12,8 @@ use tracing::{debug, instrument, trace, warn};
 use crate::{
     Locked,
     cache::{Artifact, FsCache, FsCas, Kind},
-    fs::{self, DEFAULT_CONCURRENCY},
+    fs::DEFAULT_CONCURRENCY,
     hash::Blake3,
-    path::JoinWith,
 };
 
 mod dependency;
@@ -92,15 +91,7 @@ pub async fn cache_target_from_workspace(
         debug!(?key, ?dependency, ?artifacts, "caching artifacts");
         let artifacts = stream::iter(artifacts)
             .map(|artifact| async move {
-                let dst = target.root().join(&artifact.target);
-                let key = if dst.extension_str_lossy().as_deref() == Some("d") {
-                    let dotd = DepInfo::from_file(&target, &dst).await?;
-                    cas.store(Kind::Cargo, dotd).await?
-                } else {
-                    let content = fs::must_read_buffered(&dst).await?;
-                    cas.store(Kind::Cargo, content).await?
-                };
-
+                let key = target.store_cas(cas, &artifact.target).await?;
                 trace!(?key, ?dependency, ?artifact, "stored artifact");
                 Artifact::builder()
                     .hash(key)
@@ -175,35 +166,14 @@ pub async fn restore_target_from_cache(
         debug!(?key, ?dependency, artifacts = ?record.artifacts, "restoring artifacts");
         stream::iter(&record.artifacts)
             .for_each_concurrent(Some(DEFAULT_CONCURRENCY), |artifact| async move {
-                let dst = target.root().join(&artifact.target);
                 let key = &artifact.hash;
-                let content = if dst.extension_str_lossy().as_deref() == Some("d") {
-                    cas.get::<DepInfo>(Kind::Cargo, target, key).await
-                } else {
-                    cas.get::<Vec<u8>>(Kind::Cargo, target, key).await
-                };
-                match content {
-                    Ok(Some(content)) => {
-                        let restore = fs::write(&dst, content)
-                            .and_then(|_| artifact.metadata.set_file(&dst))
-                            .await;
-                        match restore {
-                            Ok(_) => trace!(?key, ?dependency, ?artifact, "restored artifact"),
-                            Err(error) => {
-                                warn!(
-                                    ?error,
-                                    ?key,
-                                    "Failed to restore artifact for dependency: {dependency}"
-                                );
-                            }
-                        }
-                    }
-                    Ok(None) => trace!(?key, ?dependency, ?artifact, "artifact not found in cache"),
+                match target.restore_cas(cas, key, &artifact.target).await {
+                    Ok(_) => debug!(?key, ?artifact, ?dependency, "restored file"),
                     Err(error) => {
                         warn!(
                             ?error,
                             ?key,
-                            "Failed to read artifact for dependency: {dependency}"
+                            "Failed to restore artifact for dependency: {dependency}"
                         );
                     }
                 }

@@ -160,18 +160,6 @@ impl DepInfo {
     }
 }
 
-impl crate::cache::Entry for DepInfo {
-    async fn rewrite_store(self) -> Result<Vec<u8>> {
-        serde_json::to_vec(&self).context("serialize")
-    }
-
-    async fn rewrite_get(profile: &ProfileDir<'_, Locked>, stored: Vec<u8>) -> Result<Vec<u8>> {
-        serde_json::from_slice::<Self>(&stored)
-            .context("deserialize")
-            .map(|dotd| dotd.reconstruct(profile).into_bytes())
-    }
-}
-
 /// A single line inside a [`DepInfo`] file.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
 #[serde(tag = "t", content = "c")]
