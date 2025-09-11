@@ -73,9 +73,9 @@ impl RustcMetadata {
     }
 }
 
-/// A parsed Cargo `DepInfo` file.
+/// A parsed "dep-info" file.
 ///
-/// Cargo generates `DepInfo` files in the `deps/` directory that follow a
+/// `rustc` generates "dep-info" files in the `deps/` directory that follow a
 /// makefile-like format: `output: input1 input2 ...`. It also supports
 /// comments and blank lines, which we also retain.
 ///
@@ -110,7 +110,7 @@ impl RustcMetadata {
 pub struct DepInfo(Vec<DepInfoLine>);
 
 impl DepInfo {
-    /// Parse a `DepInfo` file and extract output artifact paths.
+    /// Parse a "dep-info" file and extract output artifact paths.
     ///
     /// Reads the dependency file at the given path (relative to profile root),
     /// parses each line for the `output:` format, and filters for relevant
@@ -133,7 +133,7 @@ impl DepInfo {
         Ok(Self(lines))
     }
 
-    /// Reconstruct the `DepInfo` file in the context of the profile directory.
+    /// Reconstruct the "dep-info" file in the context of the profile directory.
     #[instrument(name = "DepInfo::reconstruct")]
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
         self.0
@@ -169,7 +169,7 @@ impl DepInfo {
     }
 }
 
-/// A single line inside a [`DepInfo`] file.
+/// A single line inside a ["dep-info" file](DepInfo).
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
 #[serde(tag = "t", content = "c")]
 pub enum DepInfoLine {
@@ -188,7 +188,7 @@ pub enum DepInfoLine {
 }
 
 impl DepInfoLine {
-    /// Parse the line in a `DepInfo` file.
+    /// Parse the line in a "dep-info" file.
     //
     // TODO: Handle spaces in the paths; rustc uses `\` to escape them[^1].
     // TODO: Handle optional `checksum` comments[^2].
@@ -246,9 +246,9 @@ impl DepInfoLine {
     }
 }
 
-/// A dependency path specified in a [`DepInfo`] file.
+/// A dependency path specified in a ["dep-info" file](DepInfo).
 ///
-/// Dependencies specified in `DepInfo` files can reference files either inside the
+/// Dependencies specified in "dep-info" files can reference files either inside the
 /// current project, or in the Cargo registry cache on the local machine.
 /// This type differentiates between these options.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
