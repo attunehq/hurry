@@ -464,7 +464,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ///   - `{PACKAGE_NAME}-{HASH2}`, which contains the compiled build script.
     ///     - `build-script-build`, an executable ELF.
     ///     - `build_script_build-{HASH2}`, the exact same ELF.
-    ///     - `build_script_build-{HASH2}.d`, a `DepInfo` file listing the input
+    ///     - `build_script_build-{HASH2}.d`, a "dep-info" file listing the input
     ///       files.
     ///   - `{PACKAGE_NAME}-{HASH3}`, which contains the outputs of running the
     ///     build script.
@@ -478,7 +478,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ///     - `stderr`, the STDERR of the build script.
     /// - Deps: these are stored in `$PROFILE/deps/`. See also:
     ///   https://rustc-dev-guide.rust-lang.org/backend/libs-and-metadata.html
-    ///   - `{CRATE_NAME}-{HASH1}.d`, a `DepInfo` file listing the inputs.
+    ///   - `{CRATE_NAME}-{HASH1}.d`, a "dep-info" file listing the inputs.
     ///   - `lib{CRATE_NAME}-{HASH1}.rlib`
     ///   - `lib{CRATE_NAME}-{HASH1}.rmeta`
     ///
@@ -550,7 +550,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
             })
             .collect_vec();
 
-        // We find dependencies by looking for a `DepInfo` file in the `deps` folder
+        // We find dependencies by looking for a "dep-info" file in the `deps` folder
         // whose name starts with the name of the dependency and parsing it.
         // This will include the `.rlib` and `.rmeta`.
         let deps = index
@@ -562,11 +562,11 @@ impl<'ws> ProfileDir<'ws, Locked> {
                     .is_some_and(|part| part == "deps")
             })
             .collect_vec();
-        // We collect dependencies by finding the `DepInfo` file and reading it.
+        // We collect dependencies by finding the "dep-info" file and reading it.
         //
         // FIXME: If we can't reconstruct the expected hash, we can't actually
-        // find the _one_ `DepInfo` file because we can't tell which file is for
-        // which package version in scenarios where our project has multiple
+        // find the _one_ "dep-info" file because we can't tell which file is
+        // for which package version in scenarios where our project has multiple
         // versions of a dependency.
         let dotds = deps.iter().filter(|(path, _)| {
             path.component_strs_lossy()
@@ -578,7 +578,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         for (dotd, _) in dotds {
             let parsed = DepInfo::from_file(self, &self.root().join(*dotd))
                 .await
-                .context("parse `DepInfo` file")?;
+                .context("parse 'dep-info' file")?;
 
             // For the purpose of this check, we only care about the outputs
             // that are relative to the local project; we don't need to
@@ -587,7 +587,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
             // it's crate source, and today restoring this is considered
             // out of scope for `hurry`.
             //
-            // Note that the `DepInfo` file lists itself, so we don't need
+            // Note that the "dep-info" file lists itself, so we don't need
             // to do anything special for it.
             let outputs = parsed
                 .build_outputs()
@@ -681,7 +681,7 @@ enum CasRewrite {
     #[default]
     None,
 
-    /// This is a `DepInfo` file, so use the `DepInfo` rewrite strategy.
+    /// This is a "dep-info" file, so use the "dep-info" rewrite strategy.
     DepInfo,
 }
 
