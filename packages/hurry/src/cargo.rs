@@ -88,7 +88,7 @@ pub async fn cache_target_from_workspace(
     // TODO: this currently assumes that the entire `target/` folder doesn't
     // have any _outdated_ data; this may not be correct.
     for (key, dependency) in &target.workspace.dependencies {
-        debug!(?key, ?dependency, "restoring dependency");
+        debug!(?key, ?dependency, "caching dependency");
         let artifacts = match target.enumerate_cache_artifacts(dependency).await {
             Ok(artifacts) => artifacts,
             Err(error) => {
@@ -99,6 +99,15 @@ pub async fn cache_target_from_workspace(
                 continue;
             }
         };
+
+        if artifacts.is_empty() {
+            debug!(
+                ?key,
+                ?dependency,
+                "skipped cache: no artifacts for dependency"
+            );
+            continue;
+        }
 
         debug!(?key, ?dependency, ?artifacts, "caching artifacts");
         let artifacts = stream::iter(artifacts)
@@ -179,6 +188,15 @@ pub async fn restore_target_from_cache(
                 continue;
             }
         };
+
+        if record.artifacts.is_empty() {
+            debug!(
+                ?key,
+                ?dependency,
+                "skipped restore: no artifacts for dependency"
+            );
+            continue;
+        }
 
         debug!(?key, ?dependency, artifacts = ?record.artifacts, "restoring artifacts");
         stream::iter(&record.artifacts)
