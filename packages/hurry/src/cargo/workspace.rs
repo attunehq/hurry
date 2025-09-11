@@ -578,11 +578,17 @@ impl<'ws> ProfileDir<'ws, Locked> {
         for (dotd, _) in dotds {
             let parsed = DepInfo::from_file(self, &self.root().join(*dotd))
                 .await
-                .context("parse .d file")?;
+                .context("parse `DepInfo` file")?;
 
             // For the purpose of this check, we only care about the outputs
             // that are relative to the local project; we don't need to
             // or want to cache items that are in the global cargo cache.
+            // This is because if the file is in the global cargo cache
+            // it's crate source, and today restoring this is considered
+            // out of scope for `hurry`.
+            //
+            // Note that the `DepInfo` file lists itself, so we don't need
+            // to do anything special for it.
             let outputs = parsed
                 .build_outputs()
                 .into_iter()
