@@ -1,6 +1,5 @@
 use std::{collections::HashMap, time::SystemTime};
 
-use cargo_metadata::camino::Utf8PathBuf;
 use color_eyre::{
     Result,
     eyre::{Context, OptionExt as _, bail},
@@ -11,7 +10,10 @@ use tracing_error::ErrorLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_tree::time::Uptime;
 
-use hurry::fs;
+use hurry::{
+    fs,
+    path::{AbsDirPath, JoinWith as _, RelFilePath, TryJoinWith as _},
+};
 
 #[derive(Serialize)]
 struct RustcInvocation {
@@ -68,20 +70,23 @@ pub async fn main() -> Result<()> {
     // `cargo metadata`. This causes an infinite co-recursive loop, where
     // running the wrapper calls `cargo metadata`, which calls the wrapper (to
     // use `rustc`), which calls `cargo metadata`, etc.
-    let build_cache = Utf8PathBuf::from(cargo_invocation_root)
-        .join("target")
-        .join("hurry");
-    let invocation_cache = build_cache.join("invocations").join(cargo_invocation_id);
+    let invocation_cache = AbsDirPath::try_from(cargo_invocation_root)
+        .context("invalid cargo invocation root")?
+        .try_join_dirs(vec!["target", "hurry", "invocations", &cargo_invocation_id])
+        .context("invalid cargo invocation cache dirname")?;
     fs::write(
-        invocation_cache.join(format!(
-            "{}-{}-{}.json",
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("current time is after Unix epoch")
-                .as_secs(),
-            std::process::id(),
-            rustc_invocation_id.to_string(),
-        )),
+        &invocation_cache.join(
+            RelFilePath::try_from(format!(
+                "{}-{}-{}.json",
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .expect("current time is after Unix epoch")
+                    .as_secs(),
+                std::process::id(),
+                rustc_invocation_id.to_string(),
+            ))
+            .expect("rustc invocation filename should be a valid filename"),
+        ),
         serde_json::to_string_pretty(&RustcInvocation {
             timestamp: SystemTime::now(),
             invocation: argv.clone(),

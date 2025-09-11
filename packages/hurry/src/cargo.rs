@@ -13,6 +13,7 @@ use crate::{
     Locked,
     cache::{Cache, Cas, Kind},
     hash::Blake3,
+    path::JoinWith,
 };
 
 mod dependency;
@@ -115,7 +116,7 @@ pub async fn cache_target_from_workspace(
                     .try_for_each_concurrent(Some(100), |artifact| {
                         let (cas, target) = (cas.clone(), target.clone());
                         async move {
-                            let dst = artifact.target.to_path(target.root());
+                            let dst = target.root().join(&artifact.target);
                             cas.store_file(Kind::Cargo, &dst)
                                 .await
                                 .with_context(|| format!("backup output file: {dst:?}"))
@@ -197,7 +198,7 @@ pub async fn restore_target_from_cache(
                     .try_for_each_concurrent(Some(100), |artifact| {
                         let (cas, target) = (cas.clone(), target.clone());
                         async move {
-                            let dst = artifact.target.to_path(target.root());
+                            let dst = target.root().join(&artifact.target);
                             cas.get_file(Kind::Cargo, &artifact.hash, &dst)
                                 .await
                                 .context("extract crate")

@@ -1,7 +1,5 @@
 //! Benchmarks for caching cargo projects.
 
-use std::path::PathBuf;
-
 use color_eyre::{Result, eyre::Context};
 use divan::Bencher;
 use hurry::{
@@ -11,6 +9,8 @@ use hurry::{
     },
     fs,
     hash::Blake3,
+    mk_rel_dir,
+    path::{AbsDirPath, JoinWith},
 };
 use location_macros::workspace_dir;
 use tap::Pipe;
@@ -22,7 +22,7 @@ fn main() {
 
 #[divan::bench(sample_count = 5)]
 fn open() {
-    let workspace = PathBuf::from(workspace_dir!());
+    let workspace = current_workspace();
     tokio::runtime::Runtime::new()
         .expect("set up tokio runtime")
         .block_on(async move {
@@ -36,7 +36,7 @@ fn open() {
 
 #[divan::bench(sample_count = 5)]
 fn index() {
-    let workspace = PathBuf::from(workspace_dir!());
+    let workspace = current_workspace();
     tokio::runtime::Runtime::new()
         .expect("set up tokio runtime")
         .block_on(async move {
@@ -56,15 +56,15 @@ fn index() {
 fn backup(bencher: Bencher) {
     bencher
         .with_inputs(|| {
-            let workspace = PathBuf::from(workspace_dir!());
-            let temp = TempDir::new().expect("create temporary directory");
-            let cas_root = temp.path().join("cas");
-            let cache_root = temp.path().join("ws");
+            let workspace = current_workspace();
+            let (_tc, cache) = temporary_directory();
+            let cas_root = cache.join(mk_rel_dir!("cas"));
+            let cache_root = cache.join(mk_rel_dir!("ws"));
             tokio::runtime::Runtime::new()
                 .expect("set up tokio runtime")
                 .block_on(async move {
-                    let cas = FsCas::open_dir_std(cas_root).await.context("open CAS")?;
-                    let cache = FsCache::open_dir_std(cache_root)
+                    let cas = FsCas::open_dir(cas_root).await.context("open CAS")?;
+                    let cache = FsCache::open_dir(cache_root)
                         .await
                         .context("open cache")?
                         .pipe(FsCache::lock)
@@ -105,11 +105,11 @@ fn backup(bencher: Bencher) {
 fn restore(bencher: Bencher) {
     bencher
         .with_inputs(|| {
-            let local_workspace = PathBuf::from(workspace_dir!());
-            let temp_workspace = TempDir::new().expect("create temporary directory");
-            let temp = TempDir::new().expect("create temporary directory");
-            let cas_root = temp.path().join("cas");
-            let cache_root = temp.path().join("ws");
+            let local_workspace = current_workspace();
+            let (_tw, temp_workspace) = temporary_directory();
+            let (_tc, cache) = temporary_directory();
+            let cas_root = cache.join(mk_rel_dir!("cas"));
+            let cache_root = cache.join(mk_rel_dir!("ws"));
             tokio::runtime::Runtime::new()
                 .expect("set up tokio runtime")
                 .block_on(async move {
@@ -118,19 +118,18 @@ fn restore(bencher: Bencher) {
                     // Unfortunately this'll make the benchmark slower,
                     // but since we're running with `skip_ext_time`
                     // it should't be reported as benchmark time.
-                    let workspace = temp_workspace.path();
-                    fs::copy_dir(local_workspace, workspace)
+                    fs::copy_dir(&local_workspace, &temp_workspace)
                         .await
                         .context("copy current workspace to temp workspace")?;
 
-                    let cas = FsCas::open_dir_std(cas_root).await.context("open CAS")?;
-                    let cache = FsCache::open_dir_std(cache_root)
+                    let cas = FsCas::open_dir(cas_root).await.context("open CAS")?;
+                    let cache = FsCache::open_dir(cache_root)
                         .await
                         .context("open cache")?
                         .pipe(FsCache::lock)
                         .await
                         .context("lock cache")?;
-                    let workspace = Workspace::from_argv_in_dir(&workspace, &[])
+                    let workspace = Workspace::from_argv_in_dir(&temp_workspace, &[])
                         .await
                         .context("open workspace")?;
                     {
@@ -142,7 +141,7 @@ fn restore(bencher: Bencher) {
                             .await
                             .context("backup target")?;
                     }
-                    tokio::fs::remove_dir_all(&workspace.target)
+                    fs::remove_dir_all(&workspace.target)
                         .await
                         .context("remove workspace target folder")?;
 
@@ -173,3 +172,16 @@ fn restore(bencher: Bencher) {
 }
 
 fn progress_noop(_key: &Blake3, _dep: &Dependency) {}
+
+#[track_caller]
+pub fn current_workspace() -> AbsDirPath {
+    let ws = workspace_dir!();
+    AbsDirPath::try_from(ws).unwrap_or_else(|err| panic!("parse {ws:?} as abs dir: {err:?}"))
+}
+
+#[track_caller]
+fn temporary_directory() -> (TempDir, AbsDirPath) {
+    let dir = TempDir::new().expect("create temporary directory");
+    let path = AbsDirPath::try_from(dir.path()).expect("read temp dir as abs dir");
+    (dir, path)
+}

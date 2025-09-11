@@ -1,17 +1,17 @@
-use std::str::FromStr;
-
-use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
 use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context, OptionExt, eyre},
 };
-use relative_path::{RelativePath, RelativePathBuf};
+use futures::{StreamExt, TryStreamExt, stream};
 use serde::Deserialize;
-use tap::TapFallible;
+use tap::{Pipe, TapFallible};
 use tracing::{instrument, trace};
 
 use super::workspace::ProfileDir;
-use crate::{Locked, fs};
+use crate::{
+    Locked, fs,
+    path::{AbsDirPath, AbsFilePath, RelFilePath, RelativeTo},
+};
 
 /// Rust compiler metadata for cache key generation.
 ///
@@ -37,13 +37,13 @@ pub struct RustcMetadata {
 impl RustcMetadata {
     /// Get platform metadata from the current compiler.
     #[instrument(name = "RustcMetadata::from_argv")]
-    pub async fn from_argv(workspace_root: &Utf8Path, _argv: &[String]) -> Result<Self> {
+    pub async fn from_argv(workspace_root: &AbsDirPath, _argv: &[String]) -> Result<Self> {
         let mut cmd = tokio::process::Command::new("rustc");
 
         // Bypasses the check that disallows using unstable commands on stable.
         cmd.env("RUSTC_BOOTSTRAP", "1");
         cmd.args(["-Z", "unstable-options", "--print", "target-spec-json"]);
-        cmd.current_dir(workspace_root);
+        cmd.current_dir(workspace_root.as_std_path());
         let output = cmd.output().await.context("run rustc")?;
         if !output.status.success() {
             return Err(eyre!("invoke rustc"))
@@ -82,7 +82,7 @@ impl RustcMetadata {
 #[derive(Debug)]
 pub struct Dotd {
     /// Recorded output paths, relative to the profile root.
-    pub outputs: Vec<RelativePathBuf>,
+    pub outputs: Vec<RelFilePath>,
 }
 
 impl Dotd {
@@ -98,36 +98,36 @@ impl Dotd {
     /// - Only extracts outputs with extensions: `.d`, `.rlib`, `.rmeta`
     /// - Returns paths relative to the profile root for cache consistency
     #[instrument(name = "Dotd::from_file")]
-    pub async fn from_file(
-        profile: &ProfileDir<'_, Locked>,
-        target: &RelativePath,
-    ) -> Result<Self> {
+    pub async fn from_file(profile: &ProfileDir<'_, Locked>, target: &AbsFilePath) -> Result<Self> {
         const DEP_EXTS: [&str; 4] = [".d", ".rlib", ".rmeta", ".so"];
         let profile_root = profile.root();
-        let outputs = fs::read_buffered_utf8(target.to_path(&profile_root))
+        fs::read_buffered_utf8(target)
             .await
             .with_context(|| format!("read .d file: {target:?}"))?
             .ok_or_eyre("file does not exist")?
             .lines()
-            .filter_map(|line| {
+            .pipe(stream::iter)
+            .filter_map(|line| async move {
                 let (output, _) = line.split_once(':')?;
                 if DEP_EXTS.iter().any(|ext| output.ends_with(ext)) {
                     trace!(?line, ?output, "read .d line");
-                    Utf8PathBuf::from_str(output)
+                    AbsFilePath::try_from(output)
                         .tap_err(|error| trace!(?line, ?output, ?error, "not a valid path"))
-                        .ok()
+                        .tap_ok(|output| trace!(?line, ?output, "read output path"))
+                        .map(Some)
+                        .transpose()
                 } else {
                     trace!(?line, "skipped .d line");
                     None
                 }
             })
-            .map(|output| -> Result<RelativePathBuf> {
+            .and_then(|output| async move {
                 output
-                    .strip_prefix(&profile_root)
-                    .with_context(|| format!("make {output:?} relative to {profile_root:?}"))
-                    .and_then(|p| RelativePathBuf::from_path(p).context("read path as utf8"))
+                    .relative_to(profile_root)
+                    .context("make path relative")
             })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Self { outputs })
+            .try_collect::<Vec<_>>()
+            .await
+            .map(|outputs| Self { outputs })
     }
 }

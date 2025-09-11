@@ -25,14 +25,12 @@ color-eyre = { workspace = true }
 derive_more = { workspace = true, features = ["full"] }
 enum-assoc = { workspace = true }
 filetime = { workspace = true }
-flume = { workspace = true }
 fslock = { workspace = true }
 git-version = { workspace = true }
 hex = { workspace = true }
 homedir = { workspace = true }
 itertools = { workspace = true }
 lockfile = { workspace = true }
-relative-path = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
@@ -54,8 +52,11 @@ location-macros = {workspace = true }
 futures = { workspace = true }
 tempfile = { workspace = true }
 regex = { workspace = true }
-jiff = "0.2.15"
 uuid = { version = "1.18.1", features = ["v4"] }
+jiff = { workspace = true }
+const-str = { workspace = true, features = ["std", "all"] }
+duplicate = { workspace = true }
+paste = { workspace = true }
 
 [dev-dependencies]
 async-walkdir.workspace = true

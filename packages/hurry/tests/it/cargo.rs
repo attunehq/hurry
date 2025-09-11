@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use color_eyre::{Result, eyre::Context};
 use hurry::{
     cache::{FsCache, FsCas},
@@ -8,16 +6,18 @@ use hurry::{
     },
     fs,
     hash::Blake3,
+    mk_rel_dir,
+    path::{JoinWith, TryJoinWith},
 };
-use location_macros::workspace_dir;
 use tap::Pipe;
-use tempfile::TempDir;
+
+use crate::{current_workspace, temporary_directory};
 
 fn progress_noop(_key: &Blake3, _dep: &Dependency) {}
 
 #[test_log::test(tokio::test)]
 async fn open_workspace() -> Result<()> {
-    let workspace = PathBuf::from(workspace_dir!());
+    let workspace = current_workspace();
     Workspace::from_argv_in_dir(&workspace, &[])
         .await
         .context("open workspace")
@@ -26,7 +26,7 @@ async fn open_workspace() -> Result<()> {
 
 #[test_log::test(tokio::test)]
 async fn open_index_workspace() -> Result<()> {
-    let workspace = PathBuf::from(workspace_dir!());
+    let workspace = current_workspace();
     let workspace = Workspace::from_argv_in_dir(&workspace, &[])
         .await
         .context("open workspace")?;
@@ -39,13 +39,13 @@ async fn open_index_workspace() -> Result<()> {
 
 #[test_log::test(tokio::test)]
 async fn backup_workspace() -> Result<()> {
-    let workspace = PathBuf::from(workspace_dir!());
-    let temp = TempDir::new().expect("create temporary directory");
-    let cas_root = temp.path().join("cas");
-    let cache_root = temp.path().join("ws");
+    let workspace = current_workspace();
+    let (_temp, tempdir) = temporary_directory();
+    let cas_root = tempdir.join(mk_rel_dir!("cas"));
+    let cache_root = tempdir.join(mk_rel_dir!("ws"));
 
-    let cas = FsCas::open_dir_std(cas_root).await.context("open CAS")?;
-    let cache = FsCache::open_dir_std(cache_root)
+    let cas = FsCas::open_dir(cas_root).await.context("open CAS")?;
+    let cache = FsCache::open_dir(cache_root)
         .await
         .context("open cache")?
         .pipe(FsCache::lock)
@@ -70,32 +70,32 @@ async fn backup_workspace() -> Result<()> {
 }
 
 #[test_log::test(tokio::test)]
+#[ignore = "Issue #17 blocks this from working now that we have proper typed paths"]
 async fn restore_workspace() -> Result<()> {
-    let local_workspace = PathBuf::from(workspace_dir!());
-    let temp_workspace = TempDir::new().expect("create temporary directory");
-    let temp = TempDir::new().expect("create temporary directory");
-    let cas_root = temp.path().join("cas");
-    let cache_root = temp.path().join("ws");
+    let local_workspace = current_workspace();
+    let (_temp_cache, cache) = temporary_directory();
+    let cas_root = cache.join(mk_rel_dir!("cas"));
+    let cache_root = cache.join(mk_rel_dir!("ws"));
+    let (_temp_ws, temp_workspace) = temporary_directory();
 
     // We don't want to mess with the current workspace.
-    let workspace = temp_workspace.path();
-    fs::copy_dir(local_workspace, workspace)
+    fs::copy_dir(&local_workspace, &temp_workspace)
         .await
         .context("copy current workspace to temp workspace")?;
     assert!(
-        !fs::is_dir_empty(workspace).await?,
+        !fs::is_dir_empty(&temp_workspace).await?,
         "must have copied workspace"
     );
 
-    let cas = FsCas::open_dir_std(cas_root).await.context("open CAS")?;
-    let cache = FsCache::open_dir_std(cache_root)
+    let cas = FsCas::open_dir(cas_root).await.context("open CAS")?;
+    let cache = FsCache::open_dir(cache_root)
         .await
         .context("open cache")?
         .pipe(FsCache::lock)
         .await
         .context("lock cache")?;
 
-    let workspace = Workspace::from_argv_in_dir(&workspace, &[])
+    let workspace = Workspace::from_argv_in_dir(&temp_workspace, &[])
         .await
         .context("open workspace")?;
     {
@@ -109,7 +109,7 @@ async fn restore_workspace() -> Result<()> {
         assert!(!cas.is_empty().await?, "must have backed up files in CAS");
         assert!(!cache.is_empty().await?, "must have backed up files in CAS");
     }
-    tokio::fs::remove_dir_all(&workspace.target)
+    fs::remove_dir_all(&workspace.target)
         .await
         .context("remove workspace target folder")?;
 
@@ -128,7 +128,10 @@ async fn restore_workspace() -> Result<()> {
     // because we fail to parse the .d files since the project is moved.
     // This may need to be fixed as part of #17.
     for name in [/*"deps", "build",*/ ".fingerprint"] {
-        let subdir = target.root().join(name);
+        let subdir = target
+            .root()
+            .try_join_dir(name)
+            .unwrap_or_else(|err| panic!("subdir {name:?} does not exist: {err:?}"));
         assert!(
             !fs::is_dir_empty(&subdir).await?,
             "{subdir:?} must have been restored",

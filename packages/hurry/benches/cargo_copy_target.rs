@@ -4,9 +4,11 @@
 //! as such the benchmark changing doesn't _automatically_ mean that
 //! performance actually changed as the `target/` folder may have also changed.
 
-use std::path::PathBuf;
-
 use color_eyre::Result;
+use hurry::{
+    mk_rel_dir,
+    path::{AbsDirPath, JoinWith},
+};
 use location_macros::workspace_dir;
 use tempfile::TempDir;
 
@@ -14,20 +16,13 @@ fn main() {
     divan::main();
 }
 
-#[track_caller]
-fn setup() -> (PathBuf, TempDir) {
-    let target = PathBuf::from(workspace_dir!()).join("target");
-    let temp = TempDir::new().expect("create temporary directory");
-    (target, temp)
-}
-
 mod baseline {
     use super::*;
 
     #[divan::bench(sample_count = 5)]
     fn cp() {
-        let (target, temp) = setup();
-        let destination = temp.path();
+        let target = current_target();
+        let (_temp, destination) = temporary_directory();
 
         std::process::Command::new("cp")
             .arg("-r")
@@ -40,8 +35,8 @@ mod baseline {
     #[cfg(target_os = "macos")]
     #[divan::bench(sample_count = 5)]
     fn cp_cow() {
-        let (target, temp) = setup();
-        let destination = temp.path();
+        let target = current_target();
+        let (_temp, destination) = temporary_directory();
 
         std::process::Command::new("cp")
             .arg("-c")
@@ -65,15 +60,19 @@ mod sync {
 
         #[divan::bench(sample_count = 5)]
         fn walkdir_single_pass() {
-            let (target, temp) = setup();
+            let target = current_target();
+            let (temp, _) = temporary_directory();
 
-            for entry in walkdir::WalkDir::new(&target) {
+            for entry in walkdir::WalkDir::new(target.as_std_path()) {
                 let entry = entry.expect("walk files");
                 if !entry.file_type().is_file() {
                     continue;
                 }
 
-                let rel = entry.path().strip_prefix(&target).expect("make relative");
+                let rel = entry
+                    .path()
+                    .strip_prefix(target.as_std_path())
+                    .expect("make relative");
                 let src = entry.path();
                 let dst = temp.path().join(rel);
 
@@ -87,16 +86,20 @@ mod sync {
 
         #[divan::bench(sample_count = 5)]
         fn walkdir_two_pass() {
-            let (target, temp) = setup();
+            let target = current_target();
+            let (temp, _) = temporary_directory();
 
             let mut index = HashSet::new();
-            for entry in walkdir::WalkDir::new(&target) {
+            for entry in walkdir::WalkDir::new(target.as_std_path()) {
                 let entry = entry.expect("walk files");
                 if !entry.file_type().is_file() {
                     continue;
                 }
 
-                let rel = entry.path().strip_prefix(&target).expect("make relative");
+                let rel = entry
+                    .path()
+                    .strip_prefix(target.as_std_path())
+                    .expect("make relative");
                 index.insert(rel.to_path_buf());
             }
 
@@ -116,7 +119,7 @@ mod sync {
                     .unwrap_or_else(|err| panic!("create parent {target:?}: {err}"));
             }
             for file in index {
-                let src = target.join(&file);
+                let src = target.as_std_path().join(&file);
                 let dst = temp.path().join(file);
                 std::fs::copy(&src, &dst)
                     .unwrap_or_else(|err| panic!("copy {src:?} to {dst:?}: {err}"));
@@ -135,9 +138,10 @@ mod sync {
 
         #[divan::bench(sample_count = 5)]
         fn walkdir_single_pass() {
-            let (target, temp) = setup();
+            let target = current_target();
+            let (temp, _) = temporary_directory();
 
-            walkdir::WalkDir::new(&target)
+            walkdir::WalkDir::new(target.as_std_path())
                 .into_iter()
                 .par_bridge()
                 .try_for_each(|entry| -> Result<()> {
@@ -148,7 +152,7 @@ mod sync {
 
                     let rel = entry
                         .path()
-                        .strip_prefix(&target)
+                        .strip_prefix(target.as_std_path())
                         .context("make relative")?;
                     let src = entry.path();
                     let dst = temp.path().join(rel);
@@ -165,16 +169,20 @@ mod sync {
 
         #[divan::bench(sample_count = 5)]
         fn walkdir_two_pass() {
-            let (target, temp) = setup();
+            let target = current_target();
+            let (temp, _) = temporary_directory();
 
             let mut index = HashSet::new();
-            for entry in walkdir::WalkDir::new(&target) {
+            for entry in walkdir::WalkDir::new(target.as_std_path()) {
                 let entry = entry.expect("walk files");
                 if !entry.file_type().is_file() {
                     continue;
                 }
 
-                let rel = entry.path().strip_prefix(&target).expect("make relative");
+                let rel = entry
+                    .path()
+                    .strip_prefix(target.as_std_path())
+                    .expect("make relative");
                 index.insert(rel.to_path_buf());
             }
 
@@ -199,7 +207,7 @@ mod sync {
             index
                 .into_par_iter()
                 .try_for_each(|file| -> Result<()> {
-                    let src = target.join(&file);
+                    let src = target.as_std_path().join(&file);
                     let dst = temp.path().join(file);
                     std::fs::copy(&src, &dst)
                         .with_context(|| format!("copy {src:?} to {dst:?}"))
@@ -210,9 +218,10 @@ mod sync {
 
         #[divan::bench(sample_count = 5)]
         fn jwalk_single_pass() {
-            let (target, temp) = setup();
+            let target = current_target();
+            let (temp, _) = temporary_directory();
 
-            jwalk::WalkDir::new(&target)
+            jwalk::WalkDir::new(target.as_std_path())
                 .into_iter()
                 .par_bridge()
                 .try_for_each(|entry| -> Result<()> {
@@ -222,7 +231,9 @@ mod sync {
                     }
 
                     let src = entry.path();
-                    let rel = src.strip_prefix(&target).context("make relative")?;
+                    let rel = src
+                        .strip_prefix(target.as_std_path())
+                        .context("make relative")?;
                     let dst = temp.path().join(rel);
 
                     if let Some(parent) = dst.parent() {
@@ -245,11 +256,12 @@ mod using_tokio {
 
     #[divan::bench(sample_count = 5)]
     fn naive() {
-        let (target, temp) = setup();
+        let target = current_target();
+        let (temp, _) = temporary_directory();
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
 
         let copy: Result<()> = runtime.block_on(async move {
-            let mut walker = async_walkdir::WalkDir::new(&target);
+            let mut walker = async_walkdir::WalkDir::new(target.as_std_path());
             while let Some(entry) = walker.next().await {
                 let entry = entry.context("walk files")?;
                 let ft = entry.file_type().await.context("get type")?;
@@ -258,7 +270,9 @@ mod using_tokio {
                 }
 
                 let src = entry.path();
-                let rel = src.strip_prefix(&target).context("make relative")?;
+                let rel = src
+                    .strip_prefix(target.as_std_path())
+                    .context("make relative")?;
                 let dst = temp.path().join(rel);
 
                 if let Some(parent) = dst.parent() {
@@ -278,11 +292,12 @@ mod using_tokio {
 
     #[divan::bench(sample_count = 5, args = [1, 10, 100, 1000])]
     fn concurrent(concurrency: usize) {
-        let (target, temp) = setup();
+        let target = current_target();
+        let (temp, _) = temporary_directory();
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
 
         let copy: Result<()> = runtime.block_on(async move {
-            async_walkdir::WalkDir::new(&target)
+            async_walkdir::WalkDir::new(target.as_std_path())
                 .map_err(|err| eyre!(err))
                 .try_for_each_concurrent(Some(concurrency), |entry| {
                     let target = target.clone();
@@ -294,7 +309,9 @@ mod using_tokio {
                         }
 
                         let src = entry.path();
-                        let rel = src.strip_prefix(&target).context("make relative")?;
+                        let rel = src
+                            .strip_prefix(target.as_std_path())
+                            .context("make relative")?;
                         let dst = temp.join(rel);
 
                         if let Some(parent) = dst.parent() {
@@ -314,21 +331,23 @@ mod using_tokio {
     }
 
     mod hurry_fs {
+        use hurry::path::{JoinWith, RelativeTo};
+
         use super::*;
 
         #[divan::bench(sample_count = 5)]
         fn naive() {
-            let (target, temp) = setup();
+            let target = current_target();
+            let (_temp, tempdir) = temporary_directory();
             let runtime = tokio::runtime::Runtime::new().expect("create runtime");
 
             let copy: Result<()> = runtime.block_on(async move {
                 let mut walker = hurry::fs::walk_files(&target);
                 while let Some(entry) = walker.next().await {
-                    let entry = entry.context("walk files")?;
+                    let src = entry.context("walk files")?;
 
-                    let src = entry.path();
-                    let rel = src.strip_prefix(&target).context("make relative")?;
-                    let dst = temp.path().join(rel);
+                    let rel = src.relative_to(&target).context("make relative")?;
+                    let dst = tempdir.join(rel);
 
                     hurry::fs::copy_file(&src, &dst)
                         .await
@@ -342,15 +361,34 @@ mod using_tokio {
 
         #[divan::bench(sample_count = 5, args = [1, 10, 100, 1000])]
         fn concurrent(concurrency: usize) {
-            let (target, temp) = setup();
+            let target = current_target();
+            let (_temp, tempdir) = temporary_directory();
             let runtime = tokio::runtime::Runtime::new().expect("create runtime");
 
             let copy: Result<()> = runtime.block_on(async move {
-                hurry::fs::copy_dir_with_concurrency(concurrency, &target, temp.path())
+                hurry::fs::copy_dir_with_concurrency(concurrency, &target, &tempdir)
                     .await
                     .map(drop)
             });
             copy.expect("copy files");
         }
     }
+}
+
+#[track_caller]
+pub fn current_workspace() -> AbsDirPath {
+    let ws = workspace_dir!();
+    AbsDirPath::try_from(ws).unwrap_or_else(|err| panic!("parse {ws:?} as abs dir: {err:?}"))
+}
+
+#[track_caller]
+fn current_target() -> AbsDirPath {
+    current_workspace().join(mk_rel_dir!("target"))
+}
+
+#[track_caller]
+fn temporary_directory() -> (TempDir, AbsDirPath) {
+    let dir = TempDir::new().expect("create temporary directory");
+    let path = AbsDirPath::try_from(dir.path()).expect("read temp dir as abs dir");
+    (dir, path)
 }

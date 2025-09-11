@@ -3,12 +3,15 @@
 use bon::Builder;
 use color_eyre::Result;
 use enum_assoc::Assoc;
-use relative_path::RelativePathBuf;
 use serde::{Deserialize, Serialize};
-use std::{fmt::Debug, future::Future, path::Path};
+use std::{fmt::Debug, future::Future};
 use strum::Display;
 
-use crate::{fs::Metadata, hash::Blake3};
+use crate::{
+    fs::Metadata,
+    hash::Blake3,
+    path::{AbsFilePath, RelFilePath},
+};
 
 mod fs;
 pub use fs::*;
@@ -19,33 +22,25 @@ pub trait Cache {
     fn store(
         &self,
         kind: Kind,
-        key: impl AsRef<Blake3> + Debug + Send,
+        key: &Blake3,
         artifacts: impl IntoIterator<Item = impl Into<Artifact>> + Debug + Send,
     ) -> impl Future<Output = Result<()>> + Send;
 
     /// Get the record from the cache, if it exists.
-    fn get(
-        &self,
-        kind: Kind,
-        key: impl AsRef<Blake3> + Debug + Send,
-    ) -> impl Future<Output = Result<Option<Record>>> + Send;
+    fn get(&self, kind: Kind, key: &Blake3) -> impl Future<Output = Result<Option<Record>>> + Send;
 }
 
 impl<T: Cache + Sync> Cache for &T {
     async fn store(
         &self,
         kind: Kind,
-        key: impl AsRef<Blake3> + Debug + Send,
+        key: &Blake3,
         artifacts: impl IntoIterator<Item = impl Into<Artifact>> + Debug + Send,
     ) -> Result<()> {
         Cache::store(*self, kind, key, artifacts).await
     }
 
-    async fn get(
-        &self,
-        kind: Kind,
-        key: impl AsRef<Blake3> + Debug + Send,
-    ) -> Result<Option<Record>> {
+    async fn get(&self, kind: Kind, key: &Blake3) -> Result<Option<Record>> {
         Cache::get(*self, kind, key).await
     }
 }
@@ -57,7 +52,7 @@ pub trait Cas {
     fn store_file(
         &self,
         kind: Kind,
-        file: impl AsRef<Path> + Debug + Send,
+        file: &AbsFilePath,
     ) -> impl Future<Output = Result<Blake3>> + Send;
 
     /// Get the content from the cache, if it exists,
@@ -65,22 +60,17 @@ pub trait Cas {
     fn get_file(
         &self,
         kind: Kind,
-        key: impl AsRef<Blake3> + Debug + Send,
-        destination: impl AsRef<Path> + Debug + Send,
+        key: &Blake3,
+        destination: &AbsFilePath,
     ) -> impl Future<Output = Result<()>> + Send;
 }
 
 impl<T: Cas + Sync> Cas for &T {
-    async fn store_file(&self, kind: Kind, src: impl AsRef<Path> + Debug + Send) -> Result<Blake3> {
+    async fn store_file(&self, kind: Kind, src: &AbsFilePath) -> Result<Blake3> {
         Cas::store_file(*self, kind, src).await
     }
 
-    async fn get_file(
-        &self,
-        kind: Kind,
-        key: impl AsRef<Blake3> + Debug + Send,
-        destination: impl AsRef<Path> + Debug + Send,
-    ) -> Result<()> {
+    async fn get_file(&self, kind: Kind, key: &Blake3, destination: &AbsFilePath) -> Result<()> {
         Cas::get_file(*self, kind, key, destination).await
     }
 }
@@ -142,7 +132,7 @@ pub struct Artifact {
     /// what specifically the "cache root" is depends on the project type
     /// but is by default the root of the project.
     #[builder(into)]
-    pub target: RelativePathBuf,
+    pub target: RelFilePath,
 
     /// The hash of the content of the artifact.
     ///

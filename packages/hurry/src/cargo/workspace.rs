@@ -1,7 +1,7 @@
-use std::{fmt::Debug as StdDebug, marker::PhantomData, path::PathBuf, sync::Arc};
+use std::{marker::PhantomData, sync::Arc};
 
 use ahash::{HashMap, HashSet};
-use cargo_metadata::{TargetKind, camino::Utf8PathBuf};
+use cargo_metadata::TargetKind;
 use color_eyre::{
     Result,
     eyre::{Context, OptionExt},
@@ -10,7 +10,6 @@ use derive_more::{Debug, Display};
 use itertools::{Itertools, process_results};
 use location_macros::workspace_dir;
 use regex::Regex;
-use relative_path::{PathExt, RelativePathBuf};
 use tap::{Pipe, Tap, TapFallible};
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
@@ -20,6 +19,8 @@ use crate::{
     cache::Artifact,
     fs::{self, Index, LockFile},
     hash::Blake3,
+    mk_rel_file,
+    path::{AbsDirPath, JoinWith, TryJoinWith},
 };
 
 use super::{
@@ -41,11 +42,11 @@ use super::{
 #[display("{root}")]
 pub struct Workspace {
     /// The root directory of the workspace.
-    pub root: Utf8PathBuf,
+    pub root: AbsDirPath,
 
     /// The target directory in the workspace.
     #[debug(skip)]
-    pub target: Utf8PathBuf,
+    pub target: AbsDirPath,
 
     /// Parsed `rustc` metadata relating to the current workspace.
     #[debug(skip)]
@@ -68,17 +69,13 @@ impl Workspace {
     // I'm not certain they're worth the thread spawn cost
     // but this can be mitigated by using the rayon thread pool.
     #[instrument(name = "Workspace::from_argv_in_dir")]
-    pub async fn from_argv_in_dir(
-        path: impl Into<PathBuf> + StdDebug,
-        argv: &[String],
-    ) -> Result<Self> {
-        let path = path.into();
-
+    pub async fn from_argv_in_dir(path: &AbsDirPath, argv: &[String]) -> Result<Self> {
         // TODO: Maybe we should just replicate this logic and perform it
         // statically using filesystem operations instead of shelling out? This
         // costs something on the order of 200ms, which is not _terrible_ but
         // feels much slower than if we just did our own filesystem reads.
         let manifest_path = read_argv(argv, "--manifest-path").map(String::from);
+        let cmd_current_dir = path.as_std_path().to_path_buf();
         let metadata = spawn_blocking(move || -> Result<_> {
             cargo_metadata::MetadataCommand::new()
                 .tap_mut(|cmd| {
@@ -86,7 +83,7 @@ impl Workspace {
                         cmd.manifest_path(p);
                     }
                 })
-                .current_dir(&path)
+                .current_dir(cmd_current_dir)
                 .exec()
                 .context("exec and parse cargo metadata")
         })
@@ -95,17 +92,22 @@ impl Workspace {
         .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
         .context("get cargo metadata")?;
 
+        let workspace_root = AbsDirPath::try_from(&metadata.workspace_root)
+            .context("parse workspace root as absolute directory")?;
+        let workspace_target = AbsDirPath::try_from(&metadata.target_directory)
+            .context("parse workspace target as absolute directory")?;
+
         // TODO: This currently blows up if we have no lockfile.
-        let cargo_lock = metadata.workspace_root.join("Cargo.lock");
+        let cargo_lock = workspace_root.join(mk_rel_file!("Cargo.lock"));
         let lockfile = spawn_blocking(move || -> Result<_> {
-            cargo_lock::Lockfile::load(cargo_lock).context("parse cargo lockfile")
+            cargo_lock::Lockfile::load(cargo_lock.as_std_path()).context("parse cargo lockfile")
         })
         .await
         .context("join task")?
         .tap_ok(|lockfile| debug!(?lockfile, "cargo lockfile"))
         .context("read cargo lockfile")?;
 
-        let rustc_meta = RustcMetadata::from_argv(&metadata.workspace_root, argv)
+        let rustc_meta = RustcMetadata::from_argv(&workspace_root, argv)
             .await
             .tap_ok(|rustc_meta| debug!(?rustc_meta, "rustc metadata"))
             .context("read rustc metadata")?;
@@ -160,10 +162,12 @@ impl Workspace {
                 }
                 libs.into_iter()
                     .exactly_one()
-                    .with_context(|| format!(
-                        "package {} has {} library targets but expected 1: {:?}",
-                        package.name, len, package.targets
-                    ))
+                    .with_context(|| {
+                        format!(
+                            "package {} has {} library targets but expected 1: {:?}",
+                            package.name, len, package.targets
+                        )
+                    })
                     .map(|lib| (package.name.as_str(), lib))
                     .pipe(Some)
             })
@@ -223,8 +227,8 @@ impl Workspace {
         })?;
 
         Ok(Self {
-            root: metadata.workspace_root,
-            target: metadata.target_directory,
+            root: workspace_root,
+            target: workspace_target,
             rustc: rustc_meta,
             dependencies,
         })
@@ -236,31 +240,37 @@ impl Workspace {
     /// using the current working directory as the workspace root.
     #[instrument(name = "Workspace::from_argv")]
     pub async fn from_argv(argv: &[String]) -> Result<Self> {
-        let pwd = std::env::current_dir().context("get working directory")?;
-        Self::from_argv_in_dir(pwd, argv).await
+        let pwd = AbsDirPath::current().context("get working directory")?;
+        Self::from_argv_in_dir(&pwd, argv).await
     }
 
     /// Initialize the target directory structure for a build profile.
     ///
     /// Creates the profile subdirectory under `target/` and writes a
-    /// `CACHEDIR.TAG` file to mark it as a cache directory.
+    /// `CACHEDIR.TAG` file to mark it as a cache directory,
+    /// then returns the path to the profile directory that was created.
     ///
     /// We don't currently have this as a distinct state transition for
     /// workspace as it's unclear whether this is strictly required.
     //
     // TODO: Is this required?
     #[instrument(name = "Workspace::init_target")]
-    pub async fn init_target(&self, profile: &Profile) -> Result<()> {
-        const CACHEDIR_TAG_NAME: &str = "CACHEDIR.TAG";
+    pub async fn init_target(&self, profile: &Profile) -> Result<AbsDirPath> {
         const CACHEDIR_TAG_CONTENT: &[u8] =
             include_bytes!(concat!(workspace_dir!(), "/static/cargo/CACHEDIR.TAG"));
 
-        fs::create_dir_all(self.target.join(profile.as_str()))
+        // We don't think the profile directory exists yet.
+        let profile = self.target.try_join_dir(profile.as_str())?;
+        fs::create_dir_all(&profile)
             .await
             .context("create target directory")?;
-        fs::write(self.target.join(CACHEDIR_TAG_NAME), CACHEDIR_TAG_CONTENT)
-            .await
-            .context("write CACHEDIR.TAG")
+        fs::write(
+            &self.target.join(&mk_rel_file!("CACHEDIR.TAG")),
+            CACHEDIR_TAG_CONTENT,
+        )
+        .await
+        .context("write CACHEDIR.TAG")?;
+        Ok(profile)
     }
 
     /// Open a profile directory for reading.
@@ -327,15 +337,14 @@ pub struct ProfileDir<'ws, State> {
     /// when we clone the `ProfileDir`.
     index: Option<Arc<Index>>,
 
-    /// The root of the directory,
-    /// relative to [`workspace.target`](Workspace::target).
+    /// The root of the profile directory inside [`Workspace::target`].
     ///
     /// Note: this is intentionally not `pub` because we only want to give
     /// callers access to the directory when the cache is locked;
     /// reference the `root` method in the locked implementation block.
     /// The intention here is to minimize the chance of callers mutating or
     /// referencing the contents of the cache while it is locked.
-    root: RelativePathBuf,
+    root: AbsDirPath,
 
     /// The profile to which this directory refers.
     ///
@@ -350,18 +359,13 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
     /// Open a profile directory in unlocked mode.
     #[instrument(name = "ProfileDir::open")]
     pub async fn open(workspace: &'ws Workspace, profile: &Profile) -> Result<Self> {
-        workspace
+        let root = workspace
             .init_target(profile)
             .await
             .context("init workspace target")?;
 
-        let root = workspace.target.join(profile.as_str());
-        let lock = root.join(".cargo-lock");
+        let lock = root.join(mk_rel_file!(".cargo-lock"));
         let lock = LockFile::open(lock).await.context("open lockfile")?;
-        let root = root
-            .as_std_path()
-            .relative_to(&workspace.target)
-            .context("make root relative")?;
 
         Ok(Self {
             state: PhantomData,
@@ -377,8 +381,7 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
     #[instrument(name = "ProfileDir::lock")]
     pub async fn lock(self) -> Result<ProfileDir<'ws, Locked>> {
         let lock = self.lock.lock().await.context("lock profile")?;
-        let root = self.root.to_path(&self.workspace.target);
-        let index = Index::recursive(&root)
+        let index = Index::recursive(&self.root)
             .await
             .map(Arc::new)
             .map(Some)
@@ -508,11 +511,11 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .files
             .iter()
             .filter(|(path, _)| {
-                path.components()
+                path.component_strs_lossy()
                     .tuple_windows()
                     .next()
                     .is_some_and(|(parent, child)| {
-                        parent.as_str() == ".fingerprint" && package_regex.is_match(child.as_str())
+                        parent == ".fingerprint" && package_regex.is_match(&child)
                     })
             })
             .collect_vec();
@@ -522,11 +525,11 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .files
             .iter()
             .filter(|(path, _)| {
-                path.components()
+                path.component_strs_lossy()
                     .tuple_windows()
                     .next()
                     .is_some_and(|(parent, child)| {
-                        parent.as_str() == "build" && package_regex.is_match(child.as_str())
+                        parent == "build" && package_regex.is_match(&child)
                     })
             })
             .collect_vec();
@@ -538,9 +541,9 @@ impl<'ws> ProfileDir<'ws, Locked> {
             .files
             .iter()
             .filter(|(path, _)| {
-                path.components()
+                path.component_strs_lossy()
                     .next()
-                    .is_some_and(|part| part.as_str() == "deps")
+                    .is_some_and(|part| part == "deps")
             })
             .collect_vec();
         // We collect dependencies by finding the `.d` file and reading it.
@@ -550,14 +553,13 @@ impl<'ws> ProfileDir<'ws, Locked> {
         // which package version in scenarios where our project has multiple
         // versions of a dependency.
         let dotds = deps.iter().filter(|(path, _)| {
-            path.components()
+            path.component_strs_lossy()
                 .nth(1)
-                .is_some_and(|part| dotd_regex.is_match(part.as_str()))
+                .is_some_and(|part| dotd_regex.is_match(&part))
         });
-
         let mut dependencies = Vec::new();
         for (dotd, _) in dotds {
-            let outputs = Dotd::from_file(self, dotd)
+            let outputs = Dotd::from_file(self, &self.root().join(*dotd))
                 .await
                 .context("parse .d file")?
                 .outputs
@@ -588,7 +590,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ///
     /// Converts the internal relative path to an absolute path
     /// based on the workspace's target directory.
-    pub fn root(&self) -> PathBuf {
-        self.root.to_path(&self.workspace.target)
+    pub fn root(&self) -> &AbsDirPath {
+        &self.root
     }
 }
