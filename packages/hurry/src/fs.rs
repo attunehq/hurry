@@ -266,7 +266,7 @@ pub async fn copy_dir_with_concurrency(
     src: &AbsDirPath,
     dst: &AbsDirPath,
 ) -> Result<u64> {
-    walk_files(&src)
+    walk_files(src)
         .map_ok(|src_file| async move {
             let rel = src_file.relative_to(src).context("make relative")?;
 
@@ -398,7 +398,7 @@ pub struct Metadata {
     /// the artifact needs to be rebuilt; since we want to have the system
     /// "fail open" (meahing: we prefer to rebuild more if there is a question
     /// instead of produce bad builds) this is an acceptable fallback.
-    #[debug("{}", Timestamp::try_from(mtime.clone()).map(|t| t.to_string()).unwrap_or_else(|_| format!("{mtime:?}")))]
+    #[debug("{}", Timestamp::try_from(*mtime).map(|t| t.to_string()).unwrap_or_else(|_| format!("{mtime:?}")))]
     pub mtime: SystemTime,
 
     /// Whether the file is executable.
@@ -517,7 +517,7 @@ pub async fn exists(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
 pub async fn is_dir(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
     metadata(path)
         .await
-        .map_or(false, |m| m.is_some_and(|m| m.is_dir()))
+        .is_ok_and(|m| m.is_some_and(|m| m.is_dir()))
 }
 
 /// Return whether the path represents a normal file.
@@ -529,5 +529,5 @@ pub async fn is_dir(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
 pub async fn is_file(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
     metadata(path)
         .await
-        .map_or(false, |m| m.is_some_and(|m| m.is_file()))
+        .is_ok_and(|m| m.is_some_and(|m| m.is_file()))
 }

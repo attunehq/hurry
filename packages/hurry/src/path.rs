@@ -307,6 +307,10 @@ impl<B: Validator, T: Validator> TryFrom<ty_from> for TypedPath<B, T> {
     type Error = Report;
 
     fn try_from(value: ty_from) -> Result<Self, Self::Error> {
+        #[allow(
+            clippy::useless_conversion,
+            reason = "This is only useless for one branch of the macro (i.e. PathBuf)"
+        )]
         let value = PathBuf::from(value);
         B::validate(&value).with_context(|| format!("validate base {:?}", B::type_name()))?;
         T::validate(&value).with_context(|| format!("validate type {:?}", T::type_name()))?;
@@ -546,7 +550,7 @@ duplicate! {
             self.inner
                 .strip_prefix(&other.inner)
                 .with_context(|| format!("make {:?} relative to {:?}", other.inner, self.inner))
-                .and_then(|p| TypedPath::try_from(p))
+                .and_then(TypedPath::try_from)
         }
     }
 }

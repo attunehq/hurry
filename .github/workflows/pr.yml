@@ -1,0 +1,46 @@
+# Workflows that run on pull requests. These are primarily CI checks for
+# linting, formatting, testing, etc.
+name: PR
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Build, check, and test Rust
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Rust
+        run: |
+          rustup toolchain install nightly
+          rustup component add --toolchain nightly rustfmt
+          rustup show
+
+      - uses: actions/checkout@v4
+
+      - name: Check format
+        run: cargo +nightly fmt --all --check
+
+      - name: Run full build
+        run: cargo build --workspace --all-targets --all-features
+
+      - name: Check clippy
+        run: cargo clippy --workspace --all-targets --all-features
+
+      # FIXME: Some of these tests do not yet pass on all filesystems.
+      #
+      # - name: Run tests
+      #   run: cargo test --workspace --all-targets --all-features
