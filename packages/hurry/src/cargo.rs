@@ -94,7 +94,7 @@ pub async fn cache_target_from_workspace(
             .map(|artifact| async move {
                 let dst = target.root().join(&artifact.target);
                 let key = if dst.extension_str_lossy().as_deref() == Some("d") {
-                    let dotd = Dotd::from_file(&target, &dst).await?;
+                    let dotd = DepInfo::from_file(&target, &dst).await?;
                     cas.store(Kind::Cargo, dotd).await?
                 } else {
                     let content = fs::must_read_buffered(&dst).await?;
@@ -178,7 +178,7 @@ pub async fn restore_target_from_cache(
                 let dst = target.root().join(&artifact.target);
                 let key = &artifact.hash;
                 let content = if dst.extension_str_lossy().as_deref() == Some("d") {
-                    cas.get::<Dotd>(Kind::Cargo, target, key).await
+                    cas.get::<DepInfo>(Kind::Cargo, target, key).await
                 } else {
                     cas.get::<Vec<u8>>(Kind::Cargo, target, key).await
                 };

@@ -73,9 +73,9 @@ impl RustcMetadata {
     }
 }
 
-/// A parsed Cargo .d file.
+/// A parsed Cargo `DepInfo` file.
 ///
-/// Cargo generates `.d` files in the `deps/` directory that follow a
+/// Cargo generates `DepInfo` files in the `deps/` directory that follow a
 /// makefile-like format: `output: input1 input2 ...`. It also supports
 /// comments and blank lines, which we also retain.
 ///
@@ -98,15 +98,15 @@ impl RustcMetadata {
 /// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/wrapper.rs:
 /// ```
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
-pub struct Dotd(Vec<DotdLine>);
+pub struct DepInfo(Vec<DepInfoLine>);
 
-impl Dotd {
-    /// Parse a `.d` file and extract output artifact paths.
+impl DepInfo {
+    /// Parse a `DepInfo` file and extract output artifact paths.
     ///
     /// Reads the dependency file at the given path (relative to profile root),
     /// parses each line for the `output:` format, and filters for relevant
     /// file extensions. All returned paths are relative to the profile root.
-    #[instrument(name = "Dotd::from_file")]
+    #[instrument(name = "DepInfo::from_file")]
     pub async fn from_file(profile: &ProfileDir<'_, Locked>, dotd: &AbsFilePath) -> Result<Self> {
         let content = fs::read_buffered_utf8(dotd)
             .await
@@ -114,18 +114,18 @@ impl Dotd {
             .ok_or_eyre("file does not exist")?;
         let lines = stream::iter(content.lines())
             .then(|line| {
-                DotdLine::parse(profile, &line)
+                DepInfoLine::parse(profile, &line)
                     .then_with_context(move || format!("parse line: {line:?}"))
             })
             .try_collect::<Vec<_>>()
             .await?;
 
-        trace!(?dotd, ?content, ?lines, "parsed .d file");
+        trace!(?dotd, ?content, ?lines, "parsed DepInfo file");
         Ok(Self(lines))
     }
 
-    /// Reconstruct the `.d` file in the context of the profile directory.
-    #[instrument(name = "Dotd::reconstruct")]
+    /// Reconstruct the `DepInfo` file in the context of the profile directory.
+    #[instrument(name = "DepInfo::reconstruct")]
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
         self.0
             .iter()
@@ -134,31 +134,33 @@ impl Dotd {
     }
 
     /// Iterate over the lines in the file.
-    #[instrument(name = "Dotd::lines")]
-    pub fn lines(&self) -> impl Iterator<Item = &DotdLine> {
+    #[instrument(name = "DepInfo::lines")]
+    pub fn lines(&self) -> impl Iterator<Item = &DepInfoLine> {
         self.0.iter()
     }
 
     /// Iterate over builds parsed in the file.
-    #[instrument(name = "Dotd::builds")]
-    pub fn builds(&self) -> impl Iterator<Item = (&DotdDependencyPath, &[DotdDependencyPath])> {
+    #[instrument(name = "DepInfo::builds")]
+    pub fn builds(
+        &self,
+    ) -> impl Iterator<Item = (&DepInfoDependencyPath, &[DepInfoDependencyPath])> {
         self.0.iter().filter_map(|line| match line {
-            DotdLine::Build(output, inputs) => Some((output, inputs.as_slice())),
+            DepInfoLine::Build(output, inputs) => Some((output, inputs.as_slice())),
             _ => None,
         })
     }
 
     /// Iterate over build outputs parsed in the file.
-    #[instrument(name = "Dotd::build_outputs")]
-    pub fn build_outputs(&self) -> impl Iterator<Item = &DotdDependencyPath> {
+    #[instrument(name = "DepInfo::build_outputs")]
+    pub fn build_outputs(&self) -> impl Iterator<Item = &DepInfoDependencyPath> {
         self.0.iter().filter_map(|line| match line {
-            DotdLine::Build(output, _) => Some(output),
+            DepInfoLine::Build(output, _) => Some(output),
             _ => None,
         })
     }
 }
 
-impl crate::cache::Entry for Dotd {
+impl crate::cache::Entry for DepInfo {
     async fn rewrite_store(self) -> Result<Vec<u8>> {
         serde_json::to_vec(&self).context("serialize")
     }
@@ -170,11 +172,10 @@ impl crate::cache::Entry for Dotd {
     }
 }
 
-/// A single line inside a `.d` file.
-/// Refer to [`Dotd`] for more details.
+/// A single line inside a [`DepInfo`] file.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
 #[serde(tag = "t", content = "c")]
-pub enum DotdLine {
+pub enum DepInfoLine {
     /// An empty line.
     Space,
 
@@ -186,21 +187,21 @@ pub enum DotdLine {
     /// Note that every input is _also_ an output, just with an empty
     /// set of inputs.
     /// Outputs are usually only relative to $CARGO_HOME in this case.
-    Build(DotdDependencyPath, Vec<DotdDependencyPath>),
+    Build(DepInfoDependencyPath, Vec<DepInfoDependencyPath>),
 }
 
-impl DotdLine {
-    /// Parse the line in a `.d` file.
+impl DepInfoLine {
+    /// Parse the line in a `DepInfo` file.
     //
     // TODO: We almost definitely need to handle spaces in the paths.
-    #[instrument(name = "DotdLine::parse")]
+    #[instrument(name = "DepInfoLine::parse")]
     async fn parse(profile: &ProfileDir<'_, Locked>, line: &str) -> Result<Self> {
         Ok(if line.is_empty() {
             Self::Space
         } else if let Some(comment) = line.strip_prefix('#') {
             Self::Comment(comment.to_string())
         } else if let Some(output) = line.strip_suffix(':') {
-            let output = DotdDependencyPath::parse(profile, output)
+            let output = DepInfoDependencyPath::parse(profile, output)
                 .then_with_context(move || format!("parse output path: {output:?}"))
                 .await?;
             Self::Build(output, Vec::new())
@@ -209,11 +210,11 @@ impl DotdLine {
                 bail!("no output/input separator");
             };
 
-            let output = DotdDependencyPath::parse(profile, output)
+            let output = DepInfoDependencyPath::parse(profile, output)
                 .then_with_context(move || format!("parse output path: {output:?}"));
             let inputs = stream::iter(inputs.trim().split_whitespace())
                 .map(|input| {
-                    DotdDependencyPath::parse(profile, input)
+                    DepInfoDependencyPath::parse(profile, input)
                         .then_with_context(move || format!("parse input path: {input:?}"))
                 })
                 .buffer_unordered(DEFAULT_CONCURRENCY)
@@ -224,7 +225,7 @@ impl DotdLine {
         })
     }
 
-    #[instrument(name = "DotdLine::reconstruct")]
+    #[instrument(name = "DepInfoLine::reconstruct")]
     fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
         match self {
             Self::Build(output, inputs) => {
@@ -235,20 +236,20 @@ impl DotdLine {
                     .join(" ");
                 format!("{output}: {inputs}")
             }
-            DotdLine::Space => String::new(),
-            DotdLine::Comment(comment) => format!("#{comment}"),
+            DepInfoLine::Space => String::new(),
+            DepInfoLine::Comment(comment) => format!("#{comment}"),
         }
     }
 }
 
-/// A dependency path specified in a `.d` file.
+/// A dependency path specified in a [`DepInfo`] file.
 ///
-/// Dependencies specified in `.d` files can reference files either inside the
+/// Dependencies specified in `DepInfo` files can reference files either inside the
 /// current project, or in the Cargo registry cache on the local machine.
 /// This type differentiates between these options.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
 #[serde(tag = "t", content = "c")]
-pub enum DotdDependencyPath {
+pub enum DepInfoDependencyPath {
     /// The path is relative to the workspace target profile directory.
     RelativeTargetProfile(RelFilePath),
 
@@ -256,8 +257,8 @@ pub enum DotdDependencyPath {
     RelativeCargoHome(RelFilePath),
 }
 
-impl DotdDependencyPath {
-    #[instrument(name = "DotdPathBuf::parse")]
+impl DepInfoDependencyPath {
+    #[instrument(name = "DepInfoPathBuf::parse")]
     async fn parse(profile: &ProfileDir<'_, Locked>, path: &str) -> Result<Self> {
         Ok(if let Ok(rel) = RelFilePath::try_from(path) {
             if fs::exists(profile.root().join(&rel).as_std_path()).await {
@@ -279,15 +280,15 @@ impl DotdDependencyPath {
         })
     }
 
-    #[instrument(name = "DotdPathBuf::to_path")]
+    #[instrument(name = "DepInfoPathBuf::to_path")]
     fn to_path(&self, profile: &ProfileDir<'_, Locked>) -> AbsFilePath {
         match self {
-            DotdDependencyPath::RelativeTargetProfile(rel) => profile.root().join(rel),
-            DotdDependencyPath::RelativeCargoHome(rel) => profile.workspace.cargo_home.join(rel),
+            DepInfoDependencyPath::RelativeTargetProfile(rel) => profile.root().join(rel),
+            DepInfoDependencyPath::RelativeCargoHome(rel) => profile.workspace.cargo_home.join(rel),
         }
     }
 
-    #[instrument(name = "DotdPathBuf::reconstruct")]
+    #[instrument(name = "DepInfoPathBuf::reconstruct")]
     fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
         self.to_path(profile).to_string()
     }

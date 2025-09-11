@@ -17,7 +17,7 @@ use tracing::{debug, instrument, trace};
 use crate::{
     Locked, Unlocked,
     cache::Artifact,
-    cargo::DotdDependencyPath,
+    cargo::DepInfoDependencyPath,
     fs::{self, Index, LockFile},
     hash::Blake3,
     mk_rel_file,
@@ -27,7 +27,7 @@ use crate::{
 use super::{
     Profile,
     dependency::Dependency,
-    metadata::{Dotd, RustcMetadata},
+    metadata::{DepInfo, RustcMetadata},
     read_argv,
 };
 
@@ -464,7 +464,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ///   - `{PACKAGE_NAME}-{HASH2}`, which contains the compiled build script.
     ///     - `build-script-build`, an executable ELF.
     ///     - `build_script_build-{HASH2}`, the exact same ELF.
-    ///     - `build_script_build-{HASH2}.d`, a `.d` file listing the input
+    ///     - `build_script_build-{HASH2}.d`, a `DepInfo` file listing the input
     ///       files.
     ///   - `{PACKAGE_NAME}-{HASH3}`, which contains the outputs of running the
     ///     build script.
@@ -478,7 +478,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ///     - `stderr`, the STDERR of the build script.
     /// - Deps: these are stored in `$PROFILE/deps/`. See also:
     ///   https://rustc-dev-guide.rust-lang.org/backend/libs-and-metadata.html
-    ///   - `{CRATE_NAME}-{HASH1}.d`, a `.d` file listing the inputs.
+    ///   - `{CRATE_NAME}-{HASH1}.d`, a `DepInfo` file listing the inputs.
     ///   - `lib{CRATE_NAME}-{HASH1}.rlib`
     ///   - `lib{CRATE_NAME}-{HASH1}.rmeta`
     ///
@@ -550,7 +550,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
             })
             .collect_vec();
 
-        // We find dependencies by looking for a `.d` file in the `deps` folder
+        // We find dependencies by looking for a `DepInfo` file in the `deps` folder
         // whose name starts with the name of the dependency and parsing it.
         // This will include the `.rlib` and `.rmeta`.
         let deps = index
@@ -562,10 +562,10 @@ impl<'ws> ProfileDir<'ws, Locked> {
                     .is_some_and(|part| part == "deps")
             })
             .collect_vec();
-        // We collect dependencies by finding the `.d` file and reading it.
+        // We collect dependencies by finding the `DepInfo` file and reading it.
         //
         // FIXME: If we can't reconstruct the expected hash, we can't actually
-        // find the _one_ `.d` file because we can't tell which file is for
+        // find the _one_ `DepInfo` file because we can't tell which file is for
         // which package version in scenarios where our project has multiple
         // versions of a dependency.
         let dotds = deps.iter().filter(|(path, _)| {
@@ -576,7 +576,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
 
         let mut dependencies = Vec::new();
         for (dotd, _) in dotds {
-            let parsed = Dotd::from_file(self, &self.root().join(*dotd))
+            let parsed = DepInfo::from_file(self, &self.root().join(*dotd))
                 .await
                 .context("parse .d file")?;
 
@@ -587,8 +587,8 @@ impl<'ws> ProfileDir<'ws, Locked> {
                 .build_outputs()
                 .into_iter()
                 .filter_map(|output| match output {
-                    DotdDependencyPath::RelativeTargetProfile(p) => Some(p),
-                    DotdDependencyPath::RelativeCargoHome(_) => None,
+                    DepInfoDependencyPath::RelativeTargetProfile(p) => Some(p),
+                    DepInfoDependencyPath::RelativeCargoHome(_) => None,
                 })
                 .collect::<HashSet<_>>();
             dependencies.extend(deps.iter().filter(|(path, _)| outputs.contains(*path)));
