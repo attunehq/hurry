@@ -204,8 +204,8 @@ impl FsCas {
     pub async fn store(&self, content: &[u8]) -> Result<Blake3> {
         let key = Blake3::from_buffer(&content);
         let dst = self.root.try_join_file(key.as_str())?;
-        let bytes = fs::write(&dst, content).await?;
-        trace!(?key, ?bytes, "stored content");
+        fs::write(&dst, content).await?;
+        trace!(?key, bytes = ?content.len(), "stored content");
         Ok(key)
     }
 
