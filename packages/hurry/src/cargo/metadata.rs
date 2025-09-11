@@ -97,6 +97,15 @@ impl RustcMetadata {
 /// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/duration.rs:
 /// /Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/humantime-2.2.0/src/wrapper.rs:
 /// ```
+///
+/// ## Future work/TODO
+///
+/// Today this only handles the `RustcDepInfo` representation[^1];
+/// if we end up needing to parse the Cargo's `EncodedDepInfo`[^2] we should
+/// either disambiguate this type or make it handle both.
+///
+/// [^1]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/struct.RustcDepInfo.html
+/// [^2]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/struct.EncodedDepInfo.html
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
 pub struct DepInfo(Vec<DepInfoLine>);
 
@@ -181,7 +190,14 @@ pub enum DepInfoLine {
 impl DepInfoLine {
     /// Parse the line in a `DepInfo` file.
     //
-    // TODO: We almost definitely need to handle spaces in the paths.
+    // TODO: Handle spaces in the paths; rustc uses `\` to escape them[^1].
+    // TODO: Handle optional `checksum` comments[^2].
+    // TODO: Find other edge cases according to the type[^3] and parser[^4].
+    //
+    // [^1]: https://doc.rust-lang.org/nightly/nightly-rustc/src/cargo/core/compiler/fingerprint/dep_info.rs.html#406-418
+    // [^2]: https://doc.rust-lang.org/nightly/nightly-rustc/src/cargo/core/compiler/fingerprint/dep_info.rs.html#419-435
+    // [^3]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/struct.RustcDepInfo.html
+    // [^4]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/fn.parse_rustc_dep_info.html
     #[instrument(name = "DepInfoLine::parse")]
     async fn parse(profile: &ProfileDir<'_, Locked>, line: &str) -> Result<Self> {
         Ok(if line.is_empty() {
