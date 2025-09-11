@@ -628,7 +628,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ) -> Result<(Blake3, AbsFilePath)> {
         let file = self.root.join(file);
         let raw = fs::must_read_buffered(&file).await.context("read file")?;
-        let content = match CasRewrite::parse(&file) {
+        let content = match CasRewrite::from_path(&file) {
             CasRewrite::None => raw,
             CasRewrite::DepInfo => DepInfo::from_file(self, &file)
                 .await
@@ -654,7 +654,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ) -> Result<AbsFilePath> {
         let file = self.root.join(file);
         let content = cas.must_get(key).await.context("get content from CAS")?;
-        let raw = match CasRewrite::parse(&file) {
+        let raw = match CasRewrite::from_path(&file) {
             CasRewrite::None => content,
             CasRewrite::DepInfo => serde_json::from_slice::<DepInfo>(&content)
                 .context("deserialize depinfo")
@@ -681,7 +681,8 @@ enum CasRewrite {
 }
 
 impl CasRewrite {
-    fn parse(target: &AbsFilePath) -> Self {
+    /// Determine the rewrite strategy from the file path.
+    fn from_path(target: &AbsFilePath) -> Self {
         let Some(name) = target.file_name_str_lossy() else {
             return Self::default();
         };
