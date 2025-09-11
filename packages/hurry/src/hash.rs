@@ -18,7 +18,6 @@ impl Blake3 {
     /// Hash the contents of the file at the specified path.
     #[instrument(name = "Blake3::from_file")]
     pub async fn from_file(path: &AbsFilePath) -> Result<Self> {
-        let path = path.as_ref();
         let mut file = fs::open_file(path).await.context("open file")?;
         let mut hasher = blake3::Hasher::new();
         let mut data = vec![0; 64 * 1024];

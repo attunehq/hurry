@@ -1,0 +1,16 @@
+disallowed-methods = [
+    { path = "std::fs::read", replacement = "hurry::fs::read_buffered" },
+    { path = "std::fs::read_to_string", replacement = "hurry::fs::read_buffered_utf8" },
+    { path = "std::fs::write", replacement = "hurry::fs::write" },
+    { path = "std::fs::create_dir", replacement = "hurry::fs::create_dir_all" },
+    { path = "std::fs::create_dir_all", replacement = "hurry::fs::create_dir_all" },
+    { path = "std::fs::remove_dir", reason = "use hurry::fs module instead" },
+    { path = "std::fs::remove_dir_all", reason = "use hurry::fs module instead" },
+    { path = "std::fs::remove_file", reason = "use hurry::fs module instead" },
+    { path = "std::fs::rename", reason = "use hurry::fs module instead" },
+    { path = "std::fs::copy", replacement = "hurry::fs::copy_file" },
+    { path = "std::fs::read_dir", replacement = "hurry::fs::read_dir" },
+    { path = "std::fs::File::open", replacement = "hurry::fs::open_file" },
+    { path = "std::fs::File::create", reason = "use hurry::fs module instead" },
+    { path = "std::fs::OpenOptions::new", reason = "use hurry::fs module instead" },
+]

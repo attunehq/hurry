@@ -112,7 +112,7 @@ pub async fn cache_target_from_workspace(
             async move {
                 debug!(?key, ?dependency, ?artifacts, "caching artifacts");
                 stream::iter(&artifacts)
-                    .map(|artifact| Ok(artifact))
+                    .map(Ok)
                     .try_for_each_concurrent(Some(100), |artifact| {
                         let (cas, target) = (cas.clone(), target.clone());
                         async move {
@@ -194,7 +194,7 @@ pub async fn restore_target_from_cache(
             async move {
                 debug!(?key, ?dependency, artifacts = ?record.artifacts, "restoring artifacts");
                 stream::iter(record.artifacts)
-                    .map(|artifact| Ok(artifact))
+                    .map(Ok)
                     .try_for_each_concurrent(Some(100), |artifact| {
                         let (cas, target) = (cas.clone(), target.clone());
                         async move {

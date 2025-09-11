@@ -4,6 +4,11 @@
 //! as such the benchmark changing doesn't _automatically_ mean that
 //! performance actually changed as the `target/` folder may have also changed.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Permit sync std::fs methods in benchmarks"
+)]
+
 use color_eyre::Result;
 use hurry::{
     mk_rel_dir,
@@ -52,7 +57,7 @@ mod sync {
     use super::*;
 
     mod single_threaded {
-        use std::{collections::HashSet, path::Path, usize};
+        use std::{collections::HashSet, path::Path};
 
         use itertools::Itertools;
 
@@ -108,7 +113,7 @@ mod sync {
                 .filter_map(|p| p.parent())
                 .sorted_by_cached_key(|p| usize::MAX - p.ancestors().count())
                 .fold(Vec::<&Path>::new(), |mut kept, p| {
-                    if !kept.iter().any(|k| k.starts_with(&p)) {
+                    if !kept.iter().any(|k| k.starts_with(p)) {
                         kept.push(p);
                     }
                     kept
@@ -128,7 +133,7 @@ mod sync {
     }
 
     mod using_rayon {
-        use std::{collections::HashSet, path::Path, usize};
+        use std::{collections::HashSet, path::Path};
 
         use color_eyre::eyre::Context;
         use itertools::Itertools;
@@ -191,7 +196,7 @@ mod sync {
                 .filter_map(|p| p.parent())
                 .sorted_by_cached_key(|p| usize::MAX - p.ancestors().count())
                 .fold(Vec::<&Path>::new(), |mut kept, p| {
-                    if !kept.iter().any(|k| k.starts_with(&p)) {
+                    if !kept.iter().any(|k| k.starts_with(p)) {
                         kept.push(p);
                     }
                     kept
