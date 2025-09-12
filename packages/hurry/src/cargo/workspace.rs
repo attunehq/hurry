@@ -691,10 +691,34 @@ enum CasRewrite {
     /// This file contains the fully qualified path to `out`,
     /// which is the directory where script can output files
     /// (provided to the script as $OUT_DIR).
+    ///
+    /// These are correct to rewrite because the content of the `out` directory
+    /// should have also been restored, but even if it wasn't it's certainly
+    /// not correct to try to read or write content from the old location.
+    ///
+    /// Example taken from an actual project:
+    /// ```not_rust
+    /// /Users/jess/scratch/example/target/debug/build/rustls-5590c033895e7e9a/out
+    /// ```
     RootOutput,
 
     /// This is an "output" file, which is the output of the build script
     /// when it was executed.
+    ///
+    /// These are correct to rewrite because paths in this output
+    /// will almost definitely be referencing either something local
+    /// or something in `$CARGO_HOME`.
+    ///
+    /// Example output taken from an actual project:
+    /// ```not_rust
+    /// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
+    /// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
+    /// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
+    /// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
+    /// cargo:rustc-link-search=native=/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out
+    /// cargo:root=/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out
+    /// cargo:include=/Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zstd-sys-2.0.15+zstd.1.5.7/zstd/lib
+    /// ```
     ///
     /// Reference: https://doc.rust-lang.org/cargo/reference/build-scripts.html
     BuildScriptOutput,
@@ -730,6 +754,25 @@ impl CasRewrite {
             .tuple_windows()
             .take(1)
             .find_map(|(name, _, gparent)| {
+                // Theoretically, we could blanket rewrite all paths in all
+                // text files- but we follow a conservative approach here
+                // because above all we don't want to silently cause
+                // miscompilations and we don't want to do more work than
+                // is needed.
+                //
+                // For example, we don't rewrite `stderr` output files for
+                // build scripts, because they're only for humans to read.
+                // Also some example projects emit other arbitrary text files;
+                // e.g. the build script for `aws-lc-sys` emits a file at
+                // `./target/debug/build/aws-lc-sys-3f4f475625566422/out/memcmp_invalid_stripped_check.dSYM/Contents/Resources/Relocations/aarch64/memcmp_invalid_stripped_check.yml`
+                // which we don't try to replace because we don't really know
+                // anything about this file.
+                //
+                // We do know however that it's common practice in the Rust
+                // community to back up and restore files in `target` for
+                // caching, so we can only assume that library authors
+                // know this and can recover from or at least detect
+                // this sort of scenario if they care.
                 let ext = name.rsplit_once('.').map(|(_, ext)| ext);
                 match (gparent.as_ref(), name.as_ref(), ext) {
                     ("build", "output", _) => Some(Self::BuildScriptOutput),
