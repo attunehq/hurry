@@ -30,7 +30,7 @@ pub async fn exec(options: Options) -> Result<()> {
     let cache_path = user_global_cache_path()
         .await
         .context("get user global cache path")?;
-    println!("Clearing cache directory at {cache_path:?}");
+    println!("Clearing cache directory at {cache_path}");
     match fs::metadata(cache_path.as_std_path()).await {
         Ok(Some(metadata)) => {
             if !metadata.is_dir() {
@@ -45,12 +45,12 @@ pub async fn exec(options: Options) -> Result<()> {
             return Ok(());
         }
         Err(err) => {
-            warn!("Failed to stat cache directory: {err:?}");
+            warn!("Failed to stat cache directory: {err}");
         }
     }
     fs::remove_dir_all(&cache_path)
         .await
-        .with_context(|| format!("remove cache directory: {cache_path:?}"))?;
+        .with_context(|| format!("remove cache directory: {cache_path}"))?;
     println!("Done!");
     Ok(())
 }
