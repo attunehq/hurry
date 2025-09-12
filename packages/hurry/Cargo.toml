@@ -12,6 +12,9 @@ harness = false
 [[bench]]
 name = "cargo_cache"
 harness = false
+[[bench]]
+name = "walkdir"
+harness = false
 
 [dependencies]
 ahash = { workspace = true }
