@@ -33,6 +33,7 @@ use std::{
     borrow::Cow,
     ffi::{OsStr, OsString},
     marker::PhantomData,
+    os::unix::ffi::OsStrExt,
     path::{Component, Path, PathBuf},
     str::FromStr,
 };
@@ -217,6 +218,11 @@ impl<B, T> TypedPath<B, T> {
         self.inner.as_os_str()
     }
 
+    /// View the path as a plain byte slice.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.inner.as_os_str().as_bytes()
+    }
+
     /// Get the parent of the provided path, if one exists.
     ///
     /// Unlike the standard library, this method returns `None`
@@ -236,7 +242,7 @@ impl<B, T> TypedPath<B, T> {
     }
 
     /// Iterate through the components of the path.
-    pub fn components<'a>(&'a self) -> impl Iterator<Item = Component<'a>> {
+    pub fn components<'a>(&'a self) -> impl DoubleEndedIterator<Item = Component<'a>> {
         self.inner.components()
     }
 
@@ -244,7 +250,7 @@ impl<B, T> TypedPath<B, T> {
     ///
     /// Any non-UTF-8 sequences are replaced with `U+FFFD REPLACEMENT CHARACTER`
     /// so be careful using this to construct _new_ paths.
-    pub fn component_strs_lossy<'a>(&'a self) -> impl Iterator<Item = Cow<'a, str>> {
+    pub fn component_strs_lossy<'a>(&'a self) -> impl DoubleEndedIterator<Item = Cow<'a, str>> {
         self.inner
             .components()
             .map(|c| c.as_os_str().to_string_lossy())

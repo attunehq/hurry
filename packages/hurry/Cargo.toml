@@ -53,11 +53,12 @@ futures = { workspace = true }
 tempfile = { workspace = true }
 home = { workspace = true }
 regex = { workspace = true }
-uuid = { version = "1.18.1", features = ["v4"] }
+uuid = { workspace = true, features = ["v4"] }
 jiff = { workspace = true }
 const-str = { workspace = true, features = ["std", "all"] }
 duplicate = { workspace = true }
 paste = { workspace = true }
+bstr = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 async-walkdir.workspace = true
