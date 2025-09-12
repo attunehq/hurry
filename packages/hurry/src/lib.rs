@@ -6,6 +6,7 @@
 
 use derive_more::Display;
 
+pub mod bytes;
 pub mod cache;
 pub mod cargo;
 pub mod ext;

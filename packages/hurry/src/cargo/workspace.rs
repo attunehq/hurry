@@ -1,7 +1,6 @@
 use std::{fmt::Debug, marker::PhantomData, sync::Arc};
 
 use ahash::{HashMap, HashSet};
-use bstr::ByteSlice;
 use cargo_metadata::TargetKind;
 use color_eyre::{
     Result,
@@ -17,6 +16,7 @@ use tracing::{debug, instrument, trace};
 
 use crate::{
     Locked, Unlocked,
+    bytes::replace_all,
     cache::FsCas,
     cargo::DepInfoDependencyPath,
     fs::{self, Index, LockFile},
@@ -632,7 +632,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         let content = match CasRewrite::from_path(&file) {
             CasRewrite::None => raw,
             CasRewrite::RootOutput | CasRewrite::BuildScriptOutput => {
-                CasRewrite::generic_path_store(self, raw)
+                CasRewrite::replace_local_paths(self, raw)
             }
             CasRewrite::DepInfo => DepInfo::from_file(self, &file)
                 .await
@@ -661,7 +661,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
         let raw = match CasRewrite::from_path(&file) {
             CasRewrite::None => content,
             CasRewrite::RootOutput | CasRewrite::BuildScriptOutput => {
-                CasRewrite::generic_path_restore(self, content)
+                CasRewrite::restore_local_paths(self, content)
             }
             CasRewrite::DepInfo => serde_json::from_slice::<DepInfo>(&content)
                 .context("deserialize depinfo")
@@ -688,13 +688,13 @@ enum CasRewrite {
 
     /// This is a "root output" file, used for build scripts.
     ///
-    /// This file contains the fully qualified path to `out`,
-    /// which is the directory where script can output files
-    /// (provided to the script as $OUT_DIR).
+    /// This file contains the fully qualified path to `out`, which is the
+    /// directory where script can output files (provided to the script as
+    /// $OUT_DIR).
     ///
     /// These are correct to rewrite because the content of the `out` directory
-    /// should have also been restored, but even if it wasn't it's certainly
-    /// not correct to try to read or write content from the old location.
+    /// should have also been restored, but even if it wasn't it's certainly not
+    /// correct to try to read or write content from the old location.
     ///
     /// Example taken from an actual project:
     /// ```not_rust
@@ -702,12 +702,12 @@ enum CasRewrite {
     /// ```
     RootOutput,
 
-    /// This is an "output" file, which is the output of the build script
-    /// when it was executed.
+    /// This is an "output" file, which is the output of the build script when
+    /// it was executed.
     ///
-    /// These are correct to rewrite because paths in this output
-    /// will almost definitely be referencing either something local
-    /// or something in `$CARGO_HOME`.
+    /// These are correct to rewrite because paths in this output will almost
+    /// definitely be referencing either something local or something in
+    /// `$CARGO_HOME`.
     ///
     /// Example output taken from an actual project:
     /// ```not_rust
@@ -727,52 +727,51 @@ enum CasRewrite {
 impl CasRewrite {
     /// Indicates the "cargo home" in a rewritten file path.
     ///
-    /// This is replaced with [`Workspace::cargo_home`] when restoring,
-    /// and replaces `Workspace::cargo_home` when storing.
+    /// This is replaced with [`Workspace::cargo_home`] when restoring, and
+    /// replaces `Workspace::cargo_home` when storing.
     const CARGO_HOME: &[u8] = b"__HURRY_CARGO_HOME_ROOT";
 
     /// Indicates the "workspace root" in a rewritten file path.
     ///
-    /// This is replaced with [`Workspace::root`] when restoring,
-    /// and replaces `Workspace::root` when storing.
+    /// This is replaced with [`Workspace::root`] when restoring, and replaces
+    /// `Workspace::root` when storing.
     const WORKSPACE_ROOT: &[u8] = b"__HURRY_WORKSPACE_ROOT";
 
     /// Indicates the "profile root" in a rewritten file path.
     ///
-    /// This is replaced with [`ProfileDir::root()`] when restoring,
-    /// and replaces `ProfileDir::root()` when storing.
+    /// This is replaced with [`ProfileDir::root()`] when restoring, and
+    /// replaces `ProfileDir::root()` when storing.
     const PROFILE_ROOT: &[u8] = b"__HURRY_WORKSPACE_PROFILE_ROOT";
 
     /// Determine the rewrite strategy from the file path.
     fn from_path(target: &AbsFilePath) -> Self {
         // `.rev()` and `.take(1)` are because while we're iterating over
-        // components, we really don't care about reading the whole path-
-        // just the few elements at the end.
+        // components, we really don't care about reading the whole path- just
+        // the few elements at the end.
         target
             .component_strs_lossy()
             .rev()
             .tuple_windows()
             .take(1)
             .find_map(|(name, _, gparent)| {
-                // Theoretically, we could blanket rewrite all paths in all
-                // text files- but we follow a conservative approach here
-                // because above all we don't want to silently cause
-                // miscompilations and we don't want to do more work than
-                // is needed.
+                // Theoretically, we could blanket rewrite all paths in all text
+                // files- but we follow a conservative approach here because
+                // above all we don't want to silently cause miscompilations and
+                // we don't want to do more work than is needed.
                 //
-                // For example, we don't rewrite `stderr` output files for
-                // build scripts, because they're only for humans to read.
-                // Also some example projects emit other arbitrary text files;
-                // e.g. the build script for `aws-lc-sys` emits a file at
+                // For example, we don't rewrite `stderr` output files for build
+                // scripts, because they're only for humans to read. Also some
+                // example projects emit other arbitrary text files; e.g. the
+                // build script for `aws-lc-sys` emits a file at
                 // `./target/debug/build/aws-lc-sys-3f4f475625566422/out/memcmp_invalid_stripped_check.dSYM/Contents/Resources/Relocations/aarch64/memcmp_invalid_stripped_check.yml`
                 // which we don't try to replace because we don't really know
                 // anything about this file.
                 //
                 // We do know however that it's common practice in the Rust
                 // community to back up and restore files in `target` for
-                // caching, so we can only assume that library authors
-                // know this and can recover from or at least detect
-                // this sort of scenario if they care.
+                // caching, so we can only assume that library authors know this
+                // and can recover from or at least detect this sort of scenario
+                // if they care.
                 let ext = name.rsplit_once('.').map(|(_, ext)| ext);
                 match (gparent.as_ref(), name.as_ref(), ext) {
                     ("build", "output", _) => Some(Self::BuildScriptOutput),
@@ -784,48 +783,41 @@ impl CasRewrite {
             .unwrap_or_default()
     }
 
-    /// Perform the "generic path" strategy when storing text files.
+    /// Replace local paths in the content with Hurry-specific identifiers.
     ///
-    /// This strategy:
-    /// 1. Searches for instances of known project or machine specific paths.
-    /// 2. Replaces them with known, Hurry-specific identifiers.
+    /// Searches and replaces:
+    /// - `profile.root` -> [`CasRewrite::PROFILE_ROOT`]
+    /// - `profile.workspace.root` -> [`CasRewrite::WORKSPACE_ROOT`]
+    /// - `profile.workspace.cargo_home` -> [`CasRewrite::CARGO_HOME`]
     ///
     /// This method is intended for use with text files that are known to
     /// contain paths that are safe to rewrite without worrying about
     /// maintaining byte offsets.
     #[instrument(skip(content))]
-    fn generic_path_store(profile: &ProfileDir<'_, Locked>, content: Vec<u8>) -> Vec<u8> {
-        // Important: `workspace_root` is a substring of `profile_root`,
-        // so make sure to replace `profile_root` first!
-        //
-        // Note: we could probably use something like aho-corasick to speed
-        // this up. `bstr` also has a `replace_into` method that may be faster.
-        // If this function ends up being a bottleneck, those are probably
-        // places to start.
-        let content = content.replace(profile.root.as_bytes(), Self::PROFILE_ROOT);
-        let content = content.replace(profile.workspace.root.as_bytes(), Self::WORKSPACE_ROOT);
-        let content = content.replace(profile.workspace.cargo_home.as_bytes(), Self::CARGO_HOME);
-        content
+    fn replace_local_paths(profile: &ProfileDir<'_, Locked>, content: Vec<u8>) -> Vec<u8> {
+        content.replace_all([
+            (profile.root.as_bytes(), Self::PROFILE_ROOT),
+            (profile.workspace.root.as_bytes(), Self::WORKSPACE_ROOT),
+            (profile.workspace.cargo_home.as_bytes(), Self::CARGO_HOME),
+        ])
     }
 
-    /// Perform the "generic path" strategy when restoring text files.
+    /// Replace local paths in the content with Hurry-specific identifiers.
     ///
-    /// This strategy:
-    /// 1. Searches for instances of known, Hurry-specific identifiers.
-    /// 2. Replaces them with project or machine specific paths.
+    /// Searches and replaces:
+    /// - [`CasRewrite::PROFILE_ROOT`] -> `profile.root`
+    /// - [`CasRewrite::WORKSPACE_ROOT`] -> `profile.workspace.root`
+    /// - [`CasRewrite::CARGO_HOME`] -> `profile.workspace.cargo_home`
     ///
     /// This method is intended for use with text files that are known to
     /// contain paths that are safe to rewrite without worrying about
     /// maintaining byte offsets.
     #[instrument(skip(content))]
-    fn generic_path_restore(profile: &ProfileDir<'_, Locked>, content: Vec<u8>) -> Vec<u8> {
-        // Note: we could probably use something like aho-corasick to speed
-        // this up. `bstr` also has a `replace_into` method that may be faster.
-        // If this function ends up being a bottleneck, those are probably
-        // places to start.
-        let content = content.replace(Self::PROFILE_ROOT, profile.root.as_bytes());
-        let content = content.replace(Self::WORKSPACE_ROOT, profile.workspace.root.as_bytes());
-        let content = content.replace(Self::CARGO_HOME, profile.workspace.cargo_home.as_bytes());
-        content
+    fn restore_local_paths(profile: &ProfileDir<'_, Locked>, content: Vec<u8>) -> Vec<u8> {
+        content.replace_all([
+            (Self::PROFILE_ROOT, profile.root.as_bytes()),
+            (Self::WORKSPACE_ROOT, profile.workspace.root.as_bytes()),
+            (Self::CARGO_HOME, profile.workspace.cargo_home.as_bytes()),
+        ])
     }
 }
