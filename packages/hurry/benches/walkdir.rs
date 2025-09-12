@@ -114,11 +114,59 @@ mod using_tokio {
     use super::*;
 
     #[divan::bench(sample_count = 5)]
+    fn walkdir_spawned() {
+        let target = current_target();
+        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+
+        let walk: Result<()> = runtime.block_on(async move {
+            tokio::task::spawn_blocking(move || {
+                for entry in walkdir::WalkDir::new(target.as_std_path()) {
+                    let entry = entry.expect("walk files");
+                    if !entry.file_type().is_file() {
+                        continue;
+                    }
+
+                    black_box(entry);
+                }
+            })
+            .await
+            .context("join task")?;
+
+            Ok(())
+        });
+        walk.expect("walk files");
+    }
+
+    #[divan::bench(sample_count = 5)]
+    fn jwalk_spawned() {
+        let target = current_target();
+        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+
+        let walk: Result<()> = runtime.block_on(async move {
+            tokio::task::spawn_blocking(move || {
+                for entry in jwalk::WalkDir::new(target.as_std_path()) {
+                    let entry = entry.expect("walk files");
+                    if !entry.file_type().is_file() {
+                        continue;
+                    }
+
+                    black_box(entry);
+                }
+            })
+            .await
+            .context("join task")?;
+
+            Ok(())
+        });
+        walk.expect("walk files");
+    }
+
+    #[divan::bench(sample_count = 5)]
     fn async_walkdir() {
         let target = current_target();
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
 
-        let copy: Result<()> = runtime.block_on(async move {
+        let walk: Result<()> = runtime.block_on(async move {
             let mut walker = async_walkdir::WalkDir::new(target.as_std_path());
             while let Some(entry) = walker.next().await {
                 let entry = entry.context("walk files")?;
@@ -132,7 +180,7 @@ mod using_tokio {
 
             Ok(())
         });
-        copy.expect("copy files");
+        walk.expect("walk files");
     }
 
     #[divan::bench(sample_count = 5, args = [1, 10, 100, 1000])]
@@ -140,7 +188,7 @@ mod using_tokio {
         let target = current_target();
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
 
-        let copy: Result<()> = runtime.block_on(async move {
+        let walk: Result<()> = runtime.block_on(async move {
             async_walkdir::WalkDir::new(target.as_std_path())
                 .map_err(|err| eyre!(err))
                 .try_for_each_concurrent(Some(concurrency), |entry| async move {
@@ -154,7 +202,7 @@ mod using_tokio {
                 })
                 .await
         });
-        copy.expect("copy files");
+        walk.expect("walk files");
     }
 
     mod hurry_fs {
@@ -165,7 +213,7 @@ mod using_tokio {
             let target = current_target();
             let runtime = tokio::runtime::Runtime::new().expect("create runtime");
 
-            let copy: Result<()> = runtime.block_on(async move {
+            let walk: Result<()> = runtime.block_on(async move {
                 let mut walker = hurry::fs::walk_files(&target);
                 while let Some(entry) = walker.next().await {
                     let entry = entry.context("walk files")?;
@@ -174,7 +222,7 @@ mod using_tokio {
 
                 Ok(())
             });
-            copy.expect("copy files");
+            walk.expect("walk files");
         }
     }
 }
