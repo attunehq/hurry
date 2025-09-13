@@ -255,6 +255,17 @@ impl DepInfoLine {
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
 #[serde(tag = "t", content = "c")]
 pub enum QualifiedPath {
+    /// The path is "natively" relative without a root prior to `hurry` making
+    /// it relative. Such paths are backed up and restored "as-is".
+    ///
+    /// Note: Since these paths are natively written as relative paths,
+    /// it's not necessarily clear to what file these are referring without more
+    /// context (such as the kind of file that contained the path and its
+    /// location). If this is ever a problem, we'll probably need to change how
+    /// we represent this type- maybe e.g. provide a "computed" path relative to
+    /// a known root along with the "native" version of the path.
+    Rootless(RelFilePath),
+
     /// The path is relative to the workspace target profile directory.
     RelativeTargetProfile(RelFilePath),
 
@@ -271,31 +282,30 @@ impl QualifiedPath {
             } else if fs::exists(profile.workspace.cargo_home.join(&rel).as_std_path()).await {
                 Self::RelativeCargoHome(rel)
             } else {
-                bail!("unknown root for relative path: {rel:?}");
+                Self::Rootless(rel)
             }
-        } else {
-            let path = AbsFilePath::try_from(path).context("parse as abs file")?;
-            if let Ok(rel) = path.relative_to(profile.root()) {
+        } else if let Ok(abs) = AbsFilePath::try_from(path) {
+            if let Ok(rel) = abs.relative_to(profile.root()) {
                 Self::RelativeTargetProfile(rel)
-            } else if let Ok(rel) = path.relative_to(&profile.workspace.cargo_home) {
+            } else if let Ok(rel) = abs.relative_to(&profile.workspace.cargo_home) {
                 Self::RelativeCargoHome(rel)
             } else {
-                bail!("unknown root for absolute path: {path:?}");
+                bail!("unknown root for absolute path: {abs:?}");
             }
+        } else {
+            bail!("unknown kind of path: {path:?}")
         })
-    }
-
-    #[instrument(name = "QualifiedPath::to_path")]
-    pub fn to_path(&self, profile: &ProfileDir<'_, Locked>) -> AbsFilePath {
-        match self {
-            QualifiedPath::RelativeTargetProfile(rel) => profile.root().join(rel),
-            QualifiedPath::RelativeCargoHome(rel) => profile.workspace.cargo_home.join(rel),
-        }
     }
 
     #[instrument(name = "QualifiedPath::reconstruct")]
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
-        self.to_path(profile).to_string()
+        match self {
+            QualifiedPath::Rootless(rel) => rel.to_string(),
+            QualifiedPath::RelativeTargetProfile(rel) => profile.root().join(rel).to_string(),
+            QualifiedPath::RelativeCargoHome(rel) => {
+                profile.workspace.cargo_home.join(rel).to_string()
+            }
+        }
     }
 }
 
@@ -402,20 +412,25 @@ pub enum BuildScriptOutputLine {
     /// `cargo::rerun-if-changed=PATH`
     RerunIfChanged(QualifiedPath),
 
-    /// `cargo::rustc-link-search=[KIND=]PATH`
-    RustcLinkSearch(Option<String>, QualifiedPath),
-
     /// All other lines.
     ///
     /// These are intended to be backed up and restored unmodified.
     /// No guarantees are made about these lines: they could be blank
     /// or contain other arbitrary content.
     Other(String),
+    //
+    // Commented for now until we have the concept of multiple cache keys.
+    // Once we have those we'll need to re-add this and then make it influence
+    // the cache key:
+    // https://attunehq-workspace.slack.com/archives/C08ALDYV85T/p1757723284399379
+    //
+    // /// `cargo::rustc-link-search=[KIND=]PATH`
+    // RustcLinkSearch(Option<String>, QualifiedPath),
 }
 
 impl BuildScriptOutputLine {
-    const RERUN_IF_CHANGED: &str = "cargo::rerun-if-changed";
-    const RUSTC_LINK_SEARCH: &str = "cargo::rustc-link-search";
+    const RERUN_IF_CHANGED: &str = "cargo:rerun-if-changed";
+    // const RUSTC_LINK_SEARCH: &str = "cargo:rustc-link-search";
 
     /// Parse a line of the build script file.
     #[instrument(name = "BuildScriptOutputLine::parse")]
@@ -426,17 +441,21 @@ impl BuildScriptOutputLine {
                     let path = QualifiedPath::parse(profile, value).await?;
                     Ok(Self::RerunIfChanged(path))
                 }
-                Self::RUSTC_LINK_SEARCH => {
-                    if let Some((kind, path)) = value.split_once('=') {
-                        let path = QualifiedPath::parse(profile, path).await?;
-                        let kind = Some(kind.to_string());
-                        Ok(Self::RustcLinkSearch(kind, path))
-                    } else {
-                        let path = QualifiedPath::parse(profile, value).await?;
-                        Ok(Self::RustcLinkSearch(None, path))
-                    }
-                }
                 _ => Ok(Self::Other(line.to_string())),
+                //
+                // Commented for now, context:
+                // https://attunehq-workspace.slack.com/archives/C08ALDYV85T/p1757723284399379
+                //
+                // Self::RUSTC_LINK_SEARCH => {
+                //     if let Some((kind, path)) = value.split_once('=') {
+                //         let path = QualifiedPath::parse(profile, path).await?;
+                //         let kind = Some(kind.to_string());
+                //         Ok(Self::RustcLinkSearch(kind, path))
+                //     } else {
+                //         let path = QualifiedPath::parse(profile, value).await?;
+                //         Ok(Self::RustcLinkSearch(None, path))
+                //     }
+                // }
             }
         } else {
             Ok(Self::Other(line.to_string()))
@@ -450,16 +469,20 @@ impl BuildScriptOutputLine {
             BuildScriptOutputLine::RerunIfChanged(path) => {
                 format!("{}={}", Self::RERUN_IF_CHANGED, path.reconstruct(profile))
             }
-            BuildScriptOutputLine::RustcLinkSearch(Some(kind), path) => format!(
-                "{}={}={}",
-                Self::RUSTC_LINK_SEARCH,
-                kind,
-                path.reconstruct(profile)
-            ),
-            BuildScriptOutputLine::RustcLinkSearch(None, path) => {
-                format!("{}={}", Self::RUSTC_LINK_SEARCH, path.reconstruct(profile))
-            }
             BuildScriptOutputLine::Other(s) => s.to_string(),
+            //
+            // Commented for now, context:
+            // https://attunehq-workspace.slack.com/archives/C08ALDYV85T/p1757723284399379
+            //
+            // BuildScriptOutputLine::RustcLinkSearch(Some(kind), path) => format!(
+            //     "{}={}={}",
+            //     Self::RUSTC_LINK_SEARCH,
+            //     kind,
+            //     path.reconstruct(profile)
+            // ),
+            // BuildScriptOutputLine::RustcLinkSearch(None, path) => {
+            //     format!("{}={}", Self::RUSTC_LINK_SEARCH, path.reconstruct(profile))
+            // }
         }
     }
 }

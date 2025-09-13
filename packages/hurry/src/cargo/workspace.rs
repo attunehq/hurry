@@ -593,6 +593,7 @@ impl<'ws> ProfileDir<'ws, Locked> {
                 .build_outputs()
                 .into_iter()
                 .filter_map(|output| match output {
+                    QualifiedPath::Rootless(p) => Some(p),
                     QualifiedPath::RelativeTargetProfile(p) => Some(p),
                     QualifiedPath::RelativeCargoHome(_) => None,
                 })
