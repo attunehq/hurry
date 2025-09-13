@@ -16,9 +16,8 @@ use tracing::{debug, instrument, trace};
 
 use crate::{
     Locked, Unlocked,
-    bytes::replace_all,
     cache::FsCas,
-    cargo::DepInfoDependencyPath,
+    cargo::{BuildScriptOutput, QualifiedPath, RootOutput},
     fs::{self, Index, LockFile},
     hash::Blake3,
     mk_rel_file,
@@ -594,8 +593,8 @@ impl<'ws> ProfileDir<'ws, Locked> {
                 .build_outputs()
                 .into_iter()
                 .filter_map(|output| match output {
-                    DepInfoDependencyPath::RelativeTargetProfile(p) => Some(p),
-                    DepInfoDependencyPath::RelativeCargoHome(_) => None,
+                    QualifiedPath::RelativeTargetProfile(p) => Some(p),
+                    QualifiedPath::RelativeCargoHome(_) => None,
                 })
                 .collect::<HashSet<_>>();
             dependencies.extend(deps.iter().filter(|&path| outputs.contains(path)));
@@ -629,16 +628,27 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ) -> Result<(Blake3, AbsFilePath)> {
         let file = self.root.join(file);
         let raw = fs::must_read_buffered(&file).await.context("read file")?;
+
+        // TODO: If we keep rewrites with this sort of structure we probably
+        // want to turn them into a more generic operation instead of having to
+        // retype all this boilerplate every time.
         let content = match CasRewrite::from_path(&file) {
             CasRewrite::None => raw,
-            CasRewrite::RootOutput | CasRewrite::BuildScriptOutput => {
-                CasRewrite::replace_local_paths(self, raw)
-            }
+            CasRewrite::RootOutput => RootOutput::from_file(self, &file)
+                .await
+                .context("parse")?
+                .pipe_ref(serde_json::to_vec)
+                .context("serialize")?,
+            CasRewrite::BuildScriptOutput => BuildScriptOutput::from_file(self, &file)
+                .await
+                .context("parse")?
+                .pipe_ref(serde_json::to_vec)
+                .context("serialize")?,
             CasRewrite::DepInfo => DepInfo::from_file(self, &file)
                 .await
-                .context("parse depinfo")?
+                .context("parse")?
                 .pipe_ref(serde_json::to_vec)
-                .context("serialize depinfo")?,
+                .context("serialize")?,
         };
 
         cas.store(&content)
@@ -658,14 +668,21 @@ impl<'ws> ProfileDir<'ws, Locked> {
     ) -> Result<AbsFilePath> {
         let file = self.root.join(file);
         let content = cas.must_get(key).await.context("get content from CAS")?;
+
+        // TODO: If we keep rewrites with this sort of structure we probably
+        // want to turn them into a more generic operation instead of having to
+        // retype all this boilerplate every time.
         let raw = match CasRewrite::from_path(&file) {
             CasRewrite::None => content,
-            CasRewrite::RootOutput | CasRewrite::BuildScriptOutput => {
-                CasRewrite::restore_local_paths(self, content)
-            }
+            CasRewrite::RootOutput => serde_json::from_slice::<RootOutput>(&content)
+                .context("deserialize")
+                .map(|f| f.reconstruct(self).into_bytes())?,
+            CasRewrite::BuildScriptOutput => serde_json::from_slice::<BuildScriptOutput>(&content)
+                .context("deserialize")
+                .map(|f| f.reconstruct(self).into_bytes())?,
             CasRewrite::DepInfo => serde_json::from_slice::<DepInfo>(&content)
-                .context("deserialize depinfo")
-                .map(|dotd| dotd.reconstruct(self).into_bytes())?,
+                .context("deserialize")
+                .map(|f| f.reconstruct(self).into_bytes())?,
         };
         fs::write(&file, &raw)
             .await
@@ -677,6 +694,14 @@ impl<'ws> ProfileDir<'ws, Locked> {
 /// Some files need to be rewritten when stored in or restored from the CAS.
 /// This type supports parsing a path to determine whether it should be
 /// rewritten, and if so using what strategy.
+///
+/// A core intention of this type is to _always_ only replace things that
+/// `hurry` can actually _parse_- no blanket "replace all" functionality.
+/// The reasoning here is that while we want to make builds faster,
+/// we **cannot** make them incorrect; if we skip rewriting something
+/// that Cargo needs it'll simply recompile while if we overzealously rewrite
+/// things we don't actually know anything about we might cause subtle and
+/// bugs in the compilation phase which we absolutely cannot afford to do.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
 enum CasRewrite {
     /// No rewriting should take place.
@@ -725,24 +750,6 @@ enum CasRewrite {
 }
 
 impl CasRewrite {
-    /// Indicates the "cargo home" in a rewritten file path.
-    ///
-    /// This is replaced with [`Workspace::cargo_home`] when restoring, and
-    /// replaces `Workspace::cargo_home` when storing.
-    const CARGO_HOME: &[u8] = b"__HURRY_CARGO_HOME_ROOT";
-
-    /// Indicates the "workspace root" in a rewritten file path.
-    ///
-    /// This is replaced with [`Workspace::root`] when restoring, and replaces
-    /// `Workspace::root` when storing.
-    const WORKSPACE_ROOT: &[u8] = b"__HURRY_WORKSPACE_ROOT";
-
-    /// Indicates the "profile root" in a rewritten file path.
-    ///
-    /// This is replaced with [`ProfileDir::root()`] when restoring, and
-    /// replaces `ProfileDir::root()` when storing.
-    const PROFILE_ROOT: &[u8] = b"__HURRY_WORKSPACE_PROFILE_ROOT";
-
     /// Determine the rewrite strategy from the file path.
     fn from_path(target: &AbsFilePath) -> Self {
         // `.rev()` and `.take(1)` are because while we're iterating over
@@ -781,43 +788,5 @@ impl CasRewrite {
                 }
             })
             .unwrap_or_default()
-    }
-
-    /// Replace local paths in the content with Hurry-specific identifiers.
-    ///
-    /// Searches and replaces:
-    /// - `profile.root` -> [`CasRewrite::PROFILE_ROOT`]
-    /// - `profile.workspace.root` -> [`CasRewrite::WORKSPACE_ROOT`]
-    /// - `profile.workspace.cargo_home` -> [`CasRewrite::CARGO_HOME`]
-    ///
-    /// This method is intended for use with text files that are known to
-    /// contain paths that are safe to rewrite without worrying about
-    /// maintaining byte offsets.
-    #[instrument(skip(content))]
-    fn replace_local_paths(profile: &ProfileDir<'_, Locked>, content: Vec<u8>) -> Vec<u8> {
-        content.replace_all([
-            (profile.root.as_bytes(), Self::PROFILE_ROOT),
-            (profile.workspace.root.as_bytes(), Self::WORKSPACE_ROOT),
-            (profile.workspace.cargo_home.as_bytes(), Self::CARGO_HOME),
-        ])
-    }
-
-    /// Replace local paths in the content with Hurry-specific identifiers.
-    ///
-    /// Searches and replaces:
-    /// - [`CasRewrite::PROFILE_ROOT`] -> `profile.root`
-    /// - [`CasRewrite::WORKSPACE_ROOT`] -> `profile.workspace.root`
-    /// - [`CasRewrite::CARGO_HOME`] -> `profile.workspace.cargo_home`
-    ///
-    /// This method is intended for use with text files that are known to
-    /// contain paths that are safe to rewrite without worrying about
-    /// maintaining byte offsets.
-    #[instrument(skip(content))]
-    fn restore_local_paths(profile: &ProfileDir<'_, Locked>, content: Vec<u8>) -> Vec<u8> {
-        content.replace_all([
-            (Self::PROFILE_ROOT, profile.root.as_bytes()),
-            (Self::WORKSPACE_ROOT, profile.workspace.root.as_bytes()),
-            (Self::CARGO_HOME, profile.workspace.cargo_home.as_bytes()),
-        ])
     }
 }

@@ -7,6 +7,7 @@ use color_eyre::{
 use futures::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use tap::TapFallible;
 use tracing::{instrument, trace};
 
 use super::workspace::ProfileDir;
@@ -150,9 +151,7 @@ impl DepInfo {
 
     /// Iterate over builds parsed in the file.
     #[instrument(name = "DepInfo::builds")]
-    pub fn builds(
-        &self,
-    ) -> impl Iterator<Item = (&DepInfoDependencyPath, &[DepInfoDependencyPath])> {
+    pub fn builds(&self) -> impl Iterator<Item = (&QualifiedPath, &[QualifiedPath])> {
         self.0.iter().filter_map(|line| match line {
             DepInfoLine::Build(output, inputs) => Some((output, inputs.as_slice())),
             _ => None,
@@ -161,7 +160,7 @@ impl DepInfo {
 
     /// Iterate over build outputs parsed in the file.
     #[instrument(name = "DepInfo::build_outputs")]
-    pub fn build_outputs(&self) -> impl Iterator<Item = &DepInfoDependencyPath> {
+    pub fn build_outputs(&self) -> impl Iterator<Item = &QualifiedPath> {
         self.0.iter().filter_map(|line| match line {
             DepInfoLine::Build(output, _) => Some(output),
             _ => None,
@@ -184,7 +183,7 @@ pub enum DepInfoLine {
     /// Note that every input is _also_ an output, just with an empty
     /// set of inputs.
     /// Outputs are usually only relative to $CARGO_HOME in this case.
-    Build(DepInfoDependencyPath, Vec<DepInfoDependencyPath>),
+    Build(QualifiedPath, Vec<QualifiedPath>),
 }
 
 impl DepInfoLine {
@@ -199,13 +198,13 @@ impl DepInfoLine {
     // [^3]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/struct.RustcDepInfo.html
     // [^4]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/fn.parse_rustc_dep_info.html
     #[instrument(name = "DepInfoLine::parse")]
-    async fn parse(profile: &ProfileDir<'_, Locked>, line: &str) -> Result<Self> {
+    pub async fn parse(profile: &ProfileDir<'_, Locked>, line: &str) -> Result<Self> {
         Ok(if line.is_empty() {
             Self::Space
         } else if let Some(comment) = line.strip_prefix('#') {
             Self::Comment(comment.to_string())
         } else if let Some(output) = line.strip_suffix(':') {
-            let output = DepInfoDependencyPath::parse(profile, output)
+            let output = QualifiedPath::parse(profile, output)
                 .then_with_context(move || format!("parse output path: {output:?}"))
                 .await?;
             Self::Build(output, Vec::new())
@@ -214,11 +213,11 @@ impl DepInfoLine {
                 bail!("no output/input separator");
             };
 
-            let output = DepInfoDependencyPath::parse(profile, output)
+            let output = QualifiedPath::parse(profile, output)
                 .then_with_context(move || format!("parse output path: {output:?}"));
             let inputs = stream::iter(inputs.trim().split_whitespace())
                 .map(|input| {
-                    DepInfoDependencyPath::parse(profile, input)
+                    QualifiedPath::parse(profile, input)
                         .then_with_context(move || format!("parse input path: {input:?}"))
                 })
                 .buffer_unordered(DEFAULT_CONCURRENCY)
@@ -230,7 +229,7 @@ impl DepInfoLine {
     }
 
     #[instrument(name = "DepInfoLine::reconstruct")]
-    fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
+    pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
         match self {
             Self::Build(output, inputs) => {
                 let output = output.reconstruct(profile);
@@ -246,14 +245,16 @@ impl DepInfoLine {
     }
 }
 
-/// A dependency path specified in a ["dep-info" file](DepInfo).
+/// A "qualified" path inside a Cargo project.
 ///
-/// Dependencies specified in "dep-info" files can reference files either inside the
-/// current project, or in the Cargo registry cache on the local machine.
-/// This type differentiates between these options.
+/// Paths in some files, such as "dep-info" files or build script outputs, are
+/// sometimes written using absolute paths. However `hurry` wants to know what
+/// these paths are relative to so that it can back up and restore paths in
+/// different workspaces and machines. This type supports `hurry` being able to
+/// determine what kind of path is being referenced.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
 #[serde(tag = "t", content = "c")]
-pub enum DepInfoDependencyPath {
+pub enum QualifiedPath {
     /// The path is relative to the workspace target profile directory.
     RelativeTargetProfile(RelFilePath),
 
@@ -261,9 +262,9 @@ pub enum DepInfoDependencyPath {
     RelativeCargoHome(RelFilePath),
 }
 
-impl DepInfoDependencyPath {
-    #[instrument(name = "DepInfoPathBuf::parse")]
-    async fn parse(profile: &ProfileDir<'_, Locked>, path: &str) -> Result<Self> {
+impl QualifiedPath {
+    #[instrument(name = "QualifiedPath::parse")]
+    pub async fn parse(profile: &ProfileDir<'_, Locked>, path: &str) -> Result<Self> {
         Ok(if let Ok(rel) = RelFilePath::try_from(path) {
             if fs::exists(profile.root().join(&rel).as_std_path()).await {
                 Self::RelativeTargetProfile(rel)
@@ -284,16 +285,181 @@ impl DepInfoDependencyPath {
         })
     }
 
-    #[instrument(name = "DepInfoPathBuf::to_path")]
-    fn to_path(&self, profile: &ProfileDir<'_, Locked>) -> AbsFilePath {
+    #[instrument(name = "QualifiedPath::to_path")]
+    pub fn to_path(&self, profile: &ProfileDir<'_, Locked>) -> AbsFilePath {
         match self {
-            DepInfoDependencyPath::RelativeTargetProfile(rel) => profile.root().join(rel),
-            DepInfoDependencyPath::RelativeCargoHome(rel) => profile.workspace.cargo_home.join(rel),
+            QualifiedPath::RelativeTargetProfile(rel) => profile.root().join(rel),
+            QualifiedPath::RelativeCargoHome(rel) => profile.workspace.cargo_home.join(rel),
         }
     }
 
-    #[instrument(name = "DepInfoPathBuf::reconstruct")]
-    fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
+    #[instrument(name = "QualifiedPath::reconstruct")]
+    pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
         self.to_path(profile).to_string()
+    }
+}
+
+/// Represents a "root output" file, used for build scripts.
+///
+/// This file contains the fully qualified path to `out`, which is the directory
+/// where script can output files (provided to the script as $OUT_DIR).
+///
+/// Example:
+/// ```not_rust
+/// /Users/jess/scratch/example/target/debug/build/rustls-5590c033895e7e9a/out
+/// ```
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
+pub struct RootOutput(QualifiedPath);
+
+impl RootOutput {
+    /// Parse a "root output" file.
+    #[instrument(name = "RootOutput::from_file")]
+    pub async fn from_file(profile: &ProfileDir<'_, Locked>, file: &AbsFilePath) -> Result<Self> {
+        let content = fs::read_buffered_utf8(file)
+            .await
+            .context("read file")?
+            .ok_or_eyre("file does not exist")?;
+        let line = content
+            .lines()
+            .exactly_one()
+            .map_err(|_| eyre!("RootOutput file has more than one line: {content:?}"))?;
+        QualifiedPath::parse(profile, line)
+            .await
+            .context("parse file")
+            .map(Self)
+            .tap_ok(|parsed| trace!(?file, ?content, ?parsed, "parsed RootOutput file"))
+    }
+
+    /// Reconstruct the file in the context of the profile directory.
+    #[instrument(name = "RootOutput::reconstruct")]
+    pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
+        format!("{}", self.0.reconstruct(profile))
+    }
+}
+
+/// Parsed representation of the output of a build script when it was executed.
+///
+/// These are correct to rewrite because paths in this output will almost
+/// definitely be referencing either something local or something in
+/// `$CARGO_HOME`.
+///
+/// Example output taken from an actual project:
+/// ```not_rust
+/// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
+/// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
+/// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
+/// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
+/// cargo:rustc-link-search=native=/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out
+/// cargo:root=/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out
+/// cargo:include=/Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zstd-sys-2.0.15+zstd.1.5.7/zstd/lib
+/// ```
+///
+/// Reference: https://doc.rust-lang.org/cargo/reference/build-scripts.html
+#[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize)]
+pub struct BuildScriptOutput(Vec<BuildScriptOutputLine>);
+
+impl BuildScriptOutput {
+    /// Parse a build script output file.
+    #[instrument(name = "BuildScriptOutput::from_file")]
+    pub async fn from_file(profile: &ProfileDir<'_, Locked>, file: &AbsFilePath) -> Result<Self> {
+        let content = fs::read_buffered_utf8(file)
+            .await
+            .context("read file")?
+            .ok_or_eyre("file does not exist")?;
+        let lines = stream::iter(content.lines())
+            .then(|line| {
+                BuildScriptOutputLine::parse(profile, &line)
+                    .then_with_context(move || format!("parse line: {line:?}"))
+            })
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        trace!(?file, ?content, ?lines, "parsed DepInfo file");
+        Ok(Self(lines))
+    }
+
+    /// Reconstruct the file in the context of the profile directory.
+    #[instrument(name = "BuildScriptOutput::reconstruct")]
+    pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
+        self.0
+            .iter()
+            .map(|line| line.reconstruct(profile))
+            .join("\n")
+    }
+}
+
+/// Build scripts communicate with Cargo by printing to stdout. Cargo will
+/// interpret each line that starts with cargo:: as an instruction that will
+/// influence compilation of the package. All other lines are ignored.
+///
+/// `hurry` only cares about parsing some directives; directives it doesn't care
+/// about are passed through unchanged as the `Other` variant.
+///
+/// Reference for possible options according to the Cargo docs:
+/// https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
+pub enum BuildScriptOutputLine {
+    /// `cargo::rerun-if-changed=PATH`
+    RerunIfChanged(QualifiedPath),
+
+    /// `cargo::rustc-link-search=[KIND=]PATH`
+    RustcLinkSearch(Option<String>, QualifiedPath),
+
+    /// All other lines.
+    ///
+    /// These are intended to be backed up and restored unmodified.
+    /// No guarantees are made about these lines: they could be blank
+    /// or contain other arbitrary content.
+    Other(String),
+}
+
+impl BuildScriptOutputLine {
+    const RERUN_IF_CHANGED: &str = "cargo::rerun-if-changed";
+    const RUSTC_LINK_SEARCH: &str = "cargo::rustc-link-search";
+
+    /// Parse a line of the build script file.
+    #[instrument(name = "BuildScriptOutputLine::parse")]
+    pub async fn parse(profile: &ProfileDir<'_, Locked>, line: &str) -> Result<Self> {
+        if let Some((key, value)) = line.split_once('=') {
+            match key {
+                Self::RERUN_IF_CHANGED => {
+                    let path = QualifiedPath::parse(profile, value).await?;
+                    Ok(Self::RerunIfChanged(path))
+                }
+                Self::RUSTC_LINK_SEARCH => {
+                    if let Some((kind, path)) = value.split_once('=') {
+                        let path = QualifiedPath::parse(profile, path).await?;
+                        let kind = Some(kind.to_string());
+                        Ok(Self::RustcLinkSearch(kind, path))
+                    } else {
+                        let path = QualifiedPath::parse(profile, value).await?;
+                        Ok(Self::RustcLinkSearch(None, path))
+                    }
+                }
+                _ => Ok(Self::Other(line.to_string())),
+            }
+        } else {
+            Ok(Self::Other(line.to_string()))
+        }
+    }
+
+    /// Reconstruct the line in the current context.
+    #[instrument(name = "BuildScriptOutputLine::reconstruct")]
+    pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
+        match self {
+            BuildScriptOutputLine::RerunIfChanged(path) => {
+                format!("{}={}", Self::RERUN_IF_CHANGED, path.reconstruct(profile))
+            }
+            BuildScriptOutputLine::RustcLinkSearch(Some(kind), path) => format!(
+                "{}={}={}",
+                Self::RUSTC_LINK_SEARCH,
+                kind,
+                path.reconstruct(profile)
+            ),
+            BuildScriptOutputLine::RustcLinkSearch(None, path) => {
+                format!("{}={}", Self::RUSTC_LINK_SEARCH, path.reconstruct(profile))
+            }
+            BuildScriptOutputLine::Other(s) => s.to_string(),
+        }
     }
 }
