@@ -1,0 +1,10 @@
+[profile.default]
+
+[[profile.default.overrides]]
+filter = 'package(e2e)'
+threads-required = "num-cpus"
+
+[profile.ci]
+fail-fast = false
+slow-timeout = "5m"
+threads-required = "num-cpus"
