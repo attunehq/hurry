@@ -1,0 +1,20 @@
+[profile.default]
+
+# e2e tests invoke `cargo build`, which uses all available CPUs.
+# These tests are also fairly slow because they clone and build real projects
+# from scratch without caching.
+[[profile.default.overrides]]
+filter = 'package(e2e)'
+threads-required = "num-cpus"
+slow-timeout = "5m"
+
+[profile.ci]
+fail-fast = false
+
+# e2e tests invoke `cargo build`, which uses all available CPUs.
+# These tests are also fairly slow because they clone and build real projects
+# from scratch without caching.
+[[profile.ci.overrides]]
+filter = 'package(e2e)'
+threads-required = "num-cpus"
+slow-timeout = "5m"
