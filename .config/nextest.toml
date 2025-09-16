@@ -3,8 +3,12 @@
 [[profile.default.overrides]]
 filter = 'package(e2e)'
 threads-required = "num-cpus"
+slow-timeout = "5m"
 
 [profile.ci]
 fail-fast = false
-slow-timeout = "5m"
+
+[[profile.ci.overrides]]
+filter = 'package(e2e)'
 threads-required = "num-cpus"
+slow-timeout = "5m"

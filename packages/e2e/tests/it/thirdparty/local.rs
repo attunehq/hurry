@@ -149,9 +149,10 @@ fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 }
 
 /// Exercises building and caching the project with native dependencies.
-#[test_case("attunehq", "hurry-tests", "test/native"; "attunehq/hurry-tests:test/native")]
+#[test_case("attunehq", "hurry-tests", "test/native", "tiny", "tiny"; "attunehq/hurry-tests:test/native")]
+#[cfg_attr(feature = "ci", test_case("attunehq", "attune", "main", "attune", "attune"; "attunehq/attune:main"))]
 #[test_log::test]
-fn native(username: &str, repo: &str, branch: &str) -> Result<()> {
+fn native(username: &str, repo: &str, branch: &str, package: &str, bin: &str) -> Result<()> {
     let _ = color_eyre::install()?;
     let temp_home = temporary_directory()?;
 
@@ -186,9 +187,12 @@ fn native(username: &str, repo: &str, branch: &str) -> Result<()> {
         let path = temp_ws_1.path().to_string_lossy();
         let status = CargoBuild::new()
             .manifest_path(temp_ws_1.path().join("Cargo.toml"))
+            .bin(bin)
+            .package(package)
             .run()
             .with_context(|| format!("run cargo build in {path}"))?
             .command()
+            .arg("--help")
             .status()
             .with_context(|| format!("run cargo build in {path}"))?;
         if !status.success() {
@@ -223,9 +227,12 @@ fn native(username: &str, repo: &str, branch: &str) -> Result<()> {
     let path = temp_ws_2.path().to_string_lossy();
     let status = CargoBuild::new()
         .manifest_path(temp_ws_2.path().join("Cargo.toml"))
+        .bin(bin)
+        .package(package)
         .run()
         .with_context(|| format!("run cargo build in {path}"))?
         .command()
+        .arg("--help")
         .status()
         .with_context(|| format!("run cargo build in {path}"))?;
     if !status.success() {
@@ -243,9 +250,16 @@ fn native(username: &str, repo: &str, branch: &str) -> Result<()> {
 /// TODO: Once the cache is able to support actually keying off of this, we
 /// should add tests for working builds with changed but still compatible native
 /// dependencies.
-#[test_case("attunehq", "hurry-tests", "test/native"; "attunehq/hurry-tests:test/native")]
+#[test_case("attunehq", "hurry-tests", "test/native", "tiny", "tiny"; "attunehq/hurry-tests:test/native")]
+#[cfg_attr(feature = "ci", test_case("attunehq", "attune", "main", "attune", "attune"; "attunehq/attune:main"))]
 #[test_log::test]
-fn native_changed_breaks_build(username: &str, repo: &str, branch: &str) -> Result<()> {
+fn native_changed_breaks_build(
+    username: &str,
+    repo: &str,
+    branch: &str,
+    package: &str,
+    bin: &str,
+) -> Result<()> {
     let _ = color_eyre::install()?;
     let temp_home = temporary_directory()?;
     let temp_native = temporary_directory()?;
@@ -257,7 +271,7 @@ fn native_changed_breaks_build(username: &str, repo: &str, branch: &str) -> Resu
     // Note that we set the `RUSTFLAGS` environment variable to include the
     // temporary native directory we plan to override later here so that the
     // compiler doesn't invalidate the cache just due to this setting.
-    let build = {
+    {
         let temp_ws_1 = temporary_directory()?;
         clone_github(username, repo, temp_ws_1.path(), branch)?;
         let messages = hurry_cargo_build()
@@ -286,51 +300,59 @@ fn native_changed_breaks_build(username: &str, repo: &str, branch: &str) -> Resu
 
         let status = CargoBuild::new()
             .manifest_path(temp_ws_1.path().join("Cargo.toml"))
+            .bin(bin)
+            .package(package)
             .run()
             .context("build workspace")?
             .command()
+            .arg("--help")
             .status()
             .context("build workspace")?;
         if !status.success() {
             bail!("build workspace failed: {status}");
         }
 
-        messages
-    };
+        // Now, we're using `gpgme` as a native dependency for testing. This library
+        // does the right thing and automatically finds a valid location for the
+        // native `libgpgme` and `libgpg-error` libraries on the system. But we need
+        // to make sure the files change between the first and second build, and we
+        // don't actually have the ability to change the link args provided by the
+        // build script unless we fork and patch the dependency.
+        //
+        // Happily, we can actually look at the compiler messages to see what paths
+        // were linked, and then we do a bit of a nasty trick: we create a new temp
+        // directory and then put dummy files with the same names into them. We then
+        // put that directory first in the `LD_LIBRARY_PATH` and then build, which
+        // will cause the compiler to prefer the dummy files over the real ones,
+        // which then fail to link up as they're not actually valid libraries.
+        //
+        // Note that we do filter out paths that are inside the workspace,
+        // because we don't want to try to override libraries that are
+        // _generated_ by build scripts (e.g. stored in the `out/` directory).
+        let native_lib_dirs = messages
+            .into_iter()
+            .filter_map(|m| match m {
+                Message::BuildScriptExecuted(script) => Some(script.linked_paths),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|p| p.as_str().strip_prefix("native=").map(PathBuf::from))
+            .filter(|p| p.strip_prefix(temp_ws_1.path()).is_err())
+            .unique();
+        for lib_dir in native_lib_dirs {
+            let entries = std::fs::read_dir(&lib_dir)
+                .with_context(|| format!("read directory entries: {lib_dir:?}"))?;
+            for entry in entries {
+                let entry = entry.context("read directory entry")?;
+                if entry.metadata().context("get metadata")?.is_dir() {
+                    continue;
+                }
 
-    // Now, we're using `gpgme` as a native dependency for testing. This library
-    // does the right thing and automatically finds a valid location for the
-    // native `libgpgme` and `libgpg-error` libraries on the system. But we need
-    // to make sure the files change between the first and second build, and we
-    // don't actually have the ability to change the link args provided by the
-    // build script unless we fork and patch the dependency.
-    //
-    // Happily, we can actually look at the compiler messages to see what paths
-    // were linked, and then we do a bit of a nasty trick: we create a new temp
-    // directory and then put dummy files with the same names into them. We then
-    // put that directory first in the `LD_LIBRARY_PATH` and then build, which
-    // will cause the compiler to prefer the dummy files over the real ones,
-    // which then fail to link up as they're not actually valid libraries.
-    let native_lib_dirs = build
-        .into_iter()
-        .filter_map(|m| match m {
-            Message::BuildScriptExecuted(script) => Some(script.linked_paths),
-            _ => None,
-        })
-        .flatten()
-        .filter_map(|p| p.as_str().strip_prefix("native=").map(PathBuf::from))
-        .unique();
-    for lib_dir in native_lib_dirs {
-        for entry in std::fs::read_dir(&lib_dir).context("read directory")? {
-            let entry = entry.context("read directory entry")?;
-            if entry.metadata().context("get metadata")?.is_dir() {
-                continue;
+                let path = entry.path();
+                let dst = temp_native.path().join(entry.file_name());
+                std::fs::write(&dst, b"dummy").context("write dummy file")?;
+                eprintln!("override native libary {path:?}: {dst:?}");
             }
-
-            let path = entry.path();
-            let dst = temp_native.path().join(entry.file_name());
-            std::fs::write(&dst, b"dummy").context("write dummy file")?;
-            eprintln!("override native libary {path:?}: {dst:?}");
         }
     }
 
