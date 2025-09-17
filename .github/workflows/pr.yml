@@ -45,6 +45,10 @@ jobs:
       - name: Check clippy
         run: cargo clippy --workspace --all-targets --all-features
 
+      # We need this so that we can install `hurry-cargo-rustc-wrapper`
+      - name: Install `hurry` bins
+        run: cargo install --path packages/hurry/ --locked
+
       - name: Run tests
         run: cargo nextest run --all-targets
         env:
