@@ -202,6 +202,7 @@ jobs:
           | Linux    | arm64 (musl) | [hurry-aarch64-unknown-linux-musl.tar.gz](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/hurry-aarch64-unknown-linux-musl.tar.gz) |
 
           See [checksums.txt](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/checksums.txt) for file checksums.
+          EOF
           )
           echo 'release<<EOF' >> $GITHUB_OUTPUT
           echo "$RELEASE" >> $GITHUB_OUTPUT
