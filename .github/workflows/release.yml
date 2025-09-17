@@ -31,8 +31,15 @@ jobs:
       id: compute
       shell: bash
       run: |
-        SHA=$(git rev-parse --short HEAD)
+        # On PRs, the git sha is not the same as the "triggering" sha:
+        # https://github.com/orgs/community/discussions/26325
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          SHA=${{ github.event.pull_request.head.sha }}
+        else
+          SHA=$(git rev-parse --short HEAD)
+        fi
         echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
         if [[ "${{ github.event_name }}" == "push" && "${{ startsWith(github.ref, 'refs/tags/v') }}" == "true" ]]; then
           # For tagged builds, use the tag with its `v` prefix stripped
           RELEASE=${GITHUB_REF#refs/tags/}
