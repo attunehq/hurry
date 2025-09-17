@@ -253,6 +253,7 @@ fn native(username: &str, repo: &str, branch: &str, package: &str, bin: &str) ->
 #[test_case("attunehq", "hurry-tests", "test/native", "tiny", "tiny"; "attunehq/hurry-tests:test/native")]
 #[cfg_attr(feature = "ci", test_case("attunehq", "attune", "main", "attune", "attune"; "attunehq/attune:main"))]
 #[test_log::test]
+#[ignore = "Messing with the environment doesn't reproduce this issue in linux CI; we need to move this to a docker container instead so we can control the environment properly."]
 fn native_changed_breaks_build(
     username: &str,
     repo: &str,
