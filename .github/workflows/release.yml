@@ -204,6 +204,12 @@ jobs:
             EOF
             echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: dry run release text
+        if: ${{ !(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+        run: echo $RELEASE_TEXT
+        env:
+          RELEASE_TEXT: ${{ steps.render.outputs.release }}
+
       - name: create
         if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
         uses: softprops/action-gh-release@v1
