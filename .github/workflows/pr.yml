@@ -34,6 +34,11 @@ jobs:
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
           cargo binstall cargo-nextest --secure
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgpg-error-dev libgpgme-dev pkg-config
+
       - uses: actions/checkout@v4
 
       - name: Check format
