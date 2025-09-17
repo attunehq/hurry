@@ -47,3 +47,5 @@ jobs:
 
       - name: Run tests
         run: cargo nextest run --all-targets
+        env:
+          GITHUB_TOKEN: ${{ secrets.ATTUNE_REPOSITORY_TOKEN }}
