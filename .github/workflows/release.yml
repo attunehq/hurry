@@ -25,6 +25,8 @@ jobs:
       changelog: ${{ steps.changelog.outputs.changelog }}
 
     steps:
+    - uses: actions/checkout@v4
+
     - name: compute
       id: compute
       shell: bash
