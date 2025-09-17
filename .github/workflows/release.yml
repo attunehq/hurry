@@ -184,7 +184,6 @@ jobs:
       - name: render
         run: |
             echo "release<<EOF" >> $GITHUB_OUTPUT
-            echo <<EOF >> $GITHUB_OUTPUT
             ## Changes in ${{ needs.tagged.outputs.release }}
 
             ${{ needs.tagged.outputs.changelog }}
