@@ -206,7 +206,7 @@ install_binary() {
   cd - > /dev/null
   rm -rf "$workdir"
 
-  OUTPUT=$(./$bin_dir/hurry --version)
+  OUTPUT=$("$bin_dir/hurry" --version)
   info "Installed '$OUTPUT' to '$bin_dir/hurry'"
 
   # Check if bin_dir is in PATH
