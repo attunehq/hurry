@@ -212,7 +212,7 @@ jobs:
           echo '> [!NOTE]' >> $GITHUB_STEP_SUMMARY
           echo '> The links in this preview will not download anything; they are provided for information only.' >> $GITHUB_STEP_SUMMARY
           echo '---' >> $GITHUB_STEP_SUMMARY
-          echo "$RELEASE" >> $GITHUB_OUTPUT
+          echo "$RELEASE" >> $GITHUB_STEP_SUMMARY
       - name: create
         if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
         uses: softprops/action-gh-release@v1
