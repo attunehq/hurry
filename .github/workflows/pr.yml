@@ -29,6 +29,11 @@ jobs:
           rustup component add --toolchain nightly rustfmt
           rustup show
 
+      - name: Install Rust tools
+        run: |
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall cargo-nextest --secure
+
       - uses: actions/checkout@v4
 
       - name: Check format
@@ -40,7 +45,5 @@ jobs:
       - name: Check clippy
         run: cargo clippy --workspace --all-targets --all-features
 
-      # FIXME: Some of these tests do not yet pass on all filesystems.
-      #
-      # - name: Run tests
-      #   run: cargo test --workspace --all-targets --all-features
+      - name: Run tests
+        run: cargo nextest run --all-targets
