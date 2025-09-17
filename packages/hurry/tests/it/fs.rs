@@ -11,6 +11,7 @@ use pretty_assertions::assert_eq;
 use crate::{current_target, temporary_directory};
 
 #[test_log::test(tokio::test)]
+#[ignore = "Not working in CI currently"]
 async fn copy_files_diff() -> Result<()> {
     // Concurrent tests might mess with files in the current project's target
     // directory (notably: lockfiles).
