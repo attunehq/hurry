@@ -50,7 +50,6 @@ jobs:
         else
           # For non-tag builds, use `0.0.0-{date}-{sha}`
           DATE=$(date '+%Y-%m-%d')
-          SHA=$(git rev-parse --short HEAD)
           PSUEDOTAG="0.0.0-$DATE-$SHA"
           echo "release=v$PSUEDOTAG" >> "$GITHUB_OUTPUT"
           echo "version=$PSUEDOTAG" >> "$GITHUB_OUTPUT"
