@@ -36,7 +36,8 @@ jobs:
         # On PRs, the git sha is not the same as the "triggering" sha:
         # https://github.com/orgs/community/discussions/26325
         if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-          SHA=${{ github.event.pull_request.head.sha }}
+          GITHUB_SHA=${{ github.event.pull_request.head.sha }}
+          SHA=$(git rev-parse --short $GITHUB_SHA)
         else
           SHA=$(git rev-parse --short HEAD)
         fi
