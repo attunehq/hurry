@@ -295,7 +295,7 @@ impl Command {
                         LogOutput::StdIn { .. } => {}
                         LogOutput::Console { .. } => {}
                         LogOutput::StdErr { message } => {
-                            stderr_buf.write(&message).context("write stderr")?;
+                            stderr_buf.write_all(&message).context("write stderr")?;
                             stderr.write_all(&message).context("write stderr")?;
                         }
                         LogOutput::StdOut { message } => {
