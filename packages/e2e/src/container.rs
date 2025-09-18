@@ -143,11 +143,8 @@ impl<S: container_debian_rust_builder::State> ContainerDebianRustBuilder<S> {
     }
 }
 
-/// Internally references a running Docker container.
-///
-/// Attempts to remove the container from Docker when dropped, although since
-/// there is no such thing as async drop yet this is best effort and will likely
-/// lead to many orphan containers.
+/// Internally references a running Docker container; when this is dropped the
+/// container is removed from Docker.
 #[derive(Debug)]
 struct ContainerRef {
     docker: Docker,
@@ -158,15 +155,47 @@ impl Drop for ContainerRef {
     fn drop(&mut self) {
         let id = self.id.clone();
         let docker = self.docker.clone();
-        tokio::task::spawn(async move {
-            let options = RemoveContainerOptionsBuilder::new()
-                .force(true)
-                .v(true)
-                .build();
 
-            if let Err(err) = docker.remove_container(&id, Some(options)).await {
-                eprintln!("[WARN] Unable to remove container {id}: {err:?}");
-            }
+        // This is not a place of honor. No highly esteemed deed is commemorated
+        // here. Nothing valued is here. What is here was dangerous and
+        // repulsive to us.
+        //
+        // The difficulty here is:
+        // - We want to clean up containers when they're no longer needed.
+        // - Assertion failures or errors won't run manual cleanup code.
+        // - `bollard` is async, while `Drop` is not.
+        //
+        // We can't just spawn the cleanup task; the test just exits without
+        // actually cleaning anything up unless we actually block the drop
+        // function.
+        //
+        // This spawns a new thread + runtime per drop, which makes it only
+        // suitable for expensive resources like Docker containers (where the
+        // cost of spawning a new thread is nothing compared to the cost of the
+        // network calls to create and tear down containers). For lighter
+        // cleanup tasks, or if you just want to make something less gross,
+        // consider spawning a long-lived cleanup thread with a dedicated async
+        // runtime and sending cleanup tasks to it through a channel (which
+        // probably means also sending a channel into the cleanup task so that
+        // drop can wait for the cleanup to actually complete).
+        let handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("create runtime for cleanup");
+            rt.block_on(async move {
+                let options = RemoveContainerOptionsBuilder::new()
+                    .force(true)
+                    .v(true)
+                    .build();
+
+                if let Err(err) = docker.remove_container(&id, Some(options)).await {
+                    eprintln!("[WARN] Unable to remove container {id}: {err:?}");
+                }
+            });
         });
+
+        // Wait for cleanup to complete. This blocks the drop function, which
+        // correctly prevents the test from exiting before it cleans up.
+        if let Err(panic) = handle.join() {
+            std::panic::resume_unwind(panic);
+        }
     }
 }
