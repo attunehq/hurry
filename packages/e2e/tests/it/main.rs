@@ -48,7 +48,7 @@ async fn build_in_docker() -> Result<()> {
         .context("build hurry")?;
     Command::new()
         .pwd(&hurry_root)
-        .name("./target/release/hurry")
+        .name("./target/debug/hurry")
         .arg("--version")
         .finish()
         .run_docker(&container)
