@@ -20,18 +20,30 @@
 
 use std::{
     ffi::{OsStr, OsString},
-    fmt::Debug,
+    fmt::{Debug, Write},
+    io::Cursor,
+    iter::once,
     path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
 };
 
-use bon::{Builder, builder};
+use bollard::{
+    Docker,
+    exec::StartExecResults,
+    query_parameters::{
+        CreateContainerOptionsBuilder, CreateImageOptionsBuilder, RemoveContainerOptionsBuilder,
+        StartContainerOptionsBuilder,
+    },
+    secret::{ContainerCreateBody, ExecConfig},
+};
+use bon::{Builder, bon, builder};
 use cargo_metadata::Message;
 use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context, ContextCompat, OptionExt, bail},
 };
+use futures::{StreamExt, TryStreamExt};
 use tempfile::TempDir;
 use tracing::instrument;
 
@@ -140,6 +152,54 @@ impl Build {
             })
     }
 
+    /// Run the build locally through `hurry`.
+    ///
+    /// This method builds `hurry`, then uses `hurry cargo build` to run the
+    /// build locally.
+    #[instrument]
+    pub async fn hurry_container(
+        &self,
+        container: &Container,
+        hurry: &Build,
+    ) -> Result<Vec<Message>> {
+        let hurry = hurry.run_docker(container).await.context("build hurry")?;
+        let hurry_path = hurry
+            .iter()
+            .find_map(|m| match m {
+                Message::CompilerArtifact(artifact) => artifact
+                    .executable
+                    .as_ref()
+                    .map(|p| p.as_std_path().to_path_buf()),
+                _ => None,
+            })
+            .ok_or_eyre("unable to locate hurry executable in output")
+            .with_section(|| {
+                hurry
+                    .iter()
+                    .map(|msg| format!("{msg:?}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .header("Compiler messages:")
+            })?;
+
+        Self::capture_docker(self.as_wrapped_command(&hurry_path), container)
+            .await
+            .with_context(|| {
+                format!(
+                    "'{hurry_path:?} cargo build' {:?}/{:?} in {:?}",
+                    self.package, self.bin, self.pwd
+                )
+            })
+            .with_section(|| {
+                hurry
+                    .iter()
+                    .map(|msg| format!("{msg:?}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .header("Hurry compiler messages:")
+            })
+    }
+
     /// Run the build locally.
     #[instrument]
     pub fn run_local(&self) -> Result<Vec<Message>> {
@@ -149,6 +209,19 @@ impl Build {
                 self.package, self.bin, self.pwd
             )
         })
+    }
+
+    /// Run the build inside the container.
+    #[instrument]
+    pub async fn run_docker(&self, container: &Container) -> Result<Vec<Message>> {
+        Self::capture_docker(self.as_command(), container)
+            .await
+            .with_context(|| {
+                format!(
+                    "'cargo build' {:?}/{:?} in {:?}",
+                    self.package, self.bin, self.pwd
+                )
+            })
     }
 
     fn as_command(&self) -> Command {
@@ -197,6 +270,38 @@ impl Build {
             .context("read build command")
             .and_then(eyre_from_status)
             .map(|_| messages)
+    }
+
+    async fn capture_docker(cmd: Command, container: &Container) -> Result<Vec<Message>> {
+        let config = cmd
+            .as_container_exec()
+            .context("build docker exec context")?;
+        let exec = container
+            .inner
+            .docker
+            .create_exec(&container.inner.id, config)
+            .await
+            .context("create exec")?
+            .id;
+        match container.inner.docker.start_exec(&exec, None).await {
+            Ok(StartExecResults::Attached { mut output, .. }) => {
+                let mut stdout = String::new();
+                while let Some(line) = output.next().await {
+                    let line = line.context("read line")?;
+                    writeln!(&mut stdout, "{line}").context("buffer output")?;
+                }
+
+                let stdout = Cursor::new(stdout);
+                let reader = std::io::BufReader::new(stdout);
+                let messages = Message::parse_stream(reader)
+                    .map(|m| m.context("parse message"))
+                    .collect::<Result<Vec<_>>>()
+                    .context("parse messages")?;
+                Ok(messages)
+            }
+            Ok(StartExecResults::Detached) => unreachable!("we don't use a detached API"),
+            Err(err) => bail!("run command: {err:?}"),
+        }
     }
 }
 
@@ -286,7 +391,6 @@ impl Command {
             .arg("--branch")
             .arg(branch)
             .arg(&url)
-            .arg(".")
             .finish()
     }
 
@@ -297,6 +401,70 @@ impl Command {
             .status()
             .with_context(|| format!("exec: `{:?} {:?}` in {:?}", self.name, self.args, self.pwd))
             .and_then(eyre_from_status)
+    }
+
+    /// Run the command inside the container.
+    pub async fn run_docker(self, container: &Container) -> Result<()> {
+        let config = self
+            .as_container_exec()
+            .context("build docker exec context")?;
+        let exec = container
+            .inner
+            .docker
+            .create_exec(&container.inner.id, config)
+            .await
+            .context("create exec")?
+            .id;
+        match container.inner.docker.start_exec(&exec, None).await {
+            Ok(StartExecResults::Attached { mut output, .. }) => {
+                while let Some(line) = output.next().await {
+                    let line = line.context("read line")?;
+                    print!("{line}");
+                }
+                Ok(())
+            }
+            Ok(StartExecResults::Detached) => unreachable!("we don't use a detached API"),
+            Err(err) => bail!("run command: {err:?}"),
+        }
+    }
+
+    fn as_container_exec(&self) -> Result<ExecConfig> {
+        fn try_as_unicode(s: impl AsRef<OsStr>) -> Result<String> {
+            let s = s.as_ref();
+            s.to_str()
+                .map(String::from)
+                .ok_or_eyre("invalid unicode")
+                .with_context(|| format!("parse as unicode: {s:?}"))
+        }
+
+        let pwd = try_as_unicode(&self.pwd).context("convert pwd")?;
+        let envs = self
+            .envs
+            .iter()
+            .map(|(k, v)| -> Result<String> {
+                let k = try_as_unicode(k).context("convert env key")?;
+                let v = try_as_unicode(v).context("convert env value")?;
+                Ok(format!("{k}={v}"))
+            })
+            .collect::<Result<Vec<_>>>()
+            .context("convert envs")?;
+
+        let name = try_as_unicode(&self.name).context("convert process name")?;
+        let args = self
+            .args
+            .iter()
+            .map(try_as_unicode)
+            .collect::<Result<Vec<_>>>()
+            .context("convert args")?;
+
+        Ok(ExecConfig {
+            attach_stderr: Some(true),
+            attach_stdout: Some(true),
+            working_dir: Some(pwd),
+            env: Some(envs),
+            cmd: Some(once(name).chain(args).collect()),
+            ..Default::default()
+        })
     }
 
     fn as_std(&self) -> std::process::Command {
@@ -357,6 +525,89 @@ impl<S: command_builder::State> CommandBuilder<S> {
         self.envs
             .extend(envs.into_iter().map(|(k, v)| (k.into(), v.into())));
         self
+    }
+}
+
+/// References a running Docker container.
+///
+/// This reference uses interior mutability to track internally track references
+/// to the container. After the final reference is dropped, attempts to remove
+/// the container from the docker daemon.
+///
+/// Attempts to remove the container from Docker when dropped, although since
+/// there is no such thing as async drop yet this is best effort and will likely
+/// lead to many orphan containers.
+#[derive(Clone, Debug)]
+pub struct Container {
+    inner: Arc<ContainerRef>,
+}
+
+#[bon]
+impl Container {
+    /// Start the container and return a reference to it.
+    #[builder(start_fn = new, finish_fn = start)]
+    pub async fn build(repo: &str, tag: &str) -> Result<Container> {
+        let docker = Docker::connect_with_defaults().context("connect to docker daemon")?;
+        let reference = format!("{repo}:{tag}");
+
+        let image = CreateImageOptionsBuilder::new()
+            .from_image(&reference)
+            .build();
+        docker
+            .create_image(Some(image), None, None)
+            .inspect_ok(|msg| println!("[IMAGE] {msg:?}"))
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let container_opts = CreateContainerOptionsBuilder::default().build();
+        let container_body = ContainerCreateBody {
+            image: Some(reference),
+            tty: Some(true),
+            ..Default::default()
+        };
+        let id = docker
+            .create_container(Some(container_opts), container_body)
+            .await
+            .context("create container")?
+            .id;
+
+        let start_opts = StartContainerOptionsBuilder::default().build();
+        docker
+            .start_container(&id, Some(start_opts))
+            .await
+            .context("start container")?;
+
+        Ok(Container {
+            inner: Arc::new(ContainerRef { id, docker }),
+        })
+    }
+}
+
+/// Internally references a running Docker container.
+///
+/// Attempts to remove the container from Docker when dropped, although since
+/// there is no such thing as async drop yet this is best effort and will likely
+/// lead to many orphan containers.
+#[derive(Debug)]
+struct ContainerRef {
+    docker: Docker,
+    id: String,
+}
+
+impl Drop for ContainerRef {
+    fn drop(&mut self) {
+        let id = self.id.clone();
+        let docker = self.docker.clone();
+        tokio::task::spawn(async move {
+            let options = RemoveContainerOptionsBuilder::new()
+                .force(true)
+                .v(true)
+                .build();
+
+            if let Err(err) = docker.remove_container(&id, Some(options)).await {
+                eprintln!("[WARN] Unable to remove container {id}: {err:?}");
+            }
+        });
     }
 }
 

@@ -28,12 +28,13 @@ fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 
     let temp_home = temporary_directory()?;
     let temp_ws = temporary_directory()?;
+    let project_root = temp_ws.path().join(repo);
     Command::clone_github(username, repo, temp_ws.path(), branch).run_local()?;
 
     // Nothing should be cached on the first build.
     let hurry = Build::hurry(workspace_dir!());
     let messages = Build::new()
-        .pwd(temp_ws.path())
+        .pwd(&project_root)
         .env("HOME", temp_home.path())
         .finish()
         .hurry_local(&hurry)?;
@@ -58,9 +59,9 @@ fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 
     // Now if we delete the `target/` directory and rebuild, `hurry` should
     // reuse the cache and enable fresh artifacts.
-    Command::cargo_clean(temp_ws.path()).run_local()?;
+    Command::cargo_clean(&project_root).run_local()?;
     let messages = Build::new()
-        .pwd(temp_ws.path())
+        .pwd(&project_root)
         .env("HOME", temp_home.path())
         .finish()
         .hurry_local(&hurry)?;
@@ -100,9 +101,10 @@ fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
     // we try to build the second workspace.
     {
         let temp_ws_1 = temporary_directory()?;
+        let project_root_1 = temp_ws_1.path().join(repo);
         Command::clone_github(username, repo, temp_ws_1.path(), branch).run_local()?;
         let messages = Build::new()
-            .pwd(temp_ws_1.path())
+            .pwd(&project_root_1)
             .env("HOME", temp_home.path())
             .finish()
             .hurry_local(&hurry)?;
@@ -127,9 +129,10 @@ fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
     }
 
     let temp_ws_2 = temporary_directory()?;
+    let project_root_2 = temp_ws_2.path().join(repo);
     Command::clone_github(username, repo, temp_ws_2.path(), branch).run_local()?;
     let messages = Build::new()
-        .pwd(temp_ws_2.path())
+        .pwd(&project_root_2)
         .env("HOME", temp_home.path())
         .finish()
         .hurry_local(&hurry)?;
@@ -168,9 +171,10 @@ fn native(username: &str, repo: &str, branch: &str, package: &str, bin: &str) ->
     // we try to build the second workspace.
     {
         let temp_ws_1 = temporary_directory()?;
+        let project_root_1 = temp_ws_1.path().join(repo);
         Command::clone_github(username, repo, temp_ws_1.path(), branch).run_local()?;
         let messages = Build::new()
-            .pwd(temp_ws_1.path())
+            .pwd(&project_root_1)
             .env("HOME", temp_home.path())
             .finish()
             .hurry_local(&hurry)?;
@@ -193,9 +197,9 @@ fn native(username: &str, repo: &str, branch: &str, package: &str, bin: &str) ->
             "no artifacts should be fresh: {messages:?}"
         );
 
-        let path = temp_ws_1.path().to_string_lossy();
+        let path = project_root_1.to_string_lossy();
         let status = CargoBuild::new()
-            .manifest_path(temp_ws_1.path().join("Cargo.toml"))
+            .manifest_path(project_root_1.join("Cargo.toml"))
             .bin(bin)
             .package(package)
             .run()
@@ -210,9 +214,10 @@ fn native(username: &str, repo: &str, branch: &str, package: &str, bin: &str) ->
     }
 
     let temp_ws_2 = temporary_directory()?;
+    let project_root_2 = temp_ws_2.path().join(repo);
     Command::clone_github(username, repo, temp_ws_2.path(), branch).run_local()?;
     let messages = Build::new()
-        .pwd(temp_ws_2.path())
+        .pwd(&project_root_2)
         .env("HOME", temp_home.path())
         .finish()
         .hurry_local(&hurry)?;
@@ -234,9 +239,9 @@ fn native(username: &str, repo: &str, branch: &str, package: &str, bin: &str) ->
         freshness,
         "all artifacts should be fresh: {messages:?}"
     );
-    let path = temp_ws_2.path().to_string_lossy();
+    let path = project_root_2.to_string_lossy();
     let status = CargoBuild::new()
-        .manifest_path(temp_ws_2.path().join("Cargo.toml"))
+        .manifest_path(project_root_2.join("Cargo.toml"))
         .bin(bin)
         .package(package)
         .run()
@@ -284,9 +289,10 @@ fn native_changed_breaks_build(
     // compiler doesn't invalidate the cache just due to this setting.
     {
         let temp_ws_1 = temporary_directory()?;
+        let project_root_1 = temp_ws_1.path().join(repo);
         Command::clone_github(username, repo, temp_ws_1.path(), branch).run_local()?;
         let messages = Build::new()
-            .pwd(temp_ws_1.path())
+            .pwd(&project_root_1)
             .env("HOME", temp_home.path())
             .env("RUSTFLAGS", &linkflag)
             .finish()
@@ -311,7 +317,7 @@ fn native_changed_breaks_build(
         );
 
         let status = CargoBuild::new()
-            .manifest_path(temp_ws_1.path().join("Cargo.toml"))
+            .manifest_path(project_root_1.join("Cargo.toml"))
             .bin(bin)
             .package(package)
             .run()
@@ -369,10 +375,11 @@ fn native_changed_breaks_build(
     }
 
     let temp_ws_2 = temporary_directory()?;
+    let project_root_2 = temp_ws_2.path().join(repo);
     Command::clone_github(username, repo, temp_ws_2.path(), branch).run_local()?;
 
     let build = Build::new()
-        .pwd(temp_ws_2.path())
+        .pwd(&project_root_2)
         .env("HOME", temp_home.path())
         .env("RUSTFLAGS", &linkflag)
         .finish()
