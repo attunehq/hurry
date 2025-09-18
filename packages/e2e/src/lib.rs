@@ -3,8 +3,7 @@
 //! The intention with this package is that:
 //! - We use `hurry` as a CLI tool rather than as a library; just like a user.
 //! - We clone or otherwise reproduce test cases with real-world projects.
-//! - We use local tools on the system to do testing so that we can keep this as
-//! close to a real-world usage as possible.
+//! - Prioritize real-world usage as much as possible.
 //! - This also serves as backwards compatibility checks for users.
 //!
 //! All tests are implemented as integration tests in the `tests/` directory;

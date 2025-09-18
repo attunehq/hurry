@@ -487,9 +487,9 @@ impl ParsedOutput {
         if output.status.success() {
             Ok(output)
         } else {
-            return Err(eyre!("command failed with status: {}", output.status))
+            Err(eyre!("command failed with status: {}", output.status))
                 .section(output.stdout_lossy_string().header("Stdout:"))
-                .section(output.stderr_lossy_string().header("Stderr:"));
+                .section(output.stderr_lossy_string().header("Stderr:"))
         }
     }
     /// Parse the status of a command.
