@@ -35,40 +35,25 @@ async fn build_in_docker() -> Result<()> {
 
     let pwd = PathBuf::from("/");
     let hurry_root = pwd.join("hurry");
-    let container = Container::new()
-        .repo("docker.io/library/rust") //rust:1.89.0-bookworm
-        .tag("latest")
+    let container = Container::debian_rust()
+        .command(Command::clone_hurry(pwd))
         .start()
         .await?;
-    Command::new()
-        .pwd(&pwd)
-        .name("apt-get")
-        .arg("update")
-        .finish()
-        .run_docker(&container)
-        .await?;
-    Command::new()
-        .pwd(&pwd)
-        .name("apt-get")
-        .arg("install")
-        .arg("-y")
-        .arg("git")
-        .finish()
-        .run_docker(&container)
-        .await?;
-    Command::clone_github("attunehq", "hurry", &pwd, "main")
-        .run_docker(&container)
-        .await?;
 
-    Build::hurry(&hurry_root).run_docker(&container).await?;
+    Build::new()
+        .pwd(&hurry_root)
+        .finish()
+        .run_docker(&container)
+        .await
+        .context("build hurry")?;
     Command::new()
         .pwd(&hurry_root)
         .name("./target/release/hurry")
         .arg("--version")
         .finish()
         .run_docker(&container)
-        .await?;
+        .await
+        .context("run hurry --version")?;
 
-    println!("finished test");
     Ok(())
 }
