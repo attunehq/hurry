@@ -11,12 +11,11 @@ default = []
 ci = []
 
 [dependencies]
-bollard = "0.19.2"
+bollard = { workspace = true }
 bon.workspace = true
 cargo_metadata.workspace = true
 color-eyre.workspace = true
 escargot = { workspace = true }
-flume = "0.11.1"
 futures.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["full"] }
