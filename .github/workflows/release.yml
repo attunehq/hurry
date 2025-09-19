@@ -1,13 +1,12 @@
 name: release
 
-# Pushes standard releases on `vX.Y.Z` tags.
-# Pushes prereleases on pushes to `main`.
+# Pushes releases on `vX.Y.Z` tags (including prereleases like `vX.Y.Z-alpha.1`).
+# Builds artifacts for PRs without creating releases.
 on:
   push:
-    branches:
-      - main
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - '^v[0-9]+.[0-9]+.[0-9]+$'
+      - '^v[0-9]+.[0-9]+.[0-9]+-[a-zA-Z]+[0-9]+$'
   pull_request:
     branches:
       - main
@@ -49,9 +48,15 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "prerelease=false" >> "$GITHUB_OUTPUT"
+
+          # Check if this is a prerelease tag (has pattern -[a-zA-Z]+[0-9]+)
+          if [[ "$VERSION" =~ -[a-zA-Z]+[0-9]+ ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
         else
-          # For non-tag builds, use `0.0.0-{date}-{sha}`
+          # For PR builds, use `0.0.0-{date}-{sha}` pseudotag
           DATE=$(date '+%Y-%m-%d')
           PSUEDOTAG="0.0.0-$DATE-$SHA"
           echo "release=v$PSUEDOTAG" >> "$GITHUB_OUTPUT"
@@ -62,12 +67,36 @@ jobs:
     - name: changelog
       id: changelog
       run: |
-        if [[ "${{ steps.compute.outputs.prerelease }}" == "true" ]]; then
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
           gh api repos/attunehq/hurry/commits/${{ steps.compute.outputs.sha }} --jq '.commit.message | "- " + .' > version_changelog.txt
         else
-          LATEST_TAG=${{ steps.compute.outputs.release }}
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 --exclude=$LATEST_TAG)
-          gh api repos/attunehq/hurry/compare/$PREVIOUS_TAG...$LATEST_TAG --jq '.commits[] | .commit.message | "- " + .' > version_changelog.txt
+          CURRENT_TAG=${{ steps.compute.outputs.release }}
+
+          # Get all tags sorted by version, excluding the current tag.
+          ALL_TAGS=$(git tag -l 'v*' --sort=-version:refname | grep -v "^$CURRENT_TAG$")
+
+          # Find the newest non-prerelease tag (doesn't match -[a-zA-Z]+[0-9]+).
+          # `ALL_TAGS` is in descending order, sorted as versions; reference:
+          # https://git-scm.com/docs/git-tag#Documentation/git-tag.txt---sortkey
+          PREVIOUS_TAG=""
+          for tag in $ALL_TAGS; do
+            TAG_VERSION=${tag#v}  # Remove 'v' prefix for pattern matching
+            if [[ ! "$TAG_VERSION" =~ -[a-zA-Z]+[0-9]+$ ]]; then
+              PREVIOUS_TAG=$tag
+              break
+            fi
+          done
+
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            echo "Changes since $PREVIOUS_TAG:" > version_changelog.txt
+            echo "" >> version_changelog.txt
+            gh api repos/attunehq/hurry/compare/$PREVIOUS_TAG...$CURRENT_TAG --jq '.commits[] | .commit.message | "- " + .' >> version_changelog.txt
+          else
+            # If no previous non-prerelease tag found, get all commits
+            echo "All changes:" > version_changelog.txt
+            echo "" >> version_changelog.txt
+            gh api repos/attunehq/hurry/commits --jq '.[] | .commit.message | "- " + .' >> version_changelog.txt
+          fi
         fi
         echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
         cat version_changelog.txt >> $GITHUB_OUTPUT
@@ -215,7 +244,7 @@ jobs:
           echo '---' >> $GITHUB_STEP_SUMMARY
           echo "$RELEASE" >> $GITHUB_STEP_SUMMARY
       - name: create
-        if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         uses: softprops/action-gh-release@v1
         with:
           files: |
