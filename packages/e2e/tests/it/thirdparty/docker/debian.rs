@@ -7,6 +7,7 @@ use color_eyre::Result;
 use e2e::{
     Build, Command, Container,
     ext::{ArtifactIterExt, MessageIterExt},
+    temporary_directory,
 };
 use itertools::Itertools;
 use simple_test_case::test_case;
@@ -417,6 +418,122 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         .run_docker(&container)
         .await;
     assert!(build.is_err(), "build should fail: {build:?}");
+
+    Ok(())
+}
+
+/// Exercises building and caching the project across containers with shared volume.
+#[test_case("attunehq", "hurry-tests", "test/tiny"; "attunehq/hurry-tests:test/tiny")]
+#[cfg_attr(feature = "ci", test_case("attunehq", "attune", "main"; "attunehq/attune:main"))]
+#[cfg_attr(feature = "ci", test_case("attunehq", "hurry", "main"; "attunehq/hurry:main"))]
+#[test_log::test(tokio::test)]
+async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()> {
+    let _ = color_eyre::install()?;
+
+    // This temporary directory holds the hurry cache, which in this test will
+    // be shared across containers.
+    let temp_cache = temporary_directory()?;
+    let cache_host_path = temp_cache.path().to_string_lossy().to_string();
+    let cache_container_path = String::from("/hurry-cache");
+    let pwd = PathBuf::from("/");
+
+    // We also make the directories in which the project is cloned different in
+    // each container just to be sure that nothing is accidentally getting
+    // reused there; in effect this test is a strict superset of `cross_dir`.
+    let pwd_repo_a = pwd.join(format!("{repo}-container-a"));
+    let pwd_repo_b = pwd.join(format!("{repo}-container-b"));
+
+    // Note: we keep the first container alive until the end instead of putting
+    // it in a scope so that the shared volume is preserved. We also create both
+    // containers here so that we can do so concurrently and reduce overall test
+    // runtime- container creation time is mostly bounded on "how fast does
+    // hurry build" but this saves a few seconds at least for effectively no
+    // real cost.
+    let (container_a, container_b) = tokio::try_join!(
+        Container::debian_rust()
+            .command(Command::clone_hurry(&pwd))
+            .command(Command::install_hurry(pwd.join("hurry")))
+            .command(
+                Command::clone_github()
+                    .pwd(&pwd)
+                    .user(username)
+                    .repo(repo)
+                    .branch(branch)
+                    .dir(&pwd_repo_a)
+                    .finish()
+            )
+            .volume_bind(&cache_host_path, &cache_container_path)
+            .start(),
+        Container::debian_rust()
+            .command(Command::clone_hurry(&pwd))
+            .command(Command::install_hurry(pwd.join("hurry")))
+            .command(
+                Command::clone_github()
+                    .pwd(&pwd)
+                    .user(username)
+                    .repo(repo)
+                    .branch(branch)
+                    .dir(&pwd_repo_b)
+                    .finish()
+            )
+            .volume_bind(&cache_host_path, &cache_container_path)
+            .start(),
+    )?;
+
+    // Nothing should be cached on the first build.
+    let messages_a = Build::new()
+        .pwd(&pwd_repo_a)
+        .env("HOME", &cache_container_path)
+        .wrapper(Build::HURRY_NAME)
+        .finish()
+        .run_docker(&container_a)
+        .await?;
+    let expected = messages_a
+        .iter()
+        .thirdparty_artifacts()
+        .package_ids()
+        .map(|id| (id, false))
+        .sorted()
+        .collect::<Vec<_>>();
+    let freshness = messages_a
+        .iter()
+        .thirdparty_artifacts()
+        .freshness()
+        .sorted()
+        .collect::<Vec<_>>();
+    pretty_assertions::assert_eq!(
+        expected,
+        freshness,
+        "no artifacts should be fresh in container A: {messages_a:?}"
+    );
+
+    // Now if we set up a new container with the same cache rebuild, `hurry`
+    // should reuse the cache and enable fresh artifacts.
+    let messages_b = Build::new()
+        .pwd(&pwd_repo_b)
+        .env("HOME", &cache_container_path)
+        .wrapper(Build::HURRY_NAME)
+        .finish()
+        .run_docker(&container_b)
+        .await?;
+    let expected = messages_b
+        .iter()
+        .thirdparty_artifacts()
+        .package_ids()
+        .map(|id| (id, true))
+        .sorted()
+        .collect::<Vec<_>>();
+    let freshness = messages_b
+        .iter()
+        .thirdparty_artifacts()
+        .freshness()
+        .sorted()
+        .collect::<Vec<_>>();
+    pretty_assertions::assert_eq!(
+        expected,
+        freshness,
+        "all artifacts should be fresh in container B: {messages_b:?}"
+    );
 
     Ok(())
 }
