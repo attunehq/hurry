@@ -6,7 +6,7 @@ use bollard::{
         CreateContainerOptionsBuilder, CreateImageOptionsBuilder, RemoveContainerOptionsBuilder,
         StartContainerOptionsBuilder,
     },
-    secret::ContainerCreateBody,
+    secret::{ContainerCreateBody, HostConfig},
 };
 use bon::bon;
 use color_eyre::{Result, eyre::Context};
@@ -49,6 +49,11 @@ impl Container {
         #[builder(field)]
         commands: Vec<Command>,
 
+        /// Volume binds to mount in the container.
+        /// Each tuple represents (host_path, container_path).
+        #[builder(field)]
+        volume_binds: Vec<(String, String)>,
+
         /// The repository to use, in OCI format.
         #[builder(into)]
         repo: String,
@@ -70,9 +75,22 @@ impl Container {
             .await?;
 
         let container_opts = CreateContainerOptionsBuilder::default().build();
+        let host_config = if volume_binds.is_empty() {
+            None
+        } else {
+            let bind_strings = volume_binds
+                .into_iter()
+                .map(|(host_path, container_path)| format!("{host_path}:{container_path}"))
+                .collect::<Vec<_>>();
+            Some(HostConfig {
+                binds: Some(bind_strings),
+                ..Default::default()
+            })
+        };
         let container_body = ContainerCreateBody {
             image: Some(reference),
             tty: Some(true),
+            host_config,
             ..Default::default()
         };
         let id = docker
@@ -105,11 +123,15 @@ impl Container {
     /// Builds this container with the `latest` tag:
     /// https://hub.docker.com/_/rust
     #[builder(finish_fn = start)]
-    pub async fn debian_rust(#[builder(field)] commands: Vec<Command>) -> Result<Container> {
+    pub async fn debian_rust(
+        #[builder(field)] commands: Vec<Command>,
+        #[builder(field)] volume_binds: Vec<(String, String)>,
+    ) -> Result<Container> {
         Container::new()
             .repo("docker.io/library/rust")
             .tag("latest")
             .commands(commands)
+            .volume_binds(volume_binds)
             .start()
             .await
     }
@@ -127,6 +149,28 @@ impl<S: container_build_builder::State> ContainerBuildBuilder<S> {
         self.commands.push(command.into());
         self
     }
+
+    /// Add volume binds to mount in the container.
+    /// Each tuple represents (host_path, container_path).
+    pub fn volume_binds(
+        mut self,
+        binds: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.volume_binds
+            .extend(binds.into_iter().map(|(h, c)| (h.into(), c.into())));
+        self
+    }
+
+    /// Add a single volume bind to mount in the container.
+    pub fn volume_bind(
+        mut self,
+        host_path: impl Into<String>,
+        container_path: impl Into<String>,
+    ) -> Self {
+        self.volume_binds
+            .push((host_path.into(), container_path.into()));
+        self
+    }
 }
 
 impl<S: container_debian_rust_builder::State> ContainerDebianRustBuilder<S> {
@@ -139,6 +183,29 @@ impl<S: container_debian_rust_builder::State> ContainerDebianRustBuilder<S> {
     /// Add a command to run when the container is started.
     pub fn command(mut self, command: impl Into<Command>) -> Self {
         self.commands.push(command.into());
+        self
+    }
+
+    /// Add volume binds to mount in the container.
+    /// Each tuple represents (host_path, container_path).
+    pub fn volume_binds(
+        mut self,
+        binds: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.volume_binds
+            .extend(binds.into_iter().map(|(h, c)| (h.into(), c.into())));
+        self
+    }
+
+    /// Add a single volume bind to mount in the container.
+    /// Takes (host_path, container_path) tuple.
+    pub fn volume_bind(
+        mut self,
+        host_path: impl Into<String>,
+        container_path: impl Into<String>,
+    ) -> Self {
+        self.volume_binds
+            .push((host_path.into(), container_path.into()));
         self
     }
 }
