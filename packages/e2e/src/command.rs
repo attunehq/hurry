@@ -222,6 +222,11 @@ impl Command {
     /// are all inside the _container_ context, not the host machine; this
     /// command does nothing to e.g. move the working directory to the container
     /// or anything similar.
+    //
+    // TODO: When we run multiple commands concurrently, their outputs are
+    // interleaved in a way that makes it difficult to tell which container
+    // results in which output. We should fix this if we end up sticking with
+    // this approach longer term.
     #[instrument]
     pub async fn run_docker(self, container: &Container) -> Result<()> {
         let config = self
@@ -272,6 +277,11 @@ impl Command {
     /// are all inside the _container_ context, not the host machine; this
     /// command does nothing to e.g. move the working directory to the container
     /// or anything similar.
+    //
+    // TODO: When we run multiple commands concurrently, their outputs are
+    // interleaved in a way that makes it difficult to tell which container
+    // results in which output. We should fix this if we end up sticking with
+    // this approach longer term.
     #[instrument]
     pub async fn run_docker_with_output(self, container: &Container) -> Result<ParsedOutput> {
         let config = self
