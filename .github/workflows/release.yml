@@ -1,12 +1,13 @@
 name: release
 
-# Pushes releases on `vX.Y.Z` tags (including prereleases like `vX.Y.Z-alpha.1`).
+# Pushes releases on `vX.Y.Z` tags.
+# Pushes prereleases on `vX.Y.Z-PRE.N` tags.
 # Builds artifacts for PRs without creating releases.
 on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+-[a-zA-Z]+[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-[a-z]+.[0-9]+'
   pull_request:
     branches:
       - main
