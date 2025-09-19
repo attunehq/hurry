@@ -112,7 +112,7 @@ pub async fn cache_target_from_workspace(
         debug!(?key, ?dependency, ?artifacts, "caching artifacts");
         let artifacts = stream::iter(artifacts)
             .map(|artifact| async move {
-                let (key, file) = target.store_cas(cas, &artifact).await?;
+                let (key, file) = target.store_cas(cas, artifact).await?;
                 trace!(?key, ?dependency, ?artifact, "stored artifact");
 
                 let meta = Metadata::from_file(&file)
