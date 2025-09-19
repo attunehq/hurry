@@ -68,22 +68,28 @@ jobs:
     - name: changelog
       id: changelog
       run: |
+        set -x  # Enable debug output
         if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-          gh api repos/attunehq/hurry/commits/${{ steps.compute.outputs.sha }} --jq '.commit.message | "- " + .' > version_changelog.txt
+          gh api repos/${{ github.repository }}/commits/${{ steps.compute.outputs.sha }} --jq '.commit.message | "- " + .' > version_changelog.txt
         else
           CURRENT_TAG="${{ steps.compute.outputs.release }}"
+          echo "Current tag: $CURRENT_TAG"
 
           # Get all tags sorted by version, excluding the current tag.
           ALL_TAGS=$(git tag -l 'v*' --sort=-version:refname | grep -v "^$CURRENT_TAG$")
+          echo "All other tags: $ALL_TAGS"
 
           # Find the newest non-prerelease tag (doesn't match -[a-z]+\.[0-9]+).
           # `ALL_TAGS` is in descending order, sorted as versions; reference:
           # https://git-scm.com/docs/git-tag#Documentation/git-tag.txt---sortkey
           PREVIOUS_TAG=""
           for tag in $ALL_TAGS; do
+            echo "Checking tag: $tag"
             TAG_VERSION="${tag#v}"  # Remove 'v' prefix for pattern matching
+            echo "Tag version: $TAG_VERSION"
             if [[ ! "$TAG_VERSION" =~ -[a-z]+\.[0-9]+$ ]]; then
               PREVIOUS_TAG="$tag"
+              echo "Found previous non-prerelease tag: $PREVIOUS_TAG"
               break
             fi
           done
@@ -91,7 +97,8 @@ jobs:
           if [[ -n "$PREVIOUS_TAG" ]]; then
             echo "Changes since $PREVIOUS_TAG:" > version_changelog.txt
             echo "" >> version_changelog.txt
-            gh api repos/attunehq/hurry/compare/$PREVIOUS_TAG...$CURRENT_TAG --jq '.commits[] | .commit.message | "- " + .' >> version_changelog.txt
+            echo "Comparing $PREVIOUS_TAG...$CURRENT_TAG"
+            gh api repos/${{ github.repository }}/compare/$PREVIOUS_TAG...$CURRENT_TAG --jq '.commits[] | .commit.message | "- " + .' >> version_changelog.txt
           else
             # If no previous non-prerelease tag found, get all commits
             echo "All changes:" > version_changelog.txt
