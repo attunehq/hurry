@@ -568,8 +568,7 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
     // reused there; in effect this test is a strict superset of `cross_dir`.
     let pwd_repo_a = pwd.join(format!("{repo}-concurrent-a"));
     let pwd_repo_b = pwd.join(format!("{repo}-concurrent-b"));
-    let pwd_repo_c = pwd.join(format!("{repo}-concurrent-c"));
-    let (container_a, container_b, container_c) = tokio::try_join!(
+    let (container_a, container_b) = tokio::try_join!(
         Container::debian_rust()
             .command(Command::clone_hurry(&pwd))
             .command(Command::install_hurry(pwd.join("hurry")))
@@ -594,20 +593,6 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
                     .repo(repo)
                     .branch(branch)
                     .dir(&pwd_repo_b)
-                    .finish()
-            )
-            .volume_bind(&cache_host_path, &cache_container_path)
-            .start(),
-        Container::debian_rust()
-            .command(Command::clone_hurry(&pwd))
-            .command(Command::install_hurry(pwd.join("hurry")))
-            .command(
-                Command::clone_github()
-                    .pwd(&pwd)
-                    .user(username)
-                    .repo(repo)
-                    .branch(branch)
-                    .dir(&pwd_repo_c)
                     .finish()
             )
             .volume_bind(&cache_host_path, &cache_container_path)
@@ -656,34 +641,76 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
     // now fails.
     //
     // The best way to know if the cache was actually written properly is to try
-    // to run a third build and see if all the artifacts are fresh.
-    let messages_c = Build::new()
-        .pwd(&pwd_repo_c)
+    // to run the builds again (again concurrently) and see if all the artifacts
+    // are fresh. They definitely should be at this point.
+    let build_a = Build::new()
+        .pwd(&pwd_repo_a)
         .env("HOME", &cache_container_path)
         .wrapper(Build::HURRY_NAME)
-        .finish()
-        .run_docker(&container_c)
-        .await?;
+        .finish();
+    let build_b = Build::new()
+        .pwd(&pwd_repo_b)
+        .env("HOME", &cache_container_path)
+        .wrapper(Build::HURRY_NAME)
+        .finish();
+    let (messages_a, messages_b) = tokio::try_join!(
+        build_a.run_docker(&container_a),
+        build_b.run_docker(&container_b)
+    )?;
+    let packages_a = messages_a
+        .iter()
+        .thirdparty_artifacts()
+        .package_ids()
+        .sorted()
+        .collect::<Vec<_>>();
+    let packages_b = messages_b
+        .iter()
+        .thirdparty_artifacts()
+        .package_ids()
+        .sorted()
+        .collect::<Vec<_>>();
+    pretty_assertions::assert_eq!(
+        packages_a,
+        packages_b,
+        "both concurrent builds should have built the same packages"
+    );
 
-    // This third build should show all artifacts as fresh since the cache
-    // should now be fully populated.
-    let expected_c = messages_c
+    let expected_a = messages_a
         .iter()
         .thirdparty_artifacts()
         .package_ids()
         .map(|id| (id, true))
         .sorted()
         .collect::<Vec<_>>();
-    let freshness_c = messages_c
+    let freshness_a = messages_a
         .iter()
         .thirdparty_artifacts()
         .freshness()
         .sorted()
         .collect::<Vec<_>>();
     pretty_assertions::assert_eq!(
-        expected_c,
-        freshness_c,
-        "all artifacts should be fresh: {messages_c:?}"
+        expected_a,
+        freshness_a,
+        "all artifacts should be fresh: {messages_a:?}"
+    );
+
+    let expected_b = messages_b
+        .iter()
+        .thirdparty_artifacts()
+        .package_ids()
+        .map(|id| (id, true))
+        .sorted()
+        .collect::<Vec<_>>();
+    let freshness_b = messages_b
+        .iter()
+        .thirdparty_artifacts()
+        .freshness()
+        .sorted()
+        .collect::<Vec<_>>();
+    pretty_assertions::assert_eq!(
+        expected_b,
+        freshness_b,
+        "all artifacts should be fresh: {messages_b:?}"
     );
 
     Ok(())
