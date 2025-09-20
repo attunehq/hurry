@@ -70,28 +70,22 @@ jobs:
     - name: changelog
       id: changelog
       run: |
-        set -x  # Enable debug output
         if [[ "${{ github.event_name }}" == "pull_request" ]]; then
           gh api repos/${{ github.repository }}/commits/${{ steps.compute.outputs.sha }} --jq '.commit.message | "- " + .' > version_changelog.txt
         else
           CURRENT_TAG="${{ steps.compute.outputs.release }}"
-          echo "Current tag: $CURRENT_TAG"
 
           # Get all tags sorted by version, excluding the current tag.
           ALL_TAGS=$(git tag -l 'v*' --sort=-version:refname | grep -v "^$CURRENT_TAG$")
-          echo "All other tags: $ALL_TAGS"
 
           # Find the newest non-prerelease tag (doesn't match -[a-z]+\.[0-9]+).
           # `ALL_TAGS` is in descending order, sorted as versions; reference:
           # https://git-scm.com/docs/git-tag#Documentation/git-tag.txt---sortkey
           PREVIOUS_TAG=""
           for tag in $ALL_TAGS; do
-            echo "Checking tag: $tag"
             TAG_VERSION="${tag#v}"  # Remove 'v' prefix for pattern matching
-            echo "Tag version: $TAG_VERSION"
             if [[ ! "$TAG_VERSION" =~ -[a-z]+\.[0-9]+$ ]]; then
               PREVIOUS_TAG="$tag"
-              echo "Found previous non-prerelease tag: $PREVIOUS_TAG"
               break
             fi
           done
@@ -99,7 +93,6 @@ jobs:
           if [[ -n "$PREVIOUS_TAG" ]]; then
             echo "Changes since $PREVIOUS_TAG:" > version_changelog.txt
             echo "" >> version_changelog.txt
-            echo "Comparing $PREVIOUS_TAG...$CURRENT_TAG"
             gh api repos/${{ github.repository }}/compare/$PREVIOUS_TAG...$CURRENT_TAG --jq '.commits[] | .commit.message | "- " + .' >> version_changelog.txt
           else
             # If no previous non-prerelease tag found, get all commits
@@ -222,37 +215,55 @@ jobs:
           merge-multiple: true
 
       - name: render
+        shell: bash
+        env:
+          CHANGELOG: ${{ needs.tagged.outputs.changelog }}
         run: |
-          RELEASE=$(cat <<EOF
-          ## Changes in ${{ needs.tagged.outputs.release }}
+          # We echo this line over line instead of using the EOF syntax so that
+          # we can avoid accidentally running "commands" that were inadvertently
+          # in the changelog; the shell interprets backticks as commands to run
+          # but commit messages routinely use them to refer to code.
+          #
+          # If we put the changelog into an env variable, and then echo the
+          # variable directly, the variable is emitted as a string without
+          # further interpolation:
+          # ```
+          # $ bash
+          # bash-5.3$ export CONTENT='foo `bar` $(baz)'
+          # bash-5.3$ echo $CONTENT
+          # foo `bar` $(baz)
+          # bash-5.3$ exit
+          # exit
+          # ```
 
-          ${{ needs.tagged.outputs.changelog }}
+          echo '## Changes in ${{ needs.tagged.outputs.release }}' > release.md
+          echo '' >> release.md
+          echo $CHANGELOG >> release.md
+          echo '' >> release.md
+          echo '## Installation' >> release.md
+          echo '' >> release.md
+          echo 'Download the appropriate binary for your system and architecture:' >> release.md
+          echo '' >> release.md
+          echo '| Platform | Architecture | Download |' >> release.md
+          echo '| -------- | ------------ | -------- |' >> release.md
+          echo '| macOS    | x86_64       | [hurry-x86_64-apple-darwin.tar.gz](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/hurry-x86_64-apple-darwin.tar.gz) |' >> release.md
+          echo '| macOS    | arm64        | [hurry-aarch64-apple-darwin.tar.gz](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/hurry-aarch64-apple-darwin.tar.gz) |' >> release.md
+          echo '| Linux    | x86_64       | [hurry-x86_64-unknown-linux-gnu.tar.gz](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/hurry-x86_64-unknown-linux-gnu.tar.gz) |' >> release.md
+          echo '| Linux    | arm64        | [hurry-aarch64-unknown-linux-gnu.tar.gz](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/hurry-aarch64-unknown-linux-gnu.tar.gz) |' >> release.md
+          echo '| Linux    | x86_64 (musl) | [hurry-x86_64-unknown-linux-musl.tar.gz](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/hurry-x86_64-unknown-linux-musl.tar.gz) |' >> release.md
+          echo '| Linux    | arm64 (musl) | [hurry-aarch64-unknown-linux-musl.tar.gz](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/hurry-aarch64-unknown-linux-musl.tar.gz) |' >> release.md
+          echo '' >> release.md
+          echo 'See [checksums.txt](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/checksums.txt) for file checksums.' >> release.md
 
-          ## Installation
-
-          Download the appropriate binary for your system and architecture:
-
-          | Platform | Architecture | Download |
-          | -------- | ------------ | -------- |
-          | macOS    | x86_64       | [hurry-x86_64-apple-darwin.tar.gz](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/hurry-x86_64-apple-darwin.tar.gz) |
-          | macOS    | arm64        | [hurry-aarch64-apple-darwin.tar.gz](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/hurry-aarch64-apple-darwin.tar.gz) |
-          | Linux    | x86_64       | [hurry-x86_64-unknown-linux-gnu.tar.gz](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/hurry-x86_64-unknown-linux-gnu.tar.gz) |
-          | Linux    | arm64        | [hurry-aarch64-unknown-linux-gnu.tar.gz](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/hurry-aarch64-unknown-linux-gnu.tar.gz) |
-          | Linux    | x86_64 (musl) | [hurry-x86_64-unknown-linux-musl.tar.gz](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/hurry-x86_64-unknown-linux-musl.tar.gz) |
-          | Linux    | arm64 (musl) | [hurry-aarch64-unknown-linux-musl.tar.gz](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/hurry-aarch64-unknown-linux-musl.tar.gz) |
-
-          See [checksums.txt](https://github.com/attunehq/hurry/releases/download/${{ needs.tagged.outputs.release }}/checksums.txt) for file checksums.
-          EOF
-          )
           echo 'release<<EOF' >> $GITHUB_OUTPUT
-          echo "$RELEASE" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          cat release.md >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
 
           echo '## Release preview' >> $GITHUB_STEP_SUMMARY
           echo '> [!NOTE]' >> $GITHUB_STEP_SUMMARY
           echo '> The links in this preview will not download anything; they are provided for information only.' >> $GITHUB_STEP_SUMMARY
           echo '---' >> $GITHUB_STEP_SUMMARY
-          echo "$RELEASE" >> $GITHUB_STEP_SUMMARY
+          cat release.md >> $GITHUB_STEP_SUMMARY
       - name: create
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         uses: softprops/action-gh-release@v1
