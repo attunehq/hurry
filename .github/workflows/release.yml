@@ -154,10 +154,15 @@ jobs:
         with:
           tool: cargo-set-version
 
-      - name: Cache hurry home directory
-        uses: actions/cache@v4
+      - name: Restore cached directories
+        uses: actions/cache/restore@v4
         with:
-          path: /home/runner/.cache/hurry
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cache/hurry
           key: hurry-cache-release-${{ matrix.target }}
 
       - name: Install hurry
@@ -180,6 +185,7 @@ jobs:
         shell: bash
         run: |
           if [ ${{ matrix.cross }} = true ]; then
+            hurry cargo build --release --target ${{ matrix.target }} --hurry-skip-build --hurry-skip-backup
             cross build --release --target ${{ matrix.target }}
           else
             hurry cargo build --release --target ${{ matrix.target }}
@@ -203,6 +209,17 @@ jobs:
           name: hurry-${{ matrix.target }}
           path: hurry-${{ matrix.target }}.tar.gz
           if-no-files-found: warn
+
+      - name: Save cached directories
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cache/hurry
+          key: hurry-cache-release-${{ matrix.target }}
 
   create-checksums:
     name: checksums

@@ -32,10 +32,15 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      - name: Cache hurry home directory
-        uses: actions/cache@v4
+      - name: Restore cached directories
+        uses: actions/cache/restore@v4
         with:
-          path: /home/runner/.cache/hurry
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cache/hurry
           key: hurry-cache-pr-${{ runner.os }}
 
       - name: Install hurry
@@ -55,6 +60,17 @@ jobs:
       # TODO: add `hurry cargo clippy` support.
       - name: Check clippy
         run: cargo clippy --no-deps --workspace --all-targets --all-features
+
+      - name: Save cached directories
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cache/hurry
+          key: hurry-cache-pr-${{ runner.os }}
 
       # TODO: add `hurry cargo test` support.
       # FIXME: Some of these tests do not yet pass on all filesystems.
