@@ -41,6 +41,8 @@ jobs:
           key: hurry-cache-${{ runner.os }}
 
       - name: Install hurry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ./install.sh --version v0.2.0-alpha.1
           echo "$HOME/.local/bin" >> $GITHUB_PATH
