@@ -172,6 +172,7 @@ jobs:
           mkdir -p "$ARTIFACT_NAME"
 
           cp "$TARGET_DIR/hurry" "$ARTIFACT_NAME/"
+          cp "$TARGET_DIR/hurry-cargo-rustc-wrapper" "$ARTIFACT_NAME/"
           cp README.md "$ARTIFACT_NAME/"
           tar -czf "$ARTIFACT_NAME.tar.gz" "$ARTIFACT_NAME"
 
