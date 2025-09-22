@@ -22,6 +22,9 @@ jobs:
   rust:
     name: Build, check, and test Rust
     runs-on: ubuntu-latest
+    env:
+      HURRY_HOME: /tmp/hurry-home
+
     steps:
       - name: Install Rust
         run: |
@@ -31,11 +34,24 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      - name: Cache hurry home directory
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.HURRY_HOME }}
+          key: hurry-cache-${{ runner.os }}
+
+      - name: Install hurry
+        run: |
+          ./install.sh --version v0.2.0-alpha.1
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
       - name: Check format
         run: cargo +nightly fmt --all --check
 
       - name: Run full build
-        run: cargo build --workspace --all-targets --all-features
+        run: hurry cargo build --workspace --all-targets --all-features
+        env:
+          HOME: ${{ env.HURRY_HOME }}
 
       - name: Check clippy
         run: cargo clippy --workspace --all-targets --all-features
