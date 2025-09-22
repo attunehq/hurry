@@ -45,15 +45,18 @@ jobs:
           ./install.sh --version v0.2.0-alpha.2
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
+      # TODO (maybe?): add `hurry cargo fmt` support.
       - name: Check format
         run: cargo +nightly fmt --all --check
 
       - name: Run full build
         run: hurry cargo build --workspace --all-targets --all-features
 
+      # TODO: add `hurry cargo clippy` support.
       - name: Check clippy
         run: cargo clippy --no-deps --workspace --all-targets --all-features
 
+      # TODO: add `hurry cargo test` support.
       # FIXME: Some of these tests do not yet pass on all filesystems.
       #
       # - name: Run tests

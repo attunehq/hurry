@@ -171,6 +171,11 @@ jobs:
         shell: bash
         run: cargo set-version ${{ needs.tagged.outputs.version }}
 
+      # TODO: add `cross` support to `hurry`. `cross` is just a fancy wrapper
+      # around a docker container, so we could probably have hurry use the same
+      # container and mount the cache volume and then run the cross commands the
+      # same way that `cross` itself does. Until then, we unfortunately need to
+      # run `cross` commands separately and they can't benefit from the cache.
       - name: build
         shell: bash
         run: |
