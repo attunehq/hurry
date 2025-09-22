@@ -56,7 +56,7 @@ jobs:
           HOME: ${{ env.HURRY_HOME }}
 
       - name: Check clippy
-        run: cargo clippy --workspace --all-targets --all-features
+        run: cargo clippy --no-deps --workspace --all-targets --all-features
 
       # FIXME: Some of these tests do not yet pass on all filesystems.
       #
