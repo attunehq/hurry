@@ -44,7 +44,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ./install.sh --version v0.2.0-alpha.1
+          ./install.sh --version v0.2.0-alpha.2
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Check format
