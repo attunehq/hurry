@@ -110,8 +110,6 @@ jobs:
   build:
     name: build / ${{ matrix.os }} / ${{ matrix.target }}
     needs: tagged
-    env:
-      HURRY_HOME: /tmp/hurry-home
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -159,7 +157,7 @@ jobs:
       - name: Cache hurry home directory
         uses: actions/cache@v4
         with:
-          path: ${{ env.HURRY_HOME }}
+          path: /github/home/.cache/hurry
           key: hurry-cache-release-${{ matrix.target }}
 
       - name: Install hurry
@@ -179,7 +177,7 @@ jobs:
           if [ ${{ matrix.cross }} = true ]; then
             cross build --release --target ${{ matrix.target }}
           else
-            HOME=${{ env.HURRY_HOME }} hurry cargo build --release --target ${{ matrix.target }}
+            hurry cargo build --release --target ${{ matrix.target }}
           fi
 
       - name: prepare

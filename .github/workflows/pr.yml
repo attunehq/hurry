@@ -22,8 +22,6 @@ jobs:
   rust:
     name: Build, check, and test Rust
     runs-on: ubuntu-latest
-    env:
-      HURRY_HOME: /tmp/hurry-home
 
     steps:
       - name: Install Rust
@@ -37,8 +35,8 @@ jobs:
       - name: Cache hurry home directory
         uses: actions/cache@v4
         with:
-          path: ${{ env.HURRY_HOME }}
-          key: hurry-cache-${{ runner.os }}
+          path: /github/home/.cache/hurry
+          key: hurry-cache-pr-${{ runner.os }}
 
       - name: Install hurry
         env:
@@ -52,8 +50,6 @@ jobs:
 
       - name: Run full build
         run: hurry cargo build --workspace --all-targets --all-features
-        env:
-          HOME: ${{ env.HURRY_HOME }}
 
       - name: Check clippy
         run: cargo clippy --no-deps --workspace --all-targets --all-features
