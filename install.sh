@@ -223,6 +223,7 @@ install_binary() {
   local checksums_url
   local archive_name="hurry-${platform}.tar.gz"
   local binary_name="hurry"
+  local cargo_rustc_wrapper_name="hurry-cargo-rustc-wrapper"
 
   # Construct download URLs
   download_url=$(get_asset_download_url "$version" "$archive_name")
@@ -267,9 +268,16 @@ install_binary() {
   if [[ -z "$extracted_binary" ]]; then
     fail "Could not find $binary_name in the extracted archive"
   fi
-
   cp "$extracted_binary" "$bin_dir/hurry"
   chmod +x "$bin_dir/hurry"
+
+  local extracted_cargo_rustc_wrapper
+  extracted_cargo_rustc_wrapper=$(find . -name "$cargo_rustc_wrapper_name" -type f | head -n 1)
+  if [[ -z "$extracted_cargo_rustc_wrapper" ]]; then
+    fail "Could not find $cargo_rustc_wrapper_name in the extracted archive"
+  fi
+  cp "$extracted_cargo_rustc_wrapper" "$bin_dir/hurry-cargo-rustc-wrapper"
+  chmod +x "$bin_dir/hurry-cargo-rustc-wrapper"
 
   # Clean up
   cd - > /dev/null
