@@ -110,6 +110,8 @@ jobs:
   build:
     name: build / ${{ matrix.os }} / ${{ matrix.target }}
     needs: tagged
+    env:
+      HURRY_HOME: /tmp/hurry-home
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -125,11 +127,11 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             cross: false
+
+          # Cross compilation needed
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             cross: true
-
-          # Cross compilation needed
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             cross: true
@@ -154,6 +156,19 @@ jobs:
         with:
           tool: cargo-set-version
 
+      - name: Cache hurry home directory
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.HURRY_HOME }}
+          key: hurry-cache-release-${{ matrix.target }}
+
+      - name: Install hurry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./install.sh --version v0.2.0-alpha.2
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
       - name: set version
         shell: bash
         run: cargo set-version ${{ needs.tagged.outputs.version }}
@@ -161,8 +176,11 @@ jobs:
       - name: build
         shell: bash
         run: |
-          CARGO_COMMAND=${{ matrix.cross && 'cross' || 'cargo' }}
-          $CARGO_COMMAND build --release --target ${{ matrix.target }}
+          if [ ${{ matrix.cross }} = true ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            HOME=${{ env.HURRY_HOME }} hurry cargo build --release --target ${{ matrix.target }}
+          fi
 
       - name: prepare
         shell: bash
