@@ -61,7 +61,7 @@ jobs:
 
       # TODO: add `hurry cargo clippy` support.
       - name: Check clippy
-        run: cargo clippy --no-deps --workspace --all-targets --all-features
+        run: cargo clippy --workspace --all-targets --all-features
 
       # TODO: add `hurry cargo test` support.
       # FIXME: Some of these tests do not yet pass on all filesystems.
