@@ -1,4 +1,9 @@
-use std::{ffi::OsStr, fmt, iter::once};
+use std::{
+    ffi::OsStr,
+    fmt,
+    iter::once,
+    process::{Output, Stdio},
+};
 
 use color_eyre::{
     Result,
@@ -7,6 +12,7 @@ use color_eyre::{
 use futures::{StreamExt, TryFutureExt, TryStreamExt, stream};
 use itertools::Itertools;
 use tap::Pipe;
+use tokio::process::Child;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::{
@@ -16,14 +22,18 @@ use crate::{
     hash::Blake3,
 };
 
+mod cache;
 mod dependency;
 mod metadata;
 mod profile;
+mod rustc;
 mod workspace;
 
+pub use cache::*;
 pub use dependency::*;
 pub use metadata::*;
 pub use profile::*;
+pub use rustc::*;
 pub use workspace::*;
 
 /// Execute a Cargo subcommand with specified arguments.
@@ -32,17 +42,41 @@ pub async fn invoke(
     subcommand: impl AsRef<str> + fmt::Debug,
     args: impl IntoIterator<Item = impl AsRef<str>> + fmt::Debug,
 ) -> Result<()> {
-    invoke_env(subcommand, args, [] as [(&OsStr, &OsStr); 0]).await
+    let status = invoke_with(
+        subcommand,
+        args,
+        [] as [(&OsStr, &OsStr); 0],
+        Handles {
+            stdout: Stdio::inherit(),
+            stderr: Stdio::inherit(),
+        },
+    )
+    .await?
+    .wait()
+    .await
+    .context("could complete cargo execution")?;
+    if status.success() {
+        Ok(())
+    } else {
+        bail!("cargo exited with status: {}", status);
+    }
+}
+
+#[derive(Debug)]
+pub struct Handles {
+    pub stdout: Stdio,
+    pub stderr: Stdio,
 }
 
 /// Execute a Cargo subcommand with specified arguments and environment
 /// variables.
 #[instrument]
-pub async fn invoke_env(
+pub async fn invoke_with(
     subcommand: impl AsRef<str> + fmt::Debug,
     args: impl IntoIterator<Item = impl AsRef<str>> + fmt::Debug,
     env: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)> + fmt::Debug,
-) -> Result<()> {
+    handles: Handles,
+) -> Result<Child> {
     let subcommand = subcommand.as_ref();
     let args = args.into_iter().collect::<Vec<_>>();
     let args = args.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
@@ -51,17 +85,10 @@ pub async fn invoke_env(
     let mut cmd = tokio::process::Command::new("cargo");
     cmd.args(once(subcommand).chain(args.iter().copied()));
     cmd.envs(env);
-    let status = cmd
-        .spawn()
-        .context("could not spawn cargo")?
-        .wait()
-        .await
-        .context("could complete cargo execution")?;
-    if status.success() {
-        Ok(())
-    } else {
-        bail!("cargo exited with status: {status}");
-    }
+    cmd.stdout(handles.stdout);
+    cmd.stderr(handles.stderr);
+
+    cmd.spawn().context("could not spawn cargo")
 }
 
 /// Cache build artifacts from a workspace target directory.
@@ -88,7 +115,8 @@ pub async fn cache_target_from_workspace(
     // TODO: this currently assumes that the entire `target/` folder doesn't
     // have any _outdated_ data; this may not be correct.
     for dependency in &target.workspace.dependencies {
-        let key = dependency.key();
+        // let key = dependency.key();
+        let key = todo!();
         debug!(?key, ?dependency, "caching dependency");
         let artifacts = match target.enumerate_cache_artifacts(dependency).await {
             Ok(artifacts) => artifacts,
@@ -145,8 +173,8 @@ pub async fn cache_target_from_workspace(
 
 /// Restore build artifacts from cache to the target directory.
 ///
-/// Retrieves cached artifacts for all workspace dependencies and extracts
-/// them to their proper locations in the target directory. Only restores
+/// Retrieves cached artifacts for all workspace dependencies and extracts them
+/// to their proper locations in the target directory. Only restores
 /// dependencies that have cached records available.
 ///
 /// ## Process
@@ -161,20 +189,19 @@ pub async fn restore_target_from_cache(
     target: &ProfileDir<'_, Locked>,
     progress: impl Fn(&Blake3, &Dependency) + Clone,
 ) -> Result<()> {
-    // When backing up a `target/` directory, we enumerate
-    // the build units before backing up dependencies.
-    // But when we restore, we don't have a target directory
-    // (or don't trust it), so we can't do that here.
-    // Instead, we just enumerate dependencies
-    // and try to find some to restore.
+    // When backing up a `target/` directory, we enumerate the build units
+    // before backing up dependencies. But when we restore, we don't have a
+    // target directory (or don't trust it), so we can't do that here. Instead,
+    // we just enumerate dependencies and try to find some to restore.
     //
-    // The concurrency limits below are currently just vibes;
-    // we want to avoid opening too many file handles at a time
-    // because that can have a negative effect on performance
-    // but we obviously want to have enough running that we saturate the disk.
+    // The concurrency limits below are currently just vibes; we want to avoid
+    // opening too many file handles at a time because that can have a negative
+    // effect on performance but we obviously want to have enough running that
+    // we saturate the disk.
     debug!(dependencies = ?target.workspace.dependencies, "restoring dependencies");
     for dependency in &target.workspace.dependencies {
-        let key = dependency.key();
+        // let key = dependency.key();
+        let key = todo!();
         debug!(?key, ?dependency, "restoring dependency");
         let record = match cache.get(RecordKind::Cargo, &key).await {
             Ok(Some(record)) => record,

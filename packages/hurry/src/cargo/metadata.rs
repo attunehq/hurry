@@ -33,9 +33,9 @@ use crate::{
 // TODO: Is there a better way to get this?
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize)]
 pub struct RustcMetadata {
-    /// The LLVM target triple.
+    /// The host target triple.
     #[serde(rename = "llvm-target")]
-    pub llvm_target: String,
+    pub host_target: String,
 }
 
 impl RustcMetadata {

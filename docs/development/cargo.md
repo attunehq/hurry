@@ -144,6 +144,8 @@ target/
         .cargo-lock
 
         # Holds all of the fingerprint files for all packages.
+        #
+        # See docs: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/index.html#fingerprint-files
         .fingerprint/
 
             # The package shows up three times with different `$meta` values.
@@ -373,3 +375,89 @@ target/
 
 > **TODO**
 > What steps does `cargo` and `rustc` take to build incremental first-party crates?
+
+### Querying build information from Cargo
+
+There are several ways to get build information out of Cargo:
+
+1. Passing `RUSTC_WRAPPER` allows us to intercept and record calls to `rustc`.
+2. `cargo metadata` provides information about the "packages" and "resolved dependencies" of the workspace.
+3. `cargo build --message-format=json-diagnostic-rendered-ansi` provides formatted output messages from the compiler as it runs.
+4. `cargo build --unit-graph` provides information about the "unit graph" of the build.
+
+Each of these methods has their own trade-offs, and they're all incomplete or inconvenient in various ways. In order to get the information we need, we combine all of these methods.
+
+#### `RUSTC_WRAPPER`
+
+`RUSTC_WRAPPER` gives us the most detailed information, because we get the exact argv for each invocation of `rustc`.
+
+This is nice because:
+
+1. It includes all relevant flags, such as `-C extra-filename`, `--extern` flags, etc.
+2. There are some values (like package version) that aren't available through flags, but are set through `CARGO_` environment variables defined [here](https://doc.rust-lang.org/cargo/reference/environment-variables.html#environment-variables-cargo-sets-for-crates).
+
+Unfortunately:
+
+1. These invocations only give us information at the level of `rustc`. There's no way for us to see from these invocations alone what the whole graph looks like, where the entrypoints to the graph are, or which invocations have dependencies on which other invocations (although we can try to infer dependency using `--extern` flags and the like).
+2. There doesn't seem to be a way to infer which build scripts are for which packages.
+3. `rustc` is not invoked when it's not needed! This means that during partial builds, not all invocations will be present!
+
+#### `cargo metadata`
+
+`cargo metadata`'s format is documented [here](https://doc.rust-lang.org/cargo/commands/cargo-metadata.html#json-format).
+
+This format provides us with a full list of workspace packages and the "resolved dependency graph".
+
+Unfortunately, since this command isn't being invoked with build-time configuration (like `cargo build` flags), there's a lot of information it's missing:
+
+1. It doesn't include the actual artifact filenames.
+2. It can't tell which features are the ones actually being used in the build.
+3. Consequently, it does not correctly resolve instances where a package and version are built multiple times with different features (e.g. how `openssl` uses `bitflags`).
+
+#### `cargo build` JSON messages
+
+`cargo build --message-format=json-diagnostic-rendered-ansi` provides formatted output messages from the compiler as it runs. This format is documented [here](https://doc.rust-lang.org/cargo/reference/external-tools.html#json-messages).
+
+Some nice properties of these messages:
+
+1. They include the actual artifact filenames, including compiled build scripts.
+2. They include parsed build script outputs.
+3. They properly handle the actual build invocation flags (because they're an option of `cargo build`).
+4. They include a `fresh` field, which indicates whether they were rebuilt or reused from cache.
+5. They replay even when the unit is fresh and reused from cache.
+
+Some not-so-nice properties of these messages:
+
+1. They don't include the dependencies that go into each artifact! For example, `openssl` emits _two_ `compiler-artifact` messages for its library crate that have identical fields, because these artifacts are secretly being linked against different upstream dependencies.
+2. The lack of dependencies also makes it hard to tell which build scripts are for which packages (for example, `semver` has two build scripts in `attune` because it's built twice with different features), although it can be somewhat guessed from message order.
+3. These messages are surprisingly annoying to parse. In particular, doing so also turns off the normal human-friendly build messages, which actually changes observable behavior a bit.
+
+#### `cargo build` unit graph
+
+`cargo +nightly build --unit-graph -Z unstable-options` provides information about the "unit graph" of the build. This format is documented [here](https://doc.rust-lang.org/cargo/reference/unstable.html#unit-graph). Note that we can invoke this behavior on the stable Cargo tool by setting `RUSTC_BOOTSTRAP=1`.
+
+Some nice properties of this format:
+
+1. It includes the dependencies that go into each artifact! It even correctly distinguishes between units that seem identical to `cargo metadata` and the `cargo build` JSON output messages.
+2. It properly handles the actual build invocation flags (because it's an option of `cargo build`).
+3. It provides much more detail about optimization profile options.
+4. It explicitly represents dependencies on build script compilation and build script execution (`run-custom-build`).
+5. It provides the "roots" of the build (the top-level entrypoints), including when `cargo build` is invoked with specific targets.
+
+Some not-so-nice properties of this format:
+
+1. This format doesn't provide the actual artifact filenames, so we can't tell what which file suffix is used for artifacts of which unit.
+
+#### How we combine this information
+
+1. We can use the unit graph to find the root units.
+2. We can map those to RUSTC invocations by guessing using the entrypoint source files.
+3. From there, we can build a graph by looking at `--extern` flags and seeing which are needed.
+4. We know which `.fingerprint` files to restore because they share a folder suffix.
+5. We know the folder names of the build script _executions_ because `OUT_DIR` will be set on the packages.
+6. TODO: How do we get the folder names of the compiled build scripts themselves?
+   1. Oh shit, it's in the `--out-dir`
+   2. Maybe we just need to make sure the features match?
+   3. But we still can't tell which execution lines up with which compiled script
+   4. Hmm, maybe we can read the fingerprint's `build-script-build-script-build.json`? That has a `features` field in it. Are different features always the only reason why there might be multiple build scripts?
+      1. Wait, this is only in the compiled folder, not the actual execution folder

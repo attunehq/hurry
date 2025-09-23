@@ -5,7 +5,7 @@ use divan::Bencher;
 use hurry::{
     cache::{FsCache, FsCas},
     cargo::{
-        Dependency, Profile, Workspace, cache_target_from_workspace, restore_target_from_cache,
+        Dependency, Optimizations, Workspace, cache_target_from_workspace, restore_target_from_cache,
     },
     fs,
     hash::Blake3,
@@ -44,7 +44,7 @@ fn index() {
                 .await
                 .context("open workspace")?;
             workspace
-                .open_profile_locked(&Profile::Debug)
+                .open_profile_locked(&Optimizations::Debug)
                 .await
                 .context("open profile")
                 .map(drop)
@@ -82,7 +82,7 @@ fn backup(bencher: Bencher) {
                         .pipe(Box::new)
                         .pipe(Box::leak);
                     let target = workspace
-                        .open_profile_locked(&Profile::Debug)
+                        .open_profile_locked(&Optimizations::Debug)
                         .await
                         .context("open profile")?;
                     Result::<_>::Ok((cas, cache, target))
@@ -134,7 +134,7 @@ fn restore(bencher: Bencher) {
                         .context("open workspace")?;
                     {
                         let target = workspace
-                            .open_profile_locked(&Profile::Debug)
+                            .open_profile_locked(&Optimizations::Debug)
                             .await
                             .context("open profile")?;
                         cache_target_from_workspace(&cas, &cache, &target, progress_noop)
@@ -152,7 +152,7 @@ fn restore(bencher: Bencher) {
                     // reference is static.
                     let workspace = Box::leak(Box::new(workspace));
                     let target = workspace
-                        .open_profile_locked(&Profile::Debug)
+                        .open_profile_locked(&Optimizations::Debug)
                         .await
                         .context("open profile")?;
                     Result::<_>::Ok((cas, cache, target))

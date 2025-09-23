@@ -14,7 +14,7 @@ use tap::Pipe;
 use tracing::{instrument, level_filters::LevelFilter};
 use tracing_error::ErrorLayer;
 use tracing_flame::FlameLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{filter::Directive, layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_tree::time::FormatTime;
 
 // Since this is a binary crate, we need to ensure these modules aren't pub
@@ -91,7 +91,7 @@ async fn main() -> Result<()> {
                 .with_thread_names(false)
                 .with_verbose_exit(false)
                 .with_verbose_entry(false)
-                .with_deferred_spans(true)
+                .with_deferred_spans(false)
                 .with_bracketed_fields(true)
                 .with_span_retrace(true)
                 .with_timer(Uptime::default())
@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
         })
         .with(
             tracing_subscriber::EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
+                .with_default_directive(LevelFilter::ERROR.into())
                 .from_env_lossy(),
         )
         .with(flame_layer)

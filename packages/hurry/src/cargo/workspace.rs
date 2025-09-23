@@ -207,7 +207,6 @@ impl Workspace {
                     .package_name(package.name.to_string())
                     .lib_name(lib_name)
                     .version(package.version.to_string())
-                    .target(&rustc_meta.llvm_target)
                     .build()
                     .pipe(Ok)
             })

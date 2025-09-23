@@ -2,7 +2,7 @@ use color_eyre::{Result, eyre::Context};
 use hurry::{
     cache::{FsCache, FsCas},
     cargo::{
-        Dependency, Profile, Workspace, cache_target_from_workspace, restore_target_from_cache,
+        Dependency, Optimizations, Workspace, cache_target_from_workspace, restore_target_from_cache,
     },
     fs,
     hash::Blake3,
@@ -31,7 +31,7 @@ async fn open_index_workspace() -> Result<()> {
         .await
         .context("open workspace")?;
     workspace
-        .open_profile_locked(&Profile::Debug)
+        .open_profile_locked(&Optimizations::Debug)
         .await
         .context("open profile")
         .map(drop)
@@ -56,7 +56,7 @@ async fn backup_workspace() -> Result<()> {
         .await
         .context("open workspace")?;
     let target = workspace
-        .open_profile_locked(&Profile::Debug)
+        .open_profile_locked(&Optimizations::Debug)
         .await
         .context("open profile")?;
 
@@ -89,7 +89,7 @@ async fn restore_workspace() -> Result<()> {
             .await
             .context("open local workspace")?;
         let target = local_workspace
-            .open_profile_locked(&Profile::Debug)
+            .open_profile_locked(&Optimizations::Debug)
             .await
             .context("open profile")?;
         cache_target_from_workspace(&cas, &cache, &target, progress_noop)
@@ -110,7 +110,7 @@ async fn restore_workspace() -> Result<()> {
         .await
         .context("open temp workspace")?;
     let target = temp_workspace
-        .open_profile_locked(&Profile::Debug)
+        .open_profile_locked(&Optimizations::Debug)
         .await
         .context("open temp profile")?;
     restore_target_from_cache(&cas, &cache, &target, progress_noop)
