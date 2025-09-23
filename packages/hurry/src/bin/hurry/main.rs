@@ -24,11 +24,14 @@ use tracing_tree::time::FormatTime;
 // Relatedly, in this file specifically nothing should be `pub`.
 mod cmd;
 
+// We use `cargo set-version` in CI to update the version in `Cargo.toml` to
+// match the tag provided at release time; this means officially built releases
+// are always "dirty" so we modify the `git_version!` macro to account for that.
 #[derive(Parser)]
 #[command(
     name = "hurry",
     about = "Really, really fast builds",
-    version = format!("v{} commit {}", crate_version!(), git_version!()),
+    version = format!("v{} commit {}", crate_version!(), git_version!(args = ["--always"])),
 )]
 struct Cli {
     #[command(subcommand)]

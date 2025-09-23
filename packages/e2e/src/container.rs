@@ -1,0 +1,268 @@
+use std::sync::Arc;
+
+use bollard::{
+    Docker,
+    query_parameters::{
+        CreateContainerOptionsBuilder, CreateImageOptionsBuilder, RemoveContainerOptionsBuilder,
+        StartContainerOptionsBuilder,
+    },
+    secret::{ContainerCreateBody, HostConfig},
+};
+use bon::bon;
+use color_eyre::{Result, eyre::Context};
+use futures::TryStreamExt;
+
+use crate::Command;
+
+/// References a running Docker container.
+///
+/// This reference uses interior mutability to track internally track references
+/// to the container. After the final reference is dropped, attempts to remove
+/// the container from the docker daemon.
+///
+/// Attempts to remove the container from Docker when dropped, although since
+/// there is no such thing as async drop yet this is best effort and will likely
+/// lead to many orphan containers.
+#[derive(Clone, Debug)]
+pub struct Container {
+    inner: Arc<ContainerRef>,
+}
+
+impl Container {
+    /// Reference to the Docker client.
+    pub fn docker(&self) -> &Docker {
+        &self.inner.docker
+    }
+
+    /// The ID of the container running in the docker context.
+    pub fn id(&self) -> &str {
+        &self.inner.id
+    }
+}
+
+#[bon]
+impl Container {
+    /// Start the container and return a reference to it.
+    #[builder(start_fn = new, finish_fn = start)]
+    pub async fn build(
+        /// Commands to run when the container is started.
+        #[builder(field)]
+        commands: Vec<Command>,
+
+        /// Volume binds to mount in the container.
+        /// Each tuple represents (host_path, container_path).
+        #[builder(field)]
+        volume_binds: Vec<(String, String)>,
+
+        /// The repository to use, in OCI format.
+        #[builder(into)]
+        repo: String,
+
+        /// The tag to use.
+        #[builder(into)]
+        tag: String,
+    ) -> Result<Container> {
+        let docker = Docker::connect_with_defaults().context("connect to docker daemon")?;
+        let reference = format!("{repo}:{tag}");
+
+        let image = CreateImageOptionsBuilder::new()
+            .from_image(&reference)
+            .build();
+        docker
+            .create_image(Some(image), None, None)
+            .inspect_ok(|msg| println!("[IMAGE] {msg:?}"))
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let container_opts = CreateContainerOptionsBuilder::default().build();
+        let host_config = if volume_binds.is_empty() {
+            None
+        } else {
+            let bind_strings = volume_binds
+                .into_iter()
+                .map(|(host_path, container_path)| format!("{host_path}:{container_path}"))
+                .collect::<Vec<_>>();
+            Some(HostConfig {
+                binds: Some(bind_strings),
+                ..Default::default()
+            })
+        };
+        let container_body = ContainerCreateBody {
+            image: Some(reference),
+            tty: Some(true),
+            host_config,
+            ..Default::default()
+        };
+        let id = docker
+            .create_container(Some(container_opts), container_body)
+            .await
+            .context("create container")?
+            .id;
+
+        let start_opts = StartContainerOptionsBuilder::default().build();
+        docker
+            .start_container(&id, Some(start_opts))
+            .await
+            .context("start container")?;
+        let container = Container {
+            inner: Arc::new(ContainerRef { id, docker }),
+        };
+
+        for command in commands {
+            command
+                .run_docker(&container)
+                .await
+                .context("run command in docker context")?;
+        }
+
+        Ok(container)
+    }
+
+    /// Start a Debian container capable of running Rust builds.
+    ///
+    /// Builds this container with the `latest` tag:
+    /// https://hub.docker.com/_/rust
+    #[builder(finish_fn = start)]
+    pub async fn debian_rust(
+        #[builder(field)] commands: Vec<Command>,
+        #[builder(field)] volume_binds: Vec<(String, String)>,
+    ) -> Result<Container> {
+        Container::new()
+            .repo("docker.io/library/rust")
+            .tag("latest")
+            .commands(commands)
+            .volume_binds(volume_binds)
+            .start()
+            .await
+    }
+}
+
+impl<S: container_build_builder::State> ContainerBuildBuilder<S> {
+    /// Add commands to run when the container is started.
+    pub fn commands(mut self, commands: impl IntoIterator<Item = impl Into<Command>>) -> Self {
+        self.commands.extend(commands.into_iter().map(Into::into));
+        self
+    }
+
+    /// Add a command to run when the container is started.
+    pub fn command(mut self, command: impl Into<Command>) -> Self {
+        self.commands.push(command.into());
+        self
+    }
+
+    /// Add volume binds to mount in the container.
+    /// Each tuple represents (host_path, container_path).
+    pub fn volume_binds(
+        mut self,
+        binds: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.volume_binds
+            .extend(binds.into_iter().map(|(h, c)| (h.into(), c.into())));
+        self
+    }
+
+    /// Add a single volume bind to mount in the container.
+    pub fn volume_bind(
+        mut self,
+        host_path: impl Into<String>,
+        container_path: impl Into<String>,
+    ) -> Self {
+        self.volume_binds
+            .push((host_path.into(), container_path.into()));
+        self
+    }
+}
+
+impl<S: container_debian_rust_builder::State> ContainerDebianRustBuilder<S> {
+    /// Add commands to run when the container is started.
+    pub fn commands(mut self, commands: impl IntoIterator<Item = impl Into<Command>>) -> Self {
+        self.commands.extend(commands.into_iter().map(Into::into));
+        self
+    }
+
+    /// Add a command to run when the container is started.
+    pub fn command(mut self, command: impl Into<Command>) -> Self {
+        self.commands.push(command.into());
+        self
+    }
+
+    /// Add volume binds to mount in the container.
+    /// Each tuple represents (host_path, container_path).
+    pub fn volume_binds(
+        mut self,
+        binds: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.volume_binds
+            .extend(binds.into_iter().map(|(h, c)| (h.into(), c.into())));
+        self
+    }
+
+    /// Add a single volume bind to mount in the container.
+    /// Takes (host_path, container_path) tuple.
+    pub fn volume_bind(
+        mut self,
+        host_path: impl Into<String>,
+        container_path: impl Into<String>,
+    ) -> Self {
+        self.volume_binds
+            .push((host_path.into(), container_path.into()));
+        self
+    }
+}
+
+/// Internally references a running Docker container; when this is dropped the
+/// container is removed from Docker.
+#[derive(Debug)]
+struct ContainerRef {
+    docker: Docker,
+    id: String,
+}
+
+impl Drop for ContainerRef {
+    fn drop(&mut self) {
+        let id = self.id.clone();
+        let docker = self.docker.clone();
+
+        // This is not a place of honor. No highly esteemed deed is commemorated
+        // here. Nothing valued is here. What is here was dangerous and
+        // repulsive to us.
+        //
+        // The difficulty here is:
+        // - We want to clean up containers when they're no longer needed.
+        // - Assertion failures or errors won't run manual cleanup code.
+        // - `bollard` is async, while `Drop` is not.
+        //
+        // We can't just spawn the cleanup task; the test just exits without
+        // actually cleaning anything up unless we actually block the drop
+        // function.
+        //
+        // This spawns a new thread + runtime per drop, which makes it only
+        // suitable for expensive resources like Docker containers (where the
+        // cost of spawning a new thread is nothing compared to the cost of the
+        // network calls to create and tear down containers). For lighter
+        // cleanup tasks, or if you just want to make something less gross,
+        // consider spawning a long-lived cleanup thread with a dedicated async
+        // runtime and sending cleanup tasks to it through a channel (which
+        // probably means also sending a channel into the cleanup task so that
+        // drop can wait for the cleanup to actually complete).
+        let handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("create runtime for cleanup");
+            rt.block_on(async move {
+                let options = RemoveContainerOptionsBuilder::new()
+                    .force(true)
+                    .v(true)
+                    .build();
+
+                if let Err(err) = docker.remove_container(&id, Some(options)).await {
+                    eprintln!("[WARN] Unable to remove container {id}: {err:?}");
+                }
+            });
+        });
+
+        // Wait for cleanup to complete. This blocks the drop function, which
+        // correctly prevents the test from exiting before it cleans up.
+        if let Err(panic) = handle.join() {
+            std::panic::resume_unwind(panic);
+        }
+    }
+}

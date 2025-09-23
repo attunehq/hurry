@@ -22,6 +22,7 @@ jobs:
   rust:
     name: Build, check, and test Rust
     runs-on: ubuntu-latest
+
     steps:
       - name: Install Rust
         run: |
@@ -41,18 +42,36 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      - name: Cache directories
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cache/hurry
+          key: hurry-cache-pr-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            hurry-cache-pr-${{ runner.os }}-
+
+      - name: Install hurry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./install.sh --version v0.2.0-alpha.2
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      # TODO (maybe?): add `hurry cargo fmt` support.
       - name: Check format
         run: cargo +nightly fmt --all --check
 
       - name: Run full build
-        run: cargo build --workspace --all-targets --all-features
+        run: hurry cargo build --workspace --all-targets --all-features
 
+      # TODO: add `hurry cargo clippy` support.
       - name: Check clippy
         run: cargo clippy --workspace --all-targets --all-features
-
-      # We need this so that we can install `hurry-cargo-rustc-wrapper`
-      - name: Install `hurry` bins
-        run: cargo install --path packages/hurry/ --locked
 
       - name: Run tests
         run: cargo nextest run

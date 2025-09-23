@@ -591,7 +591,6 @@ impl<'ws> ProfileDir<'ws, Locked> {
             // to do anything special for it.
             let outputs = parsed
                 .build_outputs()
-                .into_iter()
                 .filter_map(|output| match output {
                     QualifiedPath::Rootless(p) => Some(p),
                     QualifiedPath::RelativeTargetProfile(p) => Some(p),

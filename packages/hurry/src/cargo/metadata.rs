@@ -124,7 +124,7 @@ impl DepInfo {
             .ok_or_eyre("file does not exist")?;
         let lines = stream::iter(content.lines())
             .then(|line| {
-                DepInfoLine::parse(profile, &line)
+                DepInfoLine::parse(profile, line)
                     .then_with_context(move || format!("parse line: {line:?}"))
             })
             .try_collect::<Vec<_>>()
@@ -215,7 +215,7 @@ impl DepInfoLine {
 
             let output = QualifiedPath::parse(profile, output)
                 .then_with_context(move || format!("parse output path: {output:?}"));
-            let inputs = stream::iter(inputs.trim().split_whitespace())
+            let inputs = stream::iter(inputs.split_whitespace())
                 .map(|input| {
                     QualifiedPath::parse(profile, input)
                         .then_with_context(move || format!("parse input path: {input:?}"))
@@ -378,7 +378,7 @@ impl BuildScriptOutput {
             .ok_or_eyre("file does not exist")?;
         let lines = stream::iter(content.lines())
             .then(|line| {
-                BuildScriptOutputLine::parse(profile, &line)
+                BuildScriptOutputLine::parse(profile, line)
                     .then_with_context(move || format!("parse line: {line:?}"))
             })
             .try_collect::<Vec<_>>()

@@ -1,5 +1,13 @@
 //! Exercises e2e functionality for building/caching third-party dependencies on
 //! the local machine.
+//!
+//! Note: Local tests currently must run `cargo install` on the `hurry` binary
+//! so that the `hurry-cargo-rustc-wrapper` binary is available for use on the
+//! local system. This isn't ideal since it modifies the host system, but it's
+//! what we started with for now.
+//!
+//! TODO: Fix the above issue; either make `hurry` not rely on the wrapper being
+//! in `$PATH` or simulate adding it to `$PATH` when running tests.
 
 use std::path::PathBuf;
 
@@ -9,12 +17,13 @@ use color_eyre::{
     eyre::{Context, bail},
 };
 use e2e::{
-    cargo_clean, clone_github,
+    Build, Command,
     ext::{ArtifactIterExt, MessageIterExt},
-    hurry_cargo_build, temporary_directory,
+    temporary_directory,
 };
 use escargot::CargoBuild;
 use itertools::Itertools;
+use location_macros::workspace_dir;
 use simple_test_case::test_case;
 
 /// Exercises building and caching the project in a single directory.
@@ -24,16 +33,28 @@ use simple_test_case::test_case;
 #[test_log::test]
 fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
     let _ = color_eyre::install()?;
+    Command::install_hurry(workspace_dir!())
+        .run_local()
+        .context("install hurry")?;
 
     let temp_home = temporary_directory()?;
     let temp_ws = temporary_directory()?;
-    clone_github(username, repo, temp_ws.path(), branch)?;
+    let project_root = temp_ws.path().join(repo);
+    Command::clone_github()
+        .pwd(temp_ws.path())
+        .user(username)
+        .repo(repo)
+        .branch(branch)
+        .finish()
+        .run_local()?;
 
     // Nothing should be cached on the first build.
-    let messages = hurry_cargo_build()
-        .pwd(temp_ws.path())
-        .home(temp_home.path())
-        .run()?;
+    let messages = Build::new()
+        .pwd(&project_root)
+        .env("HOME", temp_home.path())
+        .wrapper(Build::HURRY_NAME)
+        .finish()
+        .run_local()?;
     let expected = messages
         .iter()
         .thirdparty_artifacts()
@@ -55,11 +76,13 @@ fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 
     // Now if we delete the `target/` directory and rebuild, `hurry` should
     // reuse the cache and enable fresh artifacts.
-    cargo_clean(temp_ws.path())?;
-    let messages = hurry_cargo_build()
-        .pwd(temp_ws.path())
-        .home(temp_home.path())
-        .run()?;
+    Command::cargo_clean(&project_root).run_local()?;
+    let messages = Build::new()
+        .pwd(&project_root)
+        .env("HOME", temp_home.path())
+        .wrapper(Build::HURRY_NAME)
+        .finish()
+        .run_local()?;
     let expected = messages
         .iter()
         .thirdparty_artifacts()
@@ -89,17 +112,29 @@ fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 #[test_log::test]
 fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
     let _ = color_eyre::install()?;
-    let temp_home = temporary_directory()?;
+    Command::install_hurry(workspace_dir!())
+        .run_local()
+        .context("install hurry")?;
 
     // This scope ensures that the first workspace is deleted from disk before
     // we try to build the second workspace.
+    let temp_home = temporary_directory()?;
     {
         let temp_ws_1 = temporary_directory()?;
-        clone_github(username, repo, temp_ws_1.path(), branch)?;
-        let messages = hurry_cargo_build()
+        let project_root_1 = temp_ws_1.path().join(repo);
+        Command::clone_github()
             .pwd(temp_ws_1.path())
-            .home(temp_home.path())
-            .run()?;
+            .user(username)
+            .repo(repo)
+            .branch(branch)
+            .finish()
+            .run_local()?;
+        let messages = Build::new()
+            .pwd(&project_root_1)
+            .env("HOME", temp_home.path())
+            .wrapper(Build::HURRY_NAME)
+            .finish()
+            .run_local()?;
         let expected = messages
             .iter()
             .thirdparty_artifacts()
@@ -121,11 +156,20 @@ fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
     }
 
     let temp_ws_2 = temporary_directory()?;
-    clone_github(username, repo, temp_ws_2.path(), branch)?;
-    let messages = hurry_cargo_build()
+    let project_root_2 = temp_ws_2.path().join(repo);
+    Command::clone_github()
         .pwd(temp_ws_2.path())
-        .home(temp_home.path())
-        .run()?;
+        .user(username)
+        .repo(repo)
+        .branch(branch)
+        .finish()
+        .run_local()?;
+    let messages = Build::new()
+        .pwd(&project_root_2)
+        .env("HOME", temp_home.path())
+        .wrapper(Build::HURRY_NAME)
+        .finish()
+        .run_local()?;
     let expected = messages
         .iter()
         .thirdparty_artifacts()
@@ -154,17 +198,29 @@ fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 #[test_log::test]
 fn native(username: &str, repo: &str, branch: &str, package: &str, bin: &str) -> Result<()> {
     let _ = color_eyre::install()?;
-    let temp_home = temporary_directory()?;
+    Command::install_hurry(workspace_dir!())
+        .run_local()
+        .context("install hurry")?;
 
     // This scope ensures that the first workspace is deleted from disk before
     // we try to build the second workspace.
+    let temp_home = temporary_directory()?;
     {
         let temp_ws_1 = temporary_directory()?;
-        clone_github(username, repo, temp_ws_1.path(), branch)?;
-        let messages = hurry_cargo_build()
+        let project_root_1 = temp_ws_1.path().join(repo);
+        Command::clone_github()
             .pwd(temp_ws_1.path())
-            .home(temp_home.path())
-            .run()?;
+            .user(username)
+            .repo(repo)
+            .branch(branch)
+            .finish()
+            .run_local()?;
+        let messages = Build::new()
+            .pwd(&project_root_1)
+            .env("HOME", temp_home.path())
+            .wrapper(Build::HURRY_NAME)
+            .finish()
+            .run_local()?;
         let expected = messages
             .iter()
             .thirdparty_artifacts()
@@ -184,9 +240,9 @@ fn native(username: &str, repo: &str, branch: &str, package: &str, bin: &str) ->
             "no artifacts should be fresh: {messages:?}"
         );
 
-        let path = temp_ws_1.path().to_string_lossy();
+        let path = project_root_1.to_string_lossy();
         let status = CargoBuild::new()
-            .manifest_path(temp_ws_1.path().join("Cargo.toml"))
+            .manifest_path(project_root_1.join("Cargo.toml"))
             .bin(bin)
             .package(package)
             .run()
@@ -201,11 +257,20 @@ fn native(username: &str, repo: &str, branch: &str, package: &str, bin: &str) ->
     }
 
     let temp_ws_2 = temporary_directory()?;
-    clone_github(username, repo, temp_ws_2.path(), branch)?;
-    let messages = hurry_cargo_build()
+    let project_root_2 = temp_ws_2.path().join(repo);
+    Command::clone_github()
         .pwd(temp_ws_2.path())
-        .home(temp_home.path())
-        .run()?;
+        .user(username)
+        .repo(repo)
+        .branch(branch)
+        .finish()
+        .run_local()?;
+    let messages = Build::new()
+        .pwd(&project_root_2)
+        .env("HOME", temp_home.path())
+        .wrapper(Build::HURRY_NAME)
+        .finish()
+        .run_local()?;
     let expected = messages
         .iter()
         .thirdparty_artifacts()
@@ -224,9 +289,9 @@ fn native(username: &str, repo: &str, branch: &str, package: &str, bin: &str) ->
         freshness,
         "all artifacts should be fresh: {messages:?}"
     );
-    let path = temp_ws_2.path().to_string_lossy();
+    let path = project_root_2.to_string_lossy();
     let status = CargoBuild::new()
-        .manifest_path(temp_ws_2.path().join("Cargo.toml"))
+        .manifest_path(project_root_2.join("Cargo.toml"))
         .bin(bin)
         .package(package)
         .run()
@@ -262,9 +327,9 @@ fn native_changed_breaks_build(
     bin: &str,
 ) -> Result<()> {
     let _ = color_eyre::install()?;
-    let temp_home = temporary_directory()?;
-    let temp_native = temporary_directory()?;
-    let linkflag = format!("-L native={}", temp_native.path().to_string_lossy());
+    Command::install_hurry(workspace_dir!())
+        .run_local()
+        .context("install hurry")?;
 
     // This scope ensures that the first workspace is deleted from disk before
     // we try to build the second workspace.
@@ -272,14 +337,26 @@ fn native_changed_breaks_build(
     // Note that we set the `RUSTFLAGS` environment variable to include the
     // temporary native directory we plan to override later here so that the
     // compiler doesn't invalidate the cache just due to this setting.
+    let temp_home = temporary_directory()?;
+    let temp_native = temporary_directory()?;
+    let linkflag = format!("-L native={}", temp_native.path().to_string_lossy());
     {
         let temp_ws_1 = temporary_directory()?;
-        clone_github(username, repo, temp_ws_1.path(), branch)?;
-        let messages = hurry_cargo_build()
+        let project_root_1 = temp_ws_1.path().join(repo);
+        Command::clone_github()
             .pwd(temp_ws_1.path())
-            .home(temp_home.path())
-            .envs(&[("RUSTFLAGS", &linkflag)])
-            .run()?;
+            .user(username)
+            .repo(repo)
+            .branch(branch)
+            .finish()
+            .run_local()?;
+        let messages = Build::new()
+            .pwd(&project_root_1)
+            .env("HOME", temp_home.path())
+            .env("RUSTFLAGS", &linkflag)
+            .wrapper(Build::HURRY_NAME)
+            .finish()
+            .run_local()?;
         let expected = messages
             .iter()
             .thirdparty_artifacts()
@@ -300,7 +377,7 @@ fn native_changed_breaks_build(
         );
 
         let status = CargoBuild::new()
-            .manifest_path(temp_ws_1.path().join("Cargo.toml"))
+            .manifest_path(project_root_1.join("Cargo.toml"))
             .bin(bin)
             .package(package)
             .run()
@@ -358,13 +435,22 @@ fn native_changed_breaks_build(
     }
 
     let temp_ws_2 = temporary_directory()?;
-    clone_github(username, repo, temp_ws_2.path(), branch)?;
-
-    let build = hurry_cargo_build()
+    let project_root_2 = temp_ws_2.path().join(repo);
+    Command::clone_github()
         .pwd(temp_ws_2.path())
-        .home(temp_home.path())
-        .envs(&[("RUSTFLAGS", &linkflag)])
-        .run();
+        .user(username)
+        .repo(repo)
+        .branch(branch)
+        .finish()
+        .run_local()?;
+
+    let build = Build::new()
+        .pwd(&project_root_2)
+        .env("HOME", temp_home.path())
+        .env("RUSTFLAGS", &linkflag)
+        .wrapper(Build::HURRY_NAME)
+        .finish()
+        .run_local();
     assert!(build.is_err(), "build should fail: {build:?}");
 
     Ok(())
