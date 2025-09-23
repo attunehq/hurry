@@ -154,8 +154,8 @@ jobs:
         with:
           tool: cargo-set-version
 
-      - name: Restore cached directories
-        uses: actions/cache/restore@v4
+      - name: Cache directories
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -163,7 +163,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cache/hurry
-          key: hurry-cache-release-${{ matrix.target }}
+          key: hurry-cache-release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            hurry-cache-release-${{ matrix.target }}-
 
       - name: Install hurry
         env:
@@ -210,17 +212,6 @@ jobs:
           name: hurry-${{ matrix.target }}
           path: hurry-${{ matrix.target }}.tar.gz
           if-no-files-found: warn
-
-      - name: Save cached directories
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ~/.cache/hurry
-          key: hurry-cache-release-${{ matrix.target }}
 
   create-checksums:
     name: checksums
