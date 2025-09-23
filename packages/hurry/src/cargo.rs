@@ -1,4 +1,9 @@
-use std::{ffi::OsStr, fmt, iter::once};
+use std::{
+    ffi::{OsStr, OsString},
+    fmt,
+    iter::once,
+    sync::LazyLock,
+};
 
 use color_eyre::{
     Result,
@@ -14,6 +19,7 @@ use crate::{
     cache::{FsCache, FsCas, RecordArtifact, RecordKind},
     fs::{DEFAULT_CONCURRENCY, Metadata},
     hash::Blake3,
+    path::AbsDirPath,
 };
 
 mod dependency;
@@ -29,16 +35,24 @@ pub use workspace::*;
 /// Execute a Cargo subcommand with specified arguments.
 #[instrument]
 pub async fn invoke(
+    workspace: &Workspace,
     subcommand: impl AsRef<str> + fmt::Debug,
     args: impl IntoIterator<Item = impl AsRef<str>> + fmt::Debug,
 ) -> Result<()> {
-    invoke_env(subcommand, args, [] as [(&OsStr, &OsStr); 0]).await
+    invoke_env(
+        workspace,
+        subcommand,
+        args,
+        std::iter::empty::<(&OsStr, &OsStr)>(),
+    )
+    .await
 }
 
 /// Execute a Cargo subcommand with specified arguments and environment
 /// variables.
 #[instrument]
 pub async fn invoke_env(
+    workspace: &Workspace,
     subcommand: impl AsRef<str> + fmt::Debug,
     args: impl IntoIterator<Item = impl AsRef<str>> + fmt::Debug,
     env: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)> + fmt::Debug,
@@ -51,6 +65,28 @@ pub async fn invoke_env(
     let mut cmd = tokio::process::Command::new("cargo");
     cmd.args(once(subcommand).chain(args.iter().copied()));
     cmd.envs(env);
+
+    // Using `CARGO_ENCODED_RUSTFLAGS` allows us to include arguments that might
+    // have spaces, such as paths; reference:
+    // https://doc.rust-lang.org/cargo/reference/environment-variables.html
+    //
+    // TODO: This obviously makes it more difficult for users to debug
+    // the program; we should probably give users an option to do this
+    // or not.
+    cmd.env(
+        "CARGO_ENCODED_RUSTFLAGS",
+        remap_path_prefixes(workspace)
+            .into_iter()
+            .chain(["-C", "strip=debuginfo"].map(OsString::from))
+            .collect_vec()
+            .join(OsStr::new("\x1f")),
+    );
+
+    // We currently use `-Z remap-cwd-prefix=.` in `remap_path_prefixes`, so
+    // need to enable nightly features on stable rust.
+    // It's unclear if this is actually what we should be doing longer term.
+    cmd.env("RUSTC_BOOTSTRAP", "1");
+
     let status = cmd
         .spawn()
         .context("could not spawn cargo")?
@@ -62,6 +98,44 @@ pub async fn invoke_env(
     } else {
         bail!("cargo exited with status: {status}");
     }
+}
+
+/// Construct the remap path prefixes for the given workspace.
+///
+/// Reference: https://doc.rust-lang.org/rustc/command-line-arguments.html#--remap-path-prefix-remap-source-names-in-output
+//
+// TODO: If we stick with this or something like it, we should probably compute
+// this once per workspace instead of over and over.
+fn remap_path_prefixes(workspace: &Workspace) -> Vec<OsString> {
+    static REMAP_PATH_PREFIX: LazyLock<OsString> =
+        LazyLock::new(|| OsString::from("--remap-path-prefix"));
+    static REMAP_CWD_PREFIX: LazyLock<OsString> =
+        LazyLock::new(|| OsString::from("remap-cwd-prefix=."));
+    static UNSTABLE: LazyLock<OsString> = LazyLock::new(|| OsString::from("-Z"));
+    fn remap(from: &AbsDirPath, to: impl AsRef<OsStr>) -> OsString {
+        [from.as_os_str(), to.as_ref()].join(OsStr::new("="))
+    }
+
+    // We put the more general remappings first; from the docs:
+    // > When multiple remappings are given and several of them match, the last
+    // > matching one is applied.
+    let mut remappings = Vec::with_capacity(16);
+    remappings.push(UNSTABLE.clone());
+    remappings.push(REMAP_CWD_PREFIX.clone());
+
+    if let Some(user_home) = &workspace.user_home {
+        remappings.push(REMAP_PATH_PREFIX.clone());
+        remappings.push(remap(&user_home, "USER_HOME"));
+    }
+    if let Some(rustup_home) = &workspace.rustup_home {
+        remappings.push(REMAP_PATH_PREFIX.clone());
+        remappings.push(remap(&rustup_home, "RUSTUP_HOME"));
+    }
+    remappings.push(REMAP_PATH_PREFIX.clone());
+    remappings.push(remap(&workspace.cargo_home, "CARGO_HOME"));
+    remappings.push(REMAP_PATH_PREFIX.clone());
+    remappings.push(remap(&workspace.root, "WORKSPACE_ROOT"));
+    remappings
 }
 
 /// Cache build artifacts from a workspace target directory.

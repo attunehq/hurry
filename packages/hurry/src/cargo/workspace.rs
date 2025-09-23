@@ -53,6 +53,14 @@ pub struct Workspace {
     #[debug(skip)]
     pub cargo_home: AbsDirPath,
 
+    /// The home directory for the user.
+    #[debug(skip)]
+    pub user_home: Option<AbsDirPath>,
+
+    /// The home directory for `rustup`.
+    #[debug(skip)]
+    pub rustup_home: Option<AbsDirPath>,
+
     /// Parsed `rustc` metadata relating to the current workspace.
     #[debug(skip)]
     pub rustc: RustcMetadata,
@@ -102,6 +110,13 @@ impl Workspace {
         let workspace_target = AbsDirPath::try_from(&metadata.target_directory)
             .context("parse workspace target as absolute directory")?;
 
+        let user_home = spawn_blocking(move || home::home_dir())
+            .await
+            .context("join background task")?
+            .map(AbsDirPath::try_from)
+            .transpose()
+            .context("parse path as utf8")?;
+
         let cargo_home = spawn_blocking({
             let workspace_root = workspace_root.clone();
             move || home::cargo_home_with_cwd(workspace_root.as_std_path())
@@ -110,6 +125,17 @@ impl Workspace {
         .context("join background task")?
         .context("get $CARGO_HOME")?
         .pipe(AbsDirPath::try_from)
+        .context("parse path as utf8")?;
+
+        let rustup_home = spawn_blocking({
+            let workspace_root = workspace_root.clone();
+            move || home::rustup_home_with_cwd(workspace_root.as_std_path())
+        })
+        .await
+        .context("join background task")?
+        .ok()
+        .map(AbsDirPath::try_from)
+        .transpose()
         .context("parse path as utf8")?;
 
         // TODO: This currently blows up if we have no lockfile.
@@ -247,6 +273,8 @@ impl Workspace {
             rustc: rustc_meta,
             dependencies,
             cargo_home,
+            user_home,
+            rustup_home,
         })
     }
 

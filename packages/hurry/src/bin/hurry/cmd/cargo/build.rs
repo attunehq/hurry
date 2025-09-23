@@ -136,6 +136,7 @@ async fn exec_inner(
         //
         // [^1]: https://zameermanji.com/blog/2021/6/17/embedding-a-rust-binary-in-another-rust-binary/
         cargo::invoke_env(
+            workspace,
             "build",
             &options.argv,
             [

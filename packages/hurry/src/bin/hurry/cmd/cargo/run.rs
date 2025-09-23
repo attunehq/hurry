@@ -1,6 +1,6 @@
 use clap::Args;
-use color_eyre::Result;
-use hurry::cargo;
+use color_eyre::{Result, eyre::Context};
+use hurry::cargo::{self, Workspace};
 use tracing::instrument;
 
 /// Options for `cargo run`
@@ -19,5 +19,9 @@ pub struct Options {
 
 #[instrument]
 pub async fn exec(options: Options) -> Result<()> {
-    cargo::invoke("run", options.argv).await
+    let workspace = Workspace::from_argv(&options.argv)
+        .await
+        .context("open workspace")?;
+
+    cargo::invoke(&workspace, "run", options.argv).await
 }
