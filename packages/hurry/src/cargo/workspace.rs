@@ -1,6 +1,10 @@
-use std::{fmt::Debug, marker::PhantomData, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    marker::PhantomData,
+    sync::Arc,
+};
 
-use ahash::{HashMap, HashSet};
 use cargo_metadata::TargetKind;
 use color_eyre::{
     Result,

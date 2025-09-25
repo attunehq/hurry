@@ -17,7 +17,6 @@ name = "walkdir"
 harness = false
 
 [dependencies]
-ahash = { workspace = true }
 atomic-time = { workspace = true }
 blake3 = { workspace = true }
 bon = { workspace = true }

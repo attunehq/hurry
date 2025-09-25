@@ -25,10 +25,10 @@
 )]
 
 use std::{
-    convert::identity, fmt::Debug as StdDebug, marker::PhantomData, sync::Arc, time::SystemTime,
+    collections::HashSet, convert::identity, fmt::Debug as StdDebug, marker::PhantomData,
+    sync::Arc, time::SystemTime,
 };
 
-use ahash::AHashSet;
 use async_walkdir::WalkDir;
 use color_eyre::{
     Result,
@@ -145,7 +145,7 @@ pub struct Index {
     // https://docs.rs/fs-tree/0.2.2/fs_tree/ looked like it might work,
     // but the API was sketchy so I didn't use it for now.
     #[debug("{}", files.len())]
-    pub files: AHashSet<RelFilePath>,
+    pub files: HashSet<RelFilePath>,
 }
 
 impl Index {
@@ -155,7 +155,7 @@ impl Index {
         let root = root.clone();
         let files = walk_files(&root)
             .and_then(|entry| future::ready(entry.relative_to(&root)))
-            .try_collect::<AHashSet<_>>()
+            .try_collect::<HashSet<_>>()
             .await?;
 
         Ok(Self { root, files })
