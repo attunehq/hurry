@@ -128,27 +128,9 @@ async fn exec_inner(
         let cwd = std::env::current_dir().context("load build root")?;
 
         info!("Building target directory");
-        // TODO: Handle the case where the user has already defined a
-        // `RUSTC_WRAPPER` (e.g. if they're using `sccache`).
-        //
-        // TODO: Figure out how to properly distribute the wrapper. Maybe we'll
-        // embed it into the binary, and write it out? See example[^1].
-        //
-        // [^1]: https://zameermanji.com/blog/2021/6/17/embedding-a-rust-binary-in-another-rust-binary/
-        cargo::invoke_env(
-            "build",
-            &options.argv,
-            [
-                ("RUSTC_WRAPPER", "hurry-cargo-rustc-wrapper"),
-                (
-                    "HURRY_CARGO_INVOCATION_ID",
-                    &cargo_invocation_id.to_string(),
-                ),
-                ("HURRY_CARGO_INVOCATION_ROOT", &cwd.to_string_lossy()),
-            ],
-        )
-        .await
-        .context("build with cargo")?;
+        cargo::invoke("build", &options.argv)
+            .await
+            .context("build with cargo")?;
     }
 
     // If we didn't have a cache, we cache the target directory
