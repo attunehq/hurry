@@ -28,12 +28,7 @@ use crate::{
     path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, TryJoinWith},
 };
 
-use super::{
-    Profile,
-    dependency::Dependency,
-    metadata::{DepInfo, RustcMetadata},
-    read_argv,
-};
+use super::{DepInfo, Dependency, Profile, RustcMetadata, read_argv};
 
 /// Represents a Cargo workspace with caching metadata.
 ///

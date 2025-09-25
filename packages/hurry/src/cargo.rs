@@ -16,14 +16,20 @@ use crate::{
     hash::Blake3,
 };
 
+mod build_script;
+mod dep_info;
 mod dependency;
-mod metadata;
+mod path;
 mod profile;
+mod rustc;
 mod workspace;
 
-pub use dependency::*;
-pub use metadata::*;
-pub use profile::*;
+pub use build_script::{BuildScriptOutput, RootOutput};
+pub use dep_info::{DepInfo, DepInfoLine};
+pub use dependency::Dependency;
+pub use path::QualifiedPath;
+pub use profile::Profile;
+pub use rustc::RustcMetadata;
 pub use workspace::*;
 
 /// Execute a Cargo subcommand with specified arguments.
