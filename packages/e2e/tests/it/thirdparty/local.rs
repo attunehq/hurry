@@ -1,13 +1,5 @@
 //! Exercises e2e functionality for building/caching third-party dependencies on
 //! the local machine.
-//!
-//! Note: Local tests currently must run `cargo install` on the `hurry` binary
-//! so that the `hurry-cargo-rustc-wrapper` binary is available for use on the
-//! local system. This isn't ideal since it modifies the host system, but it's
-//! what we started with for now.
-//!
-//! TODO: Fix the above issue; either make `hurry` not rely on the wrapper being
-//! in `$PATH` or simulate adding it to `$PATH` when running tests.
 
 use std::path::PathBuf;
 
