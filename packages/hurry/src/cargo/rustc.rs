@@ -27,7 +27,9 @@ use crate::path::AbsDirPath;
 pub struct RustcMetadata {
     /// The host target triple.
     #[serde(rename = "llvm-target")]
-    pub llvm_target: String,
+    pub host_target: String,
+
+    // TODO: Add output from `rustc -vV`, which is what Cargo invokes.
 }
 
 impl RustcMetadata {

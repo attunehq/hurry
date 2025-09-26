@@ -11,10 +11,10 @@ use color_eyre::{
     eyre::{Context, OptionExt},
 };
 use derive_more::{Debug as DebugExt, Display};
-use itertools::{Itertools, process_results};
+use itertools::{Itertools as _, process_results};
 use location_macros::workspace_dir;
 use regex::Regex;
-use tap::{Pipe, Tap, TapFallible};
+use tap::{Pipe as _, Tap as _, TapFallible as _};
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
 
@@ -56,28 +56,29 @@ pub struct Workspace {
     #[debug(skip)]
     pub rustc: RustcMetadata,
 
-    /// Dependencies in the workspace, keyed by [`Dependency::key`].
+    /// Dependencies in the workspace.
     #[debug(skip)]
-    pub dependencies: HashMap<Blake3, Dependency>,
+    pub dependencies: Vec<Dependency>,
 }
 
 impl Workspace {
     /// Create a workspace by parsing metadata from the given directory.
     ///
-    /// Loads and parses `Cargo.toml`, `Cargo.lock`, and rustc metadata
-    /// to build a complete picture of the workspace for caching purposes.
-    /// Only includes third-party dependencies from the default registry
-    /// in the dependencies map.
+    /// Invokes and parses `cargo metadata` and `rustc` to build a complete
+    /// picture of the workspace for caching purposes. Only includes third-party
+    /// dependencies from the default registry in the dependencies map.
     //
-    // TODO: A few of these setup steps could be parallelized...
-    // I'm not certain they're worth the thread spawn cost
-    // but this can be mitigated by using the rayon thread pool.
+    // TODO: A few of these setup steps could be parallelized. I'm not certain
+    // they're worth the thread spawn cost but this can be mitigated by using
+    // the rayon thread pool.
     #[instrument(name = "Workspace::from_argv_in_dir")]
     pub async fn from_argv_in_dir(path: &AbsDirPath, argv: &[String]) -> Result<Self> {
         // TODO: Maybe we should just replicate this logic and perform it
         // statically using filesystem operations instead of shelling out? This
         // costs something on the order of 200ms, which is not _terrible_ but
-        // feels much slower than if we just did our own filesystem reads.
+        // feels much slower than if we just did our own filesystem reads,
+        // especially since we don't actually use any of the logic except the
+        // paths.
         let manifest_path = read_argv(argv, "--manifest-path").map(String::from);
         let cmd_current_dir = path.as_std_path().to_path_buf();
         let metadata = spawn_blocking(move || -> Result<_> {
@@ -205,7 +206,7 @@ impl Workspace {
         // TODO: How can we properly report `target` for cross compiled deps?
         let dependencies = lockfile.packages.into_iter().filter_map(|package| {
             match (&package.source, &package.checksum) {
-                (Some(source), Some(checksum)) if source.is_default_registry() => {
+                (Some(source), Some(_)) if source.is_default_registry() => {
                     // Ignore workspace members.
                     if workspace_package_names.contains(package.name.as_str()) {
                         return None;
@@ -219,11 +220,9 @@ impl Workspace {
                         ))
                         .map(|lib_name| {
                             Dependency::builder()
-                                .checksum(checksum.to_string())
                                 .package_name(package.name.to_string())
                                 .lib_name(lib_name)
                                 .version(package.version.to_string())
-                                .target(&rustc_meta.llvm_target)
                                 .build()
                         })
                         .pipe(Some)
@@ -235,9 +234,8 @@ impl Workspace {
             }
         });
         let dependencies = process_results(dependencies, |iter| {
-            iter.map(|dependency| (dependency.key(), dependency))
-                .inspect(|(key, dependency)| trace!(?key, ?dependency, "indexed dependency"))
-                .collect::<HashMap<_, _>>()
+            iter.inspect(|dependency| trace!(?dependency, "indexed dependency"))
+                .collect::<Vec<_>>()
         })?;
 
         Ok(Self {

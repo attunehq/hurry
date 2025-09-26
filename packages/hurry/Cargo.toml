@@ -60,6 +60,7 @@ jiff = { workspace = true }
 const-str = { workspace = true, features = ["std", "all"] }
 duplicate = { workspace = true }
 paste = { workspace = true }
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite"] }
 
 [dev-dependencies]
 async-walkdir.workspace = true

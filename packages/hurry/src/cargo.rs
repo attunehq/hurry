@@ -17,6 +17,7 @@ use crate::{
 };
 
 mod build_script;
+mod cache;
 mod dep_info;
 mod dependency;
 mod path;
@@ -25,6 +26,7 @@ mod rustc;
 mod workspace;
 
 pub use build_script::{BuildScriptOutput, RootOutput};
+pub use cache::CargoCache;
 pub use dep_info::{DepInfo, DepInfoLine};
 pub use dependency::Dependency;
 pub use path::QualifiedPath;
@@ -93,7 +95,8 @@ pub async fn cache_target_from_workspace(
     //
     // TODO: this currently assumes that the entire `target/` folder doesn't
     // have any _outdated_ data; this may not be correct.
-    for (key, dependency) in &target.workspace.dependencies {
+    for (dependency) in &target.workspace.dependencies {
+        let key = todo!();
         debug!(?key, ?dependency, "caching dependency");
         let artifacts = match target.enumerate_cache_artifacts(dependency).await {
             Ok(artifacts) => artifacts,
@@ -178,7 +181,8 @@ pub async fn restore_target_from_cache(
     // because that can have a negative effect on performance
     // but we obviously want to have enough running that we saturate the disk.
     debug!(dependencies = ?target.workspace.dependencies, "restoring dependencies");
-    for (key, dependency) in &target.workspace.dependencies {
+    for (dependency) in &target.workspace.dependencies {
+        let key = todo!();
         debug!(?key, ?dependency, "restoring dependency");
         let record = match cache.get(RecordKind::Cargo, key).await {
             Ok(Some(record)) => record,

@@ -98,7 +98,7 @@ async fn exec_inner(
             info!(
                 name = %dependency.package_name,
                 version = %dependency.version,
-                target = %dependency.target,
+                // target = %dependency.target,
                 %key,
                 "Restored dependency from cache",
             )
@@ -153,7 +153,7 @@ async fn exec_inner(
             info!(
                 name = %dependency.package_name,
                 version = %dependency.version,
-                target = %dependency.target,
+                // target = %dependency.target,
                 %key,
                 "Updated dependency in cache",
             )
