@@ -6,7 +6,7 @@
 
 use derive_more::Display;
 
-pub mod cache;
+pub mod cas;
 pub mod cargo;
 pub mod ext;
 pub mod fs;

@@ -20,7 +20,7 @@ use tracing::{debug, instrument, trace};
 
 use crate::{
     Locked, Unlocked,
-    cache::FsCas,
+    cas::FsCas,
     cargo::{BuildScriptOutput, QualifiedPath, RootOutput},
     fs::{self, Index, LockFile},
     hash::Blake3,
