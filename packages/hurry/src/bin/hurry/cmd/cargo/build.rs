@@ -55,11 +55,25 @@ impl Options {
 pub async fn exec(options: Options) -> Result<()> {
     info!("Starting");
 
+    // Open workspace.
     let workspace = Workspace::from_argv(&options.argv)
         .await
         .context("open workspace")?;
+    let profile = options.profile();
+
+    // Open backing storage services.
     let cas = FsCas::open_default().await.context("open CAS")?;
-    let cache = CargoCache::open_default().await.context("open cache")?;
+    let cache = CargoCache::open_default(workspace)
+        .await
+        .context("open cache")?;
+
+    // TODO: Compute expected artifacts.
+    let artifacts = cache
+        .artifacts(&profile)
+        .await
+        .context("calculating expected artifacts")?;
+
+    todo!();
 
     // This is split into an inner function so that we can reliably
     // release the lock if it fails.

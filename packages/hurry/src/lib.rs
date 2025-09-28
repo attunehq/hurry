@@ -6,8 +6,8 @@
 
 use derive_more::Display;
 
-pub mod cas;
 pub mod cargo;
+pub mod cas;
 pub mod ext;
 pub mod fs;
 pub mod hash;

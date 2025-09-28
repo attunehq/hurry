@@ -471,6 +471,7 @@ Some not-so-nice properties of this format:
    1. In cases where there are multiple matching units, each unit must either have (1) different features or (2) different dependencies. We can match features against the parsed invocation, and we can match dependencies by building a graph of `--extern` flags and mapping the upstream sources (which must have different features) to the unit graph.
    2. NOTE: the build plan invocations are slightly wrong because build plan construction does not run build scripts, and therefore can't know certain `rustc` arguments that can be added by build script outputs (e.g. `cargo::rustc-link-lib`). However, build script outputs cannot change `--extern` flags and cannot change `OUT_DIR`, so our usage of the build plan here is safe.
 3. Use the `cargo build --message-format=json` `build-script-executed` messages to get the missing build script output flags, and map it to units via `out_dir`. We use this instead of `RUSTC_WRAPPER` because this saves and replays cached build script output of dependencies that don't need to be rebuilt, so we can get linker flags even for dependencies that are fresh.
+    <!-- TODO: How do we do restores given that we cannot actually run the build script on the client? Or maybe we _should_ run just the build script? Or maybe we can look at the emitted instructions from a previously cached build script and use those to determine whether a rebuild is required? Or maybe key on the project and machine? -->
 
 Now, for each unit, we should know:
 1. Its compiled artifact folder.

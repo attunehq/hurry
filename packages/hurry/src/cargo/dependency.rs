@@ -46,13 +46,11 @@ pub struct Dependency {
 
 /// A DependencyBuild is a specific build of a dependency crate, including other
 /// build-identifying information such as target, profile, and features.
-///
-/// Note that this struct doesn't quite provide _all_ the information needed to
-/// specify a build, since it does not include the dependency builds of the
-/// build.
 #[derive(Clone, Eq, PartialEq, Debug, Builder)]
 pub struct DependencyBuild {
-    dependency: Dependency,
+    pub package: Dependency,
+
+    pub dependencies: Vec<DependencyBuild>,
 
     /// The target triple for which the dependency
     /// is being or has been built.
@@ -70,6 +68,8 @@ pub struct DependencyBuild {
     pub features: HashSet<String>,
 
     pub edition: String,
+
+    pub extra_filename: String,
 }
 
 #[derive(Clone, Eq, PartialEq, Debug, Builder)]
