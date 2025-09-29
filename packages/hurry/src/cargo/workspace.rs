@@ -16,7 +16,7 @@ use location_macros::workspace_dir;
 use regex::Regex;
 use tap::{Pipe, Tap, TapFallible};
 use tokio::task::spawn_blocking;
-use tracing::{debug, instrument, trace};
+use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     Locked, Unlocked,
@@ -211,22 +211,22 @@ impl Workspace {
                         return None;
                     }
 
-                    package_to_lib
-                        .get(package.name.as_str())
-                        .ok_or_eyre(format!(
-                            "package {:?} has unknown library target",
-                            package.name.as_str()
-                        ))
-                        .map(|lib_name| {
-                            Dependency::builder()
-                                .checksum(checksum.to_string())
-                                .package_name(package.name.to_string())
-                                .lib_name(lib_name)
-                                .version(package.version.to_string())
-                                .target(&rustc_meta.llvm_target)
-                                .build()
-                        })
-                        .pipe(Some)
+                    let package_name = package.name.as_str();
+                    match package_to_lib.get(package_name) {
+                        Some(lib_name) => Dependency::builder()
+                            .checksum(checksum.to_string())
+                            .package_name(package_name.to_string())
+                            .lib_name(lib_name)
+                            .version(package.version.to_string())
+                            .target(&rustc_meta.llvm_target)
+                            .build()
+                            .pipe(Result::<_>::Ok)
+                            .pipe(Some),
+                        None => {
+                            warn!("package {package_name:?} has unknown library target");
+                            None
+                        }
+                    }
                 }
                 _ => {
                     trace!(?package, "skipped indexing package for cache");
