@@ -48,7 +48,6 @@ pub fn temporary_directory() -> Result<TempDir> {
 
 /// Set the mtime of all files in `dir` to the current time, recursively.
 #[instrument]
-#[cfg(not(target_os = "windows"))]
 pub fn set_mtime(dir: impl AsRef<Path> + Debug, mtime: SystemTime) -> Result<()> {
     let dir = dir.as_ref();
     let mtime = FileTime::from_system_time(mtime);
