@@ -91,12 +91,12 @@ async fn shotgun_restore() -> Result<()> {
 
         println!("building with features: {set:?}");
         let messages = Build::new()
-            .pwd(&pwd)
+            .pwd(pwd)
             .features(set.clone())
             .finish()
             .run_local()?;
         Command::new()
-            .pwd(&pwd)
+            .pwd(pwd)
             .name(pwd.join("target/debug/tiny"))
             .finish()
             .run_local()?;

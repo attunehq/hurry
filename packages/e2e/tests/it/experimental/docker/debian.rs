@@ -143,7 +143,7 @@ async fn shotgun_restore() -> Result<()> {
             .await?;
         let messages = Build::new()
             .pwd(&pwd)
-            .features(set)
+            .features(set.clone())
             .finish()
             .run_docker(&container)
             .await?;
@@ -170,7 +170,7 @@ async fn shotgun_restore() -> Result<()> {
         pretty_assertions::assert_eq!(
             expected,
             freshness,
-            "all artifacts should be fresh: {messages:?}"
+            "all artifacts should be fresh; features: {set:?}"
         );
     }
 
