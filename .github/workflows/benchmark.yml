@@ -1,4 +1,4 @@
-name: Benchmark
+name: benchmark
 
 on:
   pull_request:
@@ -7,19 +7,16 @@ on:
 
 jobs:
   clean:
-    name: Clean build
     runs-on: ubuntu-latest
     outputs:
       duration: ${{ steps.build.outputs.duration }}
 
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust
-        run: |
+      - run: |
           rustup toolchain install stable
           rustup show
-      - name: Clean build
-        id: build
+      - id: build
         run: |
           START=$(date +%s)
           cargo build
@@ -28,23 +25,19 @@ jobs:
           echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
   hurry:
-    name: Hurry cached build
     runs-on: ubuntu-latest
     outputs:
       duration: ${{ steps.build.outputs.duration }}
 
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust
-        run: |
+      - run: |
           rustup toolchain install stable
           rustup show
-      - name: Install hurry
-        run: |
+      - run: |
           cargo install --path ./packages/hurry --locked
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-      - name: Restore hurry cache
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -55,8 +48,7 @@ jobs:
           key: hurry-cache-benchmark-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             hurry-cache-benchmark-${{ runner.os }}-
-      - name: Cached build with hurry
-        id: build
+      - id: build
         run: |
           START=$(date +%s)
           hurry cargo build
@@ -65,23 +57,19 @@ jobs:
           echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
   swatinem:
-    name: Swatinem cached build
     runs-on: ubuntu-latest
     outputs:
       duration: ${{ steps.build.outputs.duration }}
 
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust
-        run: |
+      - run: |
           rustup toolchain install stable
           rustup show
-      - name: Restore swatinem cache
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           shared-key: benchmark
-      - name: Swatinem cached build
-        id: build
+      - id: build
         run: |
           START=$(date +%s)
           cargo build
@@ -90,21 +78,17 @@ jobs:
           echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
   sccache:
-    name: sccache cached build
     runs-on: ubuntu-latest
     outputs:
       duration: ${{ steps.build.outputs.duration }}
 
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust
-        run: |
+      - run: |
           rustup toolchain install stable
           rustup show
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
-      - name: sccache cached build
-        id: build
+      - uses: mozilla-actions/sccache-action@v0.0.6
+      - id: build
         env:
           RUSTC_WRAPPER: sccache
         run: |
@@ -115,13 +99,11 @@ jobs:
           echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
   summary:
-    name: Benchmark
     runs-on: ubuntu-latest
     needs: [clean, hurry, swatinem, sccache]
 
     steps:
-      - name: Build summary
-        run: |
+      - run: |
           echo "> [!IMPORTANT]" >> $GITHUB_STEP_SUMMARY
           echo "> Caches are relative to the last successful benchmark." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
