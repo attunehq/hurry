@@ -90,3 +90,5 @@ Examples:
 - ✅ `auth::Jwt` (concise, module provides context)
 
 The module namespace already tells you the domain - the type name should add new information about the specific implementation or purpose.
+- Prefer to write tests as "cargo unit tests": colocated with code. Prefer writing these tests integration-style over unit-style.
+- Prefer streaming IO operations (e.g. AsyncRead, AsyncWrite, Read, Write) over buffered operations by default

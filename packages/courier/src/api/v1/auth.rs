@@ -4,6 +4,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::api::State;
+
 #[derive(Deserialize)]
 pub struct MintJwtRequest {
     org_id: i64,
@@ -15,7 +17,7 @@ pub struct MintJwtResponse {
     jwt: String,
 }
 
-pub fn router() -> Router {
+pub fn router() -> Router<State> {
     Router::new()
         .route("/", post(mint_jwt))
         .route("/", delete(revoke_jwt))

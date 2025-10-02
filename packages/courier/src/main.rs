@@ -1,15 +1,14 @@
 use std::{
+    path::PathBuf,
     sync::atomic::Ordering,
     time::{Duration, Instant},
 };
 
+use aerosol::Aero;
 use atomic_time::AtomicInstant;
-use axum::{Router, routing::get};
 use clap::Parser;
 use color_eyre::Result;
 use tap::Pipe;
-use tower::ServiceBuilder;
-use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer};
 use tracing::level_filters::LevelFilter;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -35,6 +34,10 @@ struct Config {
     /// Host to bind to
     #[arg(long, env = "HOST", default_value = "0.0.0.0")]
     host: String,
+
+    /// Root path to store CAS blobs
+    #[arg(long, env = "CAS_ROOT")]
+    cas_root: PathBuf,
 }
 
 #[tokio::main]
@@ -65,10 +68,14 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    tracing::info!("constructing application router...");
+    let storage = storage::Disk::new(&config.cas_root);
+    let router = api::router(Aero::new().with(storage));
+
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("listening on {}", listener.local_addr()?);
-    axum::serve(listener, api::router()).await?;
+    axum::serve(listener, router).await?;
 
     Ok(())
 }

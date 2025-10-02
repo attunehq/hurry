@@ -6,7 +6,9 @@ use axum::{
     routing::{get, head, put},
 };
 
-pub fn router() -> Router {
+use crate::api::State;
+
+pub fn router() -> Router<State> {
     Router::new()
         .route("/:key", head(check_cas))
         .route("/:key", get(read_cas))
