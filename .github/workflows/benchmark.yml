@@ -33,6 +33,8 @@ jobs:
           echo "Clean build: ${DURATION}s" >> $GITHUB_STEP_SUMMARY
 
       # --- Hurry ---
+      - name: Clean for hurry test
+        run: cargo clean
       - name: Restore hurry cache
         uses: actions/cache/restore@v4
         with:
@@ -67,9 +69,7 @@ jobs:
 
       # --- Swatinem ---
       - name: Clean for swatinem test
-        run: |
-          cargo clean
-          rm -rf ~/.cache/hurry
+        run: cargo clean
       - name: Restore swatinem cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -108,4 +108,4 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Hurry cached vs clean: **${HURRY_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
           echo "- Swatinem cached vs clean: **${SWATINEM_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
-          echo "- Hurry vs Swatinem: **${HURRY_VS_SWATINEM}x** ${HURRY_VS_SWATINEM%.*}" >> $GITHUB_STEP_SUMMARY
+          echo "- Hurry vs Swatinem: **${HURRY_VS_SWATINEM}x** faster" >> $GITHUB_STEP_SUMMARY
