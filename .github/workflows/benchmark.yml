@@ -89,14 +89,42 @@ jobs:
           DURATION=$((END - START))
           echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
-  summary:
-    name: Summary
+  sccache:
+    name: sccache cached build
     runs-on: ubuntu-latest
-    needs: [clean, hurry, swatinem]
+    outputs:
+      duration: ${{ steps.build.outputs.duration }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable
+          rustup show
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+      - name: sccache cached build
+        id: build
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          START=$(date +%s)
+          cargo build
+          END=$(date +%s)
+          DURATION=$((END - START))
+          echo "duration=$DURATION" >> $GITHUB_OUTPUT
+
+  summary:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    needs: [clean, hurry, swatinem, sccache]
 
     steps:
       - name: Build summary
         run: |
+          echo "> [!IMPORTANT]" >> $GITHUB_STEP_SUMMARY
+          echo "> Caches are relative to the last successful benchmark." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Build Time Comparison" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Phase | Duration |" >> $GITHUB_STEP_SUMMARY
@@ -104,20 +132,26 @@ jobs:
           echo "| Clean build | ${{ needs.clean.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
           echo "| Hurry cached build | ${{ needs.hurry.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
           echo "| Swatinem cached build | ${{ needs.swatinem.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| sccache cached build | ${{ needs.sccache.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> [!IMPORTANT] Caches are relative to the last successful benchmark." >> $GITHUB_STEP_SUMMARY
-          echo "> [!NOTE] `hurry` needs to build itself before benchmarking, so it may appear slower than other tools if you look at the runtimes outside of this summary." >> $GITHUB_STEP_SUMMARY
+          echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
+          echo "> `hurry` needs to build itself before benchmarking, so it may appear slower than other tools if you look at the runtimes outside of this summary." >> $GITHUB_STEP_SUMMARY
 
           CLEAN=${{ needs.clean.outputs.duration }}
           HURRY=${{ needs.hurry.outputs.duration }}
           SWATINEM=${{ needs.swatinem.outputs.duration }}
+          SCCACHE=${{ needs.sccache.outputs.duration }}
 
           HURRY_SPEEDUP=$(awk "BEGIN {printf \"%.2f\", $CLEAN / $HURRY}")
           SWATINEM_SPEEDUP=$(awk "BEGIN {printf \"%.2f\", $CLEAN / $SWATINEM}")
+          SCCACHE_SPEEDUP=$(awk "BEGIN {printf \"%.2f\", $CLEAN / $SCCACHE}")
           HURRY_VS_SWATINEM=$(awk "BEGIN {printf \"%.2f\", $SWATINEM / $HURRY}")
+          HURRY_VS_SCCACHE=$(awk "BEGIN {printf \"%.2f\", $SCCACHE / $HURRY}")
 
           echo "### Speedup Analysis" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Hurry cached vs clean: **${HURRY_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
           echo "- Swatinem cached vs clean: **${SWATINEM_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
+          echo "- sccache cached vs clean: **${SCCACHE_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
           echo "- Hurry vs Swatinem: **${HURRY_VS_SWATINEM}x** faster" >> $GITHUB_STEP_SUMMARY
+          echo "- Hurry vs sccache: **${HURRY_VS_SCCACHE}x** faster" >> $GITHUB_STEP_SUMMARY
