@@ -55,7 +55,7 @@ jobs:
           echo "duration=$DURATION" >> $GITHUB_OUTPUT
           echo "Hurry cached build: ${DURATION}s" >> $GITHUB_STEP_SUMMARY
       - name: Store hurry cache
-        uses: actions/cache/store@v4
+        uses: actions/cache/save@v4
         with:
           path: |
             ~/.cargo/bin/
