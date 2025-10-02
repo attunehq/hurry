@@ -69,3 +69,24 @@ hurry's core value proposition depends on cache correctness. When making changes
 - No Windows support (Unix-only scripts and workflows)
 - Heavy use of async/await patterns with tokio runtime
 - Extensive use of workspace dependencies for consistency
+
+## Rust Naming Conventions
+
+### Avoid Stuttering in Type Names
+
+When a type is already namespaced by its module, don't repeat context in the type name. The fully-qualified path should read naturally without redundancy.
+
+Examples:
+- ❌ `storage::CasStorage` (stutters "storage")
+- ✅ `storage::Disk` (clear what it does, doesn't repeat)
+
+- ❌ `db::Database` (generic, stutters "db")
+- ✅ `db::Postgres` (specific implementation, doesn't stutter)
+
+- ❌ `cache::KeyCache` (stutters "cache")
+- ✅ `cache::Memory` (describes the storage mechanism)
+
+- ❌ `auth::JwtManager` (verbose, "manager" adds no value)
+- ✅ `auth::Jwt` (concise, module provides context)
+
+The module namespace already tells you the domain - the type name should add new information about the specific implementation or purpose.

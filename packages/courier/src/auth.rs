@@ -9,12 +9,12 @@ pub struct Claims {
     pub exp: i64,
 }
 
-pub struct JwtManager {
+pub struct Jwt {
     encoding_key: EncodingKey,
     decoding_key: DecodingKey,
 }
 
-impl JwtManager {
+impl Jwt {
     pub fn new(secret: &[u8]) -> Self {
         Self {
             encoding_key: EncodingKey::from_secret(secret),

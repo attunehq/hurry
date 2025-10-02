@@ -1,11 +1,11 @@
 use color_eyre::Result;
 use sqlx::PgPool;
 
-pub struct Database {
+pub struct Postgres {
     pool: PgPool,
 }
 
-impl Database {
+impl Postgres {
     pub async fn connect(database_url: &str) -> Result<Self> {
         let pool = PgPool::connect(database_url).await?;
         Ok(Self { pool })

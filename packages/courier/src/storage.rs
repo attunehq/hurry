@@ -2,11 +2,11 @@ use std::path::PathBuf;
 
 use color_eyre::Result;
 
-pub struct CasStorage {
+pub struct Disk {
     root: PathBuf,
 }
 
-impl CasStorage {
+impl Disk {
     pub fn new(root: PathBuf) -> Self {
         Self { root }
     }
