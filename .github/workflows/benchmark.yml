@@ -56,7 +56,7 @@ jobs:
         id: swatinem_cached
         run: |
           START=$(date +%s)
-          cargo build --workspace --all-targets --all-features
+          cargo build
           END=$(date +%s)
           DURATION=$((END - START))
           echo "duration=$DURATION" >> $GITHUB_OUTPUT
