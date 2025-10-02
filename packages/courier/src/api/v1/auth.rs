@@ -1,4 +1,7 @@
-use axum::{routing::{delete, post}, Router, Json};
+use axum::{
+    Json, Router,
+    routing::{delete, post},
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -12,7 +15,7 @@ pub struct MintJwtResponse {
     jwt: String,
 }
 
-pub fn routes() -> Router {
+pub fn router() -> Router {
     Router::new()
         .route("/", post(mint_jwt))
         .route("/", delete(revoke_jwt))

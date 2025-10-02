@@ -1,12 +1,12 @@
 use axum::{
+    Router,
     body::Body,
     extract::Path,
     http::StatusCode,
     routing::{get, head, put},
-    Router,
 };
 
-pub fn routes() -> Router {
+pub fn router() -> Router {
     Router::new()
         .route("/:key", head(check_cas))
         .route("/:key", get(read_cas))

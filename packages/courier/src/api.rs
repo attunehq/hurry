@@ -1,10 +1,22 @@
-use axum::Router;
+use std::time::Duration;
 
-mod auth;
-mod cas;
+use axum::{Router, routing::get};
+use tower::ServiceBuilder;
+use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer};
 
-pub fn routes() -> Router {
+pub mod v1;
+
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_BODY_SIZE: usize = 100 * 1024 * 1024;
+
+pub fn router() -> Router {
+    let middleware = ServiceBuilder::new()
+        .layer(TraceLayer::new_for_http())
+        .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
+        .layer(TimeoutLayer::new(REQUEST_TIMEOUT));
+
     Router::new()
-        .nest("/auth", auth::routes())
-        .nest("/cas", cas::routes())
+        .route("/health", get(|| async { "ok" }))
+        .nest("/api/v1", v1::router())
+        .layer(middleware)
 }

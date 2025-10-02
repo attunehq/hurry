@@ -4,7 +4,7 @@ use std::{
 };
 
 use atomic_time::AtomicInstant;
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
 use clap::Parser;
 use color_eyre::Result;
 use tap::Pipe;
@@ -65,31 +65,10 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    // API health limits from RFC:
-    // - Max request deadline: 15 seconds ✓
-    // - Max requests in flight: 1,000 (TODO: add via load balancer or global semaphore)
-    // - Pending queue: 100 (TODO: add via load balancer or global semaphore)
-    // - Max body size: 100MiB ✓
-    const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-    const MAX_BODY_SIZE: usize = 100 * 1024 * 1024; // 100 MiB
-
-    let app = Router::new()
-        .route("/health", get(|| async { "ok" }))
-        .nest("/api/v1", api::routes())
-        .layer(
-            ServiceBuilder::new()
-                // HTTP request tracing
-                .layer(TraceLayer::new_for_http())
-                // Body size limit: reject request bodies larger than 100MiB
-                .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
-                // Timeout: reject requests taking longer than 15 seconds
-                .layer(TimeoutLayer::new(REQUEST_TIMEOUT)),
-        );
-
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("listening on {}", listener.local_addr()?);
-    axum::serve(listener, app).await?;
+    axum::serve(listener, api::router()).await?;
 
     Ok(())
 }
