@@ -1,0 +1,88 @@
+name: Benchmark
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    name: Build time comparison
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable
+          rustup show
+
+      - name: Install hurry
+        run: |
+          cargo install --path ./packages/hurry --locked
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Clean build with hurry
+        id: clean_hurry
+        run: |
+          START=$(date +%s)
+          hurry cargo build
+          END=$(date +%s)
+          DURATION=$((END - START))
+          echo "duration=$DURATION" >> $GITHUB_OUTPUT
+          echo "Clean hurry build: ${DURATION}s" >> $GITHUB_STEP_SUMMARY
+
+      - name: Cached build with hurry
+        id: cached_hurry
+        run: |
+          START=$(date +%s)
+          hurry cargo build
+          END=$(date +%s)
+          DURATION=$((END - START))
+          echo "duration=$DURATION" >> $GITHUB_OUTPUT
+          echo "Hurry cached build: ${DURATION}s" >> $GITHUB_STEP_SUMMARY
+
+      - name: Clean for swatinem test
+        run: |
+          cargo clean
+          rm -rf ~/.cache/hurry
+
+      - name: Restore swatinem cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: benchmark
+
+      - name: Swatinem cached build
+        id: swatinem_cached
+        run: |
+          START=$(date +%s)
+          cargo build --workspace --all-targets --all-features
+          END=$(date +%s)
+          DURATION=$((END - START))
+          echo "duration=$DURATION" >> $GITHUB_OUTPUT
+          echo "Swatinem cached build: ${DURATION}s" >> $GITHUB_STEP_SUMMARY
+
+      - name: Build summary
+        run: |
+          echo "## Build Time Comparison" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase | Duration |" >> $GITHUB_STEP_SUMMARY
+          echo "| ----- | -------- |" >> $GITHUB_STEP_SUMMARY
+          echo "| Clean build (hurry) | ${{ steps.clean_hurry.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Hurry cached build | ${{ steps.cached_hurry.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Swatinem cached build | ${{ steps.swatinem_cached.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          CLEAN=${{ steps.clean_hurry.outputs.duration }}
+          HURRY=${{ steps.cached_hurry.outputs.duration }}
+          SWATINEM=${{ steps.swatinem_cached.outputs.duration }}
+
+          HURRY_SPEEDUP=$(awk "BEGIN {printf \"%.2f\", $CLEAN / $HURRY}")
+          SWATINEM_SPEEDUP=$(awk "BEGIN {printf \"%.2f\", $CLEAN / $SWATINEM}")
+          HURRY_VS_SWATINEM=$(awk "BEGIN {printf \"%.2f\", $SWATINEM / $HURRY}")
+
+          echo "### Speedup Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Hurry cached vs clean: **${HURRY_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
+          echo "- Swatinem cached vs clean: **${SWATINEM_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
+          echo "- Hurry vs Swatinem: **${HURRY_VS_SWATINEM}x** ${HURRY_VS_SWATINEM%.*}" >> $GITHUB_STEP_SUMMARY
