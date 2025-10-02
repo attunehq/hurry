@@ -187,10 +187,10 @@ jobs:
           echo "| Phase | Duration |" >> $GITHUB_STEP_SUMMARY
           echo "| ----- | -------- |" >> $GITHUB_STEP_SUMMARY
           echo "| Clean build | ${{ needs.clean.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| `hurry` cached build | ${{ needs.hurry.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| `hurry` (no build artifacts) | ${{ needs.hurry-without-build-artifacts.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| `swatinem` cached build | ${{ needs.swatinem.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| `sccache` cached build | ${{ needs.sccache.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| hurry cached build | ${{ needs.hurry.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| hurry (no build artifacts) | ${{ needs.hurry-without-build-artifacts.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| swatinem cached build | ${{ needs.swatinem.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| sccache cached build | ${{ needs.sccache.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           CLEAN=${{ needs.clean.outputs.duration }}
@@ -208,9 +208,9 @@ jobs:
 
           echo "### Speedup Analysis" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- `hurry` cached vs clean: **${HURRY_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
-          echo "- `hurry` (no build artifacts) vs clean: **${HURRY_NO_BUILD_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
-          echo "- `swatinem` cached vs clean: **${SWATINEM_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
-          echo "- `sccache` cached vs clean: **${SCCACHE_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
-          echo "- `hurry` vs `swatinem`: **${HURRY_VS_SWATINEM}x** faster" >> $GITHUB_STEP_SUMMARY
-          echo "- `hurry` vs `sccache`: **${HURRY_VS_SCCACHE}x** faster" >> $GITHUB_STEP_SUMMARY
+          echo "- hurry cached vs clean: **${HURRY_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
+          echo "- hurry (no build artifacts) vs clean: **${HURRY_NO_BUILD_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
+          echo "- swatinem cached vs clean: **${SWATINEM_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
+          echo "- sccache cached vs clean: **${SCCACHE_SPEEDUP}x** faster" >> $GITHUB_STEP_SUMMARY
+          echo "- hurry vs swatinem: **${HURRY_VS_SWATINEM}x** faster" >> $GITHUB_STEP_SUMMARY
+          echo "- hurry vs sccache: **${HURRY_VS_SCCACHE}x** faster" >> $GITHUB_STEP_SUMMARY
