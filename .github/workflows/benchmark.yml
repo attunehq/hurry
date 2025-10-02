@@ -16,22 +16,35 @@ jobs:
         run: |
           rustup toolchain install stable
           rustup show
-
       - name: Install hurry
         run: |
           cargo install --path ./packages/hurry --locked
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: Clean build with hurry
+      # --- Clean ---
+      - name: Clean build
         id: clean_hurry
         run: |
           START=$(date +%s)
-          hurry cargo build
+          cargo build
           END=$(date +%s)
           DURATION=$((END - START))
           echo "duration=$DURATION" >> $GITHUB_OUTPUT
-          echo "Clean hurry build: ${DURATION}s" >> $GITHUB_STEP_SUMMARY
+          echo "Clean build: ${DURATION}s" >> $GITHUB_STEP_SUMMARY
 
+      # --- Hurry ---
+      - name: Restore hurry cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cache/hurry
+          key: hurry-cache-benchmark-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            hurry-cache-benchmark-${{ runner.os }}-
       - name: Cached build with hurry
         id: cached_hurry
         run: |
@@ -41,17 +54,26 @@ jobs:
           DURATION=$((END - START))
           echo "duration=$DURATION" >> $GITHUB_OUTPUT
           echo "Hurry cached build: ${DURATION}s" >> $GITHUB_STEP_SUMMARY
+      - name: Store hurry cache
+        uses: actions/cache/store@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cache/hurry
+          key: hurry-cache-benchmark-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
 
+      # --- Swatinem ---
       - name: Clean for swatinem test
         run: |
           cargo clean
           rm -rf ~/.cache/hurry
-
       - name: Restore swatinem cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: benchmark
-
       - name: Swatinem cached build
         id: swatinem_cached
         run: |
@@ -62,6 +84,7 @@ jobs:
           echo "duration=$DURATION" >> $GITHUB_OUTPUT
           echo "Swatinem cached build: ${DURATION}s" >> $GITHUB_STEP_SUMMARY
 
+      # --- Summary ---
       - name: Build summary
         run: |
           echo "## Build Time Comparison" >> $GITHUB_STEP_SUMMARY
