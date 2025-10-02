@@ -1,14 +1,18 @@
-use std::str::FromStr as _;
+use std::{collections::HashMap, path::PathBuf, str::FromStr as _};
 
-use color_eyre::{Result, eyre::Context as _};
+use cargo_metadata::TargetKind;
+use color_eyre::{
+    Result,
+    eyre::{Context as _, OptionExt, bail},
+};
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, trace};
 
 use crate::{
-    cargo::{self, BuildPlan, DependencyBuild, Profile, UnitGraph, Workspace},
+    cargo::{self, BuildPlan, CargoCompileMode, Profile, RustcMetadata, UnitGraph, Workspace},
     fs, mk_rel_dir, mk_rel_file,
     path::{AbsDirPath, JoinWith as _},
 };
@@ -58,8 +62,14 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::artifacts")]
-    pub async fn artifacts(&self, profile: &Profile) -> Result<Vec<DependencyBuild>> {
+    pub async fn artifacts(&self, profile: &Profile) -> Result<Vec<DependencyArtifacts>> {
+        let rustc = RustcMetadata::from_argv(&self.ws.root, &[])
+            .await
+            .context("parsing rustc metadata")?;
+        trace!(?rustc, "rustc metadata");
+
         let units = {
+            // TODO: Pass the rest of the `cargo build` flags in.
             let output = cargo::invoke_output(
                 "build",
                 ["--unit-graph", "-Z", "unstable-options"],
@@ -68,9 +78,10 @@ impl CargoCache {
             .await?;
             serde_json::from_slice::<UnitGraph>(&output.stdout).context("parsing unit graph")?
         };
-        debug!(?units, "unit graph");
+        trace!(?units, "unit graph");
 
         let build_plan = {
+            // TODO: Pass the rest of the `cargo build` flags in.
             let output = cargo::invoke_output(
                 "build",
                 ["--build-plan", "-Z", "unstable-options"],
@@ -79,11 +90,154 @@ impl CargoCache {
             .await?;
             serde_json::from_slice::<BuildPlan>(&output.stdout).context("parsing build plan")?
         };
-        debug!(?build_plan, "build plan");
+        trace!(?build_plan, "build plan");
+
+        let mut build_script_index_to_dir = HashMap::new();
+        let mut build_script_program_file_to_index = HashMap::new();
+        let mut build_script_executions = HashMap::new();
+        for (i, invocation) in build_plan.invocations.iter().enumerate() {
+            trace!(?invocation, "build plan invocation");
+            // For each invocation, figure out what kind it is:
+            // 1. Compiling a build script.
+            // 2. Running a build script.
+            // 3. Compiling a dependency.
+            // 4. Compiling first-party code.
+            if invocation.target_kind == vec![TargetKind::CustomBuild] {
+                match invocation.compile_mode {
+                    CargoCompileMode::Build => {
+                        if let Some(output_file) = invocation.outputs.first() {
+                            // For build script compilation, we need to know the
+                            // directory into which the build script is
+                            // compiled and record the compiled program file.
+
+                            // First, we determine the build script compilation
+                            // directory.
+                            let output_file = PathBuf::from(output_file);
+                            let out_dir = output_file
+                                .parent()
+                                .ok_or_eyre(
+                                    "build script output file should have parent directory",
+                                )?
+                                .to_owned();
+                            build_script_index_to_dir.insert(i, out_dir);
+
+                            // Second, we record the executable program.
+                            for file in &invocation.outputs {
+                                build_script_program_file_to_index.insert(file, i);
+                            }
+                            for (fslink, _orig) in &invocation.links {
+                                build_script_program_file_to_index.insert(fslink, i);
+                            }
+                        } else {
+                            bail!(
+                                "build script compilation produced no outputs: {:?}",
+                                invocation
+                            );
+                        }
+                    }
+                    CargoCompileMode::RunCustomBuild => {
+                        // For build script execution, we need to know which
+                        // compiled build script is being executed, and where
+                        // its outputs are being written.
+
+                        // First, we need to figure out the build script being
+                        // executed. We can do this using the program file being
+                        // executed.
+                        let build_script_index = *build_script_program_file_to_index
+                            .get(&invocation.program)
+                            .ok_or_eyre("build script should be compiled before execution")?;
+
+                        // Second, we need to determine where its outputs are being written.
+                        let out_dir = invocation
+                            .env
+                            .get("OUT_DIR")
+                            .ok_or_eyre("build script execution should set OUT_DIR")?;
+
+                        build_script_executions.insert(i, (build_script_index, out_dir));
+                    }
+                    _ => bail!(
+                        "unknown compile mode for build script: {:?}",
+                        invocation.compile_mode
+                    ),
+                }
+            } else if invocation.target_kind == vec![TargetKind::Bin] {
+                // Binaries are _always_ first-party code. Do nothing for now.
+                continue;
+            } else if invocation.target_kind.contains(&TargetKind::Lib)
+                || invocation.target_kind.contains(&TargetKind::RLib)
+                || invocation.target_kind.contains(&TargetKind::CDyLib)
+                || invocation.target_kind.contains(&TargetKind::ProcMacro)
+            {
+                // Sanity check: everything here should be a dependency being compiled.
+                if invocation.compile_mode != CargoCompileMode::Build {
+                    bail!(
+                        "unknown compile mode for dependency: {:?}",
+                        invocation.compile_mode
+                    );
+                }
+
+                let mut build_script_execution_index = None;
+                for dep_index in &invocation.deps {
+                    let dep = &build_plan.invocations[*dep_index];
+                    // This should be sufficient to deermine which dependency is
+                    // the execution of the build script of the current library.
+                    // There might be other build scripts for the same name and
+                    // version (but different features), but they won't be
+                    // listed as a `dep`.
+                    if dep.target_kind == vec![TargetKind::CustomBuild]
+                        && dep.compile_mode == CargoCompileMode::RunCustomBuild
+                        && dep.package_name == invocation.package_name
+                        && dep.package_version == invocation.package_version
+                    {
+                        build_script_execution_index = Some(dep_index);
+                        break;
+                    }
+                }
+
+                let (build_script_dir, build_script_output_dir) = match build_script_execution_index
+                {
+                    Some(build_script_execution_index) => {
+                        let (build_script_index, build_script_output_dir) = build_script_executions
+                            .get(&build_script_execution_index)
+                            .ok_or_eyre(
+                                "build script execution should have recorded output directory",
+                            )?;
+                        let build_script_dir = build_script_index_to_dir
+                            .get(build_script_index)
+                            .ok_or_eyre(
+                                "build script index should have recorded compilation directory",
+                            )?;
+                        (Some(build_script_dir), Some(build_script_output_dir))
+                    }
+                    None => (None, None),
+                };
+
+                // Given a dependency being compiled, we need to determine the
+                // compiled files, its build script directory, and its build
+                // script outputs directory. These are the files that we're
+                // going to save for this artifact.
+                debug!(
+                    compiled = ?invocation.outputs,
+                    build_script = ?build_script_dir,
+                    build_script_output = ?build_script_output_dir,
+                    deps = ?invocation.deps,
+                    "artifacts to save"
+                );
+
+                // Now, we need to determine the information that we need to key
+                // the cached artifact.
+            } else {
+                bail!("unknown target kind: {:?}", invocation.target_kind);
+            }
+        }
 
         todo!()
     }
 }
+
+pub struct DependencyKey {}
+
+pub struct DependencyArtifacts {}
 
 /*
 

@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
                 .with_thread_names(false)
                 .with_verbose_exit(false)
                 .with_verbose_entry(false)
-                .with_deferred_spans(true)
+                .with_deferred_spans(false)
                 .with_bracketed_fields(true)
                 .with_span_retrace(true)
                 .with_timer(Uptime::default())

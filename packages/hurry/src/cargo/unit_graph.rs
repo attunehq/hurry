@@ -7,36 +7,36 @@ use serde::Deserialize;
 /// [^2]: https://github.com/rust-lang/cargo/blob/c24e1064277fe51ab72011e2612e556ac56addf7/src/cargo/core/compiler/unit_graph.rs#L43-L48
 #[derive(Debug, Deserialize)]
 pub struct UnitGraph {
-    version: u64,
-    units: Vec<UnitGraphUnit>,
-    roots: Vec<usize>,
+    pub version: u64,
+    pub units: Vec<UnitGraphUnit>,
+    pub roots: Vec<usize>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UnitGraphUnit {
-    pkg_id: String,
-    target: cargo_metadata::Target,
-    profile: UnitGraphProfile,
-    platform: Option<String>,
-    mode: CargoCompileMode,
-    features: Vec<String>,
+    pub pkg_id: String,
+    pub target: cargo_metadata::Target,
+    pub profile: UnitGraphProfile,
+    pub platform: Option<String>,
+    pub mode: CargoCompileMode,
+    pub features: Vec<String>,
     #[serde(skip)]
-    is_std: bool,
-    dependencies: Vec<UnitGraphDependency>,
+    pub is_std: bool,
+    pub dependencies: Vec<UnitGraphDependency>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UnitGraphProfile {
-    name: String,
-    opt_level: String,
-    lto: String,
-    codegen_units: Option<u64>,
-    debuginfo: Option<u64>,
-    debug_assertions: bool,
-    overflow_checks: bool,
-    rpath: bool,
-    incremental: bool,
-    panic: UnitGraphProfilePanicStrategy,
+    pub name: String,
+    pub opt_level: String,
+    pub lto: String,
+    pub codegen_units: Option<u64>,
+    pub debuginfo: Option<u64>,
+    pub debug_assertions: bool,
+    pub overflow_checks: bool,
+    pub rpath: bool,
+    pub incremental: bool,
+    pub panic: UnitGraphProfilePanicStrategy,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,13 +48,13 @@ pub enum UnitGraphProfilePanicStrategy {
 
 #[derive(Debug, Deserialize)]
 pub struct UnitGraphDependency {
-    index: usize,
-    extern_crate_name: String,
-    public: bool,
-    noprelude: bool,
+    pub index: usize,
+    pub extern_crate_name: String,
+    pub public: bool,
+    pub noprelude: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CargoCompileMode {
     Test,

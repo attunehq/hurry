@@ -21,15 +21,18 @@ use crate::path::AbsDirPath;
 /// affect output compatibility.
 //
 // TODO: Support users cross compiling; probably need to parse argv?
+//
 // TODO: Determine minimum compiler version.
+//
 // TODO: Is there a better way to get this?
+//
+// TODO: Add output from `rustc -vV`, which is what Cargo invokes? How does
+// Cargo use this information?
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize)]
 pub struct RustcMetadata {
     /// The host target triple.
     #[serde(rename = "llvm-target")]
     pub host_target: String,
-
-    // TODO: Add output from `rustc -vV`, which is what Cargo invokes.
 }
 
 impl RustcMetadata {

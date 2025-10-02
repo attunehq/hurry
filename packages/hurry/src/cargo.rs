@@ -13,21 +13,6 @@ use itertools::Itertools;
 use tokio::process::Child;
 use tracing::{instrument, trace};
 
-// use color_eyre::{
-//     Result,
-//     eyre::{Context, OptionExt, bail},
-// };
-// use futures::{StreamExt, TryFutureExt, TryStreamExt, stream};
-// use itertools::Itertools;
-// use tap::Pipe;
-// use tracing::{debug, instrument, trace, warn};
-
-// use crate::{
-//     Locked,
-//     fs::{DEFAULT_CONCURRENCY, Metadata},
-//     hash::Blake3,
-// };
-
 mod build_plan;
 mod build_script;
 mod cache;
@@ -48,7 +33,8 @@ pub use path::QualifiedPath;
 pub use profile::Profile;
 pub use rustc::RustcMetadata;
 pub use unit_graph::{
-    UnitGraph, UnitGraphDependency, UnitGraphProfile, UnitGraphProfilePanicStrategy, UnitGraphUnit,
+    CargoCompileMode, UnitGraph, UnitGraphDependency, UnitGraphProfile,
+    UnitGraphProfilePanicStrategy, UnitGraphUnit,
 };
 pub use workspace::*;
 
