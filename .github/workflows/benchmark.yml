@@ -6,6 +6,20 @@ on:
   workflow_dispatch:
 
 jobs:
+  build-hurry:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          rustup toolchain install stable
+          rustup show
+      - run: cargo build --release --package hurry
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hurry-binary
+          path: target/release/hurry
+
   clean:
     runs-on: ubuntu-latest
     outputs:
@@ -26,6 +40,7 @@ jobs:
 
   hurry:
     runs-on: ubuntu-latest
+    needs: [build-hurry]
     outputs:
       duration: ${{ steps.build.outputs.duration }}
 
@@ -34,9 +49,13 @@ jobs:
       - run: |
           rustup toolchain install stable
           rustup show
+      - uses: actions/download-artifact@v4
+        with:
+          name: hurry-binary
+          path: /tmp/hurry
       - run: |
-          cargo install --path ./packages/hurry --locked
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          chmod +x /tmp/hurry/hurry
+          echo "/tmp/hurry" >> $GITHUB_PATH
       - uses: actions/cache@v4
         with:
           path: |
@@ -116,8 +135,6 @@ jobs:
           echo "| Swatinem cached build | ${{ needs.swatinem.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
           echo "| sccache cached build | ${{ needs.sccache.outputs.duration }}s |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
-          echo "> `hurry` needs to build itself before benchmarking, so it may appear slower than other tools if you look at the runtimes outside of this summary." >> $GITHUB_STEP_SUMMARY
 
           CLEAN=${{ needs.clean.outputs.duration }}
           HURRY=${{ needs.hurry.outputs.duration }}
