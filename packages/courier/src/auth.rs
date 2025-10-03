@@ -1,10 +1,325 @@
+use std::sync::{Arc, LazyLock};
+
 use axum::{
     extract::FromRequestParts,
     http::{StatusCode, header::AUTHORIZATION, request::Parts},
 };
-use color_eyre::Result;
+use color_eyre::{
+    Result,
+    eyre::{Context, OptionExt},
+};
 use derive_more::{Debug, Display, From, Into};
-use serde::{Deserialize, Serialize};
+use hashlru::SyncCache;
+use rand::Rng;
+use rusty_paseto::prelude::{
+    AudienceClaim, CustomClaim, IssuerClaim, Key as PasetoKey, Local as PasetoLocal, PasetoBuilder,
+    PasetoParser, PasetoSymmetricKey, SubjectClaim, V4 as PasetoV4,
+};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use tap::Pipe;
+
+use crate::storage::Key;
+
+/// The secret key for stateless tokens.
+///
+/// We generate this at startup because the stateless tokens are only relevant
+/// for a single running API instance; they're not valid across multiple
+/// instances or restarted instances.
+static STATELESS_TOKEN_SECRET: LazyLock<PasetoSymmetricKey<PasetoV4, PasetoLocal>> =
+    LazyLock::new(|| {
+        let mut key = [0u8; 32];
+        rand::rng().fill(&mut key[..]);
+        PasetoSymmetricKey::from(PasetoKey::from(key))
+    });
+
+/// Unvalidated stateless token from a request.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RawStatelessToken(String);
+
+impl RawStatelessToken {
+    /// Create a new raw stateless token.
+    pub fn new(token: impl Into<String>) -> Self {
+        Self(token.into())
+    }
+}
+
+impl AsRef<str> for RawStatelessToken {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<RawStatelessToken> for AuthenticatedStatelessToken {
+    type Error = color_eyre::Report;
+
+    fn try_from(token: RawStatelessToken) -> Result<Self, Self::Error> {
+        Self::deserialize(&token.0)
+    }
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for RawStatelessToken {
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let Some(header) = parts.headers.get(AUTHORIZATION) else {
+            return Err((StatusCode::UNAUTHORIZED, "Authorization header required"));
+        };
+        let Ok(token) = header.to_str() else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Authorization header must be a string",
+            ));
+        };
+
+        let token = match token.strip_prefix("Bearer") {
+            Some(token) => token.trim(),
+            None => token.trim(),
+        };
+        if token.is_empty() {
+            return Err((StatusCode::BAD_REQUEST, "Empty authorization token"));
+        }
+
+        Ok(RawStatelessToken::new(token))
+    }
+}
+
+/// Authenticated stateless token providing pre-authorized org and user IDs,
+/// plus the original raw token.
+#[derive(Clone, Debug)]
+pub struct AuthenticatedStatelessToken {
+    /// The authenticated organization ID.
+    pub org_id: OrgId,
+
+    /// The authenticated user ID.
+    pub user_id: UserId,
+
+    /// The original raw token.
+    pub token: RawToken,
+}
+
+impl AuthenticatedStatelessToken {
+    const CLAIM_AUDIENCE: &str = "hurry";
+    const CLAIM_SUBJECT: &str = "cas";
+    const CLAIM_ISSUER: &str = "courier";
+    const CLAIM_ORG_ID: &str = "x-org-id";
+    const CLAIM_USER_ID: &str = "x-user-id";
+    const CLAIM_TOKEN: &str = "x-token";
+
+    fn audience() -> AudienceClaim<'static> {
+        AudienceClaim::from(Self::CLAIM_AUDIENCE)
+    }
+
+    fn subject() -> SubjectClaim<'static> {
+        SubjectClaim::from(Self::CLAIM_SUBJECT)
+    }
+
+    fn issuer() -> IssuerClaim<'static> {
+        IssuerClaim::from(Self::CLAIM_ISSUER)
+    }
+
+    fn org_id(&self) -> Result<CustomClaim<u64>> {
+        CustomClaim::try_from((Self::CLAIM_ORG_ID, self.org_id.as_u64()))
+            .context("custom claim org id")
+    }
+
+    fn user_id(&self) -> Result<CustomClaim<u64>> {
+        CustomClaim::try_from((Self::CLAIM_USER_ID, self.user_id.as_u64()))
+            .context("custom claim user id")
+    }
+
+    fn token(&self) -> Result<CustomClaim<String>> {
+        CustomClaim::try_from((Self::CLAIM_TOKEN, self.token.0.clone()))
+            .context("custom claim token")
+    }
+
+    /// Serialize the stateless token to a string.
+    pub fn serialize(&self) -> Result<String> {
+        let org_id = Self::org_id(self)?;
+        let user_id = Self::user_id(self)?;
+        let token = Self::token(self)?;
+        PasetoBuilder::<PasetoV4, PasetoLocal>::default()
+            .set_claim(Self::audience())
+            .set_claim(Self::subject())
+            .set_claim(Self::issuer())
+            .set_claim(org_id)
+            .set_claim(user_id)
+            .set_claim(token)
+            .build(&STATELESS_TOKEN_SECRET)
+            .context("build token")
+    }
+
+    /// Deserialize a stateless token from a string.
+    pub fn deserialize(token: &str) -> Result<Self> {
+        let parsed = PasetoParser::<PasetoV4, PasetoLocal>::default()
+            .check_claim(Self::audience())
+            .check_claim(Self::subject())
+            .check_claim(Self::issuer())
+            .parse(token, &STATELESS_TOKEN_SECRET)
+            .context("parse token")?;
+
+        let org_id = parsed[Self::CLAIM_ORG_ID]
+            .as_u64()
+            .ok_or_eyre("no org id")?;
+        let user_id = parsed[Self::CLAIM_USER_ID]
+            .as_u64()
+            .ok_or_eyre("no user id")?;
+        let token = parsed[Self::CLAIM_TOKEN]
+            .as_str()
+            .ok_or_eyre("no raw token")?;
+
+        Ok(Self {
+            org_id: OrgId::from_u64(org_id),
+            user_id: UserId::from_u64(user_id),
+            token: RawToken::new(token),
+        })
+    }
+}
+
+impl Serialize for AuthenticatedStatelessToken {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let token = self.serialize().map_err(serde::ser::Error::custom)?;
+        serializer.serialize_str(&token)
+    }
+}
+
+impl<'de> Deserialize<'de> for AuthenticatedStatelessToken {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let token = String::deserialize(deserializer)?;
+        Self::deserialize(&token).map_err(serde::de::Error::custom)
+    }
+}
+
+impl From<AuthenticatedStatelessToken> for AuthenticatedToken {
+    fn from(jwt: AuthenticatedStatelessToken) -> Self {
+        Self {
+            user_id: jwt.user_id,
+            org_id: jwt.org_id,
+            token: jwt.token,
+        }
+    }
+}
+
+impl From<&AuthenticatedStatelessToken> for AuthenticatedToken {
+    fn from(jwt: &AuthenticatedStatelessToken) -> Self {
+        jwt.clone().into()
+    }
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedStatelessToken {
+    type Rejection = (StatusCode, String);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let Some(header) = parts.headers.get(AUTHORIZATION) else {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                String::from("Authorization header required"),
+            ));
+        };
+        let Ok(token) = header.to_str() else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                String::from("Authorization header must be a string"),
+            ));
+        };
+
+        let token = match token.strip_prefix("Bearer") {
+            Some(token) => token.trim(),
+            None => token.trim(),
+        };
+        if token.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                String::from("Empty authorization token"),
+            ));
+        }
+
+        AuthenticatedStatelessToken::deserialize(token)
+            .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))
+    }
+}
+
+/// In-memory cache of allowed CAS keys per organization.
+///
+/// This type uses interior mutability to allow for thread-safe operations; even
+/// when you clone an instance the internal cache is still shared with the
+/// original instance.
+#[derive(Clone, Debug)]
+#[debug("KeyCache(count = {})", self.0.len())]
+pub struct KeyCache(Arc<SyncCache<OrgId, OrgKeySet>>);
+
+impl KeyCache {
+    /// The default number of organizations to cache.
+    ///
+    /// If more than this number of keys are inserted into the set, the least
+    /// recently used key is evicted.
+    pub const DEFAULT_LIMIT: u64 = 100;
+
+    /// Create a new instance with the default limit.
+    pub fn new() -> Self {
+        SyncCache::new(Self::DEFAULT_LIMIT as usize)
+            .pipe(Arc::new)
+            .pipe(Self)
+    }
+
+    /// Get the set of allowed CAS keys for the given organization.
+    ///
+    /// If the set for the organization is not in the cache, a new set is
+    /// created and inserted, then returned.
+    ///
+    /// Reminder that [`OrgKeySet`] uses interior mutability to allow clones to
+    /// share the same underlying data; even though you're getting an owned
+    /// instance changes to this instance will be reflected in all clones.
+    pub fn organization(&self, id: OrgId) -> OrgKeySet {
+        match self.0.get(&id) {
+            Some(set) => set,
+            None => {
+                let set = OrgKeySet::new();
+                self.0.insert(id, set.clone());
+                set
+            }
+        }
+    }
+}
+
+/// Cached set of allowed CAS keys for a given organization.
+///
+/// This type uses interior mutability to allow for thread-safe operations; even
+/// when you clone an instance the internal cache is still shared with the
+/// original instance.
+#[derive(Clone, Debug)]
+#[debug("OrgKeySet(count = {})", self.0.len())]
+pub struct OrgKeySet(Arc<SyncCache<Key, ()>>);
+
+impl OrgKeySet {
+    /// The default number of keys to cache per organization.
+    ///
+    /// If more than this number of keys are inserted into the set, the least
+    /// recently used key is evicted.
+    pub const DEFAULT_LIMIT: u64 = 100_000;
+
+    /// Create a new instance with the default limit.
+    pub fn new() -> Self {
+        SyncCache::new(Self::DEFAULT_LIMIT as usize)
+            .pipe(Arc::new)
+            .pipe(Self)
+    }
+
+    /// Check if the set contains the given key.
+    pub fn contains(&self, key: &Key) -> bool {
+        self.0.contains_key(key)
+    }
+
+    /// Insert a key into the set.
+    pub fn insert(&self, key: Key) {
+        self.0.insert(key, ());
+    }
+}
 
 /// An ID uniquely identifying an organization.
 #[derive(
@@ -20,10 +335,26 @@ use serde::{Deserialize, Serialize};
     Default,
     Deserialize,
     Serialize,
-    From,
-    Into,
 )]
 pub struct OrgId(u64);
+
+impl OrgId {
+    pub fn as_i64(&self) -> i64 {
+        self.0 as i64
+    }
+
+    pub fn as_u64(&self) -> u64 {
+        self.0
+    }
+
+    pub fn from_i64(id: i64) -> Self {
+        Self(id as u64)
+    }
+
+    pub fn from_u64(id: u64) -> Self {
+        Self(id)
+    }
+}
 
 impl<S: Send + Sync> FromRequestParts<S> for OrgId {
     type Rejection = (StatusCode, &'static str);
@@ -50,7 +381,7 @@ impl<S: Send + Sync> FromRequestParts<S> for OrgId {
             ));
         };
 
-        Ok(OrgId::from(parsed))
+        Ok(OrgId::from_u64(parsed))
     }
 }
 
@@ -73,6 +404,24 @@ impl<S: Send + Sync> FromRequestParts<S> for OrgId {
 )]
 pub struct UserId(u64);
 
+impl UserId {
+    pub fn as_i64(&self) -> i64 {
+        self.0 as i64
+    }
+
+    pub fn as_u64(&self) -> u64 {
+        self.0
+    }
+
+    pub fn from_i64(id: i64) -> Self {
+        Self(id as u64)
+    }
+
+    pub fn from_u64(id: u64) -> Self {
+        Self(id)
+    }
+}
+
 /// An authenticated token, which has been validated.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AuthenticatedToken {
@@ -84,6 +433,26 @@ pub struct AuthenticatedToken {
 
     /// The token that was authenticated.
     pub token: RawToken,
+}
+
+impl AuthenticatedToken {
+    /// Convert into a stateless representation of the authenticated token.
+    pub fn into_stateless(self) -> AuthenticatedStatelessToken {
+        AuthenticatedStatelessToken {
+            user_id: self.user_id,
+            org_id: self.org_id,
+            token: self.token,
+        }
+    }
+
+    /// Create a stateless representation of the authenticated token.
+    pub fn as_stateless(&self) -> AuthenticatedStatelessToken {
+        AuthenticatedStatelessToken {
+            user_id: self.user_id,
+            org_id: self.org_id,
+            token: self.token.clone(),
+        }
+    }
 }
 
 impl Into<RawToken> for AuthenticatedToken {

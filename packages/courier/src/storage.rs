@@ -5,39 +5,44 @@ use async_compression::tokio::bufread::ZstdDecoder;
 use async_compression::tokio::write::ZstdEncoder;
 use color_eyre::eyre::bail;
 use color_eyre::{Result, eyre::Context};
-use derive_more::Display;
+use derive_more::{Display, From};
 use tokio::fs::{File, create_dir_all, metadata, remove_file, rename};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tracing::warn;
 use uuid::Uuid;
 
 /// The key to a content-addressed storage blob.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Display)]
-#[display("{}", _0.to_hex())]
-pub struct Key(blake3::Hash);
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Display, From)]
+#[display("{}", self.to_hex())]
+pub struct Key(Vec<u8>);
 
 impl Key {
     /// View the key as a hex string.
     fn to_hex(&self) -> String {
-        self.0.to_hex().to_string()
+        hex::encode(&self.0)
+    }
+
+    /// View the key as bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
     }
 }
 
 impl From<blake3::Hash> for Key {
     fn from(hash: blake3::Hash) -> Self {
-        Self(hash)
+        Self(hash.as_bytes().to_vec())
     }
 }
 
 impl PartialEq<blake3::Hash> for Key {
     fn eq(&self, other: &blake3::Hash) -> bool {
-        self.0 == *other
+        self.0 == other.as_bytes()
     }
 }
 
 impl PartialEq<blake3::Hash> for &Key {
     fn eq(&self, other: &blake3::Hash) -> bool {
-        self.0 == *other
+        self.0 == other.as_bytes()
     }
 }
 
@@ -302,7 +307,7 @@ mod tests {
     use zstd::bulk::decompress;
 
     fn key_for(input: &[u8]) -> Key {
-        Key(blake3::hash(input))
+        Key::from(blake3::hash(input))
     }
 
     #[test_case(Vec::from(b"hello world\n"); "short input")]
