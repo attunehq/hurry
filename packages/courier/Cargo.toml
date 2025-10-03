@@ -4,15 +4,15 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
-axum = "0.7"
+axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 tower = { version = "0.5", features = ["buffer", "limit", "load-shed"] }
-tower-http = { version = "0.5", features = ["trace", "limit", "timeout"] }
+tower-http = { version = "0.6", features = ["trace", "limit", "timeout"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "migrate"] }
 serde = { version = "1", features = ["derive"] }
 rmp-serde = "1"
-jsonwebtoken = "9"
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 async-compression = { version = "0.4", features = ["tokio", "zstd"] }
 blake3 = "1"
 hex = "0.4"
@@ -31,6 +31,8 @@ async-tempfile = "0.7.0"
 tempfile = "3"
 uuid = { workspace = true, features = ["v4"] }
 aerosol = { version = "1.3.0", features = ["async", "axum", "axum-extra", "tracing"] }
+futures = "0.3"
+secrecy = { version = "0.10.3", features = ["serde"] }
 
 [dev-dependencies]
 pretty_assertions = "1"

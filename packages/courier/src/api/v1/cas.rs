@@ -1,3 +1,4 @@
+use aerosol::axum::Dep;
 use axum::{
     Router,
     body::Body,
@@ -6,22 +7,22 @@ use axum::{
     routing::{get, head, put},
 };
 
-use crate::api::State;
+use crate::{api::State, storage::Disk};
 
 pub fn router() -> Router<State> {
     Router::new()
-        .route("/:key", head(check_cas))
-        .route("/:key", get(read_cas))
-        .route("/:key", put(write_cas))
+        .route("/{key}", head(check_cas))
+        .route("/{key}", get(read_cas))
+        .route("/{key}", put(write_cas))
 }
 
-async fn check_cas(Path(key): Path<String>) -> StatusCode {
+async fn check_cas(Dep(cas): Dep<Disk>, Path(key): Path<String>) -> StatusCode {
     todo!("1. Validate JWT and extract org_id");
     todo!("2. Check if key exists in CAS storage");
     todo!("3. Return 200 if exists, 404 if not");
 }
 
-async fn read_cas(Path(key): Path<String>) -> Body {
+async fn read_cas(Dep(cas): Dep<Disk>, Path(key): Path<String>) -> Body {
     todo!("1. Validate JWT and extract org_id, user_id");
     todo!("2. Check if key is in in-memory cache");
     todo!("3. If not in cache, check database for access");
@@ -30,7 +31,7 @@ async fn read_cas(Path(key): Path<String>) -> Body {
     todo!("6. Asynchronously record access frequency");
 }
 
-async fn write_cas(Path(key): Path<String>, body: Body) -> StatusCode {
+async fn write_cas(Dep(cas): Dep<Disk>, Path(key): Path<String>, body: Body) -> StatusCode {
     todo!("1. Validate JWT and extract org_id, user_id");
     todo!("2. Stream body to temporary file");
     todo!("3. Compute blake3 hash while streaming");

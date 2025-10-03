@@ -7,12 +7,16 @@ use std::{
 use aerosol::Aero;
 use atomic_time::AtomicInstant;
 use clap::Parser;
-use color_eyre::Result;
+use color_eyre::{Result, eyre::Context};
+use secrecy::{ExposeSecret, SecretString};
+use sqlx::postgres::PgPoolOptions;
 use tap::Pipe;
 use tracing::level_filters::LevelFilter;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_tree::time::FormatTime;
+
+use crate::db::Postgres;
 
 mod api;
 mod auth;
@@ -22,10 +26,25 @@ mod storage;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
-struct Config {
-    /// Database URL (Postgres)
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    /// Start the Courier API server
+    Serve(ServeConfig),
+
+    /// Apply database migrations
+    Migrate(MigrateConfig),
+}
+
+#[derive(Parser, Debug)]
+struct ServeConfig {
+    /// Database URL
     #[arg(long, env = "DATABASE_URL")]
-    database_url: String,
+    database_url: SecretString,
 
     /// Port to listen on
     #[arg(long, env = "PORT", default_value = "3000")]
@@ -40,9 +59,16 @@ struct Config {
     cas_root: PathBuf,
 }
 
+#[derive(Parser, Debug)]
+struct MigrateConfig {
+    /// Database URL
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: SecretString,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = Config::parse();
+    let cli = Cli::parse();
     color_eyre::install()?;
 
     tracing_subscriber::registry()
@@ -68,6 +94,13 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    match cli.command {
+        Command::Serve(config) => serve(config).await,
+        Command::Migrate(config) => migrate(config).await,
+    }
+}
+
+async fn serve(config: ServeConfig) -> Result<()> {
     tracing::info!("constructing application router...");
     let storage = storage::Disk::new(&config.cas_root);
     let router = api::router(Aero::new().with(storage));
@@ -77,6 +110,22 @@ async fn main() -> Result<()> {
     tracing::info!("listening on {}", listener.local_addr()?);
     axum::serve(listener, router).await?;
 
+    Ok(())
+}
+
+async fn migrate(config: MigrateConfig) -> Result<()> {
+    tracing::info!("applying migrations...");
+
+    let pool = PgPoolOptions::new()
+        .connect(config.database_url.expose_secret())
+        .await
+        .context("connect to database")?;
+    Postgres::MIGRATOR
+        .run(&pool)
+        .await
+        .context("apply migrations")?;
+
+    tracing::info!("migrations applied successfully");
     Ok(())
 }
 

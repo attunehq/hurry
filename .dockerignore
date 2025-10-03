@@ -1,0 +1,13 @@
+.env
+.env.example
+.git
+.github
+.gitignore
+.gitmodules
+.scratch
+.vscode
+docker/
+docs/
+target/
+LICENSE
+README.md

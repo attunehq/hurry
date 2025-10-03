@@ -6,13 +6,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::State;
 
-#[derive(Deserialize)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize)]
 pub struct MintJwtRequest {
-    org_id: i64,
-    api_key: Vec<u8>,
+    org_id: usize,
+    api_key: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
 pub struct MintJwtResponse {
     jwt: String,
 }

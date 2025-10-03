@@ -1,18 +1,17 @@
 use color_eyre::Result;
-use sqlx::PgPool;
+use sqlx::{PgPool, migrate::Migrator};
 
 pub struct Postgres {
     pool: PgPool,
 }
 
 impl Postgres {
+    /// The migrator for the database.
+    pub const MIGRATOR: Migrator = sqlx::migrate!("./schema/migrations");
+
     pub async fn connect(database_url: &str) -> Result<Self> {
         let pool = PgPool::connect(database_url).await?;
         Ok(Self { pool })
-    }
-
-    pub async fn run_migrations(&self) -> Result<()> {
-        todo!("Run SQL migrations from schema.sql")
     }
 
     pub async fn validate_api_key(&self, _org_id: i64, _api_key: &[u8]) -> Result<i64> {
@@ -23,7 +22,12 @@ impl Postgres {
         todo!("Get organization secret for JWT")
     }
 
-    pub async fn store_jwt_session(&self, _user_id: i64, _org_id: i64, _expires_at: i64) -> Result<()> {
+    pub async fn store_jwt_session(
+        &self,
+        _user_id: i64,
+        _org_id: i64,
+        _expires_at: i64,
+    ) -> Result<()> {
         todo!("Store JWT session in database")
     }
 
