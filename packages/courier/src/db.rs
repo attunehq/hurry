@@ -1,6 +1,21 @@
-use color_eyre::Result;
-use sqlx::{PgPool, migrate::Migrator};
+//! Database interface.
+//!
+//! # Serialization/Deserialization
+//!
+//! Types in this module do not implement `Serialize` or `Deserialize` because
+//! they are internal implementation details for Courier. If you want to
+//! serialize or deserialize these types, create public-facing types that do so
+//! and are able to convert back and forth with the internal types.
 
+use color_eyre::{Result, eyre::Context};
+use derive_more::{Debug, Display};
+use sqlx::{PgPool, Type, migrate::Migrator};
+use tap::Conv;
+
+use crate::auth::{AuthenticatedToken, RawToken};
+
+/// A connected Postgres database instance.
+#[derive(Clone, Debug)]
 pub struct Postgres {
     pool: PgPool,
 }
@@ -9,45 +24,72 @@ impl Postgres {
     /// The migrator for the database.
     pub const MIGRATOR: Migrator = sqlx::migrate!("./schema/migrations");
 
-    pub async fn connect(database_url: &str) -> Result<Self> {
-        let pool = PgPool::connect(database_url).await?;
+    /// Connect to the Postgres database.
+    pub async fn connect(url: &str) -> Result<Self> {
+        let pool = PgPool::connect(url).await?;
         Ok(Self { pool })
     }
 
-    pub async fn validate_api_key(&self, _org_id: i64, _api_key: &[u8]) -> Result<i64> {
-        todo!("Query api_key table to validate and return user_id")
-    }
-
-    pub async fn get_org_secret(&self, _org_id: i64) -> Result<Vec<u8>> {
-        todo!("Get organization secret for JWT")
-    }
-
-    pub async fn store_jwt_session(
+    /// Validate the provided raw token in the database.
+    pub async fn validate(
         &self,
-        _user_id: i64,
-        _org_id: i64,
-        _expires_at: i64,
-    ) -> Result<()> {
-        todo!("Store JWT session in database")
+        org_id: InternalOrgId,
+        token: RawToken,
+    ) -> Result<AuthenticatedToken> {
+        let row = sqlx::query!(
+            "SELECT users.id
+            FROM users
+            JOIN api_keys ON users.id = api_keys.user_id
+            WHERE users.organization_id = $1
+            AND api_keys.content = $2",
+            org_id.0,
+            token.as_bytes(),
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("fetch user id for token")?;
+        Ok(AuthenticatedToken {
+            user_id: InternalUserId(row.id).into(),
+            org_id: org_id.into(),
+            token,
+        })
     }
+}
 
-    pub async fn revoke_jwt_session(&self, _user_id: i64, _org_id: i64) -> Result<()> {
-        todo!("Mark JWT session as revoked")
+impl AsRef<PgPool> for Postgres {
+    fn as_ref(&self) -> &PgPool {
+        &self.pool
     }
+}
 
-    pub async fn check_cas_access(&self, _org_id: i64, _cas_key: &[u8]) -> Result<bool> {
-        todo!("Check if org has access to CAS key")
+/// Internal representation of an organization ID.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Default, Type)]
+pub struct InternalOrgId(i64);
+
+impl From<crate::auth::OrgId> for InternalOrgId {
+    fn from(id: crate::auth::OrgId) -> Self {
+        Self(id.conv::<u64>() as i64)
     }
+}
 
-    pub async fn grant_cas_access(&self, _org_id: i64, _cas_key: &[u8]) -> Result<()> {
-        todo!("Grant org access to CAS key (insert into cas_access)")
+impl From<InternalOrgId> for crate::auth::OrgId {
+    fn from(InternalOrgId(id): InternalOrgId) -> Self {
+        (id as u64).into()
     }
+}
 
-    pub async fn load_top_cas_keys(&self, _user_id: i64, _limit: usize) -> Result<Vec<Vec<u8>>> {
-        todo!("Query frequency_user_cas_key to get top N most accessed keys")
+/// Internal representation of a user ID.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Default, Type)]
+pub struct InternalUserId(i64);
+
+impl From<crate::auth::UserId> for InternalUserId {
+    fn from(id: crate::auth::UserId) -> Self {
+        Self(id.conv::<u64>() as i64)
     }
+}
 
-    pub async fn record_cas_access(&self, _user_id: i64, _cas_key: &[u8]) -> Result<()> {
-        todo!("Asynchronously record access to cas key")
+impl From<InternalUserId> for crate::auth::UserId {
+    fn from(InternalUserId(id): InternalUserId) -> Self {
+        (id as u64).into()
     }
 }

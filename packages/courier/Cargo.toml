@@ -33,6 +33,9 @@ uuid = { workspace = true, features = ["v4"] }
 aerosol = { version = "1.3.0", features = ["async", "axum", "axum-extra", "tracing"] }
 futures = "0.3"
 secrecy = { version = "0.10.3", features = ["serde"] }
+block-id = "0.2.1"
+const-str = { workspace = true, features = ["all"] }
+hashlru = "0.11.1"
 
 [dev-dependencies]
 pretty_assertions = "1"

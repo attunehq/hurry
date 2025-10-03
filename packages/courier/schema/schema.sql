@@ -1,22 +1,22 @@
 -- Organizations
-create table organization (
+create table organizations (
     id bigserial primary key not null,
     name text not null,
     created timestamptz not null default now()
 );
 
 -- Users
-create table "user" (
+create table users (
     id bigserial primary key not null,
-    organization_id bigint references organization(id) not null,
+    organization_id bigint references organizations(id) not null,
     email text not null unique,
     created timestamptz not null default now()
 );
 
 -- API Keys
-create table api_key (
+create table api_keys (
     id bigserial primary key not null,
-    user_id bigint references "user"(id) not null,
+    user_id bigint references users(id) not null,
     content bytea not null,
     created timestamptz not null default now(),
     accessed timestamptz not null default now(),
@@ -25,7 +25,7 @@ create table api_key (
 );
 
 -- CAS Key Index
-create table cas_key (
+create table cas_keys (
     id bigserial primary key not null,
     content bytea not null,
     created timestamptz not null default now(),
@@ -34,16 +34,16 @@ create table cas_key (
 
 -- Access Control
 create table cas_access (
-    org_id bigint references organization(id) not null,
-    cas_key_id bigint references cas_key(id) not null,
+    org_id bigint references organizations(id) not null,
+    cas_key_id bigint references cas_keys(id) not null,
     created timestamptz not null default now(),
     primary key (org_id, cas_key_id)
 );
 
 -- Frequency Tracking
 create table frequency_user_cas_key (
-    user_id bigint references "user"(id) not null,
-    cas_key_id bigint references cas_key(id) not null,
+    user_id bigint references users(id) not null,
+    cas_key_id bigint references cas_keys(id) not null,
     accessed timestamptz not null default now(),
     primary key (user_id, cas_key_id, accessed)
 );

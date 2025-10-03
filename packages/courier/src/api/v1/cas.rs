@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use aerosol::axum::Dep;
 use axum::{
     Router,
@@ -6,8 +8,19 @@ use axum::{
     http::StatusCode,
     routing::{get, head, put},
 };
+use hashlru::SyncCache;
 
-use crate::{api::State, storage::Disk};
+use crate::{
+    api::State,
+    auth::OrgId,
+    storage::{Disk, Key},
+};
+
+const MAX_KEYS_PER_ORG: usize = 100_000;
+const MAX_ORGS: usize = 100;
+
+static ALLOWED_CAS_KEYS: LazyLock<SyncCache<(OrgId, Key), ()>> =
+    LazyLock::new(|| SyncCache::new(MAX_ORGS * MAX_KEYS_PER_ORG));
 
 pub fn router() -> Router<State> {
     Router::new()
@@ -17,28 +30,13 @@ pub fn router() -> Router<State> {
 }
 
 async fn check_cas(Dep(cas): Dep<Disk>, Path(key): Path<String>) -> StatusCode {
-    todo!("1. Validate JWT and extract org_id");
-    todo!("2. Check if key exists in CAS storage");
-    todo!("3. Return 200 if exists, 404 if not");
+    todo!()
 }
 
 async fn read_cas(Dep(cas): Dep<Disk>, Path(key): Path<String>) -> Body {
-    todo!("1. Validate JWT and extract org_id, user_id");
-    todo!("2. Check if key is in in-memory cache");
-    todo!("3. If not in cache, check database for access");
-    todo!("4. If access granted, add to cache");
-    todo!("5. Stream blob from CAS storage (decompress zstd)");
-    todo!("6. Asynchronously record access frequency");
+    todo!()
 }
 
 async fn write_cas(Dep(cas): Dep<Disk>, Path(key): Path<String>, body: Body) -> StatusCode {
-    todo!("1. Validate JWT and extract org_id, user_id");
-    todo!("2. Stream body to temporary file");
-    todo!("3. Compute blake3 hash while streaming");
-    todo!("4. Verify hash matches key parameter");
-    todo!("5. Compress with zstd level 3");
-    todo!("6. Rename to final location (idempotent)");
-    todo!("7. Grant org access to key in database");
-    todo!("8. Asynchronously record access frequency");
-    StatusCode::CREATED
+    todo!()
 }

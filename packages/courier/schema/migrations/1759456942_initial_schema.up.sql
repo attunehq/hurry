@@ -1,19 +1,19 @@
-CREATE TABLE organization (
+CREATE TABLE organizations (
   id bigserial PRIMARY KEY NOT NULL,
   name TEXT NOT NULL,
   created TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE "user" (
+CREATE TABLE users (
   id bigserial PRIMARY KEY NOT NULL,
-  organization_id BIGINT REFERENCES organization (id) NOT NULL,
+  organization_id BIGINT REFERENCES organizations (id) NOT NULL,
   email TEXT NOT NULL UNIQUE,
   created TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE api_key (
+CREATE TABLE api_keys (
   id bigserial PRIMARY KEY NOT NULL,
-  user_id BIGINT REFERENCES "user" (id) NOT NULL,
+  user_id BIGINT REFERENCES users (id) NOT NULL,
   content BYTEA NOT NULL,
   created TIMESTAMPTZ NOT NULL DEFAULT now(),
   accessed TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -21,7 +21,7 @@ CREATE TABLE api_key (
   UNIQUE (content)
 );
 
-CREATE TABLE cas_key (
+CREATE TABLE cas_keys (
   id bigserial PRIMARY KEY NOT NULL,
   content BYTEA NOT NULL,
   created TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -29,15 +29,15 @@ CREATE TABLE cas_key (
 );
 
 CREATE TABLE cas_access (
-  org_id BIGINT REFERENCES organization (id) NOT NULL,
-  cas_key_id BIGINT REFERENCES cas_key (id) NOT NULL,
+  org_id BIGINT REFERENCES organizations (id) NOT NULL,
+  cas_key_id BIGINT REFERENCES cas_keys (id) NOT NULL,
   created TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (org_id, cas_key_id)
 );
 
 CREATE TABLE frequency_user_cas_key (
-  user_id BIGINT REFERENCES "user" (id) NOT NULL,
-  cas_key_id BIGINT REFERENCES cas_key (id) NOT NULL,
+  user_id BIGINT REFERENCES users (id) NOT NULL,
+  cas_key_id BIGINT REFERENCES cas_keys (id) NOT NULL,
   accessed TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, cas_key_id, accessed)
 );

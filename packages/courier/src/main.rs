@@ -8,8 +8,7 @@ use aerosol::Aero;
 use atomic_time::AtomicInstant;
 use clap::Parser;
 use color_eyre::{Result, eyre::Context};
-use secrecy::{ExposeSecret, SecretString};
-use sqlx::postgres::PgPoolOptions;
+use derive_more::Debug;
 use tap::Pipe;
 use tracing::level_filters::LevelFilter;
 use tracing_error::ErrorLayer;
@@ -44,7 +43,8 @@ enum Command {
 struct ServeConfig {
     /// Database URL
     #[arg(long, env = "DATABASE_URL")]
-    database_url: SecretString,
+    #[debug(ignore)]
+    database_url: String,
 
     /// Port to listen on
     #[arg(long, env = "PORT", default_value = "3000")]
@@ -63,7 +63,8 @@ struct ServeConfig {
 struct MigrateConfig {
     /// Database URL
     #[arg(long, env = "DATABASE_URL")]
-    database_url: SecretString,
+    #[debug(ignore)]
+    database_url: String,
 }
 
 #[tokio::main]
@@ -103,8 +104,12 @@ async fn main() -> Result<()> {
 async fn serve(config: ServeConfig) -> Result<()> {
     tracing::info!("constructing application router...");
     let storage = storage::Disk::new(&config.cas_root);
-    let router = api::router(Aero::new().with(storage));
+    let db = Postgres::connect(&config.database_url)
+        .await
+        .context("connect to database")?;
+    let router = api::router(Aero::new().with(storage).with(db));
 
+    // TODO: add graceful shutdown
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("listening on {}", listener.local_addr()?);
@@ -116,12 +121,12 @@ async fn serve(config: ServeConfig) -> Result<()> {
 async fn migrate(config: MigrateConfig) -> Result<()> {
     tracing::info!("applying migrations...");
 
-    let pool = PgPoolOptions::new()
-        .connect(config.database_url.expose_secret())
+    let pool = Postgres::connect(&config.database_url)
         .await
         .context("connect to database")?;
+
     Postgres::MIGRATOR
-        .run(&pool)
+        .run(pool.as_ref())
         .await
         .context("apply migrations")?;
 
