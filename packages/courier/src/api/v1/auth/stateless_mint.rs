@@ -29,11 +29,11 @@ pub async fn handle(
                 .await;
             match allowed {
                 Ok(allowed) => {
-                    info!(allowed = ?allowed.len(), user = ?token.user_id, org = ?token.org_id, "inserting allowed cas keys");
+                    info!(allowed = ?allowed.len(), user = ?token.user_id, org = ?token.org_id, "insert allowed cas keys");
                     keysets.organization(org_id).insert_all(allowed);
                 }
                 Err(error) => {
-                    warn!(?error, user = ?token.user_id, "unable to get allowed cas keys for user");
+                    warn!(?error, user = ?token.user_id, "get allowed cas keys");
                 }
             }
             MintStatelessResponse::Success(token.into_stateless())

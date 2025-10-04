@@ -47,20 +47,25 @@ pub async fn handle(
             //    [`Disk::write`]) and we can just clean these up at the same
             //    time.
             if let Err(err) = db.grant_org_cas_key(token.org_id, &key).await {
-                error!(?err, user = ?token.user_id, org = ?token.org_id, "error granting org access to cas key");
+                error!(?err, user = ?token.user_id, org = ?token.org_id, "grant org access to cas key");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
 
             keysets.organization(token.org_id).insert(key.clone());
 
-            if let Err(err) = db.record_cas_key_access(token.user_id, &key).await {
-                warn!(?err, user = ?token.user_id, "error recording cas key access");
-            }
+            // We record access frequency asynchronously to avoid blocking
+            // the overall request, since access frequency is a "nice to
+            // have" feature while latency is a "must have" feature.
+            tokio::spawn(async move {
+                if let Err(err) = db.record_cas_key_access(token.user_id, &key).await {
+                    warn!(?err, user = ?token.user_id, "record cas key access");
+                }
+            });
 
             StatusCode::CREATED.into_response()
         }
         Err(err) => {
-            error!(?err, "error writing cas key");
+            error!(?err, "write cas key");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }

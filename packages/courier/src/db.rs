@@ -85,16 +85,17 @@ impl Postgres {
 
     /// Get the allowed CAS keys for the given user.
     ///
-    /// Today this just returns all CAS keys, but in the future we plan to
-    /// select the top N most frequently accessed keys.
+    /// Returns the top N most frequently accessed keys for the user based on
+    /// access patterns over the last 7 days.
     pub async fn user_allowed_cas_keys(&self, user_id: UserId, limit: u64) -> Result<HashSet<Key>> {
-        // TODO: use frequency_user_cas_key once it's implemented
         let mut rows = sqlx::query!(
-            "select cas_keys.content
-            from cas_keys
-            join cas_access on cas_keys.id = cas_access.cas_key_id
-            join users on cas_access.org_id = users.organization_id
-            where users.id = $1
+            "select cas_keys.content, count(*) as freq
+            from frequency_user_cas_key
+            join cas_keys on frequency_user_cas_key.cas_key_id = cas_keys.id
+            where frequency_user_cas_key.user_id = $1
+            and frequency_user_cas_key.accessed > now() - interval '7 days'
+            group by cas_keys.id, cas_keys.content
+            order by freq desc
             limit $2",
             user_id.as_i64(),
             limit as i64,

@@ -24,11 +24,9 @@ pub async fn handle(
                 StatusCode::NOT_FOUND
             }
         }
-        Ok(false) => {
-            StatusCode::NOT_FOUND
-        }
+        Ok(false) => StatusCode::NOT_FOUND,
         Err(err) => {
-            error!(?err, "error checking allowed cas key");
+            error!(?err, "check allowed cas key");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
