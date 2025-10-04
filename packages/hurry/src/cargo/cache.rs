@@ -12,15 +12,15 @@ use sqlx::{
 use tracing::{debug, instrument, trace};
 
 use crate::{
-    cargo::{self, BuildPlan, CargoCompileMode, Profile, RustcMetadata, UnitGraph, Workspace},
+    cargo::{self, BuildPlan, CargoCompileMode, Profile, ProfileDir, RustcMetadata, UnitGraph, Workspace},
     fs, mk_rel_dir, mk_rel_file,
-    path::{AbsDirPath, JoinWith as _},
+    path::{AbsDirPath, JoinWith as _}, Locked,
 };
 
 #[derive(Debug, Clone)]
 pub struct CargoCache {
     db: SqlitePool,
-    ws: Workspace,
+    pub ws: Workspace,
 }
 
 impl CargoCache {
@@ -62,7 +62,7 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::artifacts")]
-    pub async fn artifacts(&self, profile: &Profile) -> Result<Vec<DependencyArtifacts>> {
+    pub async fn artifacts(&self, profile: &Profile) -> Result<Vec<ArtifactPlan>> {
         let rustc = RustcMetadata::from_argv(&self.ws.root, &[])
             .await
             .context("parsing rustc metadata")?;
@@ -95,6 +95,7 @@ impl CargoCache {
         let mut build_script_index_to_dir = HashMap::new();
         let mut build_script_program_file_to_index = HashMap::new();
         let mut build_script_executions = HashMap::new();
+        let mut artifacts = Vec::new();
         for (i, invocation) in build_plan.invocations.iter().enumerate() {
             trace!(?invocation, "build plan invocation");
             // For each invocation, figure out what kind it is:
@@ -223,21 +224,57 @@ impl CargoCache {
                     deps = ?invocation.deps,
                     "artifacts to save"
                 );
+                artifacts.push(ArtifactPlan {
+                    package_name: invocation.package_name.clone(),
+                    package_version: invocation.package_version.clone(),
+                    compiled_files: invocation.outputs.clone(),
+                    build_script_files: build_script_dir.map(|dir| BuildScriptDirs {
+                        compiled_dir: todo!(),
+                        output_dir: todo!(),
+                        // compiled_dir: dir.clone(),
+                        // output_dir: build_script_output_dir.clone(),
+                    }),
+                });
 
                 // Now, we need to determine the information that we need to key
                 // the cached artifact.
+
+                // Finally, we return two things:
+                // 1. The key to use in restoration (although this may need to
+                //    happen interactively as we discover things like build
+                //    script output directives).
+                // 2. The artifact folders to save (although this needs to be
+                //    augmented by actual build messages).
+                //
+                // What is this structure called? Maybe something like an
+                // "artifact skeleton"? Or an ArtifactPlan?
             } else {
                 bail!("unknown target kind: {:?}", invocation.target_kind);
             }
         }
-
-        todo!()
+        Ok(artifacts)
     }
 }
 
-pub struct DependencyKey {}
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub struct ArtifactPlan {
+    // Partial artifact key information. Note that this is only derived from the
+    // build plan, and therefore is missing essential information (e.g. `rustc`
+    // flags from build script output directives) that can only be determined
+    // interactively.
+    package_name: String,
+    package_version: String,
 
-pub struct DependencyArtifacts {}
+    // Artifact folders to save and restore.
+    compiled_files: Vec<String>,
+    build_script_files: Option<BuildScriptDirs>,
+}
+
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub struct BuildScriptDirs {
+    compiled_dir: String,
+    output_dir: String,
+}
 
 /*
 

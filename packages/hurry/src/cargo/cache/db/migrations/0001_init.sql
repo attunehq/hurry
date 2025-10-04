@@ -1,3 +1,47 @@
+-- ---- TABLES FOR RUSTC INVOCATION CACHE ----
+
+/*CREATE TABLE cargo_workspace (
+  id INTEGER PRIMARY KEY,
+  workspace_root_dir TEXT NOT NULL
+);
+
+CREATE TABLE hurry_invocation (
+  id INTEGER PRIMARY KEY,
+  workspace_id INTEGER NOT NULL REFERENCES cargo_workspace(id),
+
+  -- This is a Unix timestamp.
+  invoked_at INTEGER NOT NULL,
+
+  -- This is stored as a JSON array of strings.
+  argv TEXT NOT NULL,
+
+  -- This is stored as a JSON object of key-value strings, sorted
+  -- lexicographically by key.
+  env TEXT NOT NULL,
+
+  -- The current working directory of the invocation.
+  cwd TEXT NOT NULL
+);
+
+CREATE TABLE rustc_invocation (
+  id INTEGER PRIMARY KEY,
+  hurry_invocation_id INTEGER NOT NULL REFERENCES hurry_invocation(id),
+  -- This is a Unix timestamp.
+  invoked_at INTEGER NOT NULL,
+
+  -- This is stored as a JSON array of strings.
+  argv TEXT NOT NULL,
+
+  -- This is stored as a JSON object of key-value strings, sorted
+  -- lexicographically by key.
+  env TEXT NOT NULL,
+
+  -- The current working directory of the invocation.
+  cwd TEXT NOT NULL
+);*/
+
+-- ---- TABLES FOR PACKAGE CACHE ----
+
 -- Objects stored in the CAS.
 CREATE TABLE object (
   id INTEGER PRIMARY KEY,
@@ -78,6 +122,15 @@ CREATE TABLE package_build (
 
   -- TODO: We will need to add some fields to capture build script outputs,
   -- especially directives that should cause the cached artifacts to invalidate.
+  -- This may include:
+  --
+  -- 1. The hash of paths specified by `cargo::rerun-if-changed`.
+  -- 2. The environment variable keys and values specified by
+  --    `cargo::rerun-if-env-changed`.
+  -- 3. Other `cargo::` directives, especially ones that set `rustc` flags.
+  -- 4. The flags of the full `rustc` invocation.
+  --
+  -- See also: https://github.com/attunehq/hurry/pull/55
 );
 
 -- A `package_build_dependency` is a crate `package_build` that is used as a
@@ -99,6 +152,9 @@ CREATE TABLE package_build_artifact (
 
   -- The path of the artifact within the target directory.
   path TEXT NOT NULL,
+
+  -- The mtime of the artifact.
+  mtime INTEGER NOT NULL,
 
   -- Whether the artifact should have its executable permission bit set.
   executable BOOLEAN NOT NULL

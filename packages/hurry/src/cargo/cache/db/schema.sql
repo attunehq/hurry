@@ -70,7 +70,7 @@ CREATE TABLE package_build (
   features TEXT NOT NULL,
 
   -- The Rust compiler edition.
-  edition TEXT NOT NULL
+  edition TEXT NOT NULL,
 
   -- TODO: Do we need to add the Rust compiler version as a key? I think the
   -- answer is no, but `cargo build` does call `rustc -vV` on boot.
@@ -91,6 +91,15 @@ CREATE TABLE package_build (
 
   -- TODO: We will need to add some fields to capture build script outputs,
   -- especially directives that should cause the cached artifacts to invalidate.
+  -- This may include:
+  --
+  -- 1. The hash of paths specified by `cargo::rerun-if-changed`.
+  -- 2. The environment variable keys and values specified by
+  --    `cargo::rerun-if-env-changed`.
+  -- 3. Other `cargo::` directives, especially ones that set `rustc` flags.
+  -- 4. The flags of the full `rustc` invocation.
+  --
+  -- See also: https://github.com/attunehq/hurry/pull/55
 );
 
 -- A `package_build_dependency` is a crate `package_build` that is used as a
@@ -112,6 +121,9 @@ CREATE TABLE package_build_artifact (
 
   -- The path of the artifact within the target directory.
   path TEXT NOT NULL,
+
+  -- The mtime of the artifact.
+  mtime INTEGER NOT NULL,
 
   -- Whether the artifact should have its executable permission bit set.
   executable BOOLEAN NOT NULL

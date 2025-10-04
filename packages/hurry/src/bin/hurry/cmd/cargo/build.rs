@@ -4,16 +4,27 @@
 //! - `docs/DESIGN.md`
 //! - `docs/development/cargo.md`
 
-use std::fmt::Debug;
+use std::{
+    collections::HashMap,
+    ffi::OsStr,
+    fmt::Debug,
+    process::Stdio,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
+use cargo_metadata::{Artifact, PackageId};
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use hurry::{
-    cargo::{self, CargoCache, Profile, Workspace},
+    cargo::{
+        self, CargoCache, Handles, INVOCATION_LOG_DIR_ENV_VAR, Profile, Workspace,
+        invocation_log_dir,
+    },
     cas::FsCas,
     fs,
     path::TryJoinWith as _,
 };
+use tokio::io::AsyncBufReadExt;
 use tracing::{error, info, instrument, warn};
 
 /// Options for `cargo build`.
@@ -58,109 +69,103 @@ pub async fn exec(options: Options) -> Result<()> {
     // Open workspace.
     let workspace = Workspace::from_argv(&options.argv)
         .await
-        .context("open workspace")?;
+        .context("opening workspace")?;
     let profile = options.profile();
 
     // Open backing storage services.
-    let cas = FsCas::open_default().await.context("open CAS")?;
+    let cas = FsCas::open_default().await.context("opening CAS")?;
     let cache = CargoCache::open_default(workspace)
         .await
-        .context("open cache")?;
+        .context("opening cache")?;
 
-    // TODO: Compute expected artifacts.
+    // Compute expected artifacts.
     let artifacts = cache
         .artifacts(&profile)
         .await
         .context("calculating expected artifacts")?;
 
-    todo!();
+    // TODO: Restore artifacts.
 
-    // This is split into an inner function so that we can reliably
-    // release the lock if it fails.
-    let result = {
-        let profile = options.profile();
+    // Run the build.
+    if !options.skip_build {
+        info!("Building target directory");
 
-        if !options.skip_restore {
-            info!(?cache, "Restoring target directory from cache");
-            let target = workspace
+        // Record `rustc` invocations. We need these invocations in order to
+        // properly key the cache against `rustc` flags.
+        //
+        // These flags cannot be read out of the build plan or unit graph
+        // because they are not known until build scripts are executed, and they
+        // can't be read out of the build JSON messages because the message
+        // format does not include this information.
+        //
+        // We record these invocations by using a `rustc` wrapper that writes
+        // the invocation and immediately delegates to the real `rustc`. The
+        // invocation logging directory format is:
+        //
+        // ```
+        // ./target/<profile>/hurry/rustc/<hurry_invocation_timestamp>/<rustc_unit_hash>.json
+        // ```
+        //
+        // This format allows us to quickly find the `rustc` invocation for a
+        // particular unit hash, and allows us to quickly search _previous_
+        // `hurry` invocations to see whether a recorded `rustc` invocation is
+        // available for a particular unit. This "quick historical search"
+        // capability is important because `rustc` is not invoked for crates
+        // that have _already been compiled_, and because cargo does not record
+        // the `rustc` invocation anywhere else (in particular, cargo _does_
+        // replay old build JSON messages, but these messages do not contain
+        // information about `rustc` flags).
+        //
+        // TODO: Is this really necessary? Can we just reconstruct the
+        // invocation by parsing the build script output for each unit and
+        // simulating the `rustc` invocation construction?
+        let cargo_invocation_log_dir = {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("current time should be after Unix epoch");
+            cache
+                .ws
                 .open_profile_locked(&profile)
                 .await
-                .context("open profile")?;
-
-            // let restore = restore_target_from_cache(cas, cache, &target, |key, dependency| {
-            //     info!(
-            //         name = %dependency.package_name,
-            //         version = %dependency.version,
-            //         // target = %dependency.target,
-            //         %key,
-            //         "Restored dependency from cache",
-            //     )
-            // });
-            // match restore.await {
-            //     Ok(_) => info!("Restored cache"),
-            //     Err(error) => warn!(?error, "Failed to restore cache"),
-            // }
-        }
-
-        // After restoring the target directory from cache,
-        // or if we never had a cache, we need to build it-
-        // this is because we currently only cache based on lockfile hash;
-        // if the first-party code has changed we'll need to rebuild.
-        if !options.skip_build {
-            // Ensure that the Hurry build cache within `target` is created for the
-            // invocation, and that the build is run with the Hurry wrapper.
-            let cargo_invocation_id = uuid::Uuid::new_v4();
-            fs::create_dir_all(
-                &workspace
-                    .target
-                    .try_join_dirs(["hurry", "invocations", &cargo_invocation_id.to_string()])
-                    .context("invalid cargo invocation cache dirname")?,
-            )
+                .context("opening target directory")?
+                .root()
+                .try_join_dirs(["hurry", "rustc", &timestamp.as_nanos().to_string()])
+                .expect("rustc invocation log dir should be valid")
+        };
+        fs::create_dir_all(&cargo_invocation_log_dir)
             .await
             .context("create build-scoped Hurry cache")?;
-            let cwd = std::env::current_dir().context("load build root")?;
 
-            info!("Building target directory");
-            cargo::invoke("build", &options.argv)
-                .await
-                .context("build with cargo")?;
-        }
+        let mut child = cargo::invoke_with(
+            "build",
+            &options.argv,
+            [
+                ("RUSTC_WRAPPER", "hurry-cargo-rustc-wrapper".as_ref()),
+                (
+                    INVOCATION_LOG_DIR_ENV_VAR,
+                    cargo_invocation_log_dir.as_os_str(),
+                ),
+            ],
+            Handles {
+                stdout: Stdio::inherit(),
+                stderr: Stdio::inherit(),
+            },
+        )
+        .await
+        .context("build with cargo")?;
 
-        // If we didn't have a cache, we cache the target directory
-        // after the build finishes.
-        //
-        // We don't _always_ cache because since we don't currently
-        // cache based on first-party code changes so this would lead to
-        // lots of unnecessary copies.
-        //
-        // TODO: watch and cache the target directory _as the build occurs_
-        // rather than having to copy it all at the end.
-        if !options.skip_backup {
-            info!("Caching built target directory");
-            let target = workspace
-                .open_profile_locked(&profile)
-                .await
-                .context("open profile")?;
+        // TODO: Handle the case where the build fails. Maybe bail here?
+        let result = child
+            .wait()
+            .await
+            .context("Couldn't get cargo's exit status")?;
 
-            // let backup = cache_target_from_workspace(cas, cache, &target, |key, dependency| {
-            //     info!(
-            //         name = %dependency.package_name,
-            //         version = %dependency.version,
-            //         // target = %dependency.target,
-            //         %key,
-            //         "Updated dependency in cache",
-            //     )
-            // });
-            // match backup.await {
-            //     Ok(_) => info!("Cached target directory"),
-            //     Err(error) => warn!(?error, "Failed to cache target"),
-            // }
-        }
+        // TODO: Read the build script output from the build folders, and parse the output for directives.
+    }
 
-        Ok(())
-    };
-
-    result
-        .inspect(|_| info!("finished"))
-        .inspect_err(|error| error!(?error, "failed: {error:#?}"))
+    // Cache the built artifacts.
+    if !options.skip_backup {
+        info!("Caching built artifacts");
+    }
+    todo!()
 }
