@@ -35,9 +35,9 @@ async fn check_allowed(
     token: &AuthenticatedStatelessToken,
 ) -> Result<bool> {
     let allowed = keysets.organization(token.org_id);
-    if !allowed.contains(&key) {
+    if !allowed.contains(key) {
         let access = db
-            .user_has_cas_key(token.user_id, &key)
+            .user_has_cas_key(token.user_id, key)
             .await
             .context("check user has cas key")?;
         if access {

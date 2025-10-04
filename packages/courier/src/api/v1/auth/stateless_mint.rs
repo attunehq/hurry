@@ -21,7 +21,6 @@ pub async fn handle(
     Dep(keysets): Dep<KeySets>,
     Dep(db): Dep<Postgres>,
 ) -> MintStatelessResponse {
-    let org_id = org_id.into();
     match db.validate(org_id, token).await {
         Ok(None) => MintStatelessResponse::Unauthorized,
         Ok(Some(token)) => {

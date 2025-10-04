@@ -464,9 +464,9 @@ impl AuthenticatedToken {
     }
 }
 
-impl Into<RawToken> for AuthenticatedToken {
-    fn into(self) -> RawToken {
-        self.token
+impl From<AuthenticatedToken> for RawToken {
+    fn from(val: AuthenticatedToken) -> Self {
+        val.token
     }
 }
 

@@ -24,7 +24,7 @@ pub async fn handle(
     body: Body,
 ) -> Response {
     let stream = body.into_data_stream();
-    let stream = stream.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err));
+    let stream = stream.map_err(std::io::Error::other);
     let reader = StreamReader::new(stream);
 
     // Note: [`Disk::write`] validates that the content hashes to the provided
