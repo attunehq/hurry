@@ -109,6 +109,65 @@ impl Postgres {
         }
         Ok(keys)
     }
+
+    /// Grant an organization access to a CAS key.
+    ///
+    /// This is idempotent: if the org already has access, this is a no-op.
+    /// The key is automatically inserted into `cas_keys` if it doesn't exist.
+    pub async fn grant_org_cas_key(&self, org_id: OrgId, key: &Key) -> Result<()> {
+        // We use a two-CTE approach to handle the "insert or get existing"
+        // pattern in a single round trip without creating dead tuples:
+        //
+        // 1. `inserted` CTE: tries to insert the key, returns ID if successful
+        // 2. `key_id` CTE: unions the insert result with a fallback SELECT that
+        //    only runs if the insert returned nothing (due to conflict)
+        // 3. Final INSERT: grants access using the key ID from step 2
+        //
+        // We avoid using `ON CONFLICT DO UPDATE` because that creates dead
+        // tuples even when doing a no-op update, which increases vacuum
+        // overhead.
+        sqlx::query!(
+            "with inserted as (
+                insert into cas_keys (content)
+                values ($2)
+                on conflict (content) do nothing
+                returning id
+            ),
+            key_id as (
+                select id from inserted
+                union all
+                select id from cas_keys where content = $2
+                limit 1
+            )
+            insert into cas_access (org_id, cas_key_id)
+            select $1, id from key_id
+            on conflict (org_id, cas_key_id) do nothing",
+            org_id.as_i64(),
+            key.as_bytes(),
+        )
+        .execute(&self.pool)
+        .await
+        .context("grant org access to cas key")?;
+
+        Ok(())
+    }
+
+    /// Record that a user accessed a CAS key.
+    ///
+    /// This is used for frequency tracking to preload hot keys into memory.
+    pub async fn record_cas_key_access(&self, user_id: UserId, key: &Key) -> Result<()> {
+        sqlx::query!(
+            "insert into frequency_user_cas_key (user_id, cas_key_id)
+            select $1, id from cas_keys where content = $2",
+            user_id.as_i64(),
+            key.as_bytes(),
+        )
+        .execute(&self.pool)
+        .await
+        .context("record cas key access")?;
+
+        Ok(())
+    }
 }
 
 impl AsRef<PgPool> for Postgres {

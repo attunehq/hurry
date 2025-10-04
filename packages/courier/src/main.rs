@@ -19,7 +19,6 @@ use crate::{auth::KeySets, db::Postgres};
 
 mod api;
 mod auth;
-mod cache;
 mod db;
 mod storage;
 

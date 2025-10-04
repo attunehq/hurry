@@ -1,9 +1,10 @@
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
+use tracing::{info, warn};
 
 use crate::{
-    auth::{AuthenticatedStatelessToken, OrgId, RawToken},
+    auth::{AuthenticatedStatelessToken, KeySets, OrgId, OrgKeySet, RawToken},
     db::Postgres,
 };
 
@@ -17,12 +18,27 @@ pub enum MintStatelessResponse {
 pub async fn handle(
     token: RawToken,
     org_id: OrgId,
+    Dep(keysets): Dep<KeySets>,
     Dep(db): Dep<Postgres>,
 ) -> MintStatelessResponse {
     let org_id = org_id.into();
     match db.validate(org_id, token).await {
         Ok(None) => MintStatelessResponse::Unauthorized,
-        Ok(Some(token)) => MintStatelessResponse::Success(token.into_stateless()),
+        Ok(Some(token)) => {
+            let allowed = db
+                .user_allowed_cas_keys(token.user_id, OrgKeySet::DEFAULT_LIMIT)
+                .await;
+            match allowed {
+                Ok(allowed) => {
+                    info!(allowed = ?allowed.len(), user = ?token.user_id, org = ?token.org_id, "inserting allowed cas keys");
+                    keysets.organization(org_id).insert_all(allowed);
+                }
+                Err(error) => {
+                    warn!(?error, user = ?token.user_id, "unable to get allowed cas keys for user");
+                }
+            }
+            MintStatelessResponse::Success(token.into_stateless())
+        }
         Err(error) => MintStatelessResponse::Error(error),
     }
 }

@@ -177,7 +177,7 @@ impl Disk {
     ///
     /// Note: the returned reader is buffered with the capacity of
     /// [`Disk::DEFAULT_BUF_SIZE`]; callers should probably not buffer further.
-    pub async fn read(&self, key: &Key) -> Result<impl AsyncRead + Unpin> {
+    pub async fn read(&self, key: &Key) -> Result<impl AsyncRead + Unpin + 'static> {
         let path = self.key_path(key);
         File::open(&path)
             .await

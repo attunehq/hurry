@@ -334,6 +334,13 @@ impl OrgKeySet {
     pub fn insert(&self, key: Key) {
         self.0.insert(key, ());
     }
+
+    /// Insert all keys into the set.
+    pub fn insert_all(&self, allowed: impl IntoIterator<Item = Key>) {
+        for key in allowed {
+            self.0.insert(key, ());
+        }
+    }
 }
 
 /// An ID uniquely identifying an organization.
@@ -360,10 +367,6 @@ impl OrgId {
 
     pub fn as_u64(&self) -> u64 {
         self.0
-    }
-
-    pub fn from_i64(id: i64) -> Self {
-        Self(id as u64)
     }
 
     pub fn from_u64(id: u64) -> Self {
@@ -457,15 +460,6 @@ impl AuthenticatedToken {
             user_id: self.user_id,
             org_id: self.org_id,
             token: self.token,
-        }
-    }
-
-    /// Create a stateless representation of the authenticated token.
-    pub fn as_stateless(&self) -> AuthenticatedStatelessToken {
-        AuthenticatedStatelessToken {
-            user_id: self.user_id,
-            org_id: self.org_id,
-            token: self.token.clone(),
         }
     }
 }

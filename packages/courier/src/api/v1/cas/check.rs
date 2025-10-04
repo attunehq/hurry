@@ -12,8 +12,8 @@ use crate::{
 pub async fn handle(
     token: AuthenticatedStatelessToken,
     Dep(keysets): Dep<KeySets>,
-    Dep(cas): Dep<Disk>,
     Dep(db): Dep<Postgres>,
+    Dep(cas): Dep<Disk>,
     Path(key): Path<Key>,
 ) -> StatusCode {
     match check_allowed(&keysets, &db, &key, &token).await {
