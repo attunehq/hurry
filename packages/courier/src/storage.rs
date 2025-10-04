@@ -1,4 +1,3 @@
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use async_compression::tokio::bufread::ZstdDecoder;
@@ -187,16 +186,6 @@ impl Disk {
             .map(|reader| BufReader::with_capacity(Self::DEFAULT_BUF_SIZE, reader))
     }
 
-    /// Read the content from storage for the provided key.
-    pub async fn read_buffered(&self, key: &Key) -> Result<Vec<u8>> {
-        let mut content = self.read(key).await?;
-        let mut buffer = Vec::new();
-        tokio::io::copy(&mut content, &mut buffer)
-            .await
-            .with_context(|| "read decompressed blob content")?;
-        Ok(buffer)
-    }
-
     /// Write the content to storage for the provided key.
     pub async fn write(&self, key: &Key, content: impl AsyncRead + Unpin) -> Result<()> {
         let path = self.key_path(key);
@@ -264,12 +253,6 @@ impl Disk {
             }
         }
     }
-
-    /// Write the content to storage for the provided key.
-    pub async fn write_buffered(&self, key: &Key, content: impl AsRef<[u8]>) -> Result<()> {
-        let cursor = Cursor::new(content.as_ref());
-        self.write(key, cursor).await
-    }
 }
 
 /// Generate a temporary file path in the same directory as the target.
@@ -332,12 +315,29 @@ mod tests {
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use proptest::{prop_assert, prop_assert_eq, prop_assert_ne};
     use simple_test_case::test_case;
+    use std::io::Cursor;
     use tempfile::TempDir;
     use test_strategy::proptest;
     use zstd::bulk::decompress;
 
     fn key_for(input: &[u8]) -> Key {
         Key::from(blake3::hash(input))
+    }
+
+    /// Test helper: read and buffer the entire content from storage.
+    async fn read_buffered(disk: &Disk, key: &Key) -> Result<Vec<u8>> {
+        let mut content = disk.read(key).await?;
+        let mut buffer = Vec::new();
+        tokio::io::copy(&mut content, &mut buffer)
+            .await
+            .with_context(|| "read decompressed blob content")?;
+        Ok(buffer)
+    }
+
+    /// Test helper: write buffered content to storage.
+    async fn write_buffered(disk: &Disk, key: &Key, content: impl AsRef<[u8]>) -> Result<()> {
+        let cursor = Cursor::new(content.as_ref());
+        disk.write(key, cursor).await
     }
 
     #[test_case(Vec::from(b"hello world\n"); "short input")]
@@ -386,10 +386,10 @@ mod tests {
         let storage = Disk::new(temp_dir.path().to_path_buf());
 
         let key = key_for(&content);
-        storage.write_buffered(&key, &content).await?;
+        write_buffered(&storage, &key, &content).await?;
         pretty_assert_eq!(storage.exists(&key).await, true);
 
-        let read_content = storage.read_buffered(&key).await?;
+        let read_content = read_buffered(&storage, &key).await?;
         pretty_assert_eq!(read_content, content);
 
         Ok(())
@@ -403,10 +403,10 @@ mod tests {
         let storage = Disk::new(temp_dir.path().to_path_buf());
 
         let key = key_for(&content);
-        storage.write_buffered(&key, &content).await?;
-        storage.write_buffered(&key, &content).await?;
+        write_buffered(&storage, &key, &content).await?;
+        write_buffered(&storage, &key, &content).await?;
 
-        let read_content = storage.read_buffered(&key).await?;
+        let read_content = read_buffered(&storage, &key).await?;
         pretty_assert_eq!(read_content, content);
 
         Ok(())
@@ -421,11 +421,11 @@ mod tests {
 
         let key = key_for(&content);
         tokio::try_join!(
-            storage.write_buffered(&key, &content),
-            storage.write_buffered(&key, &content)
+            write_buffered(&storage, &key, &content),
+            write_buffered(&storage, &key, &content)
         )?;
 
-        let read_content = storage.read_buffered(&key).await?;
+        let read_content = read_buffered(&storage, &key).await?;
         pretty_assert_eq!(read_content, content);
 
         Ok(())
@@ -441,7 +441,7 @@ mod tests {
         let key = key_for(b"nonexistent");
 
         assert!(!storage.exists(&key).await);
-        assert!(storage.read_buffered(&key).await.is_err());
+        assert!(read_buffered(&storage, &key).await.is_err());
 
         Ok(())
     }
@@ -453,7 +453,7 @@ mod tests {
 
         let key = key_for(&content);
         let key_hex = key.to_hex();
-        storage.write_buffered(&key, &content).await.expect("write");
+        write_buffered(&storage, &key, &content).await.expect("write");
 
         let expected_path = temp_dir
             .path()
@@ -482,19 +482,19 @@ mod tests {
 
         for content in &blobs {
             let key = key_for(&content);
-            storage.write_buffered(&key, &content).await.expect("write");
+            write_buffered(&storage, &key, &content).await.expect("write");
         }
 
         for content in blobs {
             let key = key_for(&content);
-            let read_content = storage.read_buffered(&key).await.expect("read");
+            let read_content = read_buffered(&storage, &key).await.expect("read");
             prop_assert_eq!(read_content, content);
         }
     }
 
-    /// The `write_buffered` and `read_buffered` methods use the streaming API
-    /// internally so this test is mainly just to double check that they work as
-    /// expected.
+    /// The test helper `write_buffered` and `read_buffered` use the streaming
+    /// API internally so this test is mainly just to double check that they work
+    /// as expected.
     #[proptest(async = "tokio")]
     async fn streaming_roundtrip(#[any] content: Vec<u8>) {
         let temp_dir = TempDir::new().expect("temp dir");
@@ -521,7 +521,7 @@ mod tests {
 
         let key = key_for(&content);
         prop_assert!(!storage.exists(&key).await, "doesn't exist before write");
-        storage.write_buffered(&key, &content).await.expect("write");
+        write_buffered(&storage, &key, &content).await.expect("write");
         prop_assert!(storage.exists(&key).await, "exists after write");
     }
 }
