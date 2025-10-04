@@ -13,7 +13,7 @@ const MAX_BODY_SIZE: usize = 100 * 1024 * 1024;
 pub type State = Aero![
     crate::db::Postgres,
     crate::storage::Disk,
-    crate::auth::KeyCache
+    crate::auth::KeySets,
 ];
 
 pub fn router(state: State) -> Router {

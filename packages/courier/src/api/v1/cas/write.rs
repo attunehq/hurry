@@ -1,22 +1,19 @@
 use aerosol::axum::Dep;
-use axum::{
-    Router,
-    body::Body,
-    extract::Path,
-    http::StatusCode,
-    routing::{get, head, put},
-};
+use axum::{body::Body, extract::Path, http::StatusCode};
 
 use crate::{
-    api::State,
-    auth::{KeyCache, OrgId},
+    auth::{AuthenticatedStatelessToken, KeySets},
+    db::Postgres,
     storage::{Disk, Key},
 };
 
 pub async fn handle(
-    Dep(key_cache): Dep<KeyCache>,
+    token: AuthenticatedStatelessToken,
+    Dep(keysets): Dep<KeySets>,
     Dep(cas): Dep<Disk>,
-    Path(key): Path<String>,
+    Dep(db): Dep<Postgres>,
+    Path(key): Path<Key>,
+    mut body: Body,
 ) -> StatusCode {
     todo!()
 }

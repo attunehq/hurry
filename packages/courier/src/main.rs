@@ -15,7 +15,7 @@ use tracing_error::ErrorLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_tree::time::FormatTime;
 
-use crate::{auth::KeyCache, db::Postgres};
+use crate::{auth::KeySets, db::Postgres};
 
 mod api;
 mod auth;
@@ -107,7 +107,7 @@ async fn serve(config: ServeConfig) -> Result<()> {
     let db = Postgres::connect(&config.database_url)
         .await
         .context("connect to database")?;
-    let key_cache = KeyCache::new();
+    let key_cache = KeySets::new();
     let router = api::router(Aero::new().with(key_cache).with(storage).with(db));
 
     // TODO: add graceful shutdown

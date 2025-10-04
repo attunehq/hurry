@@ -66,6 +66,23 @@ impl Postgres {
         })
     }
 
+    /// Check if the given user has access to the given CAS key.
+    pub async fn user_has_cas_key(&self, user_id: UserId, key: &Key) -> Result<bool> {
+        sqlx::query!(
+            "select exists(
+            select 1 from cas_access
+            join users on cas_access.org_id = users.organization_id
+            where users.id = $1
+            and cas_access.cas_key_id = (select id from cas_keys where content = $2))",
+            user_id.as_i64(),
+            key.as_bytes(),
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("fetch user has cas key")
+        .map(|query| query.exists.unwrap_or(false))
+    }
+
     /// Get the allowed CAS keys for the given user.
     ///
     /// Today this just returns all CAS keys, but in the future we plan to

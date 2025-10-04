@@ -25,6 +25,13 @@ use crate::storage::Key;
 /// We generate this at startup because the stateless tokens are only relevant
 /// for a single running API instance; they're not valid across multiple
 /// instances or restarted instances.
+///
+/// Each instance having its own secret is also nice in that we don't have to
+/// worry about manually validating that the `org_id` passed to the request via
+/// header and the `org_id` in the token match: the stateless token will just
+/// fail to parse if the user provided a different `org_id` in the header
+/// (assuming that caused the ingress to route the request to the wrong
+/// backend instance).
 static STATELESS_TOKEN_SECRET: LazyLock<PasetoSymmetricKey<PasetoV4, PasetoLocal>> =
     LazyLock::new(|| {
         let mut key = [0u8; 32];
@@ -244,16 +251,21 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedStatelessToken {
     }
 }
 
-/// In-memory cache of allowed CAS keys per organization.
+/// In-memory collection of [`OrgKeySet`] per organization.
 ///
 /// This type uses interior mutability to allow for thread-safe operations; even
 /// when you clone an instance the internal cache is still shared with the
 /// original instance.
+///
+/// This type implements an LRU cache per organization; by default the set holds
+/// up to [`KeySets::DEFAULT_LIMIT`] organizations. Each `OrgKeySet` that's
+/// created is initialized with an LRU cache that holds up to
+/// [`OrgKeySet::DEFAULT_LIMIT`] keys by default.
 #[derive(Clone, Debug)]
-#[debug("KeyCache(count = {})", self.0.len())]
-pub struct KeyCache(Arc<SyncCache<OrgId, OrgKeySet>>);
+#[debug("KeySets(count = {})", self.0.len())]
+pub struct KeySets(Arc<SyncCache<OrgId, OrgKeySet>>);
 
-impl KeyCache {
+impl KeySets {
     /// The default number of organizations to cache.
     ///
     /// If more than this number of keys are inserted into the set, the least
@@ -292,6 +304,9 @@ impl KeyCache {
 /// This type uses interior mutability to allow for thread-safe operations; even
 /// when you clone an instance the internal cache is still shared with the
 /// original instance.
+///
+/// This type implements an LRU cache; by default the set holds up to
+/// [`OrgKeySet::DEFAULT_LIMIT`] keys.
 #[derive(Clone, Debug)]
 #[debug("OrgKeySet(count = {})", self.0.len())]
 pub struct OrgKeySet(Arc<SyncCache<Key, ()>>);

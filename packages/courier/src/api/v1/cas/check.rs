@@ -1,22 +1,35 @@
 use aerosol::axum::Dep;
-use axum::{
-    Router,
-    body::Body,
-    extract::Path,
-    http::StatusCode,
-    routing::{get, head, put},
-};
+use axum::{extract::Path, http::StatusCode};
+use tracing::error;
 
 use crate::{
-    api::State,
-    auth::{KeyCache, OrgId},
+    api::v1::cas::check_allowed,
+    auth::{AuthenticatedStatelessToken, KeySets},
+    db::Postgres,
     storage::{Disk, Key},
 };
 
 pub async fn handle(
-    Dep(key_cache): Dep<KeyCache>,
+    token: AuthenticatedStatelessToken,
+    Dep(keysets): Dep<KeySets>,
     Dep(cas): Dep<Disk>,
-    Path(key): Path<String>,
+    Dep(db): Dep<Postgres>,
+    Path(key): Path<Key>,
 ) -> StatusCode {
-    todo!()
+    match check_allowed(&keysets, &db, &key, &token).await {
+        Ok(true) => {
+            if cas.exists(&key).await {
+                return StatusCode::OK;
+            } else {
+                return StatusCode::NOT_FOUND;
+            }
+        }
+        Ok(false) => {
+            return StatusCode::NOT_FOUND;
+        }
+        Err(err) => {
+            error!(?err, "error checking allowed cas key");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    }
 }

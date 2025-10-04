@@ -6,6 +6,7 @@ use async_compression::tokio::write::ZstdEncoder;
 use color_eyre::eyre::bail;
 use color_eyre::{Result, eyre::Context};
 use derive_more::{Display, From};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tokio::fs::{File, create_dir_all, metadata, remove_file, rename};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tracing::warn;
@@ -20,6 +21,11 @@ impl Key {
     /// View the key as a hex string.
     fn to_hex(&self) -> String {
         hex::encode(&self.0)
+    }
+
+    /// Attempt to parse the key from a hex string.
+    pub fn from_hex(hex: &str) -> Result<Self> {
+        hex::decode(hex).context("decode hex").map(Self)
     }
 
     /// View the key as bytes.
@@ -43,6 +49,25 @@ impl PartialEq<blake3::Hash> for Key {
 impl PartialEq<blake3::Hash> for &Key {
     fn eq(&self, other: &blake3::Hash) -> bool {
         self.0 == other.as_bytes()
+    }
+}
+
+impl Serialize for Key {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for Key {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let hex = String::deserialize(deserializer)?;
+        Self::from_hex(&hex).map_err(serde::de::Error::custom)
     }
 }
 
@@ -138,6 +163,11 @@ impl Disk {
     /// - In the current design we don't ever delete blobs. In the future we may
     ///   do so and in that world we may no longer be able to trust "exists"
     ///   checks, but that's not the world we're in today.
+    ///
+    /// This method might incorrectly return that the key doesn't exist due to
+    /// an issue checking the file system. This isn't ideal, but it's _okay_,
+    /// because having the client write the blob again at worst won't change the
+    /// existing data.
     pub async fn exists(&self, key: &Key) -> bool {
         let path = self.key_path(key);
         metadata(&path).await.is_ok()
