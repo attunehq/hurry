@@ -93,11 +93,6 @@ impl StatelessToken {
             .context("custom claim token")
     }
 
-    /// Convert the stateless token into an authenticated token.
-    pub fn authenticated(self) -> AuthenticatedToken {
-        self.into()
-    }
-
     /// Serialize the stateless token to a string.
     pub fn serialize(&self) -> Result<String> {
         let org_id = Self::org_id(self)?;

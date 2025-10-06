@@ -106,6 +106,7 @@ impl IntoResponse for MintStatelessResponse {
 
 #[cfg(test)]
 mod tests {
+    use axum::http::StatusCode;
     use color_eyre::{Result, eyre::Context};
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use serde_json::Value;
@@ -117,7 +118,7 @@ mod tests {
         migrator = "crate::db::Postgres::MIGRATOR",
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
-    async fn test_mint_stateless_token(pool: PgPool) -> Result<()> {
+    async fn mint_stateless_token_happy_path(pool: PgPool) -> Result<()> {
         const TOKEN: &str = "test-token:user1@test1.com";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -137,6 +138,154 @@ mod tests {
         pretty_assert_eq!(stateless.org_id, OrgId::from_u64(1));
         pretty_assert_eq!(stateless.user_id, UserId::from_u64(1));
         pretty_assert_eq!(stateless.token, RawToken::new(TOKEN));
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn mint_with_invalid_token(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let response = server
+            .post("/api/v1/auth")
+            .add_header("Authorization", "Bearer invalid-token-not-in-db")
+            .add_header("x-org-id", "1")
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn mint_with_wrong_org_id(pool: PgPool) -> Result<()> {
+        const TOKEN: &str = "test-token:user1@test1.com";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        // User1 is in org 1, but we claim they're in org 2
+        let response = server
+            .post("/api/v1/auth")
+            .add_header("Authorization", format!("Bearer {TOKEN}"))
+            .add_header("x-org-id", "2")
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn mint_with_missing_authorization_header(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let response = server
+            .post("/api/v1/auth")
+            .add_header("x-org-id", "1")
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn mint_with_missing_org_id_header(pool: PgPool) -> Result<()> {
+        const TOKEN: &str = "test-token:user1@test1.com";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let response = server
+            .post("/api/v1/auth")
+            .add_header("Authorization", format!("Bearer {TOKEN}"))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn mint_with_empty_authorization(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let response = server
+            .post("/api/v1/auth")
+            .add_header("Authorization", "")
+            .add_header("x-org-id", "1")
+            .await;
+
+        response.assert_status(StatusCode::BAD_REQUEST);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn mint_with_bearer_prefix(pool: PgPool) -> Result<()> {
+        const TOKEN: &str = "test-token:user1@test1.com";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let response = server
+            .post("/api/v1/auth")
+            .add_header("Authorization", format!("Bearer {TOKEN}"))
+            .add_header("x-org-id", "1")
+            .await;
+
+        response.assert_status_ok();
+        let body = response.json::<Value>();
+        let token = body["token"].as_str().expect("token as a string");
+
+        let stateless = StatelessToken::deserialize(token).expect("deserialize token");
+        pretty_assert_eq!(stateless.token, RawToken::new(TOKEN));
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn mint_with_invalid_org_id_format(pool: PgPool) -> Result<()> {
+        const TOKEN: &str = "test-token:user1@test1.com";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let response = server
+            .post("/api/v1/auth")
+            .add_header("Authorization", format!("Bearer {TOKEN}"))
+            .add_header("x-org-id", "not-a-number")
+            .await;
+
+        response.assert_status(StatusCode::BAD_REQUEST);
 
         Ok(())
     }

@@ -80,3 +80,50 @@ pub async fn test_server(
         .map_err(|e| color_eyre::eyre::eyre!("create test server: {e}"))
         .map(|server| (server, temp))
 }
+
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use axum::body::Bytes;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
+    use color_eyre::Result;
+    use serde_json::Value;
+
+    use crate::storage::Key;
+
+    /// Mint a stateless token for the given user token and org ID.
+    pub async fn mint_token(server: &TestServer, user_token: &str, org_id: u64) -> Result<String> {
+        let response = server
+            .post("/api/v1/auth")
+            .add_header("Authorization", format!("Bearer {user_token}"))
+            .add_header("x-org-id", org_id.to_string())
+            .await;
+
+        response.assert_status_ok();
+        let body = response.json::<Value>();
+        let token = body["token"]
+            .as_str()
+            .expect("token as a string")
+            .to_string();
+        Ok(token)
+    }
+
+    /// Generate test content and compute its key.
+    pub fn test_blob(content: &[u8]) -> (Vec<u8>, Key) {
+        let hash = blake3::hash(content);
+        (content.to_vec(), Key::from(hash))
+    }
+
+    /// Write a blob to CAS and return the key.
+    pub async fn write_cas(server: &TestServer, token: &str, content: &[u8]) -> Result<Key> {
+        let (_, key) = test_blob(content);
+        let response = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .add_header("Authorization", token)
+            .bytes(Bytes::copy_from_slice(content))
+            .await;
+
+        response.assert_status(StatusCode::CREATED);
+        Ok(key)
+    }
+}

@@ -121,3 +121,382 @@ impl IntoResponse for CasWriteResponse {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Bytes;
+    use axum::http::StatusCode;
+    use color_eyre::{Result, eyre::Context};
+    use pretty_assertions::assert_eq as pretty_assert_eq;
+    use sqlx::PgPool;
+
+    use crate::api::test_helpers::{mint_token, test_blob, write_cas};
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn basic_write_flow(pool: PgPool) -> Result<()> {
+        const TOKEN: &str = "test-token:user1@test1.com";
+        const CONTENT: &[u8] = b"hello world";
+        let (server, _tmp) = crate::api::test_server(pool.clone())
+            .await
+            .context("create test server")?;
+
+        let token = mint_token(&server, TOKEN, 1).await?;
+        let (_, key) = test_blob(CONTENT);
+
+        let response = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .add_header("Authorization", &token)
+            .bytes(Bytes::from_static(CONTENT))
+            .await;
+
+        response.assert_status(StatusCode::CREATED);
+
+        // Verify org has access to key in database
+        let access: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1 FROM cas_access ca
+                JOIN cas_keys ck ON ca.cas_key_id = ck.id
+                WHERE ca.org_id = $1 AND ck.content = $2
+            )",
+        )
+        .bind(1i64)
+        .bind(key.as_bytes())
+        .fetch_one(&pool)
+        .await?;
+
+        pretty_assert_eq!(access, true, "org should have access to key");
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn write_grants_access_to_org(pool: PgPool) -> Result<()> {
+        const USER1_TOKEN: &str = "test-token:user1@test1.com";
+        const USER2_TOKEN: &str = "test-token:user2@test1.com";
+        const CONTENT: &[u8] = b"shared content";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        // User1 writes content
+        let user1_token = mint_token(&server, USER1_TOKEN, 1).await?;
+        let key = write_cas(&server, &user1_token, CONTENT).await?;
+
+        // User2 (same org) can read it
+        let user2_token = mint_token(&server, USER2_TOKEN, 1).await?;
+        let response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .add_header("Authorization", &user2_token)
+            .await;
+
+        response.assert_status_ok();
+        let body = response.as_bytes();
+        pretty_assert_eq!(body.as_ref(), CONTENT, "user2 should read content written by user1");
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn idempotent_writes(pool: PgPool) -> Result<()> {
+        const TOKEN: &str = "test-token:user1@test1.com";
+        const CONTENT: &[u8] = b"idempotent test";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let token = mint_token(&server, TOKEN, 1).await?;
+        let (_, key) = test_blob(CONTENT);
+
+        // First write
+        let response1 = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .add_header("Authorization", &token)
+            .bytes(Bytes::from_static(CONTENT))
+            .await;
+        response1.assert_status(StatusCode::CREATED);
+
+        // Second write
+        let response2 = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .add_header("Authorization", &token)
+            .bytes(Bytes::from_static(CONTENT))
+            .await;
+        response2.assert_status(StatusCode::CREATED);
+
+        // Content should still be readable
+        let read_response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .add_header("Authorization", &token)
+            .await;
+        read_response.assert_status_ok();
+        let body = read_response.as_bytes();
+        pretty_assert_eq!(body.as_ref(), CONTENT);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn invalid_key_hash(pool: PgPool) -> Result<()> {
+        const TOKEN: &str = "test-token:user1@test1.com";
+        const ACTUAL_CONTENT: &[u8] = b"actual content";
+        const WRONG_CONTENT: &[u8] = b"different content";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let token = mint_token(&server, TOKEN, 1).await?;
+        let (_, wrong_key) = test_blob(WRONG_CONTENT);
+
+        let response = server
+            .put(&format!("/api/v1/cas/{wrong_key}"))
+            .add_header("Authorization", &token)
+            .bytes(Bytes::from_static(ACTUAL_CONTENT))
+            .await;
+
+        response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn large_blob_write(pool: PgPool) -> Result<()> {
+        const TOKEN: &str = "test-token:user1@test1.com";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let token = mint_token(&server, TOKEN, 1).await?;
+        let content = vec![0xAB; 1024 * 1024]; // 1MB blob
+        let key = write_cas(&server, &token, &content).await?;
+
+        // Verify it can be read back
+        let response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .add_header("Authorization", &token)
+            .await;
+        response.assert_status_ok();
+        let body = response.as_bytes();
+        pretty_assert_eq!(body.len(), content.len());
+        pretty_assert_eq!(body.as_ref(), content.as_slice());
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn write_without_auth(pool: PgPool) -> Result<()> {
+        const CONTENT: &[u8] = b"test content";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(CONTENT);
+
+        let response = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .bytes(Bytes::from_static(CONTENT))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn write_with_raw_token_instead_of_stateless(pool: PgPool) -> Result<()> {
+        const TOKEN: &str = "test-token:user1@test1.com";
+        const CONTENT: &[u8] = b"test content";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(CONTENT);
+
+        // Try to use raw token directly (should fail)
+        let response = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .add_header("Authorization", format!("Bearer {TOKEN}"))
+            .bytes(Bytes::from_static(CONTENT))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn concurrent_writes_same_blob(pool: PgPool) -> Result<()> {
+        const TOKEN: &str = "test-token:user1@test1.com";
+        const CONTENT: &[u8] = b"concurrent write test content";
+        let (server, _tmp) = crate::api::test_server(pool.clone())
+            .await
+            .context("create test server")?;
+
+        let token = mint_token(&server, TOKEN, 1).await?;
+        let (_, key) = test_blob(CONTENT);
+
+        // Execute 10 concurrent writes of the same content
+        let (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10) = tokio::join!(
+            server.put(&format!("/api/v1/cas/{key}"))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::from_static(CONTENT)),
+            server.put(&format!("/api/v1/cas/{key}"))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::from_static(CONTENT)),
+            server.put(&format!("/api/v1/cas/{key}"))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::from_static(CONTENT)),
+            server.put(&format!("/api/v1/cas/{key}"))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::from_static(CONTENT)),
+            server.put(&format!("/api/v1/cas/{key}"))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::from_static(CONTENT)),
+            server.put(&format!("/api/v1/cas/{key}"))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::from_static(CONTENT)),
+            server.put(&format!("/api/v1/cas/{key}"))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::from_static(CONTENT)),
+            server.put(&format!("/api/v1/cas/{key}"))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::from_static(CONTENT)),
+            server.put(&format!("/api/v1/cas/{key}"))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::from_static(CONTENT)),
+            server.put(&format!("/api/v1/cas/{key}"))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::from_static(CONTENT)),
+        );
+
+        // All writes should succeed (idempotent)
+        for response in [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10] {
+            response.assert_status(StatusCode::CREATED);
+        }
+
+        // Verify content is correct and uncorrupted
+        let read_response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .add_header("Authorization", &token)
+            .await;
+        read_response.assert_status_ok();
+        let body = read_response.as_bytes();
+        pretty_assert_eq!(body.as_ref(), CONTENT, "content should be uncorrupted");
+
+        // Verify database shows org has access (only once, not 10 times)
+        let access_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM cas_access ca
+            JOIN cas_keys ck ON ca.cas_key_id = ck.id
+            WHERE ca.org_id = $1 AND ck.content = $2",
+        )
+        .bind(1i64)
+        .bind(key.as_bytes())
+        .fetch_one(&pool)
+        .await?;
+
+        pretty_assert_eq!(access_count, 1, "should have exactly one access grant");
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn concurrent_writes_different_blobs(pool: PgPool) -> Result<()> {
+        const TOKEN: &str = "test-token:user1@test1.com";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let token = mint_token(&server, TOKEN, 1).await?;
+
+        // Create 10 different blobs
+        let blobs = (0..10)
+            .map(|i| {
+                let content = format!("concurrent blob {i}").into_bytes();
+                let (_, key) = test_blob(&content);
+                (key, content)
+            })
+            .collect::<Vec<_>>();
+
+        // Write all blobs concurrently
+        let (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10) = tokio::join!(
+            server.put(&format!("/api/v1/cas/{}", blobs[0].0))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::copy_from_slice(&blobs[0].1)),
+            server.put(&format!("/api/v1/cas/{}", blobs[1].0))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::copy_from_slice(&blobs[1].1)),
+            server.put(&format!("/api/v1/cas/{}", blobs[2].0))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::copy_from_slice(&blobs[2].1)),
+            server.put(&format!("/api/v1/cas/{}", blobs[3].0))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::copy_from_slice(&blobs[3].1)),
+            server.put(&format!("/api/v1/cas/{}", blobs[4].0))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::copy_from_slice(&blobs[4].1)),
+            server.put(&format!("/api/v1/cas/{}", blobs[5].0))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::copy_from_slice(&blobs[5].1)),
+            server.put(&format!("/api/v1/cas/{}", blobs[6].0))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::copy_from_slice(&blobs[6].1)),
+            server.put(&format!("/api/v1/cas/{}", blobs[7].0))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::copy_from_slice(&blobs[7].1)),
+            server.put(&format!("/api/v1/cas/{}", blobs[8].0))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::copy_from_slice(&blobs[8].1)),
+            server.put(&format!("/api/v1/cas/{}", blobs[9].0))
+                .add_header("Authorization", &token)
+                .bytes(Bytes::copy_from_slice(&blobs[9].1)),
+        );
+
+        // All writes should succeed
+        for response in [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10] {
+            response.assert_status(StatusCode::CREATED);
+        }
+
+        // Verify all blobs can be read back with correct content
+        for (key, expected_content) in blobs {
+            let read_response = server
+                .get(&format!("/api/v1/cas/{key}"))
+                .add_header("Authorization", &token)
+                .await;
+            read_response.assert_status_ok();
+            let body = read_response.as_bytes();
+            pretty_assert_eq!(
+                body.as_ref(),
+                expected_content.as_slice(),
+                "blob content should match for key {key}"
+            );
+        }
+
+        Ok(())
+    }
+}
