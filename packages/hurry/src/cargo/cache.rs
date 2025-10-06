@@ -12,20 +12,25 @@ use sqlx::{
 use tracing::{debug, instrument, trace};
 
 use crate::{
-    cargo::{self, BuildPlan, CargoCompileMode, Profile, ProfileDir, RustcMetadata, UnitGraph, Workspace},
+    Locked,
+    cargo::{
+        self, BuildPlan, CargoCompileMode, Profile, ProfileDir, RustcMetadata, UnitGraph, Workspace,
+    },
+    cas::FsCas,
     fs, mk_rel_dir, mk_rel_file,
-    path::{AbsDirPath, JoinWith as _}, Locked,
+    path::{AbsDirPath, JoinWith as _},
 };
 
 #[derive(Debug, Clone)]
 pub struct CargoCache {
+    cas: FsCas,
     db: SqlitePool,
     pub ws: Workspace,
 }
 
 impl CargoCache {
     #[instrument(name = "CargoCache::open")]
-    async fn open(conn: &str, ws: Workspace) -> Result<Self> {
+    async fn open(cas: FsCas, conn: &str, ws: Workspace) -> Result<Self> {
         let options = SqliteConnectOptions::from_str(conn)
             .context("parse sqlite connection string")?
             .create_if_missing(true);
@@ -37,32 +42,33 @@ impl CargoCache {
             .run(&db)
             .await
             .context("running migrations")?;
-        Ok(Self { db, ws })
+        Ok(Self { cas, db, ws })
     }
 
     #[instrument(name = "CargoCache::open_dir")]
-    pub async fn open_dir(dir: &AbsDirPath, ws: Workspace) -> Result<Self> {
-        let dbfile = dir.join(mk_rel_file!("cache.db"));
+    pub async fn open_dir(cas: FsCas, cache_dir: &AbsDirPath, ws: Workspace) -> Result<Self> {
+        let dbfile = cache_dir.join(mk_rel_file!("cache.db"));
         if !fs::exists(dbfile.as_std_path()).await {
-            fs::create_dir_all(dir)
+            fs::create_dir_all(cache_dir)
                 .await
                 .context("create cache directory")?;
         }
 
-        Self::open(&format!("sqlite://{}", dbfile), ws).await
+        Self::open(cas, &format!("sqlite://{}", dbfile), ws).await
     }
 
     #[instrument(name = "CargoCache::open_default")]
     pub async fn open_default(ws: Workspace) -> Result<Self> {
+        let cas = FsCas::open_default().await.context("opening CAS")?;
         let cache = fs::user_global_cache_path()
             .await
             .context("finding user cache path")?
             .join(mk_rel_dir!("cargo"));
-        Self::open_dir(&cache, ws).await
+        Self::open_dir(cas, &cache, ws).await
     }
 
     #[instrument(name = "CargoCache::artifacts")]
-    pub async fn artifacts(&self, profile: &Profile) -> Result<Vec<ArtifactPlan>> {
+    pub async fn artifact_plan(&self, profile: &Profile) -> Result<Vec<ArtifactPlan>> {
         let rustc = RustcMetadata::from_argv(&self.ws.root, &[])
             .await
             .context("parsing rustc metadata")?;
@@ -195,8 +201,7 @@ impl CargoCache {
                     }
                 }
 
-                let (build_script_dir, build_script_output_dir) = match build_script_execution_index
-                {
+                let build_script = match build_script_execution_index {
                     Some(build_script_execution_index) => {
                         let (build_script_index, build_script_output_dir) = build_script_executions
                             .get(&build_script_execution_index)
@@ -208,9 +213,12 @@ impl CargoCache {
                             .ok_or_eyre(
                                 "build script index should have recorded compilation directory",
                             )?;
-                        (Some(build_script_dir), Some(build_script_output_dir))
+                        Some(BuildScriptDirs {
+                            compiled_dir: build_script_dir.clone().to_string_lossy().to_string(),
+                            output_dir: build_script_output_dir.to_string(),
+                        })
                     }
-                    None => (None, None),
+                    None => None,
                 };
 
                 // Given a dependency being compiled, we need to determine the
@@ -219,8 +227,7 @@ impl CargoCache {
                 // going to save for this artifact.
                 debug!(
                     compiled = ?invocation.outputs,
-                    build_script = ?build_script_dir,
-                    build_script_output = ?build_script_output_dir,
+                    build_script = ?build_script,
                     deps = ?invocation.deps,
                     "artifacts to save"
                 );
@@ -228,30 +235,18 @@ impl CargoCache {
                     package_name: invocation.package_name.clone(),
                     package_version: invocation.package_version.clone(),
                     compiled_files: invocation.outputs.clone(),
-                    build_script_files: build_script_dir.map(|dir| BuildScriptDirs {
-                        compiled_dir: todo!(),
-                        output_dir: todo!(),
-                        // compiled_dir: dir.clone(),
-                        // output_dir: build_script_output_dir.clone(),
-                    }),
+                    build_script_files: build_script,
                 });
 
-                // Now, we need to determine the information that we need to key
-                // the cached artifact.
-
-                // Finally, we return two things:
-                // 1. The key to use in restoration (although this may need to
-                //    happen interactively as we discover things like build
-                //    script output directives).
-                // 2. The artifact folders to save (although this needs to be
-                //    augmented by actual build messages).
-                //
-                // What is this structure called? Maybe something like an
-                // "artifact skeleton"? Or an ArtifactPlan?
+                // TODO: If needed, we could try to read previous build script
+                // output from the target directory here to try and supplement
+                // information for built crates. I can't imagine why we would
+                // need to do that, though.
             } else {
                 bail!("unknown target kind: {:?}", invocation.target_kind);
             }
         }
+
         Ok(artifacts)
     }
 }
@@ -262,16 +257,22 @@ pub struct ArtifactPlan {
     // build plan, and therefore is missing essential information (e.g. `rustc`
     // flags from build script output directives) that can only be determined
     // interactively.
+    //
+    // TODO: There are more fields here that we can know from the planning stage
+    // that need to be added (e.g. target, features).
     package_name: String,
     package_version: String,
 
     // Artifact folders to save and restore.
+    //
+    // TODO: These should probably be `QualifiedPath`s.
     compiled_files: Vec<String>,
     build_script_files: Option<BuildScriptDirs>,
 }
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct BuildScriptDirs {
+    // TODO: These should probably be `QualifiedPath`s.
     compiled_dir: String,
     output_dir: String,
 }
