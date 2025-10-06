@@ -14,7 +14,7 @@ CREATE TABLE users (
 CREATE TABLE api_keys (
   id bigserial PRIMARY KEY NOT NULL,
   user_id BIGINT REFERENCES users (id) NOT NULL,
-  content BYTEA NOT NULL,
+  content TEXT NOT NULL,
   created TIMESTAMPTZ NOT NULL DEFAULT now(),
   accessed TIMESTAMPTZ NOT NULL DEFAULT now(),
   revoked TIMESTAMPTZ,

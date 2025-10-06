@@ -447,9 +447,9 @@ impl RawToken {
         Self(token.into())
     }
 
-    /// View the token as bytes.
-    pub fn as_bytes(&self) -> &[u8] {
-        self.0.as_bytes()
+    /// View the token as a string.
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
     }
 }
 

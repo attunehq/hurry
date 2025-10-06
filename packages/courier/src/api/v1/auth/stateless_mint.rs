@@ -1,6 +1,7 @@
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
+use serde::Serialize;
 use tracing::{info, warn};
 
 use crate::{
@@ -77,6 +78,11 @@ pub async fn handle(
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct MintStatelessResponseBody {
+    pub token: StatelessToken,
+}
+
 #[derive(Debug)]
 pub enum MintStatelessResponse {
     Unauthorized,
@@ -88,12 +94,50 @@ impl IntoResponse for MintStatelessResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             MintStatelessResponse::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
-            MintStatelessResponse::Success(stateless) => {
-                (StatusCode::OK, Json(stateless)).into_response()
+            MintStatelessResponse::Success(token) => {
+                (StatusCode::OK, Json(MintStatelessResponseBody { token })).into_response()
             }
             MintStatelessResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use color_eyre::{Result, eyre::Context};
+    use pretty_assertions::assert_eq as pretty_assert_eq;
+    use serde_json::Value;
+    use sqlx::PgPool;
+
+    use crate::auth::{OrgId, RawToken, StatelessToken, UserId};
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../../../schema/fixtures/auth.sql")
+    )]
+    async fn test_mint_stateless_token(pool: PgPool) -> Result<()> {
+        const TOKEN: &str = "test-token:user1@test1.com";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let response = server
+            .post("/api/v1/auth")
+            .add_header("Authorization", format!("Bearer {TOKEN}"))
+            .add_header("x-org-id", "1")
+            .await;
+
+        response.assert_status_ok();
+        let body = response.json::<Value>();
+        let token = body["token"].as_str().expect("token as a string");
+
+        let stateless = StatelessToken::deserialize(token).expect("deserialize token");
+        pretty_assert_eq!(stateless.org_id, OrgId::from_u64(1));
+        pretty_assert_eq!(stateless.user_id, UserId::from_u64(1));
+        pretty_assert_eq!(stateless.token, RawToken::new(TOKEN));
+
+        Ok(())
     }
 }

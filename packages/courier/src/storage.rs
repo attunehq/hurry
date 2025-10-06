@@ -130,6 +130,15 @@ impl Disk {
         Self { root: root.into() }
     }
 
+    /// Create a new instance in a temporary directory.
+    #[cfg(test)]
+    pub async fn new_temp() -> Result<(Self, async_tempfile::TempDir)> {
+        let root = async_tempfile::TempDir::new()
+            .await
+            .context("create temp directory")?;
+        Ok((Self::new(root.dir_path()), root))
+    }
+
     /// Validate that the CAS is accessible and writable.
     pub async fn ping(&self) -> Result<()> {
         static PING_KEY: LazyLock<Key> = LazyLock::new(|| Key::from(blake3::hash(b"ping")));

@@ -1,3 +1,12 @@
+-- Schema file for Courier.
+-- This file is maintained by hand; we use `sql-schema` to generate migrations.
+--
+-- After making changes to this file, run `sql-schema` to generate a migration
+-- within the root of the `courier` package:
+-- ```
+-- sql-schema migration --name {new name here}
+-- ```
+
 -- Organizations
 create table organizations (
     id bigserial primary key not null,
@@ -17,7 +26,7 @@ create table users (
 create table api_keys (
     id bigserial primary key not null,
     user_id bigint references users(id) not null,
-    content bytea not null,
+    content text not null,
     created timestamptz not null default now(),
     accessed timestamptz not null default now(),
     revoked timestamptz,

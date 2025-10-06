@@ -40,8 +40,10 @@ rusty_paseto = "0.7.2"
 rand = "0.9.2"
 
 [dev-dependencies]
+axum-test = { version = "18.1.0", features = ["all"] }
 pretty_assertions = "1"
 proptest = "1.8.0"
+serde_json.workspace = true
 simple_test_case.workspace = true
 tempfile = "3"
 test-log = { version = "0.2", features = ["trace"] }

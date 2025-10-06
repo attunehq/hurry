@@ -57,3 +57,26 @@ pub fn router(state: State) -> Router {
         .layer(middleware)
         .with_state(state)
 }
+
+/// Create an isolated test server with the given database pool:
+/// - The database pool is intended to come from the [`sqlx::test`] macro
+/// - Creates a new [`Disk`](crate::storage::Disk) instance in a temp directory
+/// - Creates a new empty [`KeySets`](crate::auth::KeySets) instance
+#[cfg(test)]
+pub async fn test_server(
+    pool: sqlx::PgPool,
+) -> color_eyre::Result<(axum_test::TestServer, async_tempfile::TempDir)> {
+    use color_eyre::eyre::Context;
+
+    let db = crate::db::Postgres { pool };
+    let (storage, temp) = crate::storage::Disk::new_temp()
+        .await
+        .context("create temp storage")?;
+    let keysets = crate::auth::KeySets::new();
+    let state = Aero::new().with(keysets).with(storage).with(db);
+    let router = crate::api::router(state);
+    axum_test::TestServerConfig::default()
+        .build(router)
+        .map_err(|e| color_eyre::eyre::eyre!("create test server: {e}"))
+        .map(|server| (server, temp))
+}

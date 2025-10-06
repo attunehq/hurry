@@ -67,7 +67,7 @@ impl Postgres {
             where users.organization_id = $1
             and api_keys.content = $2",
             org_id.as_i64(),
-            token.as_bytes(),
+            token.as_str(),
         )
         .fetch_optional(&self.pool)
         .await
