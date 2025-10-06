@@ -6,7 +6,7 @@ use color_eyre::{Result, eyre::Context};
 
 use crate::{
     api::State,
-    auth::{AuthenticatedStatelessToken, KeySets},
+    auth::{StatelessToken, KeySets},
     db::Postgres,
     storage::Key,
 };
@@ -32,7 +32,7 @@ async fn check_allowed(
     keysets: &KeySets,
     db: &Postgres,
     key: &Key,
-    token: &AuthenticatedStatelessToken,
+    token: &StatelessToken,
 ) -> Result<bool> {
     let allowed = keysets.organization(token.org_id);
     if !allowed.contains(key) {

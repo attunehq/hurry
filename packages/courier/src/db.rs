@@ -9,7 +9,10 @@
 
 use std::collections::HashSet;
 
-use color_eyre::{Result, eyre::Context};
+use color_eyre::{
+    Result,
+    eyre::{Context, bail},
+};
 use derive_more::Debug;
 use futures::StreamExt;
 use sqlx::{PgPool, migrate::Migrator};
@@ -22,7 +25,7 @@ use crate::{
 /// A connected Postgres database instance.
 #[derive(Clone, Debug)]
 pub struct Postgres {
-    pool: PgPool,
+    pub pool: PgPool,
 }
 
 impl Postgres {
@@ -33,6 +36,18 @@ impl Postgres {
     pub async fn connect(url: &str) -> Result<Self> {
         let pool = PgPool::connect(url).await?;
         Ok(Self { pool })
+    }
+
+    /// Ping the database to ensure the connection is alive.
+    pub async fn ping(&self) -> Result<()> {
+        let row = sqlx::query!("select 1 as pong")
+            .fetch_one(&self.pool)
+            .await
+            .context("ping database")?;
+        if row.pong.is_none_or(|pong| pong != 1) {
+            bail!("database ping failed; unexpected response: {row:?}");
+        }
+        Ok(())
     }
 
     /// Validate the provided raw token in the database.

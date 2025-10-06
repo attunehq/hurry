@@ -1,28 +1,62 @@
 use aerosol::axum::Dep;
-use axum::{
-    body::Body,
-    extract::Path,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
+use axum::{body::Body, extract::Path, http::StatusCode, response::IntoResponse};
+use color_eyre::eyre::Report;
 use futures::TryStreamExt;
 use tokio_util::io::StreamReader;
 use tracing::{error, warn};
 
 use crate::{
-    auth::{AuthenticatedStatelessToken, KeySets},
+    auth::{KeySets, StatelessToken},
     db::Postgres,
     storage::{Disk, Key},
 };
 
+/// Write the content to the CAS for the given key.
+///
+/// ## Security
+///
+/// All users have visibility into all keys that any user in the organization
+/// has ever written. This is intentional, because we expect users to run hurry
+/// on their local dev machines as well as in CI or other environments like
+/// docker builds.
+///
+/// Even if another organization has written content with the same key, this
+/// content is not visible to the current organization unless they have also
+/// written it.
+///
+/// ## Idempotency
+///
+/// The CAS is idempotent: if a file already exists, it is not written again.
+/// This is safe because the key is computed from the content of the file, so if
+/// the file already exists it must have the same content.
+///
+/// ## Atomic writes
+///
+/// The CAS uses write-then-rename to ensure that writes are atomic. If a file
+/// already exists, it is not written again. This is safe because the key is
+/// computed from the content of the file, so if the file already exists it must
+/// have the same content.
+///
+/// ## Key validation
+///
+/// While clients provide the key to the request, the CAS validates the key when
+/// the content is written to ensure that the key provided by the user and the
+/// key computed from the content actually match.
+///
+/// If they do not, this request is rejected and the write operation is aborted.
+/// Making clients provide the key is due to two reasons:
+/// 1. It reduces the chance that the client provides the wrong value.
+/// 2. It allows this service to colocate the temporary file with the ultimate
+///    destination for the content, which makes implementation simpler if we
+///    move to multiple mounted disks for subsets of the CAS.
 pub async fn handle(
-    token: AuthenticatedStatelessToken,
+    token: StatelessToken,
     Dep(keysets): Dep<KeySets>,
     Dep(cas): Dep<Disk>,
     Dep(db): Dep<Postgres>,
     Path(key): Path<Key>,
     body: Body,
-) -> Response {
+) -> CasWriteResponse {
     let stream = body.into_data_stream();
     let stream = stream.map_err(std::io::Error::other);
     let reader = StreamReader::new(stream);
@@ -48,7 +82,7 @@ pub async fn handle(
             //    time.
             if let Err(err) = db.grant_org_cas_key(token.org_id, &key).await {
                 error!(?err, user = ?token.user_id, org = ?token.org_id, "grant org access to cas key");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return CasWriteResponse::Error(err);
             }
 
             keysets.organization(token.org_id).insert(key.clone());
@@ -62,11 +96,28 @@ pub async fn handle(
                 }
             });
 
-            StatusCode::CREATED.into_response()
+            CasWriteResponse::Created
         }
         Err(err) => {
             error!(?err, "write cas key");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            CasWriteResponse::Error(err)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum CasWriteResponse {
+    Created,
+    Error(Report),
+}
+
+impl IntoResponse for CasWriteResponse {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            CasWriteResponse::Created => StatusCode::CREATED.into_response(),
+            CasWriteResponse::Error(error) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
+            }
         }
     }
 }

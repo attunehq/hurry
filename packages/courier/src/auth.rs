@@ -39,72 +39,26 @@ static STATELESS_TOKEN_SECRET: LazyLock<PasetoSymmetricKey<PasetoV4, PasetoLocal
         PasetoSymmetricKey::from(PasetoKey::from(key))
     });
 
-/// Unvalidated stateless token from a request.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RawStatelessToken(String);
-
-impl RawStatelessToken {
-    /// Create a new raw stateless token.
-    pub fn new(token: impl Into<String>) -> Self {
-        Self(token.into())
-    }
-}
-
-impl AsRef<str> for RawStatelessToken {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<RawStatelessToken> for AuthenticatedStatelessToken {
-    type Error = color_eyre::Report;
-
-    fn try_from(token: RawStatelessToken) -> Result<Self, Self::Error> {
-        Self::deserialize(&token.0)
-    }
-}
-
-impl<S: Send + Sync> FromRequestParts<S> for RawStatelessToken {
-    type Rejection = (StatusCode, &'static str);
-
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let Some(header) = parts.headers.get(AUTHORIZATION) else {
-            return Err((StatusCode::UNAUTHORIZED, "Authorization header required"));
-        };
-        let Ok(token) = header.to_str() else {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "Authorization header must be a string",
-            ));
-        };
-
-        let token = match token.strip_prefix("Bearer") {
-            Some(token) => token.trim(),
-            None => token.trim(),
-        };
-        if token.is_empty() {
-            return Err((StatusCode::BAD_REQUEST, "Empty authorization token"));
-        }
-
-        Ok(RawStatelessToken::new(token))
-    }
-}
-
-/// Authenticated stateless token providing pre-authorized org and user IDs,
-/// plus the original raw token.
+/// Stateless token providing pre-authorized org and user IDs, plus the original
+/// token used to mint the stateless token (intended to support interacting with
+/// the database).
+///
+/// This type is technically equivalent to [`AuthenticatedToken`], but has
+/// different semantics; due to this it is possible to freely convert between
+/// the two types without any loss of information or even cloning.
 #[derive(Clone, Debug)]
-pub struct AuthenticatedStatelessToken {
+pub struct StatelessToken {
     /// The authenticated organization ID.
     pub org_id: OrgId,
 
     /// The authenticated user ID.
     pub user_id: UserId,
 
-    /// The original raw token.
+    /// The original token used to mint the stateless token.
     pub token: RawToken,
 }
 
-impl AuthenticatedStatelessToken {
+impl StatelessToken {
     const CLAIM_AUDIENCE: &str = "hurry";
     const CLAIM_SUBJECT: &str = "cas";
     const CLAIM_ISSUER: &str = "courier";
@@ -137,6 +91,11 @@ impl AuthenticatedStatelessToken {
     fn token(&self) -> Result<CustomClaim<String>> {
         CustomClaim::try_from((Self::CLAIM_TOKEN, self.token.0.clone()))
             .context("custom claim token")
+    }
+
+    /// Convert the stateless token into an authenticated token.
+    pub fn authenticated(self) -> AuthenticatedToken {
+        self.into()
     }
 
     /// Serialize the stateless token to a string.
@@ -182,7 +141,7 @@ impl AuthenticatedStatelessToken {
     }
 }
 
-impl Serialize for AuthenticatedStatelessToken {
+impl Serialize for StatelessToken {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -192,7 +151,7 @@ impl Serialize for AuthenticatedStatelessToken {
     }
 }
 
-impl<'de> Deserialize<'de> for AuthenticatedStatelessToken {
+impl<'de> Deserialize<'de> for StatelessToken {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -202,8 +161,8 @@ impl<'de> Deserialize<'de> for AuthenticatedStatelessToken {
     }
 }
 
-impl From<AuthenticatedStatelessToken> for AuthenticatedToken {
-    fn from(jwt: AuthenticatedStatelessToken) -> Self {
+impl From<StatelessToken> for AuthenticatedToken {
+    fn from(jwt: StatelessToken) -> Self {
         Self {
             user_id: jwt.user_id,
             org_id: jwt.org_id,
@@ -212,13 +171,13 @@ impl From<AuthenticatedStatelessToken> for AuthenticatedToken {
     }
 }
 
-impl From<&AuthenticatedStatelessToken> for AuthenticatedToken {
-    fn from(jwt: &AuthenticatedStatelessToken) -> Self {
+impl From<&StatelessToken> for AuthenticatedToken {
+    fn from(jwt: &StatelessToken) -> Self {
         jwt.clone().into()
     }
 }
 
-impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedStatelessToken {
+impl<S: Send + Sync> FromRequestParts<S> for StatelessToken {
     type Rejection = (StatusCode, String);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
@@ -246,8 +205,7 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedStatelessToken {
             ));
         }
 
-        AuthenticatedStatelessToken::deserialize(token)
-            .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))
+        StatelessToken::deserialize(token).map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))
     }
 }
 
@@ -441,7 +399,7 @@ impl UserId {
 }
 
 /// An authenticated token, which has been validated.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AuthenticatedToken {
     /// The user ID in the database.
     pub user_id: UserId,
@@ -455,8 +413,8 @@ pub struct AuthenticatedToken {
 
 impl AuthenticatedToken {
     /// Convert into a stateless representation of the authenticated token.
-    pub fn into_stateless(self) -> AuthenticatedStatelessToken {
-        AuthenticatedStatelessToken {
+    pub fn into_stateless(self) -> StatelessToken {
+        StatelessToken {
             user_id: self.user_id,
             org_id: self.org_id,
             token: self.token,
