@@ -61,4 +61,4 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features
 
       - name: Run tests
-        run: cargo nextest run
+        run: cargo nextest run -p courier -p hurry
