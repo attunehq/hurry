@@ -208,7 +208,8 @@ mod tests {
 
         // Ensure the two requests got different IDs
         pretty_assert_ne!(
-            request_id1, request_id2,
+            request_id1,
+            request_id2,
             "Different requests should get different request IDs"
         );
 
