@@ -17,11 +17,27 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  SQLX_OFFLINE: 1
+  DATABASE_URL: postgres://postgres:postgres@localhost:5432/courier_test
 
 jobs:
   rust:
     name: Build, check, and test Rust
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: courier_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
 
     steps:
       - name: Install Rust

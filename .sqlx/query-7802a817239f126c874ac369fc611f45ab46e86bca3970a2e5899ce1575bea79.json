@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select users.id\n            from users\n            join api_keys on users.id = api_keys.user_id\n            where users.organization_id = $1\n            and api_keys.content = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7802a817239f126c874ac369fc611f45ab46e86bca3970a2e5899ce1575bea79"
+}

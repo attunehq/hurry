@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into frequency_user_cas_key (user_id, cas_key_id)\n            select $1, id from cas_keys where content = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "671459c135b9bb0349456fb1521ca35deb3e0d014a913ad8fe5756ba2c9654d5"
+}
