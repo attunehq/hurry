@@ -1002,7 +1002,6 @@ dependencies = [
  "simple_test_case",
  "sqlx",
  "tap",
- "tempfile",
  "test-log",
  "test-strategy",
  "tokio",

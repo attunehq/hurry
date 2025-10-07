@@ -365,7 +365,6 @@ mod tests {
     use proptest::{prop_assert, prop_assert_eq, prop_assert_ne};
     use simple_test_case::test_case;
     use std::io::Cursor;
-    use tempfile::TempDir;
     use test_strategy::proptest;
     use tokio::io::AsyncReadExt;
     use zstd::bulk::decompress;
@@ -416,8 +415,7 @@ mod tests {
     async fn write_read_roundtrip(#[any] content: Vec<u8>) -> Result<()> {
         let _ = color_eyre::install();
 
-        let temp_dir = TempDir::new()?;
-        let storage = Disk::new(temp_dir.path().to_path_buf());
+        let (storage, _temp) = Disk::new_temp().await?;
 
         let key = key_for(&content);
         storage.write_buffered(&key, &content).await?;
@@ -433,8 +431,7 @@ mod tests {
     async fn write_idempotent(#[any] content: Vec<u8>) -> Result<()> {
         let _ = color_eyre::install();
 
-        let temp_dir = TempDir::new()?;
-        let storage = Disk::new(temp_dir.path().to_path_buf());
+        let (storage, _temp) = Disk::new_temp().await?;
 
         let key = key_for(&content);
         storage.write_buffered(&key, &content).await?;
@@ -450,8 +447,7 @@ mod tests {
     async fn write_concurrent(#[any] content: Vec<u8>) -> Result<()> {
         let _ = color_eyre::install();
 
-        let temp_dir = TempDir::new()?;
-        let storage = Disk::new(temp_dir.path().to_path_buf());
+        let (storage, _temp) = Disk::new_temp().await?;
 
         let key = key_for(&content);
         tokio::try_join!(
@@ -469,8 +465,7 @@ mod tests {
     async fn nonexistent() -> Result<()> {
         let _ = color_eyre::install();
 
-        let temp_dir = TempDir::new()?;
-        let storage = Disk::new(temp_dir.path().to_path_buf());
+        let (storage, _temp) = Disk::new_temp().await?;
 
         let key = key_for(b"nonexistent");
 
@@ -482,15 +477,14 @@ mod tests {
 
     #[proptest(async = "tokio")]
     async fn verify_directory_structure(#[any] content: Vec<u8>) {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let storage = Disk::new(temp_dir.path().to_path_buf());
+        let (storage, temp) = Disk::new_temp().await.expect("temp dir");
 
         let key = key_for(&content);
         let key_hex = key.to_hex();
         storage.write_buffered(&key, &content).await.expect("write");
 
-        let expected_path = temp_dir
-            .path()
+        let expected_path = temp
+            .dir_path()
             .join(&key_hex[0..2]) // First 2 chars
             .join(&key_hex[2..4]) // Second 2 chars
             .join(&key_hex); // Full key
@@ -511,8 +505,7 @@ mod tests {
 
     #[proptest(async = "tokio")]
     async fn multiple_blobs(#[any] blobs: Vec<Vec<u8>>) {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let storage = Disk::new(temp_dir.path().to_path_buf());
+        let (storage, _temp) = Disk::new_temp().await.expect("temp dir");
 
         for content in &blobs {
             let key = key_for(&content);
@@ -531,8 +524,7 @@ mod tests {
     /// as expected.
     #[proptest(async = "tokio")]
     async fn streaming_roundtrip(#[any] content: Vec<u8>) {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let storage = Disk::new(temp_dir.path().to_path_buf());
+        let (storage, _temp) = Disk::new_temp().await.expect("temp dir");
 
         let key = key_for(&content);
         let cursor = Cursor::new(&content);
@@ -550,8 +542,7 @@ mod tests {
 
     #[proptest(async = "tokio")]
     async fn exists(#[any] content: Vec<u8>) {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let storage = Disk::new(temp_dir.path().to_path_buf());
+        let (storage, _temp) = Disk::new_temp().await.expect("temp dir");
 
         let key = key_for(&content);
         prop_assert!(!storage.exists(&key).await, "doesn't exist before write");

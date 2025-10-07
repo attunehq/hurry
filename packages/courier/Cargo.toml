@@ -24,8 +24,6 @@ clap = { workspace = true, features = ["derive", "env"] }
 atomic-time = { workspace = true }
 tap = { workspace = true }
 derive_more = { workspace = true, features = ["full"] }
-async-tempfile = { workspace = true }
-tempfile = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 aerosol = { workspace = true, features = ["async", "axum", "axum-extra", "tracing"] }
 futures = { workspace = true }
@@ -35,11 +33,11 @@ rusty_paseto = { workspace = true }
 rand = { workspace = true }
 
 [dev-dependencies]
+async-tempfile = { workspace = true }
 axum-test = { workspace = true, features = ["all"] }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 serde_json.workspace = true
 simple_test_case.workspace = true
-tempfile = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
 test-strategy = { workspace = true }
