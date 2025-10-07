@@ -1,0 +1,3 @@
+[submodule "vendor/sqlx"]
+	path = vendor/sqlx
+	url = https://github.com/launchbadge/sqlx.git
