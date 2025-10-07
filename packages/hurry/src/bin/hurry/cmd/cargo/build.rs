@@ -4,18 +4,28 @@
 //! - `docs/DESIGN.md`
 //! - `docs/development/cargo.md`
 
-use std::fmt::Debug;
+use std::{
+    collections::HashMap,
+    ffi::OsStr,
+    fmt::Debug,
+    process::Stdio,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
+use cargo_metadata::{Artifact, PackageId};
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use hurry::{
-    Locked,
-    cache::{FsCache, FsCas},
-    cargo::{self, Profile, Workspace, cache_target_from_workspace, restore_target_from_cache},
+    cargo::{
+        self, CargoCache, Handles, INVOCATION_LOG_DIR_ENV_VAR, Profile, Workspace,
+        invocation_log_dir,
+    },
+    cas::FsCas,
     fs,
-    path::TryJoinWith,
+    path::TryJoinWith as _,
 };
-use tracing::{error, info, instrument, warn};
+use tokio::io::AsyncBufReadExt;
+use tracing::{debug, error, info, instrument, warn};
 
 /// Options for `cargo build`.
 //
@@ -56,111 +66,117 @@ impl Options {
 pub async fn exec(options: Options) -> Result<()> {
     info!("Starting");
 
+    // Open workspace.
     let workspace = Workspace::from_argv(&options.argv)
         .await
-        .context("open workspace")?;
-
-    let cas = FsCas::open_default().await.context("open CAS")?;
-    let cache = FsCache::open_default().await.context("open cache")?;
-    let cache = cache.lock().await.context("lock cache")?;
-
-    // This is split into an inner function so that we can reliably
-    // release the lock if it fails.
-    let result = exec_inner(options, &cas, &workspace, &cache).await;
-    if let Err(err) = cache.unlock().await {
-        // This shouldn't happen, but if it does, we should warn users.
-        // TODO: figure out a way to recover.
-        warn!("unable to release workspace cache lock: {err:?}");
-    }
-
-    result
-        .inspect(|_| info!("finished"))
-        .inspect_err(|error| error!(?error, "failed: {error:#?}"))
-}
-
-#[instrument]
-async fn exec_inner(
-    options: Options,
-    cas: &FsCas,
-    workspace: &Workspace,
-    cache: &FsCache<Locked>,
-) -> Result<()> {
+        .context("opening workspace")?;
     let profile = options.profile();
 
-    if !options.skip_restore {
-        info!(?cache, "Restoring target directory from cache");
-        let target = workspace
-            .open_profile_locked(&profile)
-            .await
-            .context("open profile")?;
+    // Open cache.
+    let cache = CargoCache::open_default(workspace)
+        .await
+        .context("opening cache")?;
 
-        let restore = restore_target_from_cache(cas, cache, &target, |key, dependency| {
-            info!(
-                name = %dependency.package_name,
-                version = %dependency.version,
-                target = %dependency.target,
-                %key,
-                "Restored dependency from cache",
-            )
-        });
-        match restore.await {
-            Ok(_) => info!("Restored cache"),
-            Err(error) => warn!(?error, "Failed to restore cache"),
-        }
+    // Compute artifact plan, which provides expected artifacts. Note that
+    // because we are not actually running build scripts, these "expected
+    // artifacts" do not contain fully unambiguous cache key information.
+    let artifacts = cache
+        // TODO: Pass the rest of the `cargo build` flags in, so the build plan
+        // is an accurate reflection of the user's build.
+        .artifact_plan(&profile)
+        .await
+        .context("calculating expected artifacts")?;
+
+    // TODO: Restore artifacts.
+    if !options.skip_restore {
+        info!("Restoring artifacts");
+        // TODO: Make sure to warn on ambiguous restores.
     }
 
-    // After restoring the target directory from cache,
-    // or if we never had a cache, we need to build it-
-    // this is because we currently only cache based on lockfile hash;
-    // if the first-party code has changed we'll need to rebuild.
+    // Run the build.
     if !options.skip_build {
-        // Ensure that the Hurry build cache within `target` is created for the
-        // invocation, and that the build is run with the Hurry wrapper.
-        let cargo_invocation_id = uuid::Uuid::new_v4();
-        fs::create_dir_all(
-            &workspace
-                .target
-                .try_join_dirs(["hurry", "invocations", &cargo_invocation_id.to_string()])
-                .context("invalid cargo invocation cache dirname")?,
-        )
-        .await
-        .context("create build-scoped Hurry cache")?;
-        let cwd = std::env::current_dir().context("load build root")?;
-
         info!("Building target directory");
+
+        // There are two integration points here that we specifically do _not_
+        // use.
+        //
+        // # 1: Using `RUSTC_WRAPPER` to intercept `rustc` invocations
+        //
+        // We could intercept `rustc` invocations using `RUSTC_WRAPPER`. We
+        // prototyped this, and the problem with this approach is that the
+        // wrapper is only invoked when rustc itself is invoked. In particular,
+        // this means that the wrapper is never invoked for crates that have
+        // already been built previously. This means we can't rely on rustc
+        // invocation recording to capture the rustc invocations of _all_
+        // crates. We could structure the recording logs such that we can
+        // quickly access recordings from previous `hurry` invocations (the
+        // original log directory format was
+        // `./target/hurry/rustc/<hurry_invocation_timestamp>/<unit_hash>.json`,
+        // which meant we could quickly look up invocations per unit hash _and_
+        // quickly see if that unit hash was present in previous `hurry` runs),
+        // but this still means that we must at some point clean build every
+        // crate to get its recorded invocation (i.e. users would be forced to
+        // `cargo clean` the very first time they ran `hurry` in a project).
+        //
+        // Instead, we reconstruct the `rustc` invocation from a combination of:
+        // 1. The base static invocation for a package from the build plan.
+        // 2. The parsed build script outputs for a package.
+        //
+        // Theoretically, there is no stable interface that guarantees that this
+        // will fully reconstruct the `rustc` invocation. In practice, we expect
+        // this to work because we stared at the Cargo source code for building
+        // `rustc` flags[^1] for a long time, and hopefully Cargo won't make big
+        // changes any time soon.
+        //
+        // [^1]: https://github.com/rust-lang/cargo/blob/c24e1064277fe51ab72011e2612e556ac56addf7/src/cargo/core/compiler/mod.rs#L360-L375
+        //
+        // # 2: Reading `cargo build --message-format=json`
+        //
+        // `cargo build` has a flag that emits JSON messages about the build,
+        // whose format is stable and documented[^2]. These messages are emitted
+        // on STDOUT, so we can read them while still forwarding interactive
+        // user messages that are emitted on STDERR.
+        //
+        // We don't use this integration point for two reasons:
+        // 1. These messages don't actually give us anything that we don't
+        //    already get from the build plan and build script output.
+        // 2. Enabling this flag actually _changes_ the interactive user
+        //    messages on STDERR. In particular, certain warnings and progress
+        //    messages are different (because they are now emitted on STDOUT as
+        //    JSON messages e.g. compiler errors and warnings), and we now need
+        //    to add logic to manually repaint the progress bar when messages
+        //    are emitted.
+        //
+        // It's just a whole lot of effort for no incremental value. Instead, we
+        // reconstruct information from these messages using the build plan and
+        // the target directory's build script outputs.
+        //
+        // [^2]: https://doc.rust-lang.org/cargo/reference/external-tools.html#json-messages
+
+        // TODO: Add `RUSTC_WRAPPER` wrapper that records invocations in "debug
+        // mode", so we can assert that our invocation reconstruction works
+        // properly. Maybe that should be added to a test harness?
         cargo::invoke("build", &options.argv)
             .await
             .context("build with cargo")?;
+
+        // TODO: One thing that _would_ be interesting would be to `epoll` the
+        // target directory while the build is running. Maybe information about
+        // file changes in this directory tree could tell us interesting things
+        // about what changed and needs to be cached.
     }
 
-    // If we didn't have a cache, we cache the target directory
-    // after the build finishes.
-    //
-    // We don't _always_ cache because since we don't currently
-    // cache based on first-party code changes so this would lead to
-    // lots of unnecessary copies.
-    //
-    // TODO: watch and cache the target directory _as the build occurs_
-    // rather than having to copy it all at the end.
+    // Cache the built artifacts.
     if !options.skip_backup {
-        info!("Caching built target directory");
-        let target = workspace
-            .open_profile_locked(&profile)
-            .await
-            .context("open profile")?;
+        info!("Caching built artifacts");
+        for artifact in artifacts {
+            // TODO: Read the build script output from the build folders, and
+            // parse the output for directives. Use this to construct the rustc
+            // invocation, and use all of this information to fully construct
+            // the cache key.
 
-        let backup = cache_target_from_workspace(cas, cache, &target, |key, dependency| {
-            info!(
-                name = %dependency.package_name,
-                version = %dependency.version,
-                target = %dependency.target,
-                %key,
-                "Updated dependency in cache",
-            )
-        });
-        match backup.await {
-            Ok(_) => info!("Cached target directory"),
-            Err(error) => warn!(?error, "Failed to cache target"),
+            // TODO: Cache the artifact.
+            debug!(?artifact, "caching artifact");
         }
     }
 

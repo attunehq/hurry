@@ -1,13 +1,17 @@
-use std::fmt::Debug;
+use std::{
+    collections::BTreeMap,
+    fmt::Debug,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context, eyre},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::path::AbsDirPath;
+use crate::path::{AbsDirPath, TryJoinWith as _};
 
 /// Rust compiler metadata for cache key generation.
 ///
@@ -21,13 +25,18 @@ use crate::path::AbsDirPath;
 /// affect output compatibility.
 //
 // TODO: Support users cross compiling; probably need to parse argv?
+//
 // TODO: Determine minimum compiler version.
+//
 // TODO: Is there a better way to get this?
+//
+// TODO: Add output from `rustc -vV`, which is what Cargo invokes? How does
+// Cargo use this information?
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize)]
 pub struct RustcMetadata {
     /// The host target triple.
     #[serde(rename = "llvm-target")]
-    pub llvm_target: String,
+    pub host_target: String,
 }
 
 impl RustcMetadata {
@@ -64,5 +73,34 @@ impl RustcMetadata {
                     .to_string()
                     .header("Rustc Output:")
             })
+    }
+}
+
+/// Records the raw `rustc` invocation information.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RawRustcInvocation {
+    pub timestamp: SystemTime,
+    pub invocation: Vec<String>,
+    // Use BTreeMap instead of HashMap so the JSON is sorted.
+    pub env: BTreeMap<String, String>,
+    pub cwd: String,
+}
+
+pub const INVOCATION_LOG_DIR_ENV_VAR: &str = "HURRY_CARGO_INVOCATION_LOG_DIR";
+
+pub fn invocation_log_dir(workspace_target_dir: &AbsDirPath) -> AbsDirPath {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("current time should be after Unix epoch");
+    workspace_target_dir
+        .try_join_dirs(["hurry", "rustc", &timestamp.as_nanos().to_string()])
+        .expect("rustc invocation log dir should be valid")
+}
+
+pub struct RustcInvocation {}
+
+impl RustcInvocation {
+    pub fn from_argv(argv: &[String]) -> Self {
+        Self {}
     }
 }

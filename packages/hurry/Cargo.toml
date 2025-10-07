@@ -21,7 +21,6 @@ atomic-time = { workspace = true }
 blake3 = { workspace = true }
 bon = { workspace = true }
 cargo_metadata = { workspace = true }
-cargo-lock = { workspace = true, features = ["dependency-tree"] }
 clap = { workspace = true, features = ["cargo", "derive", "string"] }
 color-eyre = { workspace = true }
 derive_more = { workspace = true, features = ["full"] }
@@ -60,6 +59,7 @@ jiff = { workspace = true }
 const-str = { workspace = true, features = ["std", "all"] }
 duplicate = { workspace = true }
 paste = { workspace = true }
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite"] }
 
 [dev-dependencies]
 async-walkdir.workspace = true

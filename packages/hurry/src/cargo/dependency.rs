@@ -1,31 +1,18 @@
-use bon::{Builder, bon};
+use std::collections::HashSet;
+
+use bon::Builder;
 use derive_more::{Debug, Display};
 
-use crate::hash::Blake3;
-
-/// A third-party Cargo dependency for cache identification.
+/// A Dependency identifies a dependency package in a Cargo build.
 ///
-/// Contains the minimal set of information needed to uniquely identify
-/// a dependency across different workspaces and machines for caching purposes.
-/// Each dependency gets cached independently based on its cache key.
+/// Note that these are not sufficient for keying compiled artifacts! This type
+/// is designed to be constructible from `cargo metadata` output, which is
+/// resolved before build invocation (and therefore doesn't know things like
+/// which optimizations and features are enabled). This only identifies the
+/// package and version being used.
 ///
-/// ## Cache Key Components
-/// All fields contribute to the cache key generation:
-/// - `name`: Crate name from `Cargo.lock`
-/// - `version`: Exact version from `Cargo.lock`
-/// - `checksum`: Registry checksum ensuring content integrity
-/// - `target`: Compilation target (e.g., `x86_64-unknown-linux-gnu`)
-///
-/// ## Contract
-/// - Only represents third-party dependencies from the default registry
-/// - Cache keys must match exactly for artifacts to be reused
-/// - Target triple ensures platform-specific artifacts aren't mixed
-///
-/// ## TODO
-/// - We probably need to move to a model where we search for matching caches
-///   based on the elements in this instead of opaque cache keys.
-/// - We aren't including things that should almost definitely be included,
-///   for example active features.
+/// For keying compiled artifacts, use the `DependencyBuild` type, which
+/// includes the actual information used to compile the dependency.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Builder)]
 #[display("{package_name}@{version}")]
 pub struct Dependency {
@@ -55,10 +42,15 @@ pub struct Dependency {
     /// The version of the dependency.
     #[builder(into)]
     pub version: String,
+}
 
-    /// The checksum of the dependency.
-    #[builder(into)]
-    pub checksum: String,
+/// A DependencyBuild is a specific build of a dependency crate, including other
+/// build-identifying information such as target, profile, and features.
+#[derive(Clone, Eq, PartialEq, Debug, Builder)]
+pub struct DependencyBuild {
+    pub package: Dependency,
+
+    pub dependencies: Vec<DependencyBuild>,
 
     /// The target triple for which the dependency
     /// is being or has been built.
@@ -70,41 +62,25 @@ pub struct Dependency {
     /// ```
     #[builder(into)]
     pub target: String,
+
+    pub profile: Optimizations,
+
+    pub features: HashSet<String>,
+
+    #[builder(into)]
+    pub edition: String,
+
+    #[builder(into)]
+    pub extra_filename: String,
 }
 
-impl Dependency {
-    /// Generate a cache key for this dependency.
-    ///
-    /// Creates a Blake3 hash from all dependency fields to uniquely
-    /// identify this dependency for cache storage and retrieval.
-    #[deprecated = "Refer to TODO's on this type"]
-    pub fn key(&self) -> Blake3 {
-        Self::key_for()
-            .checksum(&self.checksum)
-            .name(&self.package_name)
-            .target(&self.target)
-            .version(&self.version)
-            .call()
-    }
-}
-
-#[bon]
-impl Dependency {
-    /// Generate a cache key without creating a Dependency instance.
-    ///
-    /// Use this when you have the fields that would normally go into a
-    /// [`Dependency`] instance borrowed.
-    #[builder]
-    pub fn key_for(
-        name: impl AsRef<[u8]>,
-        version: impl AsRef<[u8]>,
-        checksum: impl AsRef<[u8]>,
-        target: impl AsRef<[u8]>,
-    ) -> Blake3 {
-        let name = name.as_ref();
-        let version = version.as_ref();
-        let checksum = checksum.as_ref();
-        let target = target.as_ref();
-        Blake3::from_fields([name, version, checksum, target])
-    }
+#[derive(Clone, Eq, PartialEq, Debug, Builder)]
+pub struct Optimizations {
+    #[builder(into)]
+    pub opt_level: String,
+    #[builder(into)]
+    pub debuginfo: String,
+    pub debug_assertions: bool,
+    pub overflow_checks: bool,
+    pub test: bool,
 }

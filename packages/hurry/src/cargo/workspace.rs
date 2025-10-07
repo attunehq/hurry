@@ -1,34 +1,20 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Debug,
-    marker::PhantomData,
-    sync::Arc,
-};
+use std::marker::PhantomData;
 
-use cargo_metadata::TargetKind;
-use color_eyre::{
-    Result,
-    eyre::{Context, OptionExt},
-};
-use derive_more::{Debug as DebugExt, Display};
-use itertools::{Itertools, process_results};
+use color_eyre::{Result, eyre::Context};
+use derive_more::{Debug, Display};
 use location_macros::workspace_dir;
-use regex::Regex;
-use tap::{Pipe, Tap, TapFallible};
+use tap::{Pipe as _, Tap as _, TapFallible as _};
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     Locked, Unlocked,
-    cache::FsCas,
-    cargo::{BuildScriptOutput, QualifiedPath, RootOutput},
-    fs::{self, Index, LockFile},
-    hash::Blake3,
+    fs::{self, LockFile},
     mk_rel_file,
-    path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, TryJoinWith},
+    path::{AbsDirPath, JoinWith as _, TryJoinWith as _},
 };
 
-use super::{DepInfo, Dependency, Profile, RustcMetadata, read_argv};
+use super::{Profile, read_argv};
 
 /// Represents a Cargo workspace with caching metadata.
 ///
@@ -38,7 +24,7 @@ use super::{DepInfo, Dependency, Profile, RustcMetadata, read_argv};
 ///
 /// Note: For hurry's purposes, workspace and non-workspace projects
 /// are treated identically.
-#[derive(DebugExt, Display)]
+#[derive(Clone, Eq, PartialEq, Debug, Display)]
 #[display("{root}")]
 pub struct Workspace {
     /// The root directory of the workspace.
@@ -51,33 +37,18 @@ pub struct Workspace {
     /// The $CARGO_HOME value.
     #[debug(skip)]
     pub cargo_home: AbsDirPath,
-
-    /// Parsed `rustc` metadata relating to the current workspace.
-    #[debug(skip)]
-    pub rustc: RustcMetadata,
-
-    /// Dependencies in the workspace, keyed by [`Dependency::key`].
-    #[debug(skip)]
-    pub dependencies: HashMap<Blake3, Dependency>,
 }
 
 impl Workspace {
-    /// Create a workspace by parsing metadata from the given directory.
-    ///
-    /// Loads and parses `Cargo.toml`, `Cargo.lock`, and rustc metadata
-    /// to build a complete picture of the workspace for caching purposes.
-    /// Only includes third-party dependencies from the default registry
-    /// in the dependencies map.
-    //
-    // TODO: A few of these setup steps could be parallelized...
-    // I'm not certain they're worth the thread spawn cost
-    // but this can be mitigated by using the rayon thread pool.
+    /// Create a workspace by parsing `cargo metadata` from the given directory.
     #[instrument(name = "Workspace::from_argv_in_dir")]
     pub async fn from_argv_in_dir(path: &AbsDirPath, argv: &[String]) -> Result<Self> {
         // TODO: Maybe we should just replicate this logic and perform it
         // statically using filesystem operations instead of shelling out? This
         // costs something on the order of 200ms, which is not _terrible_ but
-        // feels much slower than if we just did our own filesystem reads.
+        // feels much slower than if we just did our own filesystem reads,
+        // especially since we don't actually use any of the logic except the
+        // paths.
         let manifest_path = read_argv(argv, "--manifest-path").map(String::from);
         let cmd_current_dir = path.as_std_path().to_path_buf();
         let metadata = spawn_blocking(move || -> Result<_> {
@@ -111,140 +82,9 @@ impl Workspace {
         .pipe(AbsDirPath::try_from)
         .context("parse path as utf8")?;
 
-        // TODO: This currently blows up if we have no lockfile.
-        let cargo_lock = workspace_root.join(mk_rel_file!("Cargo.lock"));
-        let lockfile = spawn_blocking(move || -> Result<_> {
-            cargo_lock::Lockfile::load(cargo_lock.as_std_path()).context("parse cargo lockfile")
-        })
-        .await
-        .context("join task")?
-        .tap_ok(|lockfile| debug!(?lockfile, "cargo lockfile"))
-        .context("read cargo lockfile")?;
-
-        let rustc_meta = RustcMetadata::from_argv(&workspace_root, argv)
-            .await
-            .tap_ok(|rustc_meta| debug!(?rustc_meta, "rustc metadata"))
-            .context("read rustc metadata")?;
-
-        // We need to know which packages are first-party workspace members for
-        // two reasons:
-        //
-        // 1. We cache them differently in order to correctly handle incremental
-        //    compilation. (Right now, we don't cache them at all.)
-        // 2. Workspace members can be binary-only crates if they're
-        //    entrypoints. This means our normal library crate name resolution
-        //    won't (and _shouldn't_) work for them, so we need to handle them
-        //    as a special case. Note that not all workspace members are
-        //    binary-only crates! Some may have library crates, and some may be
-        //    used as dependencies.
-        let workspace_package_names = metadata
-            .workspace_members
-            .iter()
-            .map(|id| {
-                metadata
-                    .packages
-                    .iter()
-                    .find(|package| package.id == *id)
-                    .ok_or_eyre("workspace member not found")
-                    .map(|package| package.name.clone())
-            })
-            .collect::<Result<HashSet<_>>>()?;
-
-        // Construct a mapping of _package names_ to _library crate names_.
-        let package_to_lib = metadata
-            .packages
-            .iter()
-            .filter_map(|package| {
-                let libs = package
-                    .targets
-                    .iter()
-                    .filter_map(|target| {
-                        if target.kind.contains(&TargetKind::Lib)
-                            || target.kind.contains(&TargetKind::ProcMacro)
-                            || target.kind.contains(&TargetKind::RLib)
-                        {
-                            Some(target.name.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let len = libs.len();
-                // Workspace members might be binary-only crates.
-                if len < 1 && workspace_package_names.contains(&package.name) {
-                    return None;
-                }
-                libs.into_iter()
-                    .exactly_one()
-                    .with_context(|| {
-                        format!(
-                            "package {} has {} library targets but expected 1: {:?}",
-                            package.name, len, package.targets
-                        )
-                    })
-                    .map(|lib| (package.name.as_str(), lib))
-                    .pipe(Some)
-            })
-            .collect::<Result<HashMap<_, _>>>()?;
-
-        // We only care about third party packages for now.
-        //
-        // From observation, first party packages seem to have
-        // no `source` or `checksum` while third party packages do,
-        // so we just filter anything that doesn't have these.
-        //
-        // In addition, to keep things simple, we filter to only
-        // packages that are in the default registry.
-        //
-        // Only dependencies reported here are actually cached;
-        // anything we exclude here is ignored by the caching system.
-        //
-        // TODO: Support caching packages not in the default registry.
-        // TODO: Support caching first party packages.
-        // TODO: Support caching git etc packages.
-        // TODO: How can we properly report `target` for cross compiled deps?
-        let dependencies = lockfile.packages.into_iter().filter_map(|package| {
-            match (&package.source, &package.checksum) {
-                (Some(source), Some(checksum)) if source.is_default_registry() => {
-                    // Ignore workspace members.
-                    if workspace_package_names.contains(package.name.as_str()) {
-                        return None;
-                    }
-
-                    let package_name = package.name.as_str();
-                    match package_to_lib.get(package_name) {
-                        Some(lib_name) => Dependency::builder()
-                            .checksum(checksum.to_string())
-                            .package_name(package_name.to_string())
-                            .lib_name(lib_name)
-                            .version(package.version.to_string())
-                            .target(&rustc_meta.llvm_target)
-                            .build()
-                            .pipe(Result::<_>::Ok)
-                            .pipe(Some),
-                        None => {
-                            warn!("package {package_name:?} has unknown library target");
-                            None
-                        }
-                    }
-                }
-                _ => {
-                    trace!(?package, "skipped indexing package for cache");
-                    None
-                }
-            }
-        });
-        let dependencies = process_results(dependencies, |iter| {
-            iter.map(|dependency| (dependency.key(), dependency))
-                .inspect(|(key, dependency)| trace!(?key, ?dependency, "indexed dependency"))
-                .collect::<HashMap<_, _>>()
-        })?;
-
         Ok(Self {
             root: workspace_root,
             target: workspace_target,
-            rustc: rustc_meta,
-            dependencies,
             cargo_home,
         })
     }
@@ -320,7 +160,7 @@ impl Workspace {
 /// - `Unlocked`: No file operations allowed
 /// - `Locked`: Exclusive access with file index and directory
 /// - Locking is compatible with Cargo's own locking mechanism
-#[derive(DebugExt, Clone)]
+#[derive(Debug, Clone)]
 pub struct ProfileDir<'ws, State> {
     #[debug(skip)]
     state: PhantomData<State>,
@@ -339,18 +179,6 @@ pub struct ProfileDir<'ws, State> {
 
     /// The workspace in which this build profile is located.
     pub workspace: &'ws Workspace,
-
-    /// The index of files inside the profile directory.
-    /// Paths in this index are relative to [`ProfileDir::root`].
-    ///
-    /// This index is built when the profile directory is locked.
-    /// Currently there's no explicit unlock mechanism for profiles since
-    /// they're just dropped, but if we ever add one that's where we'd clear
-    /// this and set it to `None`.
-    ///
-    /// This is in an `Arc` so that we don't have to clone the whole index
-    /// when we clone the `ProfileDir`.
-    index: Option<Arc<Index>>,
 
     /// The root of the profile directory inside [`Workspace::target`].
     ///
@@ -378,13 +206,12 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
             .init_target(profile)
             .await
             .context("init workspace target")?;
-
-        let lock = root.join(mk_rel_file!(".cargo-lock"));
-        let lock = LockFile::open(lock).await.context("open lockfile")?;
+        let lock = LockFile::open(root.join(mk_rel_file!(".cargo-lock")))
+            .await
+            .context("open lockfile")?;
 
         Ok(Self {
             state: PhantomData,
-            index: None,
             profile: profile.clone(),
             root,
             lock,
@@ -396,396 +223,22 @@ impl<'ws> ProfileDir<'ws, Unlocked> {
     #[instrument(name = "ProfileDir::lock")]
     pub async fn lock(self) -> Result<ProfileDir<'ws, Locked>> {
         let lock = self.lock.lock().await.context("lock profile")?;
-        let index = Index::recursive(&self.root)
-            .await
-            .map(Arc::new)
-            .map(Some)
-            .context("index target folder")?;
         Ok(ProfileDir {
             state: PhantomData,
             profile: self.profile,
             root: self.root,
-            workspace: self.workspace,
             lock,
-            index,
+            workspace: self.workspace,
         })
     }
 }
 
 impl<'ws> ProfileDir<'ws, Locked> {
-    /// Find all cache artifacts for a specific dependency.
-    ///
-    /// # Dependencies
-    ///
-    /// Each dependency is a single package, and the first-party project depends
-    /// on its library crate. When we talk about "_the_ crate" of a dependency,
-    /// we mean its library crate (as opposed to its binary crates or test
-    /// crates). Below, we notate the package name as `PACKAGE_NAME` and the
-    /// crate name as `CRATE_NAME` (the difference being that the crate name
-    /// must be a valid Rust identifier and therefore has hyphens replaced with
-    /// underscores).
-    ///
-    /// These dependency library crates can come in two configurations: either
-    /// they _do_ have a build script or _do not_ have a build script.
-    ///
-    /// # Expected artifacts
-    ///
-    /// For each package, here are the artifacts we expect:
-    ///
-    /// - Fingerprints: these are stored in `$PROFILE/.fingerprint/`.
-    ///   - For packages with build scripts, there are 3 fingerprint folders:
-    ///     - `{PACKAGE_NAME}-{HASH1}`, which contains the fingerprint for the
-    ///       library crate itself.
-    ///       - `dep-lib-{CRATE_NAME}` (TODO: what's this used for? It's some
-    ///         fixed 14-byte marker)
-    ///       - `invoked.timestamp`, whose mtime marks the start of the
-    ///         package's build
-    ///       - `lib-{CRATE_NAME}`, containing a hash (TODO: for what? It's not
-    ///         the PackageId or the package checksum)
-    ///       - `lib-{CRATE_NAME}.json`, containing unit information like the
-    ///         rustc version, features, dependencies, etc.
-    ///     - `{PACKAGE_NAME}-{HASH2}`, which contains the fingerprint for
-    ///       compiling the build script crate.
-    ///       - `dep-build-script-build-script-build`
-    ///       - `invoked.timestamp`
-    ///       - `build-script-build-script-build`
-    ///       - `build-script-build-script-build.json`
-    ///     - `{PACKAGE_NAME}-{HASH3}`, which contains the fingerprint for
-    ///       running the build script.
-    ///       - `run-build-script-build-script-build`
-    ///       - `run-build-script-build-script-build.json`, which among other
-    ///         things contains the conditions for re-running the build script
-    ///   - For packages without build scripts, only `{PACKAGE_NAME}-{HASH1}` is
-    ///     present.
-    /// - Build scripts: these are stored in `$PROFILE/build/`. For packages
-    ///   without build scripts, there are no entries in this folder. For
-    ///   packages with build scripts, there are 2 folders:
-    ///   - `{PACKAGE_NAME}-{HASH2}`, which contains the compiled build script.
-    ///     - `build-script-build`, an executable ELF.
-    ///     - `build_script_build-{HASH2}`, the exact same ELF.
-    ///     - `build_script_build-{HASH2}.d`, a "dep-info" file listing the input
-    ///       files.
-    ///   - `{PACKAGE_NAME}-{HASH3}`, which contains the outputs of running the
-    ///     build script.
-    ///     - `invoked.timestamp`, whose mtime marks when the build script
-    ///       compilation was started (I think?)
-    ///     - `out`, the build script output folder.
-    ///     - `output`, the STDOUT of the build script, containing e.g. printed
-    ///       `cargo:` directives.
-    ///     - `root-output`, a file containing the absolute path to the output
-    ///       folder of the build script.
-    ///     - `stderr`, the STDERR of the build script.
-    /// - Deps: these are stored in `$PROFILE/deps/`. See also:
-    ///   https://rustc-dev-guide.rust-lang.org/backend/libs-and-metadata.html
-    ///   - `{CRATE_NAME}-{HASH1}.d`, a "dep-info" file listing the inputs.
-    ///   - `lib{CRATE_NAME}-{HASH1}.rlib`
-    ///   - `lib{CRATE_NAME}-{HASH1}.rmeta`
-    ///
-    /// # Known weirdness
-    ///
-    /// ## Extra fingerprint and dep files
-    ///
-    /// When you examine your target folder after a build, you may see
-    /// additional instances of fingerprint and dep files? Why is this? It's
-    /// very likely because you have your IDE open, and rust-analyzer is running
-    /// `cargo check` which is checking the units in a different feature/profile
-    /// configuration than a regular `cargo build`, and therefore is creating
-    /// units with different `PackageId`s. See if these extra files still appear
-    /// after closing your IDE, killing all rust-analyzer processes, and running
-    /// `cargo clean` and then `cargo build`.
-    ///
-    /// ## Missing artifacts
-    ///
-    /// Some dependencies listed in the lockfile don't generate artifacts
-    /// because they aren't actually used. To check whether the artifact is
-    /// actually used, see if you can find it in the output of `cargo tree`. See
-    /// also: https://github.com/rust-lang/cargo/issues/10801
-    ///
-    /// FIXME: The right thing to do here is to read the dependency source from
-    /// `cargo tree` or whatever underlying mechanism it's using, rather than
-    /// from the lockfile or `cargo metadata`.
-    #[instrument(name = "ProfileDir::enumerate_cache_artifacts")]
-    pub async fn enumerate_cache_artifacts(
-        &self,
-        dependency: &Dependency,
-    ) -> Result<Vec<&RelFilePath>> {
-        // TODO: We could make these lookups faster. For example, we could build
-        // dedicated indexes for the fingerprint, deps, and build folders. We
-        // could also use a data structure that natively supports fast "look up
-        // by package name (i.e. file prefix)" rather than doing
-        // iter-then-filter.
-        let index = self.index.as_ref().ok_or_eyre("files not indexed")?;
-
-        // TODO: Figure out how to directly reconstruct the expected package
-        // hashes.
-        let package_regex = Regex::new(&format!("^{}-[0-9a-f]{{16}}$", dependency.package_name))?;
-        let dotd_regex = Regex::new(&format!("^{}-[0-9a-f]{{16}}\\.d$", dependency.lib_name))?;
-
-        // Save fingerprints.
-        let fingerprints = index
-            .files
-            .iter()
-            .filter(|path| {
-                path.component_strs_lossy()
-                    .tuple_windows()
-                    .next()
-                    .is_some_and(|(parent, child)| {
-                        parent == ".fingerprint" && package_regex.is_match(&child)
-                    })
-            })
-            .collect_vec();
-
-        // Save build scripts.
-        let build_scripts = index
-            .files
-            .iter()
-            .filter(|path| {
-                path.component_strs_lossy()
-                    .tuple_windows()
-                    .next()
-                    .is_some_and(|(parent, child)| {
-                        parent == "build" && package_regex.is_match(&child)
-                    })
-            })
-            .collect_vec();
-
-        // We find dependencies by looking for a "dep-info" file in the `deps` folder
-        // whose name starts with the name of the dependency and parsing it.
-        // This will include the `.rlib` and `.rmeta`.
-        let deps = index
-            .files
-            .iter()
-            .filter(|path| {
-                path.component_strs_lossy()
-                    .next()
-                    .is_some_and(|part| part == "deps")
-            })
-            .collect_vec();
-        // We collect dependencies by finding the "dep-info" file and reading it.
-        //
-        // FIXME: If we can't reconstruct the expected hash, we can't actually
-        // find the _one_ "dep-info" file because we can't tell which file is
-        // for which package version in scenarios where our project has multiple
-        // versions of a dependency.
-        let dotds = deps.iter().filter(|path| {
-            path.component_strs_lossy()
-                .nth(1)
-                .is_some_and(|part| dotd_regex.is_match(&part))
-        });
-
-        let mut dependencies = Vec::new();
-        for &dotd in dotds {
-            let parsed = DepInfo::from_file(self, &self.root().join(dotd))
-                .await
-                .context("parse 'dep-info' file")?;
-
-            // For the purpose of this check, we only care about the outputs
-            // that are relative to the local project; we don't need to
-            // or want to cache items that are in the global cargo cache.
-            // This is because if the file is in the global cargo cache
-            // it's crate source, and today restoring this is considered
-            // out of scope for `hurry`.
-            //
-            // Note that the "dep-info" file lists itself, so we don't need
-            // to do anything special for it.
-            let outputs = parsed
-                .build_outputs()
-                .filter_map(|output| match output {
-                    QualifiedPath::Rootless(p) => Some(p),
-                    QualifiedPath::RelativeTargetProfile(p) => Some(p),
-                    QualifiedPath::RelativeCargoHome(_) => None,
-                })
-                .collect::<HashSet<_>>();
-            dependencies.extend(deps.iter().filter(|&path| outputs.contains(path)));
-        }
-
-        // Now that we have our three sources of files,
-        // we actually treat them all the same way!
-        fingerprints
-            .into_iter()
-            .chain(build_scripts)
-            .chain(dependencies)
-            .inspect(|artifact| trace!(?artifact, "enumerated artifact"))
-            .collect::<Vec<_>>()
-            .pipe(Ok)
-    }
-
     /// Get the absolute path to the profile directory root.
     ///
     /// Converts the internal relative path to an absolute path
     /// based on the workspace's target directory.
     pub fn root(&self) -> &AbsDirPath {
         &self.root
-    }
-
-    /// Store the contents of the file referenced by the path in the CAS.
-    #[instrument(name = "ProfileDir::store_cas")]
-    pub async fn store_cas(
-        &self,
-        cas: &FsCas,
-        file: &RelFilePath,
-    ) -> Result<(Blake3, AbsFilePath)> {
-        let file = self.root.join(file);
-        let raw = fs::must_read_buffered(&file).await.context("read file")?;
-
-        // TODO: If we keep rewrites with this sort of structure we probably
-        // want to turn them into a more generic operation instead of having to
-        // retype all this boilerplate every time.
-        let content = match CasRewrite::from_path(&file) {
-            CasRewrite::None => raw,
-            CasRewrite::RootOutput => RootOutput::from_file(self, &file)
-                .await
-                .context("parse")?
-                .pipe_ref(serde_json::to_vec)
-                .context("serialize")?,
-            CasRewrite::BuildScriptOutput => BuildScriptOutput::from_file(self, &file)
-                .await
-                .context("parse")?
-                .pipe_ref(serde_json::to_vec)
-                .context("serialize")?,
-            CasRewrite::DepInfo => DepInfo::from_file(self, &file)
-                .await
-                .context("parse")?
-                .pipe_ref(serde_json::to_vec)
-                .context("serialize")?,
-        };
-
-        cas.store(&content)
-            .await
-            .context("store content in CAS")
-            .map(|key| (key, file))
-    }
-
-    /// Get the content from the CAS referenced by the key and restore it
-    /// to the provided path.
-    #[instrument(name = "ProfileDir::restore_cas")]
-    pub async fn restore_cas(
-        &self,
-        cas: &FsCas,
-        key: &Blake3,
-        file: &RelFilePath,
-    ) -> Result<AbsFilePath> {
-        let file = self.root.join(file);
-        let content = cas.must_get(key).await.context("get content from CAS")?;
-
-        // TODO: If we keep rewrites with this sort of structure we probably
-        // want to turn them into a more generic operation instead of having to
-        // retype all this boilerplate every time.
-        let raw = match CasRewrite::from_path(&file) {
-            CasRewrite::None => content,
-            CasRewrite::RootOutput => serde_json::from_slice::<RootOutput>(&content)
-                .context("deserialize")
-                .map(|f| f.reconstruct(self).into_bytes())?,
-            CasRewrite::BuildScriptOutput => serde_json::from_slice::<BuildScriptOutput>(&content)
-                .context("deserialize")
-                .map(|f| f.reconstruct(self).into_bytes())?,
-            CasRewrite::DepInfo => serde_json::from_slice::<DepInfo>(&content)
-                .context("deserialize")
-                .map(|f| f.reconstruct(self).into_bytes())?,
-        };
-        fs::write(&file, &raw)
-            .await
-            .context("write file")
-            .map(|_| file)
-    }
-}
-
-/// Some files need to be rewritten when stored in or restored from the CAS.
-/// This type supports parsing a path to determine whether it should be
-/// rewritten, and if so using what strategy.
-///
-/// A core intention of this type is to _always_ only replace things that
-/// `hurry` can actually _parse_- no blanket "replace all" functionality.
-/// The reasoning here is that while we want to make builds faster,
-/// we **cannot** make them incorrect; if we skip rewriting something
-/// that Cargo needs it'll simply recompile while if we overzealously rewrite
-/// things we don't actually know anything about we might cause subtle and
-/// bugs in the compilation phase which we absolutely cannot afford to do.
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
-enum CasRewrite {
-    /// No rewriting should take place.
-    #[default]
-    None,
-
-    /// This is a "dep-info" file, so use the "dep-info" rewrite strategy.
-    DepInfo,
-
-    /// This is a "root output" file, used for build scripts.
-    ///
-    /// This file contains the fully qualified path to `out`, which is the
-    /// directory where script can output files (provided to the script as
-    /// $OUT_DIR).
-    ///
-    /// These are correct to rewrite because the content of the `out` directory
-    /// should have also been restored, but even if it wasn't it's certainly not
-    /// correct to try to read or write content from the old location.
-    ///
-    /// Example taken from an actual project:
-    /// ```not_rust
-    /// /Users/jess/scratch/example/target/debug/build/rustls-5590c033895e7e9a/out
-    /// ```
-    RootOutput,
-
-    /// This is an "output" file, which is the output of the build script when
-    /// it was executed.
-    ///
-    /// These are correct to rewrite because paths in this output will almost
-    /// definitely be referencing either something local or something in
-    /// `$CARGO_HOME`.
-    ///
-    /// Example output taken from an actual project:
-    /// ```not_rust
-    /// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
-    /// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
-    /// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
-    /// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
-    /// cargo:rustc-link-search=native=/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out
-    /// cargo:root=/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out
-    /// cargo:include=/Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zstd-sys-2.0.15+zstd.1.5.7/zstd/lib
-    /// ```
-    ///
-    /// Reference: https://doc.rust-lang.org/cargo/reference/build-scripts.html
-    BuildScriptOutput,
-}
-
-impl CasRewrite {
-    /// Determine the rewrite strategy from the file path.
-    fn from_path(target: &AbsFilePath) -> Self {
-        // `.rev()` and `.take(1)` are because while we're iterating over
-        // components, we really don't care about reading the whole path- just
-        // the few elements at the end.
-        target
-            .component_strs_lossy()
-            .rev()
-            .tuple_windows()
-            .take(1)
-            .find_map(|(name, _, gparent)| {
-                // Theoretically, we could blanket rewrite all paths in all text
-                // files- but we follow a conservative approach here because
-                // above all we don't want to silently cause miscompilations and
-                // we don't want to do more work than is needed.
-                //
-                // For example, we don't rewrite `stderr` output files for build
-                // scripts, because they're only for humans to read. Also some
-                // example projects emit other arbitrary text files; e.g. the
-                // build script for `aws-lc-sys` emits a file at
-                // `./target/debug/build/aws-lc-sys-3f4f475625566422/out/memcmp_invalid_stripped_check.dSYM/Contents/Resources/Relocations/aarch64/memcmp_invalid_stripped_check.yml`
-                // which we don't try to replace because we don't really know
-                // anything about this file.
-                //
-                // We do know however that it's common practice in the Rust
-                // community to back up and restore files in `target` for
-                // caching, so we can only assume that library authors know this
-                // and can recover from or at least detect this sort of scenario
-                // if they care.
-                let ext = name.rsplit_once('.').map(|(_, ext)| ext);
-                match (gparent.as_ref(), name.as_ref(), ext) {
-                    ("build", "output", _) => Some(Self::BuildScriptOutput),
-                    ("build", "root-output", _) => Some(Self::RootOutput),
-                    (_, _, Some("d")) => Some(Self::DepInfo),
-                    _ => None,
-                }
-            })
-            .unwrap_or_default()
     }
 }
