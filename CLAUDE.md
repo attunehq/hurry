@@ -11,8 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Building and Testing
 - **Build the project**: `hurry cargo build` (use instead of `cargo build`)
 - **Install locally**: `cargo install --path ./packages/hurry --locked`
-- **Run end-to-end tests**: `cargo test --package e2e`
-- **Run unit tests**: `cargo test --package hurry`
+- **Run tests for a package**: `cargo nextest run -p {PACKAGE_NAME}`
 - **Run benchmarks**: `cargo bench --package hurry`
 
 ### Cache Management
@@ -49,10 +48,12 @@ These scripts are essential for cache correctness validation and performance ana
 
 ## Testing Strategy
 
-- **Unit tests**: Focus on individual components in `packages/hurry/tests/it/`
-- **End-to-end tests**: Full workflow validation in `packages/e2e/tests/it/`
+- **Tests are colocated with code**: Tests are written in `#[cfg(test)]` modules within source files, not in separate `tests/` directories
+- **Integration-style tests**: Even though tests are colocated, write them integration-style (testing through public APIs) rather than unit-style (testing internal implementation details)
+- **End-to-end tests**: Full workflow validation in `packages/e2e/`
 - **Manual validation**: Use `scripts/diff-*.sh` to verify cache restore accuracy
 - **Benchmarks**: Performance regression testing via `cargo bench`
+- **Running tests**: Use `cargo nextest run -p {PACKAGE_NAME}` to run tests for a specific package
 
 ## Cache Correctness
 
@@ -90,5 +91,12 @@ Examples:
 - ✅ `auth::Jwt` (concise, module provides context)
 
 The module namespace already tells you the domain - the type name should add new information about the specific implementation or purpose.
-- Prefer to write tests as "cargo unit tests": colocated with code. Prefer writing these tests integration-style over unit-style.
+
+## Additional Guidelines
+
+- Prefer to write tests as "cargo unit tests": colocated with code in `#[cfg(test)]` modules. Write these tests integration-style over unit-style.
 - Prefer streaming IO operations (e.g. AsyncRead, AsyncWrite, Read, Write) over buffered operations by default
+- Prefer `pretty_assertions` over standard assertions; import them with a `pretty_` prefix:
+  - `pretty_assertions::assert_eq as pretty_assert_eq`
+  - `pretty_assertions::assert_ne as pretty_assert_ne`
+  - `pretty_assertions::assert_matches as pretty_assert_matches`

@@ -18,20 +18,12 @@ mod tests {
     use axum::body::Bytes;
     use axum::http::StatusCode;
     use color_eyre::{Result, eyre::Context};
-    use pretty_assertions::assert_eq as pretty_assert_eq;
+    use pretty_assertions::{assert_eq as pretty_assert_eq, assert_ne as pretty_assert_ne};
     use serde_json::Value;
     use sqlx::PgPool;
 
     use crate::api::test_helpers::test_blob;
 
-    /// End-to-end test simulating the full hurry client workflow:
-    /// 1. Mint stateless token
-    /// 2. Write multiple blobs
-    /// 3. Read blobs back and verify content
-    /// 4. Check for nonexistent blob (should fail)
-    /// 5. Write the new blob
-    /// 6. Check it exists
-    /// 7. Read it back and verify
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
         fixtures("../../schema/fixtures/auth.sql")
@@ -144,6 +136,81 @@ mod tests {
             .await;
         read_new.assert_status_ok();
         pretty_assert_eq!(read_new.as_bytes().as_ref(), new_blob_content);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../schema/fixtures/auth.sql")
+    )]
+    async fn request_id_echoed_when_provided(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let client_request_id = "client-provided-12345";
+
+        let response = server
+            .get("/api/v1/health")
+            .add_header("x-request-id", client_request_id)
+            .await;
+
+        response.assert_status_ok();
+        let response_request_id = response
+            .headers()
+            .get("x-request-id")
+            .expect("x-request-id header should be present")
+            .to_str()
+            .expect("x-request-id should be valid UTF-8");
+
+        pretty_assert_eq!(response_request_id, client_request_id);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures("../../schema/fixtures/auth.sql")
+    )]
+    async fn request_id_generated_when_not_provided(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let response1 = server.get("/api/v1/health").await;
+        response1.assert_status_ok();
+        let request_id1 = response1
+            .headers()
+            .get("x-request-id")
+            .expect("x-request-id header should be present")
+            .to_str()
+            .expect("x-request-id should be valid UTF-8");
+
+        let response2 = server.get("/api/v1/health").await;
+        response2.assert_status_ok();
+        let request_id2 = response2
+            .headers()
+            .get("x-request-id")
+            .expect("x-request-id header should be present")
+            .to_str()
+            .expect("x-request-id should be valid UTF-8");
+
+        // Ensure both IDs are valid UUIDs
+        assert!(
+            uuid::Uuid::parse_str(request_id1).is_ok(),
+            "request_id1 should be a valid UUID: {request_id1}"
+        );
+        assert!(
+            uuid::Uuid::parse_str(request_id2).is_ok(),
+            "request_id2 should be a valid UUID: {request_id2}"
+        );
+
+        // Ensure the two requests got different IDs
+        pretty_assert_ne!(
+            request_id1, request_id2,
+            "Different requests should get different request IDs"
+        );
 
         Ok(())
     }
