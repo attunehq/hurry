@@ -201,7 +201,11 @@ mod tests {
 
         response.assert_status_ok();
         let body = response.as_bytes();
-        pretty_assert_eq!(body.as_ref(), CONTENT, "user2 should read content written by user1");
+        pretty_assert_eq!(
+            body.as_ref(),
+            CONTENT,
+            "user2 should read content written by user1"
+        );
 
         Ok(())
     }
@@ -364,34 +368,44 @@ mod tests {
 
         // Execute 10 concurrent writes of the same content
         let (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10) = tokio::join!(
-            server.put(&format!("/api/v1/cas/{key}"))
+            server
+                .put(&format!("/api/v1/cas/{key}"))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::from_static(CONTENT)),
-            server.put(&format!("/api/v1/cas/{key}"))
+            server
+                .put(&format!("/api/v1/cas/{key}"))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::from_static(CONTENT)),
-            server.put(&format!("/api/v1/cas/{key}"))
+            server
+                .put(&format!("/api/v1/cas/{key}"))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::from_static(CONTENT)),
-            server.put(&format!("/api/v1/cas/{key}"))
+            server
+                .put(&format!("/api/v1/cas/{key}"))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::from_static(CONTENT)),
-            server.put(&format!("/api/v1/cas/{key}"))
+            server
+                .put(&format!("/api/v1/cas/{key}"))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::from_static(CONTENT)),
-            server.put(&format!("/api/v1/cas/{key}"))
+            server
+                .put(&format!("/api/v1/cas/{key}"))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::from_static(CONTENT)),
-            server.put(&format!("/api/v1/cas/{key}"))
+            server
+                .put(&format!("/api/v1/cas/{key}"))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::from_static(CONTENT)),
-            server.put(&format!("/api/v1/cas/{key}"))
+            server
+                .put(&format!("/api/v1/cas/{key}"))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::from_static(CONTENT)),
-            server.put(&format!("/api/v1/cas/{key}"))
+            server
+                .put(&format!("/api/v1/cas/{key}"))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::from_static(CONTENT)),
-            server.put(&format!("/api/v1/cas/{key}"))
+            server
+                .put(&format!("/api/v1/cas/{key}"))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::from_static(CONTENT)),
         );
@@ -449,34 +463,44 @@ mod tests {
 
         // Write all blobs concurrently
         let (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10) = tokio::join!(
-            server.put(&format!("/api/v1/cas/{}", blobs[0].0))
+            server
+                .put(&format!("/api/v1/cas/{}", blobs[0].0))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::copy_from_slice(&blobs[0].1)),
-            server.put(&format!("/api/v1/cas/{}", blobs[1].0))
+            server
+                .put(&format!("/api/v1/cas/{}", blobs[1].0))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::copy_from_slice(&blobs[1].1)),
-            server.put(&format!("/api/v1/cas/{}", blobs[2].0))
+            server
+                .put(&format!("/api/v1/cas/{}", blobs[2].0))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::copy_from_slice(&blobs[2].1)),
-            server.put(&format!("/api/v1/cas/{}", blobs[3].0))
+            server
+                .put(&format!("/api/v1/cas/{}", blobs[3].0))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::copy_from_slice(&blobs[3].1)),
-            server.put(&format!("/api/v1/cas/{}", blobs[4].0))
+            server
+                .put(&format!("/api/v1/cas/{}", blobs[4].0))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::copy_from_slice(&blobs[4].1)),
-            server.put(&format!("/api/v1/cas/{}", blobs[5].0))
+            server
+                .put(&format!("/api/v1/cas/{}", blobs[5].0))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::copy_from_slice(&blobs[5].1)),
-            server.put(&format!("/api/v1/cas/{}", blobs[6].0))
+            server
+                .put(&format!("/api/v1/cas/{}", blobs[6].0))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::copy_from_slice(&blobs[6].1)),
-            server.put(&format!("/api/v1/cas/{}", blobs[7].0))
+            server
+                .put(&format!("/api/v1/cas/{}", blobs[7].0))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::copy_from_slice(&blobs[7].1)),
-            server.put(&format!("/api/v1/cas/{}", blobs[8].0))
+            server
+                .put(&format!("/api/v1/cas/{}", blobs[8].0))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::copy_from_slice(&blobs[8].1)),
-            server.put(&format!("/api/v1/cas/{}", blobs[9].0))
+            server
+                .put(&format!("/api/v1/cas/{}", blobs[9].0))
                 .add_header("Authorization", &token)
                 .bytes(Bytes::copy_from_slice(&blobs[9].1)),
         );

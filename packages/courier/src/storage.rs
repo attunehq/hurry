@@ -362,12 +362,12 @@ mod tests {
     use super::{Disk, Key, hashed_copy};
     use color_eyre::Result;
     use pretty_assertions::assert_eq as pretty_assert_eq;
-    use tokio::io::AsyncReadExt;
     use proptest::{prop_assert, prop_assert_eq, prop_assert_ne};
     use simple_test_case::test_case;
     use std::io::Cursor;
     use tempfile::TempDir;
     use test_strategy::proptest;
+    use tokio::io::AsyncReadExt;
     use zstd::bulk::decompress;
 
     fn key_for(input: &[u8]) -> Key {
