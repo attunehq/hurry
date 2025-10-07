@@ -1,4 +1,6 @@
 fn main() {
+    println!("cargo:rerun-if-changed=schema/migrations");
+
     #[cfg(debug_assertions)]
     sqlx_env_var_tests();
 }
