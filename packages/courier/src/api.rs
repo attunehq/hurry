@@ -31,7 +31,7 @@
 use std::time::{Duration, Instant};
 
 use aerosol::Aero;
-use axum::{Router, extract::Request, middleware::Next, response::Response};
+use axum::{Router, extract::Request, http::HeaderValue, middleware::Next, response::Response};
 use tower::ServiceBuilder;
 use tower_http::{
     compression::CompressionLayer, decompression::RequestDecompressionLayer,
@@ -67,18 +67,28 @@ pub fn router(state: State) -> Router {
 }
 
 async fn trace_request(request: Request, next: Next) -> Response {
+    const REQUEST_ID_HEADER: &str = "x-request-id";
+    let id = request
+        .headers()
+        .get(REQUEST_ID_HEADER)
+        .and_then(|id| id.to_str().map(|id| id.to_string()).ok())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
     let start = Instant::now();
-    let id = Uuid::new_v4();
     let url = request.uri().to_string();
     let method = request.method().to_string();
 
     let span = tracing::info_span!("http.request", %id, %url, %method);
     let _guard = span.enter();
     Instrument::in_current_span(async move {
-        let response = next.run(request).await;
+        let mut response = next.run(request).await;
         let status = response.status();
         let duration = start.elapsed();
         tracing::info!(%status, ?duration, "http.request.response");
+
+        if let Ok(id) = HeaderValue::from_str(&id) {
+            response.headers_mut().insert(REQUEST_ID_HEADER, id);
+        }
         response
     })
     .await
