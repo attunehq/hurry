@@ -53,7 +53,7 @@ These scripts are essential for cache correctness validation and performance ana
 - **Generate new migration**: `sql-schema migration --name {migration_name}` (after editing `schema/schema.sql`)
 - **Run tests with fixtures**: Tests use `#[sqlx::test]` macro with automatic fixture loading
 - **Note**: Migrations are not auto-applied on server startup to prevent accidental production migrations
-- **Note**: When using sqlx-cli commands, you must manually specify `--database-url "$COURIER_DATABASE_URL"` since sqlx doesn't support per-package database URLs without the 0.9 alpha
+- **Note**: When using sqlx-cli commands, you must manually specify `--database-url "$COURIER_DATABASE_URL"` since sqlx doesn't support per-package database URLs
 
 #### Testing
 - **Run API tests**: `RUST_BACKTRACE=1 cargo test --package courier` or `cargo nextest run -p courier`
