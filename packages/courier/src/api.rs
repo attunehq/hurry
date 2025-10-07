@@ -35,7 +35,7 @@ use axum::{Router, extract::Request, http::HeaderValue, middleware::Next, respon
 use tower::ServiceBuilder;
 use tower_http::{
     compression::CompressionLayer, decompression::RequestDecompressionLayer,
-    limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer,
+    limit::RequestBodyLimitLayer, timeout::TimeoutLayer,
 };
 use tracing::Instrument;
 use uuid::Uuid;
@@ -53,7 +53,6 @@ pub type State = Aero![
 
 pub fn router(state: State) -> Router {
     let middleware = ServiceBuilder::new()
-        .layer(TraceLayer::new_for_http())
         .layer(RequestDecompressionLayer::new())
         .layer(CompressionLayer::new())
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
@@ -79,8 +78,7 @@ async fn trace_request(request: Request, next: Next) -> Response {
     let method = request.method().to_string();
 
     let span = tracing::info_span!("http.request", %id, %url, %method);
-    let _guard = span.enter();
-    Instrument::in_current_span(async move {
+    async move {
         let mut response = next.run(request).await;
         let status = response.status();
         let duration = start.elapsed();
@@ -90,7 +88,8 @@ async fn trace_request(request: Request, next: Next) -> Response {
             response.headers_mut().insert(REQUEST_ID_HEADER, id);
         }
         response
-    })
+    }
+    .instrument(span)
     .await
 }
 
