@@ -152,6 +152,10 @@ pub async fn exec(options: Options) -> Result<()> {
         // the target directory's build script outputs.
         //
         // [^2]: https://doc.rust-lang.org/cargo/reference/external-tools.html#json-messages
+
+        // TODO: Add `RUSTC_WRAPPER` wrapper that records invocations in "debug
+        // mode", so we can assert that our invocation reconstruction works
+        // properly. Maybe that should be added to a test harness?
         cargo::invoke("build", &options.argv)
             .await
             .context("build with cargo")?;

@@ -74,18 +74,21 @@ impl CargoCache {
             .context("parsing rustc metadata")?;
         trace!(?rustc, "rustc metadata");
 
-        let units = {
-            // TODO: Pass the rest of the `cargo build` flags in.
-            let output = cargo::invoke_output(
-                "build",
-                ["--unit-graph", "-Z", "unstable-options"],
-                [("RUSTC_BOOTSTRAP", "1")],
-            )
-            .await?;
-            serde_json::from_slice::<UnitGraph>(&output.stdout).context("parsing unit graph")?
-        };
-        trace!(?units, "unit graph");
-
+        // Note that build plans as a feature are _deprecated_, although their
+        // removal has not occurred in the last 6 years[^1]. If a stable
+        // alternative comes along, we should migrate.
+        //
+        // An alternative is the `--unit-graph` flag, which is unstable but not
+        // deprecated[^2]. Unfortunately, unit graphs do not provide information
+        // about the `rustc` invocation argv or the unit hash of the build
+        // script execution, both of which are necessary to construct the
+        // artifact cache key. We could theoretically reconstruct this
+        // information using the JSON build messages and RUSTC_WRAPPER
+        // invocation recording, but that's way more work for no stronger of a
+        // stability guarantee.
+        //
+        // [^1]: https://github.com/rust-lang/cargo/issues/7614
+        // [^2]: https://doc.rust-lang.org/cargo/reference/unstable.html#unit-graph
         let build_plan = {
             // TODO: Pass the rest of the `cargo build` flags in.
             let output = cargo::invoke_output(

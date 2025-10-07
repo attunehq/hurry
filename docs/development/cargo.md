@@ -376,7 +376,7 @@ target/
 > **TODO**
 > What steps does `cargo` and `rustc` take to build incremental first-party crates?
 
-### Querying build information from Cargo
+### Getting build information from Cargo
 
 There are several ways to get build information out of Cargo:
 
@@ -385,6 +385,7 @@ There are several ways to get build information out of Cargo:
 3. `cargo build --message-format=json-diagnostic-rendered-ansi` provides formatted output messages from the compiler as it runs.
 4. `cargo build --unit-graph` provides information about the "unit graph" of the build.
 5. `cargo build --build-plan` provides information about the "build plan" of the build.
+6. Reading the `./output` file of a build script execution provides the recorded build script output.
 
 Each of these methods has their own trade-offs, and they're all incomplete or inconvenient in various ways. In order to get the information we need, we combine all of these methods.
 
@@ -447,7 +448,9 @@ Some nice properties of this format:
 
 Some not-so-nice properties of this format:
 
-1. This format doesn't provide the actual artifact filenames, so we can't tell what which file suffix is used for artifacts of which unit.
+1. It doesn't provide the actual artifact filenames, so we can't tell what which file suffix is used for artifacts of which unit.
+2. It doesn't provide the unit hash, file name, or `OUT_DIR` of build script executions.
+3. It doesn't specify environment variables set during `rustc` invocation, or the exact `rustc` argv (which must be inferred via reconstruction).
 
 #### `cargo build` build plan
 
@@ -456,28 +459,36 @@ Some not-so-nice properties of this format:
 Some nice properties of this format:
 
 1. It provides the artifact names of all generated outputs.
-2. It provides all `rustc` invocations _and_ all build script invocations.
+2. It provides all `rustc` invocations _and_ all build script invocations, including environment variables.
 3. It ties each invocation to the package being built.
+4. It provides a dependency graph of invocations.
 
 Some not-so-nice properties of this format:
 
-1. It doesn't provide a graph of dependencies (it only provides a list of invocations), so it doesn't tell us _why_ a particular invocation is being run.
-2. The feature is allegedly deprecated, although it has not been removed in [six years](https://github.com/rust-lang/cargo/issues/7614).
+1. The feature is allegedly deprecated, although it has not been removed in [six years](https://github.com/rust-lang/cargo/issues/7614).
+
+#### Reading build script `./output`
 
 #### How we combine this information
 
-1. Use the unit graph to enumerate all units. In particular, this will provide us with the _dependencies_ of each unit, which we need in order to properly key the cached artifact and find its build script.
-2. Use the build plan to map each unit to its generated artifacts (via `-C extra-filename`) and build script execution artifacts (via `OUT_DIR`).
-   1. In cases where there are multiple matching units, each unit must either have (1) different features or (2) different dependencies. We can match features against the parsed invocation, and we can match dependencies by building a graph of `--extern` flags and mapping the upstream sources (which must have different features) to the unit graph.
-   2. NOTE: the build plan invocations are slightly wrong because build plan construction does not run build scripts, and therefore can't know certain `rustc` arguments that can be added by build script outputs (e.g. `cargo::rustc-link-lib`). However, build script outputs cannot change `--extern` flags and cannot change `OUT_DIR`, so our usage of the build plan here is safe.
-3. Use the `cargo build --message-format=json` `build-script-executed` messages to get the missing build script output flags, and map it to units via `out_dir`. We use this instead of `RUSTC_WRAPPER` because this saves and replays cached build script output of dependencies that don't need to be rebuilt, so we can get linker flags even for dependencies that are fresh.
-    <!-- TODO: How do we do restores given that we cannot actually run the build script on the client? Or maybe we _should_ run just the build script? Or maybe we can look at the emitted instructions from a previously cached build script and use those to determine whether a rebuild is required? Or maybe key on the project and machine? -->
+First, at the start of a build, we construct an _artifact plan_. This is information about expected artifacts that we can calculate without running any part of the build (in particular, without compiling and running build scripts).
+
+1. We start with the build plan.
+   1. Note that [build plan invocations are incomplete](https://github.com/rust-lang/cargo/issues/7614#issue-526685181) because they do not run build scripts. However, build script directives can never change the shape of the dependency graph (see [here](https://doc.rust-lang.org/cargo/reference/build-scripts.html#rustc-cfg:~:text=Note%20that%20this%20does%20not%20affect%20Cargo%E2%80%99s%20dependency%20resolution.%20This%20cannot%20be%20used%20to%20enable%20an%20optional%20dependency%2C%20or%20enable%20other%20Cargo%20features.)), and can never change the `OUT_DIR`, so these invocations are safe to rely upon in our case.
+2. We use the `deps` in the build plan to collate invocations into "library units". A library unit is a dependency's library crate, that library crate's build script compilation, and that library crate's build script execution.
 
 Now, for each unit, we should know:
 1. Its compiled artifact folder.
 2. Its build script folder.
 3. Its build script execution folder.
 4. Its dependencies.
-5. Its rustc flags.
+5. Its planned `rustc` invocation argv.
+6. Its build script directives.
 
-This information should be sufficient to cache and key the unit.
+Second, we run the build.
+
+Lastly, we save built artifacts to the cache.
+
+1. For each library unit, we parse the library unit's build script execution's output file. This allows us to parse build script directives, which allows us to reconstruct the actual `rustc` invocation. To see Cargo's `rustc` invocation construction logic, see [here](https://github.com/rust-lang/cargo/blob/c24e1064277fe51ab72011e2612e556ac56addf7/src/cargo/core/compiler/mod.rs#L360-L375).
+
+With this information, we can now reconstruct its actual `rustc` invocation argv, which enables us to build a full artifact key and save the unit.
