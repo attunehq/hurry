@@ -226,6 +226,15 @@ By vendoring as a git submodule:
 3. Builds are reproducible
 4. Consistent sqlx-cli across machines
 
+If we _don't_ want to do this, the alternatives are:
+- Maintain multiple `.env` files that set different values for `DATABASE_URL`; `cd` into the packages to do operations.
+- Use `build.rs` workarounds alone; this makes it more annoying to use `cargo sqlx` operations as we'll have to manually specify the url each time but not the end of the world.
+
+The main issue with both approaches is that they prevent us from working with the packages at the workspace level or add extra things you have to remember. Of course, so does `sqlx 0.9` today- but the sqlx team has explicitly said they plan to make this better (ref: https://github.com/launchbadge/sqlx/issues/3761) whereas the other workarounds would never get better.
+
+> [!TIP]
+> Annoyingly, when compiling `cargo` now emits warnings for `sqlx` since it thinks that this is a first-party project. There doesn't seem to be a way to work around this. If we don't want to deal with the extra warnings we can always take one of the alternative options mentioned above.
+
 ## Troubleshooting
 
 ### "DATABASE_URL must be set"
