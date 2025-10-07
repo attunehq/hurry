@@ -45,48 +45,20 @@ jobs:
           rustup toolchain install nightly
           rustup component add --toolchain nightly rustfmt
           rustup show
-
+      - uses: taiki-e/install-action@nextest
       - uses: actions/checkout@v4
 
-      - name: Cache directories
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ~/.cache/hurry
-          key: hurry-cache-pr-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            hurry-cache-pr-${{ runner.os }}-
+      # TODO: Swap to `hurry`!
+      - uses: Swatinem/rust-cache@v2
 
-      # For now, `hurry` is commented since we're in the middle of changing how
-      # it works.
-      #
-      # - name: Install hurry
-      #   env:
-      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #   run: |
-      #     ./install.sh --version v0.2.0-alpha.2
-      #     echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-      # TODO (maybe?): add `hurry cargo fmt` support.
       - name: Check format
         run: cargo +nightly fmt --all --check
 
-      # For now, `hurry` is commented since we're in the middle of changing how
-      # it works.
       - name: Run full build
         run: cargo build --workspace --all-targets --all-features
-        # run: hurry cargo build --workspace --all-targets --all-features
 
-      # TODO: add `hurry cargo clippy` support.
       - name: Check clippy
         run: cargo clippy --workspace --all-targets --all-features
 
-      # TODO: add `hurry cargo test` support.
-      # FIXME: Some of these tests do not yet pass on all filesystems.
-      #
-      # - name: Run tests
-      #   run: cargo test --workspace --all-targets --all-features
+      - name: Run tests
+        run: cargo nextest run
