@@ -18,7 +18,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   SQLX_OFFLINE: 1
-  DATABASE_URL: postgres://postgres:postgres@localhost:5432/courier_test
+  COURIER_DATABASE_URL: postgres://postgres:postgres@localhost:5432/courier_test
 
 jobs:
   rust:
@@ -47,6 +47,8 @@ jobs:
           rustup show
       - uses: taiki-e/install-action@nextest
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       # TODO: Swap to `hurry`!
       - uses: Swatinem/rust-cache@v2
