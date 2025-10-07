@@ -33,7 +33,10 @@ use std::time::Duration;
 use aerosol::Aero;
 use axum::Router;
 use tower::ServiceBuilder;
-use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer};
+use tower_http::{
+    compression::CompressionLayer, decompression::RequestDecompressionLayer,
+    limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer,
+};
 
 pub mod v1;
 
@@ -49,6 +52,8 @@ pub type State = Aero![
 pub fn router(state: State) -> Router {
     let middleware = ServiceBuilder::new()
         .layer(TraceLayer::new_for_http())
+        .layer(RequestDecompressionLayer::new())
+        .layer(CompressionLayer::new())
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
         .layer(TimeoutLayer::new(REQUEST_TIMEOUT));
 
