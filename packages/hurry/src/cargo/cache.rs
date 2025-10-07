@@ -9,6 +9,7 @@ use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use tap::Pipe as _;
 use tracing::{debug, instrument, trace};
 
 use crate::{
@@ -48,11 +49,9 @@ impl CargoCache {
     #[instrument(name = "CargoCache::open_dir")]
     pub async fn open_dir(cas: FsCas, cache_dir: &AbsDirPath, ws: Workspace) -> Result<Self> {
         let dbfile = cache_dir.join(mk_rel_file!("cache.db"));
-        if !fs::exists(dbfile.as_std_path()).await {
-            fs::create_dir_all(cache_dir)
-                .await
-                .context("create cache directory")?;
-        }
+        fs::create_dir_all(cache_dir)
+            .await
+            .context("create cache directory")?;
 
         Self::open(cas, &format!("sqlite://{}", dbfile), ws).await
     }
@@ -89,16 +88,16 @@ impl CargoCache {
         //
         // [^1]: https://github.com/rust-lang/cargo/issues/7614
         // [^2]: https://doc.rust-lang.org/cargo/reference/unstable.html#unit-graph
-        let build_plan = {
-            // TODO: Pass the rest of the `cargo build` flags in.
-            let output = cargo::invoke_output(
-                "build",
-                ["--build-plan", "-Z", "unstable-options"],
-                [("RUSTC_BOOTSTRAP", "1")],
-            )
-            .await?;
-            serde_json::from_slice::<BuildPlan>(&output.stdout).context("parsing build plan")?
-        };
+
+        // TODO: Pass the rest of the `cargo build` flags in.
+        let build_plan = cargo::invoke_output(
+            "build",
+            ["--build-plan", "-Z", "unstable-options"],
+            [("RUSTC_BOOTSTRAP", "1")],
+        )
+        .await?
+        .pipe(|output| serde_json::from_slice::<BuildPlan>(&output.stdout))
+        .context("parsing build plan")?;
         trace!(?build_plan, "build plan");
 
         let mut build_script_index_to_dir = HashMap::new();
@@ -112,7 +111,7 @@ impl CargoCache {
             // 2. Running a build script.
             // 3. Compiling a dependency.
             // 4. Compiling first-party code.
-            if invocation.target_kind == vec![TargetKind::CustomBuild] {
+            if invocation.target_kind == &[TargetKind::CustomBuild] {
                 match invocation.compile_mode {
                     CargoCompileMode::Build => {
                         if let Some(output_file) = invocation.outputs.first() {
@@ -170,7 +169,7 @@ impl CargoCache {
                         invocation.compile_mode
                     ),
                 }
-            } else if invocation.target_kind == vec![TargetKind::Bin] {
+            } else if invocation.target_kind == &[TargetKind::Bin] {
                 // Binaries are _always_ first-party code. Do nothing for now.
                 continue;
             } else if invocation.target_kind.contains(&TargetKind::Lib)
@@ -194,7 +193,7 @@ impl CargoCache {
                     // There might be other build scripts for the same name and
                     // version (but different features), but they won't be
                     // listed as a `dep`.
-                    if dep.target_kind == vec![TargetKind::CustomBuild]
+                    if dep.target_kind == &[TargetKind::CustomBuild]
                         && dep.compile_mode == CargoCompileMode::RunCustomBuild
                         && dep.package_name == invocation.package_name
                         && dep.package_version == invocation.package_version
@@ -217,7 +216,7 @@ impl CargoCache {
                                 "build script index should have recorded compilation directory",
                             )?;
                         Some(BuildScriptDirs {
-                            compiled_dir: build_script_dir.clone().to_string_lossy().to_string(),
+                            compiled_dir: build_script_dir.to_string_lossy().to_string(),
                             output_dir: build_script_output_dir.to_string(),
                         })
                     }

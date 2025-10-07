@@ -40,7 +40,7 @@ pub struct UnitGraphProfile {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum UnitGraphProfilePanicStrategy {
     Unwind,
     Abort,
@@ -55,7 +55,7 @@ pub struct UnitGraphDependency {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum CargoCompileMode {
     Test,
     Build,
@@ -63,6 +63,5 @@ pub enum CargoCompileMode {
     Doc,
     Doctest,
     Docscrape,
-    #[serde(rename = "run-custom-build")]
     RunCustomBuild,
 }

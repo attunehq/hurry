@@ -67,14 +67,18 @@ pub struct DependencyBuild {
 
     pub features: HashSet<String>,
 
+    #[builder(into)]
     pub edition: String,
 
+    #[builder(into)]
     pub extra_filename: String,
 }
 
 #[derive(Clone, Eq, PartialEq, Debug, Builder)]
 pub struct Optimizations {
+    #[builder(into)]
     pub opt_level: String,
+    #[builder(into)]
     pub debuginfo: String,
     pub debug_assertions: bool,
     pub overflow_checks: bool,
