@@ -6,7 +6,7 @@ use async_compression::tokio::bufread::ZstdDecoder;
 use async_compression::tokio::write::ZstdEncoder;
 use color_eyre::eyre::bail;
 use color_eyre::{Result, eyre::Context};
-use derive_more::{Display, From};
+use derive_more::{Debug, Display, From};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tokio::fs::{File, create_dir_all, metadata, remove_file, rename};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -103,6 +103,7 @@ impl<'de> Deserialize<'de> for Key {
 /// computed from the content of the file, so if the file already exists it must
 /// have the same content.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display)]
+#[debug("Disk(root = {})", self.root.display())]
 #[display("{}", root.display())]
 pub struct Disk {
     root: PathBuf,
@@ -140,6 +141,7 @@ impl Disk {
     }
 
     /// Validate that the CAS is accessible and writable.
+    #[tracing::instrument(name = "Disk::ping")]
     pub async fn ping(&self) -> Result<()> {
         static PING_KEY: LazyLock<Key> = LazyLock::new(|| Key::from(blake3::hash(b"ping")));
         const PING_CONTENT: &[u8] = b"ping";
@@ -195,6 +197,7 @@ impl Disk {
     /// an issue checking the file system. This isn't ideal, but it's _okay_,
     /// because having the client write the blob again at worst won't change the
     /// existing data.
+    #[tracing::instrument(name = "Disk::exists")]
     pub async fn exists(&self, key: &Key) -> bool {
         let path = self.key_path(key);
         metadata(&path).await.is_ok()
@@ -204,6 +207,7 @@ impl Disk {
     ///
     /// Note: the returned reader is buffered with the capacity of
     /// [`Disk::DEFAULT_BUF_SIZE`]; callers should probably not buffer further.
+    #[tracing::instrument(name = "Disk::read")]
     pub async fn read(&self, key: &Key) -> Result<impl AsyncRead + Unpin + 'static> {
         let path = self.key_path(key);
         File::open(&path)
@@ -215,6 +219,7 @@ impl Disk {
     }
 
     /// Write the content to storage for the provided key.
+    #[tracing::instrument(name = "Disk::write", skip(content))]
     pub async fn write(&self, key: &Key, content: impl AsyncRead + Unpin) -> Result<()> {
         let path = self.key_path(key);
         if self.exists(key).await {
@@ -354,9 +359,10 @@ async fn hashed_copy(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Disk, Key, hashed_copy};
     use color_eyre::Result;
     use pretty_assertions::assert_eq as pretty_assert_eq;
+    use tokio::io::AsyncReadExt;
     use proptest::{prop_assert, prop_assert_eq, prop_assert_ne};
     use simple_test_case::test_case;
     use std::io::Cursor;

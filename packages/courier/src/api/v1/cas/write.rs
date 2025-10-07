@@ -3,7 +3,7 @@ use axum::{body::Body, extract::Path, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
 use futures::TryStreamExt;
 use tokio_util::io::StreamReader;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     auth::{KeySets, StatelessToken},
@@ -49,6 +49,7 @@ use crate::{
 /// 2. It allows this service to colocate the temporary file with the ultimate
 ///    destination for the content, which makes implementation simpler if we
 ///    move to multiple mounted disks for subsets of the CAS.
+#[tracing::instrument(skip(body))]
 pub async fn handle(
     token: StatelessToken,
     Dep(keysets): Dep<KeySets>,
@@ -90,16 +91,19 @@ pub async fn handle(
             // We record access frequency asynchronously to avoid blocking
             // the overall request, since access frequency is a "nice to
             // have" feature while latency is a "must have" feature.
+            let user_id = token.user_id;
             tokio::spawn(async move {
-                if let Err(err) = db.record_cas_key_access(token.user_id, &key).await {
-                    warn!(?err, user = ?token.user_id, "record cas key access");
+                if let Err(err) = db.record_cas_key_access(user_id, &key).await {
+                    warn!(error = ?err, "cas.write.record_access_failed");
                 }
             });
+
+            info!("cas.write.success");
 
             CasWriteResponse::Created
         }
         Err(err) => {
-            error!(?err, "write cas key");
+            error!(error = ?err, "cas.write.error");
             CasWriteResponse::Error(err)
         }
     }

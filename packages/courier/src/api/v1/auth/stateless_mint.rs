@@ -51,6 +51,7 @@ use crate::{
 /// If the key isn't in the set of preloaded keys, the server checks the
 /// database and stores the key in the set. Each set uses an LRU cache of
 /// allowed keys, so this memory usage is bounded.
+#[tracing::instrument(skip(token))]
 pub async fn handle(
     token: RawToken,
     org_id: OrgId,
@@ -58,23 +59,29 @@ pub async fn handle(
     Dep(db): Dep<Postgres>,
 ) -> MintStatelessResponse {
     match db.validate(org_id, token).await {
-        Ok(None) => MintStatelessResponse::Unauthorized,
+        Ok(None) => {
+            info!("auth.mint.unauthorized");
+            MintStatelessResponse::Unauthorized
+        }
         Ok(Some(token)) => {
             let allowed = db
                 .user_allowed_cas_keys(token.user_id, OrgKeySet::DEFAULT_LIMIT)
                 .await;
             match allowed {
                 Ok(allowed) => {
-                    info!(allowed = ?allowed.len(), user = ?token.user_id, org = ?token.org_id, "insert allowed cas keys");
+                    info!(preloaded_keys = allowed.len(), "auth.mint.success");
                     keysets.organization(org_id).insert_all(allowed);
                 }
                 Err(error) => {
-                    warn!(?error, user = ?token.user_id, "get allowed cas keys");
+                    warn!(error = ?error, "auth.mint.preload_failed");
                 }
             }
             MintStatelessResponse::Success(token.into_stateless())
         }
-        Err(error) => MintStatelessResponse::Error(error),
+        Err(error) => {
+            warn!(error = ?error, "auth.mint.error");
+            MintStatelessResponse::Error(error)
+        }
     }
 }
 

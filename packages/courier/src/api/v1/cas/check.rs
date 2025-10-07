@@ -1,7 +1,7 @@
 use aerosol::axum::Dep;
 use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::{
     api::v1::cas::check_allowed,
@@ -46,6 +46,7 @@ use crate::{
 /// Even if another organization has written content with the same key, this
 /// content is not visible to the current organization unless they have also
 /// written it.
+#[tracing::instrument]
 pub async fn handle(
     token: StatelessToken,
     Dep(keysets): Dep<KeySets>,
@@ -56,14 +57,19 @@ pub async fn handle(
     match check_allowed(&keysets, &db, &key, &token).await {
         Ok(true) => {
             if cas.exists(&key).await {
+                debug!("cas.check.found");
                 CasCheckResponse::Found
             } else {
+                debug!("cas.check.not_found");
                 CasCheckResponse::NotFound
             }
         }
-        Ok(false) => CasCheckResponse::NotFound,
+        Ok(false) => {
+            debug!("cas.check.unauthorized");
+            CasCheckResponse::NotFound
+        }
         Err(err) => {
-            error!(?err, "check allowed cas key");
+            error!(error = ?err, "cas.check.error");
             CasCheckResponse::Error(err)
         }
     }

@@ -47,6 +47,7 @@ static STATELESS_TOKEN_SECRET: LazyLock<PasetoSymmetricKey<PasetoV4, PasetoLocal
 /// different semantics; due to this it is possible to freely convert between
 /// the two types without any loss of information or even cloning.
 #[derive(Clone, Debug)]
+#[debug("StatelessToken(org_id = {}, user_id = {})", org_id, user_id)]
 pub struct StatelessToken {
     /// The authenticated organization ID.
     pub org_id: OrgId,

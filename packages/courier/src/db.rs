@@ -24,6 +24,7 @@ use crate::{
 
 /// A connected Postgres database instance.
 #[derive(Clone, Debug)]
+#[debug("Postgres(pool_size = {})", self.pool.size())]
 pub struct Postgres {
     pub pool: PgPool,
 }
@@ -33,12 +34,14 @@ impl Postgres {
     pub const MIGRATOR: Migrator = sqlx::migrate!("./schema/migrations");
 
     /// Connect to the Postgres database.
+    #[tracing::instrument(name = "Postgres::connect")]
     pub async fn connect(url: &str) -> Result<Self> {
         let pool = PgPool::connect(url).await?;
         Ok(Self { pool })
     }
 
     /// Ping the database to ensure the connection is alive.
+    #[tracing::instrument(name = "Postgres::ping")]
     pub async fn ping(&self) -> Result<()> {
         let row = sqlx::query!("select 1 as pong")
             .fetch_one(&self.pool)
@@ -55,6 +58,7 @@ impl Postgres {
     /// If the token is valid, returns the authenticated token. If the token is
     /// invalid, returns `None`; errors are only returned if there is an error
     /// communicating with the database.
+    #[tracing::instrument(name = "Postgres::validate", skip(token))]
     pub async fn validate(
         &self,
         org_id: OrgId,
@@ -82,6 +86,7 @@ impl Postgres {
     }
 
     /// Check if the given user has access to the given CAS key.
+    #[tracing::instrument(name = "Postgres::user_has_cas_key")]
     pub async fn user_has_cas_key(&self, user_id: UserId, key: &Key) -> Result<bool> {
         sqlx::query!(
             "select exists(
@@ -102,6 +107,7 @@ impl Postgres {
     ///
     /// Returns the top N most frequently accessed keys for the user based on
     /// access patterns over the last 7 days.
+    #[tracing::instrument(name = "Postgres::user_allowed_cas_keys")]
     pub async fn user_allowed_cas_keys(&self, user_id: UserId, limit: u64) -> Result<HashSet<Key>> {
         let mut rows = sqlx::query!(
             "select cas_keys.content, count(*) as freq
@@ -130,6 +136,7 @@ impl Postgres {
     ///
     /// This is idempotent: if the org already has access, this is a no-op.
     /// The key is automatically inserted into `cas_keys` if it doesn't exist.
+    #[tracing::instrument(name = "Postgres::grant_org_cas_key")]
     pub async fn grant_org_cas_key(&self, org_id: OrgId, key: &Key) -> Result<()> {
         // We use a two-CTE approach to handle the "insert or get existing"
         // pattern in a single round trip without creating dead tuples:
@@ -171,6 +178,7 @@ impl Postgres {
     /// Record that a user accessed a CAS key.
     ///
     /// This is used for frequency tracking to preload hot keys into memory.
+    #[tracing::instrument(name = "Postgres::record_cas_key_access")]
     pub async fn record_cas_key_access(&self, user_id: UserId, key: &Key) -> Result<()> {
         sqlx::query!(
             "insert into frequency_user_cas_key (user_id, cas_key_id)

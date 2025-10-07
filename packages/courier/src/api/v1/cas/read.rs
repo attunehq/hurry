@@ -2,7 +2,7 @@ use aerosol::axum::Dep;
 use axum::{body::Body, extract::Path, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
 use tokio_util::io::ReaderStream;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     api::v1::cas::check_allowed,
@@ -23,6 +23,7 @@ use crate::{
 /// Even if another organization has written content with the same key, this
 /// content is not visible to the current organization unless they have also
 /// written it.
+#[tracing::instrument]
 pub async fn handle(
     token: StatelessToken,
     Dep(keysets): Dep<KeySets>,
@@ -36,23 +37,29 @@ pub async fn handle(
                 // We record access frequency asynchronously to avoid blocking
                 // the overall request, since access frequency is a "nice to
                 // have" feature while latency is a "must have" feature.
+                let user_id = token.user_id;
                 tokio::spawn(async move {
-                    if let Err(err) = db.record_cas_key_access(token.user_id, &key).await {
-                        warn!(?err, user = ?token.user_id, "record cas key access");
+                    if let Err(err) = db.record_cas_key_access(user_id, &key).await {
+                        warn!(error = ?err, "cas.read.record_access_failed");
                     }
                 });
+
+                info!("cas.read.success");
 
                 let stream = ReaderStream::new(reader);
                 CasReadResponse::Found(Body::from_stream(stream))
             }
             Err(err) => {
-                error!(?err, "read cas key");
+                error!(error = ?err, "cas.read.error");
                 CasReadResponse::Error(err)
             }
         },
-        Ok(false) => CasReadResponse::NotFound,
+        Ok(false) => {
+            info!("cas.read.not_found");
+            CasReadResponse::NotFound
+        }
         Err(err) => {
-            error!(?err, "check allowed cas key");
+            error!(error = ?err, "cas.read.check_allowed_error");
             CasReadResponse::Error(err)
         }
     }

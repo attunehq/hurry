@@ -13,6 +13,7 @@ use crate::{db::Postgres, storage::Disk};
 /// ## Validation
 ///
 /// Validates that the database and CAS are accessible before responding.
+#[tracing::instrument]
 pub async fn handle(Dep(db): Dep<Postgres>, Dep(cas): Dep<Disk>) -> PingResponse {
     let (db, cas) = tokio::join!(db.ping(), cas.ping());
     match (db, cas) {

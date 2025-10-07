@@ -109,13 +109,49 @@ async fn serve(config: ServeConfig) -> Result<()> {
     let key_cache = KeySets::new();
     let router = api::router(Aero::new().with(key_cache).with(storage).with(db));
 
-    // TODO: add graceful shutdown
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("listening on {}", listener.local_addr()?);
-    axum::serve(listener, router).await?;
 
+    // Graceful shutdown: wait for SIGTERM or SIGINT, then allow in-flight
+    // requests to complete with a grace period.
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    tracing::info!("server shutdown complete");
     Ok(())
+}
+
+/// Wait for a shutdown signal (SIGTERM or SIGINT).
+async fn shutdown_signal() {
+    use tokio::signal;
+
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            tracing::info!("received SIGINT (Ctrl+C), starting graceful shutdown");
+        },
+        _ = terminate => {
+            tracing::info!("received SIGTERM, starting graceful shutdown");
+        },
+    }
 }
 
 async fn migrate(config: MigrateConfig) -> Result<()> {
