@@ -1,4 +1,3 @@
-use color_eyre::Result;
 use enum_assoc::Assoc;
 use itertools::Itertools;
 use strum::{EnumIter, IntoEnumIterator};
