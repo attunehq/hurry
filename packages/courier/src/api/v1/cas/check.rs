@@ -1,7 +1,7 @@
 use aerosol::axum::Dep;
 use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
-use tracing::{debug, error};
+use tracing::{error, info};
 
 use crate::{
     api::v1::cas::check_allowed,
@@ -57,15 +57,15 @@ pub async fn handle(
     match check_allowed(&keysets, &db, &key, &token).await {
         Ok(true) => {
             if cas.exists(&key).await {
-                debug!("cas.check.found");
+                info!("cas.check.found");
                 CasCheckResponse::Found
             } else {
-                debug!("cas.check.not_found");
+                info!("cas.check.not_found");
                 CasCheckResponse::NotFound
             }
         }
         Ok(false) => {
-            debug!("cas.check.unauthorized");
+            info!("cas.check.unauthorized");
             CasCheckResponse::NotFound
         }
         Err(err) => {

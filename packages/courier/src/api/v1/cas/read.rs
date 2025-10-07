@@ -45,7 +45,6 @@ pub async fn handle(
                 });
 
                 info!("cas.read.success");
-
                 let stream = ReaderStream::new(reader);
                 CasReadResponse::Found(Body::from_stream(stream))
             }

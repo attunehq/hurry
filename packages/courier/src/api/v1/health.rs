@@ -4,7 +4,7 @@ use color_eyre::{
     Section, SectionExt,
     eyre::{Report, eyre},
 };
-use tracing::error;
+use tracing::{error, info};
 
 use crate::{db::Postgres, storage::Disk};
 
@@ -17,9 +17,12 @@ use crate::{db::Postgres, storage::Disk};
 pub async fn handle(Dep(db): Dep<Postgres>, Dep(cas): Dep<Disk>) -> PingResponse {
     let (db, cas) = tokio::join!(db.ping(), cas.ping());
     match (db, cas) {
-        (Ok(_), Ok(_)) => PingResponse::Success,
+        (Ok(_), Ok(_)) => {
+            info!("health.ping.success");
+            PingResponse::Success
+        }
         (Err(db_err), Err(cas_err)) => {
-            error!(?db_err, ?cas_err, "ping database and CAS");
+            error!(?db_err, ?cas_err, "health.ping.error");
             PingResponse::Error(
                 eyre!("ping database and CAS")
                     .section(format!("{db_err}").header("Database:"))
@@ -27,11 +30,11 @@ pub async fn handle(Dep(db): Dep<Postgres>, Dep(cas): Dep<Disk>) -> PingResponse
             )
         }
         (Err(err), Ok(_)) => {
-            error!(?err, "ping database");
+            error!(db_err = ?err, "health.ping.error");
             PingResponse::Error(err)
         }
         (Ok(_), Err(err)) => {
-            error!(?err, "ping CAS");
+            error!(cas_err = ?err, "health.ping.error");
             PingResponse::Error(err)
         }
     }

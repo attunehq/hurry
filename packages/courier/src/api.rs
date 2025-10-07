@@ -28,15 +28,17 @@
 //!
 //! [^2]: https://docs.rs/axum/latest/axum/response/trait.IntoResponse.html
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aerosol::Aero;
-use axum::Router;
+use axum::{Router, extract::Request, middleware::Next, response::Response};
 use tower::ServiceBuilder;
 use tower_http::{
     compression::CompressionLayer, decompression::RequestDecompressionLayer,
     limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer,
 };
+use tracing::Instrument;
+use uuid::Uuid;
 
 pub mod v1;
 
@@ -60,7 +62,26 @@ pub fn router(state: State) -> Router {
     Router::new()
         .nest("/api/v1", v1::router())
         .layer(middleware)
+        .layer(axum::middleware::from_fn(trace_request))
         .with_state(state)
+}
+
+async fn trace_request(request: Request, next: Next) -> Response {
+    let start = Instant::now();
+    let id = Uuid::new_v4();
+    let url = request.uri().to_string();
+    let method = request.method().to_string();
+
+    let span = tracing::info_span!("http.request", %id, %url, %method);
+    let _guard = span.enter();
+    Instrument::in_current_span(async move {
+        let response = next.run(request).await;
+        let status = response.status();
+        let duration = start.elapsed();
+        tracing::info!(%status, ?duration, "http.request.response");
+        response
+    })
+    .await
 }
 
 /// Create an isolated test server with the given database pool:

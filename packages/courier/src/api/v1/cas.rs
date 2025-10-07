@@ -3,7 +3,7 @@ use axum::{
     routing::{get, head, put},
 };
 use color_eyre::{Result, eyre::Context};
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::{
     api::State,
@@ -43,7 +43,7 @@ async fn check_allowed(
             .await
             .context("check user has cas key")?;
         if access {
-            debug!("cas.auth.cache_miss");
+            info!("cas.auth.cache_miss");
             allowed.insert(key.clone());
         } else {
             info!("cas.auth.unauthorized");
