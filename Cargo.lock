@@ -1355,6 +1355,7 @@ dependencies = [
  "cargo_metadata",
  "color-eyre",
  "escargot",
+ "filetime",
  "futures",
  "itertools",
  "location-macros",
@@ -1364,6 +1365,7 @@ dependencies = [
  "test-log",
  "tokio",
  "tracing",
+ "walkdir",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use bollard::{
     Docker,
@@ -9,7 +9,10 @@ use bollard::{
     secret::{ContainerCreateBody, HostConfig},
 };
 use bon::bon;
-use color_eyre::{Result, eyre::Context};
+use color_eyre::{
+    Result,
+    eyre::{Context, OptionExt},
+};
 use futures::TryStreamExt;
 
 use crate::Command;
@@ -52,7 +55,7 @@ impl Container {
         /// Volume binds to mount in the container.
         /// Each tuple represents (host_path, container_path).
         #[builder(field)]
-        volume_binds: Vec<(String, String)>,
+        volume_binds: Vec<(PathBuf, PathBuf)>,
 
         /// The repository to use, in OCI format.
         #[builder(into)]
@@ -80,8 +83,21 @@ impl Container {
         } else {
             let bind_strings = volume_binds
                 .into_iter()
-                .map(|(host_path, container_path)| format!("{host_path}:{container_path}"))
-                .collect::<Vec<_>>();
+                .map(|(host_path, container_path)| {
+                    let host_path = host_path
+                        .to_str()
+                        .ok_or_eyre("invalid string")
+                        .with_context(|| format!("convert host path to string: {host_path:?}"))?;
+                    let container_path = container_path
+                        .to_str()
+                        .ok_or_eyre("invalid string")
+                        .with_context(|| {
+                            format!("convert container path to string: {container_path:?}")
+                        })?;
+                    Ok(format!("{host_path}:{container_path}:z,rw"))
+                })
+                .collect::<Result<Vec<_>>>()
+                .context("convert volume binds")?;
             Some(HostConfig {
                 binds: Some(bind_strings),
                 ..Default::default()
@@ -125,7 +141,7 @@ impl Container {
     #[builder(finish_fn = start)]
     pub async fn debian_rust(
         #[builder(field)] commands: Vec<Command>,
-        #[builder(field)] volume_binds: Vec<(String, String)>,
+        #[builder(field)] volume_binds: Vec<(PathBuf, PathBuf)>,
     ) -> Result<Container> {
         Container::new()
             .repo("docker.io/library/rust")
@@ -154,7 +170,7 @@ impl<S: container_build_builder::State> ContainerBuildBuilder<S> {
     /// Each tuple represents (host_path, container_path).
     pub fn volume_binds(
         mut self,
-        binds: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+        binds: impl IntoIterator<Item = (impl Into<PathBuf>, impl Into<PathBuf>)>,
     ) -> Self {
         self.volume_binds
             .extend(binds.into_iter().map(|(h, c)| (h.into(), c.into())));
@@ -164,8 +180,8 @@ impl<S: container_build_builder::State> ContainerBuildBuilder<S> {
     /// Add a single volume bind to mount in the container.
     pub fn volume_bind(
         mut self,
-        host_path: impl Into<String>,
-        container_path: impl Into<String>,
+        host_path: impl Into<PathBuf>,
+        container_path: impl Into<PathBuf>,
     ) -> Self {
         self.volume_binds
             .push((host_path.into(), container_path.into()));
@@ -190,7 +206,7 @@ impl<S: container_debian_rust_builder::State> ContainerDebianRustBuilder<S> {
     /// Each tuple represents (host_path, container_path).
     pub fn volume_binds(
         mut self,
-        binds: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+        binds: impl IntoIterator<Item = (impl Into<PathBuf>, impl Into<PathBuf>)>,
     ) -> Self {
         self.volume_binds
             .extend(binds.into_iter().map(|(h, c)| (h.into(), c.into())));
@@ -201,8 +217,8 @@ impl<S: container_debian_rust_builder::State> ContainerDebianRustBuilder<S> {
     /// Takes (host_path, container_path) tuple.
     pub fn volume_bind(
         mut self,
-        host_path: impl Into<String>,
-        container_path: impl Into<String>,
+        host_path: impl Into<PathBuf>,
+        container_path: impl Into<PathBuf>,
     ) -> Self {
         self.volume_binds
             .push((host_path.into(), container_path.into()));

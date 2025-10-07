@@ -27,6 +27,10 @@ pub struct Build {
     #[builder(field)]
     envs: Vec<(OsString, OsString)>,
 
+    /// Features to enable for the build.
+    #[builder(field)]
+    features: Vec<String>,
+
     /// The working directory in which to run the build.
     /// This should generally be the root of the workspace.
     #[builder(into)]
@@ -98,6 +102,10 @@ impl Build {
             .arg_maybe("--bin", self.bin.as_ref())
             .arg_maybe("--package", self.package.as_ref())
             .arg_if(self.release, "--release")
+            .arg_if(
+                !self.features.is_empty(),
+                format!("--features={}", self.features.join(",")),
+            )
             .args(&self.additional_args)
             .envs(self.envs.iter().map(|(k, v)| (k, v)))
             .pwd(&self.pwd)
@@ -164,6 +172,18 @@ impl<S: build_builder::State> BuildBuilder<S> {
     ) -> Self {
         self.envs
             .extend(envs.into_iter().map(|(k, v)| (k.into(), v.into())));
+        self
+    }
+
+    /// Add a feature to enable for the build.
+    pub fn feature(mut self, feature: impl Into<String>) -> Self {
+        self.features.push(feature.into());
+        self
+    }
+
+    /// Add multiple features to enable for the build.
+    pub fn features(mut self, features: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.features.extend(features.into_iter().map(Into::into));
         self
     }
 }
