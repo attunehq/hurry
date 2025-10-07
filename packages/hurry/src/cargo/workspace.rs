@@ -5,7 +5,7 @@ use derive_more::{Debug, Display};
 use location_macros::workspace_dir;
 use tap::{Pipe as _, Tap as _, TapFallible as _};
 use tokio::task::spawn_blocking;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     Locked, Unlocked,

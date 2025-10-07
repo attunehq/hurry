@@ -45,19 +45,25 @@ jobs:
           restore-keys: |
             hurry-cache-pr-${{ runner.os }}-
 
-      - name: Install hurry
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ./install.sh --version v0.2.0-alpha.2
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      # For now, `hurry` is commented since we're in the middle of changing how
+      # it works.
+      #
+      # - name: Install hurry
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #   run: |
+      #     ./install.sh --version v0.2.0-alpha.2
+      #     echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       # TODO (maybe?): add `hurry cargo fmt` support.
       - name: Check format
         run: cargo +nightly fmt --all --check
 
+      # For now, `hurry` is commented since we're in the middle of changing how
+      # it works.
       - name: Run full build
-        run: hurry cargo build --workspace --all-targets --all-features
+        run: cargo build --workspace --all-targets --all-features
+        # run: hurry cargo build --workspace --all-targets --all-features
 
       # TODO: add `hurry cargo clippy` support.
       - name: Check clippy
