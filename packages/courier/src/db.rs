@@ -199,3 +199,14 @@ impl AsRef<PgPool> for Postgres {
         &self.pool
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn open_test_database(pool: PgPool) {
+        let db = crate::db::Postgres { pool };
+        db.ping().await.expect("ping database");
+    }
+}

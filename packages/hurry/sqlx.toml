@@ -1,2 +1,5 @@
 [common]
 database-url-var = "HURRY_DATABASE_URL"
+
+[migrate]
+migrations-dir = "schema/migrations"
