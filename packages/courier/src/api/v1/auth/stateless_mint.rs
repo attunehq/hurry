@@ -21,7 +21,7 @@ use crate::{
 ///
 /// ## Implementation
 ///
-/// We use PARETO tokens to authenticate the request. PARETO tokens are a sort
+/// We use PASETO tokens to authenticate the request. PASETO tokens are a sort
 /// of upgraded JWT; since we implement both ends we don't need to worry too
 /// much about interoperability with other libraries.
 ///
@@ -41,7 +41,7 @@ use crate::{
 /// ## Expiration
 ///
 /// The stateless token will expire after 1 hour, which is the default
-/// expiration time for the PARETO token implementation we use. We may change
+/// expiration time for the PASETO token implementation we use. We may change
 /// this in the future, but for now since we have a LRU cache of organizations
 /// it doesn't seem to matter _that_ much (old idle orgs will get evicted as
 /// needed).

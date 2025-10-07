@@ -17,6 +17,6 @@ COPY --from=builder /courier/target/release/courier /usr/local/bin
 
 USER 1000:1000
 ENV RUST_LOG=courier=debug
-HEALTHCHECK --interval=1s --timeout=5s CMD curl -f http://localhost:3000/api/v0/health
+HEALTHCHECK --interval=1s --timeout=5s CMD curl -f http://localhost:3000/api/v1/health
 
 ENTRYPOINT ["/usr/local/bin/courier"]
