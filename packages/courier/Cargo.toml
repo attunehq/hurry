@@ -9,7 +9,7 @@ tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["io"] }
 tower = { workspace = true, features = ["buffer", "limit", "load-shed"] }
 tower-http = { workspace = true, features = ["trace", "limit", "timeout", "compression-full", "decompression-full"] }
-sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate"] }
+sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate", "sqlx-toml"] }
 serde = { workspace = true, features = ["derive"] }
 async-compression = { workspace = true, features = ["tokio", "zstd"] }
 blake3 = { workspace = true }

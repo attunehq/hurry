@@ -1,0 +1,5 @@
+[common]
+database-url-var = "COURIER_DATABASE_URL"
+
+[migrate]
+migrations-dir = "schema/migrations"

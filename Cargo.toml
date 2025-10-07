@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["packages/*"]
+exclude = ["vendor/sqlx"]
 
 [workspace.dependencies]
 atomic-time = "0.1.5"
@@ -66,7 +67,7 @@ rand = "0.9.2"
 rmp-serde = "1"
 rusty_paseto = "0.7.2"
 secrecy = "0.10.3"
-sqlx = "0.8"
+sqlx = { path = "vendor/sqlx" }
 test-strategy = "0.4.3"
 thiserror = "2"
 tokio-util = "0.7"

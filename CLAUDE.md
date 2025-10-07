@@ -12,6 +12,14 @@ This is a monorepo containing two main projects:
 
 ## Development Commands
 
+### Prerequisites
+- **Initialize git submodules**: `git submodule update --init --recursive`
+  - This project vendors sqlx 0.9 (pre-release) at a specific commit for stability
+  - Ensures all developers use the same sqlx version and prevents alpha changes from breaking builds
+- **Install sqlx-cli**: `cargo install --path vendor/sqlx/sqlx-cli --features postgres,sqlite,sqlx-toml`
+  - The `sqlx-toml` feature is required for multi-database workspace support
+  - Install both `postgres` and `sqlite` features to work with both databases
+
 ### Building and Testing
 - **Build the project**: `hurry cargo build` (use instead of `cargo build`)
 - **Install hurry locally**: `cargo install --path ./packages/hurry --locked`
@@ -36,20 +44,22 @@ These scripts are essential for cache correctness validation and performance ana
 ### Courier-specific Commands
 
 #### Running the Server
-- **Run locally**: `courier serve --database-url <URL> --cas-root <PATH>`
+- **Run locally**: `courier serve --database-url <URL> --cas-root <PATH>` (uses `COURIER_DATABASE_URL` from `.env`)
 - **Run in Docker**: `docker compose up` (automatically applies migrations)
 - **View serve options**: `courier serve --help`
 
 #### Database Management
 - **Apply migrations manually**:
-  - Via sqlx-cli: `cargo sqlx migrate run --source packages/courier/schema/migrations/` (recommended for dev, faster)
+  - Via sqlx-cli: Run from courier directory: `cd packages/courier && cargo sqlx migrate run` (recommended for dev, faster)
   - Via courier binary: `docker compose run --build migrate` (for testing production-like deployments)
 - **Generate new migration**: `sql-schema migration --name {migration_name}` (after editing `schema/schema.sql`)
 - **Run tests with fixtures**: Tests use `#[sqlx::test]` macro with automatic fixture loading
+- **Note**: All sqlx-cli commands must be run from within the `packages/courier` directory to pick up the `sqlx.toml` configuration
 - **Note**: Migrations are not auto-applied on server startup to prevent accidental production migrations
+- **Note**: Courier uses `COURIER_DATABASE_URL` instead of `DATABASE_URL` to avoid conflicts with other packages in the workspace
 
 #### Testing
-- **Run API tests**: `RUST_BACKTRACE=1 cargo test --package courier` or `cargo nextest run -p courier`
+- **Run API tests**: `cargo nextest run -p courier` (uses `COURIER_DATABASE_URL` from `.env`)
 - Tests automatically spin up isolated test servers with temporary storage and database pools
 
 ## Architecture
@@ -95,12 +105,13 @@ These scripts are essential for cache correctness validation and performance ana
 4. Run e2e tests to ensure integration works across different scenarios
 
 ### Courier Workflow
-1. Start PostgreSQL: `docker compose up -d postgres` (or use full `docker compose up` for everything)
-2. Apply migrations: `cargo sqlx migrate run --source packages/courier/schema/migrations/` (or `docker compose run --build migrate`)
-3. Run the server: `courier serve --database-url postgresql://... --cas-root ./cas-data`
-4. Make API requests: Use curl, httpie, or the test client
-5. Iterate on code: Tests use isolated databases via `#[sqlx::test]` macro
-6. Schema changes: Edit `schema/schema.sql` → run `sql-schema migration --name {name}` → review migrations → apply with sqlx-cli
+1. Set up environment: `cp example.env .env` and customize as needed
+2. Start PostgreSQL: `docker compose up -d postgres` (or use full `docker compose up` for everything)
+3. Apply migrations: `cd packages/courier && cargo sqlx migrate run` (or `docker compose run --build migrate`)
+4. Run the server: `courier serve`
+5. Make API requests: Use curl, xh, httpie, or the test client
+6. Iterate on code: Tests use isolated databases via `#[sqlx::test]` macro
+7. Schema changes: Edit `schema/schema.sql` → run `sql-schema migration --name {name}` → review migrations → `cd packages/courier && cargo sqlx migrate run`
 
 ### Courier Authentication Flow
 1. Client presents long-lived API key via `Authorization: Bearer <key>` header
@@ -142,6 +153,44 @@ hurry's core value proposition depends on cache correctness. When making changes
 - No Windows support (Unix-only scripts and workflows)
 - Heavy use of async/await patterns with tokio runtime
 - Extensive use of workspace dependencies for consistency
+- Vendors sqlx 0.9 (pre-release) in `vendor/sqlx` as a git submodule pinned to a specific commit for stability and multi-database support via `sqlx.toml` configuration files
+
+### Multi-Database Configuration
+
+This workspace uses multiple databases:
+- `courier`: PostgreSQL database (`COURIER_DATABASE_URL`)
+- `hurry`: SQLite database (`HURRY_DATABASE_URL`)
+
+Each package has its own `sqlx.toml` configuration file that specifies which environment variable to use for its database connection. This allows both packages to coexist in the same workspace without conflicting over the `DATABASE_URL` environment variable.
+
+**Setup:**
+1. Copy the example environment file: `cp example.env .env`
+2. Customize database URLs in `.env` as needed
+
+**Running Migrations:**
+
+sqlx-cli discovers the `sqlx.toml` configuration in the current directory, so you must `cd` into each package directory:
+
+```bash
+# Courier migrations
+cd packages/courier
+cargo sqlx migrate run
+
+# Hurry migrations
+cd packages/hurry
+cargo sqlx migrate run
+```
+
+All sqlx-cli commands (e.g., `sqlx database create`, `sqlx migrate add`, `sqlx prepare`) work the same way: run them from within the package directory.
+
+**Running Tests:**
+Tests automatically use the correct database URL from `.env` based on each package's `sqlx.toml` configuration:
+```bash
+cargo nextest run -p courier
+cargo nextest run -p hurry
+```
+
+This is accomplished with a build script workaround for now due to `#[sqlx::test]` not yet implementing support for `sqlx.toml`.
 
 ## Rust Naming Conventions
 

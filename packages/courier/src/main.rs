@@ -41,7 +41,7 @@ enum Command {
 #[derive(Parser, Debug)]
 struct ServeConfig {
     /// Database URL
-    #[arg(long, env = "DATABASE_URL")]
+    #[arg(long, env = "COURIER_DATABASE_URL")]
     #[debug(ignore)]
     database_url: String,
 
@@ -61,7 +61,7 @@ struct ServeConfig {
 #[derive(Parser, Debug)]
 struct MigrateConfig {
     /// Database URL
-    #[arg(long, env = "DATABASE_URL")]
+    #[arg(long, env = "COURIER_DATABASE_URL")]
     #[debug(ignore)]
     database_url: String,
 }

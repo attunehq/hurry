@@ -6,12 +6,19 @@
       {
         "ordinal": 0,
         "name": "content",
-        "type_info": "Bytea"
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "cas_keys",
+            "name": "content"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "freq",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": "Expression"
       }
     ],
     "parameters": {
