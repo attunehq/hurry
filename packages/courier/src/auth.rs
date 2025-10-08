@@ -39,7 +39,7 @@ static STATELESS_TOKEN_SECRET: LazyLock<PasetoSymmetricKey<PasetoV4, PasetoLocal
         PasetoSymmetricKey::from(PasetoKey::from(key))
     });
 
-/// Stateless token providing pre-authorized org and user IDs, plus the original
+/// Stateless token providing pre-authorized org and account IDs, plus the original
 /// token used to mint the stateless token (intended to support interacting with
 /// the database).
 ///
@@ -47,13 +47,13 @@ static STATELESS_TOKEN_SECRET: LazyLock<PasetoSymmetricKey<PasetoV4, PasetoLocal
 /// different semantics; due to this it is possible to freely convert between
 /// the two types without any loss of information or even cloning.
 #[derive(Clone, Debug)]
-#[debug("StatelessToken(org_id = {}, user_id = {})", org_id, user_id)]
+#[debug("StatelessToken(org_id = {}, account_id = {})", org_id, account_id)]
 pub struct StatelessToken {
     /// The authenticated organization ID.
     pub org_id: OrgId,
 
-    /// The authenticated user ID.
-    pub user_id: UserId,
+    /// The authenticated account ID.
+    pub account_id: AccountId,
 
     /// The original token used to mint the stateless token.
     pub token: RawToken,
@@ -64,7 +64,7 @@ impl StatelessToken {
     const CLAIM_SUBJECT: &str = "cas";
     const CLAIM_ISSUER: &str = "courier";
     const CLAIM_ORG_ID: &str = "x-org-id";
-    const CLAIM_USER_ID: &str = "x-user-id";
+    const CLAIM_ACCOUNT_ID: &str = "x-account-id";
     const CLAIM_TOKEN: &str = "x-token";
 
     fn audience() -> AudienceClaim<'static> {
@@ -84,9 +84,9 @@ impl StatelessToken {
             .context("custom claim org id")
     }
 
-    fn user_id(&self) -> Result<CustomClaim<u64>> {
-        CustomClaim::try_from((Self::CLAIM_USER_ID, self.user_id.as_u64()))
-            .context("custom claim user id")
+    fn account_id(&self) -> Result<CustomClaim<u64>> {
+        CustomClaim::try_from((Self::CLAIM_ACCOUNT_ID, self.account_id.as_u64()))
+            .context("custom claim account id")
     }
 
     fn token(&self) -> Result<CustomClaim<String>> {
@@ -97,14 +97,14 @@ impl StatelessToken {
     /// Serialize the stateless token to a string.
     pub fn serialize(&self) -> Result<String> {
         let org_id = Self::org_id(self)?;
-        let user_id = Self::user_id(self)?;
+        let account_id = Self::account_id(self)?;
         let token = Self::token(self)?;
         PasetoBuilder::<PasetoV4, PasetoLocal>::default()
             .set_claim(Self::audience())
             .set_claim(Self::subject())
             .set_claim(Self::issuer())
             .set_claim(org_id)
-            .set_claim(user_id)
+            .set_claim(account_id)
             .set_claim(token)
             .build(&STATELESS_TOKEN_SECRET)
             .context("build token")
@@ -122,16 +122,16 @@ impl StatelessToken {
         let org_id = parsed[Self::CLAIM_ORG_ID]
             .as_u64()
             .ok_or_eyre("no org id")?;
-        let user_id = parsed[Self::CLAIM_USER_ID]
+        let account_id = parsed[Self::CLAIM_ACCOUNT_ID]
             .as_u64()
-            .ok_or_eyre("no user id")?;
+            .ok_or_eyre("no account id")?;
         let token = parsed[Self::CLAIM_TOKEN]
             .as_str()
             .ok_or_eyre("no raw token")?;
 
         Ok(Self {
             org_id: OrgId::from_u64(org_id),
-            user_id: UserId::from_u64(user_id),
+            account_id: AccountId::from_u64(account_id),
             token: RawToken::new(token),
         })
     }
@@ -160,7 +160,7 @@ impl<'de> Deserialize<'de> for StatelessToken {
 impl From<StatelessToken> for AuthenticatedToken {
     fn from(jwt: StatelessToken) -> Self {
         Self {
-            user_id: jwt.user_id,
+            account_id: jwt.account_id,
             org_id: jwt.org_id,
             token: jwt.token,
         }
@@ -357,7 +357,7 @@ impl<S: Send + Sync> FromRequestParts<S> for OrgId {
     }
 }
 
-/// An ID uniquely identifying a user.
+/// An ID uniquely identifying an account.
 #[derive(
     Copy,
     Clone,
@@ -374,9 +374,9 @@ impl<S: Send + Sync> FromRequestParts<S> for OrgId {
     From,
     Into,
 )]
-pub struct UserId(u64);
+pub struct AccountId(u64);
 
-impl UserId {
+impl AccountId {
     pub fn as_i64(&self) -> i64 {
         self.0 as i64
     }
@@ -397,8 +397,8 @@ impl UserId {
 /// An authenticated token, which has been validated.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AuthenticatedToken {
-    /// The user ID in the database.
-    pub user_id: UserId,
+    /// The account ID in the database.
+    pub account_id: AccountId,
 
     /// The organization ID in the database.
     pub org_id: OrgId,
@@ -411,7 +411,7 @@ impl AuthenticatedToken {
     /// Convert into a stateless representation of the authenticated token.
     pub fn into_stateless(self) -> StatelessToken {
         StatelessToken {
-            user_id: self.user_id,
+            account_id: self.account_id,
             org_id: self.org_id,
             token: self.token,
         }

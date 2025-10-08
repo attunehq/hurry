@@ -12,6 +12,10 @@ use crate::{
 
 /// Check whether the given key exists in the CAS.
 ///
+/// This handler implements the HEAD endpoint for checking blob existence without
+/// downloading the full content. It performs authorization and then checks if the
+/// blob exists on disk.
+///
 /// ## TOCTOU (Time of Check Time of Use)
 ///
 /// Normally, developers are advised to avoid "exists" checks since they are
@@ -38,10 +42,10 @@ use crate::{
 ///
 /// ## Security
 ///
-/// All users have visibility into all keys that any user in the organization
-/// has ever written. This is intentional, because we expect users to run hurry
-/// on their local dev machines as well as in CI or other environments like
-/// docker builds.
+/// All accounts have visibility into all keys that any account in the organization
+/// has ever written. This is intentional, because we expect accounts to be used
+/// by developers on their local machines as well as in CI or other environments
+/// like docker builds.
 ///
 /// Even if another organization has written content with the same key, this
 /// content is not visible to the current organization unless they have also
@@ -107,7 +111,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn check_exists(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         const CONTENT: &[u8] = b"check exists test";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -131,7 +135,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn check_doesnt_exist(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
@@ -157,8 +161,8 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn check_with_no_access(pool: PgPool) -> Result<()> {
-        const ORG1_TOKEN: &str = "test-token:user1@test1.com";
-        const ORG2_TOKEN: &str = "test-token:user1@test2.com";
+        const ORG1_TOKEN: &str = "test-api-key-account1-org1";
+        const ORG2_TOKEN: &str = "test-api-key-account1-org2";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
@@ -185,8 +189,8 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn check_cross_org_access(pool: PgPool) -> Result<()> {
-        const ORG1_TOKEN: &str = "test-token:user1@test1.com";
-        const ORG2_TOKEN: &str = "test-token:user1@test2.com";
+        const ORG1_TOKEN: &str = "test-api-key-account1-org1";
+        const ORG2_TOKEN: &str = "test-api-key-account1-org2";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
@@ -234,7 +238,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn check_then_write_toctou_safety(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         const CONTENT: &[u8] = b"toctou test";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -268,22 +272,22 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn check_org_member_access(pool: PgPool) -> Result<()> {
-        const USER1_TOKEN: &str = "test-token:user1@test1.com";
-        const USER2_TOKEN: &str = "test-token:user2@test1.com";
+        const ACCOUNT1_TOKEN: &str = "test-api-key-account1-org1";
+        const ACCOUNT2_TOKEN: &str = "test-api-key-account2-org1";
         const CONTENT: &[u8] = b"team content";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
-        // User1 writes content
-        let user1_token = mint_token(&server, USER1_TOKEN, 1).await?;
-        let key = write_cas(&server, &user1_token, CONTENT).await?;
+        // Account1 writes content
+        let account1_token = mint_token(&server, ACCOUNT1_TOKEN, 1).await?;
+        let key = write_cas(&server, &account1_token, CONTENT).await?;
 
-        // User2 (same org) can check it
-        let user2_token = mint_token(&server, USER2_TOKEN, 1).await?;
+        // Account2 (same org) can check it
+        let account2_token = mint_token(&server, ACCOUNT2_TOKEN, 1).await?;
         let response = server
             .method(axum::http::Method::HEAD, &format!("/api/v1/cas/{key}"))
-            .add_header("Authorization", &user2_token)
+            .add_header("Authorization", &account2_token)
             .await;
 
         response.assert_status_ok();

@@ -13,12 +13,17 @@ use crate::{
 
 /// Write the content to the CAS for the given key.
 ///
+/// This handler implements the PUT endpoint for storing blob content. It streams the
+/// request body to disk (compressing with zstd), validates the hash matches the
+/// provided key, grants database access to the organization, and asynchronously
+/// records access frequency for cache warming.
+///
 /// ## Security
 ///
-/// All users have visibility into all keys that any user in the organization
-/// has ever written. This is intentional, because we expect users to run hurry
-/// on their local dev machines as well as in CI or other environments like
-/// docker builds.
+/// All accounts have visibility into all keys that any account in the organization
+/// has ever written. This is intentional, because we expect accounts to be used
+/// by developers on their local machines as well as in CI or other environments
+/// like docker builds.
 ///
 /// Even if another organization has written content with the same key, this
 /// content is not visible to the current organization unless they have also
@@ -82,7 +87,7 @@ pub async fn handle(
             //    [`Disk::write`]) and we can just clean these up at the same
             //    time.
             if let Err(err) = db.grant_org_cas_key(token.org_id, &key).await {
-                error!(?err, user = ?token.user_id, org = ?token.org_id, "grant org access to cas key");
+                error!(?err, account = ?token.account_id, org = ?token.org_id, "grant org access to cas key");
                 return CasWriteResponse::Error(err);
             }
 
@@ -91,9 +96,9 @@ pub async fn handle(
             // We record access frequency asynchronously to avoid blocking
             // the overall request, since access frequency is a "nice to
             // have" feature while latency is a "must have" feature.
-            let user_id = token.user_id;
+            let account_id = token.account_id;
             tokio::spawn(async move {
-                if let Err(err) = db.record_cas_key_access(user_id, &key).await {
+                if let Err(err) = db.record_cas_key_access(account_id, &key).await {
                     warn!(error = ?err, "cas.write.record_access_failed");
                 }
             });
@@ -141,7 +146,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn basic_write_flow(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         const CONTENT: &[u8] = b"hello world";
         let (server, _tmp) = crate::api::test_server(pool.clone())
             .await
@@ -162,7 +167,7 @@ mod tests {
         let access: bool = sqlx::query_scalar(
             "SELECT EXISTS(
                 SELECT 1 FROM cas_access ca
-                JOIN cas_keys ck ON ca.cas_key_id = ck.id
+                JOIN cas_key ck ON ca.cas_key_id = ck.id
                 WHERE ca.org_id = $1 AND ck.content = $2
             )",
         )
@@ -181,22 +186,22 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn write_grants_access_to_org(pool: PgPool) -> Result<()> {
-        const USER1_TOKEN: &str = "test-token:user1@test1.com";
-        const USER2_TOKEN: &str = "test-token:user2@test1.com";
+        const ACCOUNT1_TOKEN: &str = "test-api-key-account1-org1";
+        const ACCOUNT2_TOKEN: &str = "test-api-key-account2-org1";
         const CONTENT: &[u8] = b"shared content";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
-        // User1 writes content
-        let user1_token = mint_token(&server, USER1_TOKEN, 1).await?;
-        let key = write_cas(&server, &user1_token, CONTENT).await?;
+        // Account1 writes content
+        let account1_token = mint_token(&server, ACCOUNT1_TOKEN, 1).await?;
+        let key = write_cas(&server, &account1_token, CONTENT).await?;
 
-        // User2 (same org) can read it
-        let user2_token = mint_token(&server, USER2_TOKEN, 1).await?;
+        // Account2 (same org) can read it
+        let account2_token = mint_token(&server, ACCOUNT2_TOKEN, 1).await?;
         let response = server
             .get(&format!("/api/v1/cas/{key}"))
-            .add_header("Authorization", &user2_token)
+            .add_header("Authorization", &account2_token)
             .await;
 
         response.assert_status_ok();
@@ -204,7 +209,7 @@ mod tests {
         pretty_assert_eq!(
             body.as_ref(),
             CONTENT,
-            "user2 should read content written by user1"
+            "account2 should read content written by account1"
         );
 
         Ok(())
@@ -215,7 +220,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn idempotent_writes(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         const CONTENT: &[u8] = b"idempotent test";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -257,7 +262,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn invalid_key_hash(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         const ACTUAL_CONTENT: &[u8] = b"actual content";
         const WRONG_CONTENT: &[u8] = b"different content";
         let (server, _tmp) = crate::api::test_server(pool)
@@ -283,7 +288,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn large_blob_write(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
@@ -332,7 +337,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn write_with_raw_token_instead_of_stateless(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         const CONTENT: &[u8] = b"test content";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -357,7 +362,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn concurrent_writes_same_blob(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         const CONTENT: &[u8] = b"concurrent write test content";
         let (server, _tmp) = crate::api::test_server(pool.clone())
             .await
@@ -427,7 +432,7 @@ mod tests {
         // Verify database shows org has access (only once, not 10 times)
         let access_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM cas_access ca
-            JOIN cas_keys ck ON ca.cas_key_id = ck.id
+            JOIN cas_key ck ON ca.cas_key_id = ck.id
             WHERE ca.org_id = $1 AND ck.content = $2",
         )
         .bind(1i64)
@@ -445,7 +450,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn concurrent_writes_different_blobs(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select users.id\n            from users\n            join api_keys on users.id = api_keys.user_id\n            where users.organization_id = $1\n            and api_keys.content = $2",
+  "query": "select account.id\n            from account\n            join api_key on account.id = api_key.account_id\n            where account.organization_id = $1\n            and api_key.content = $2",
   "describe": {
     "columns": [
       {
@@ -19,5 +19,5 @@
       false
     ]
   },
-  "hash": "7802a817239f126c874ac369fc611f45ab46e86bca3970a2e5899ce1575bea79"
+  "hash": "7577d3307fc53d8a8420c13eb5e4b8f3126394507f506eeb68a86efc2d293071"
 }

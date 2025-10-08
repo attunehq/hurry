@@ -8,7 +8,7 @@ This is a monorepo containing two main projects:
 
 **hurry** is a Rust tool that accelerates Cargo builds by intelligently caching and restoring build artifacts across git branches, worktrees, and development contexts. It provides drop-in replacements for common Cargo commands with significant performance improvements.
 
-**courier** is the API service for Hurry, providing content-addressed storage (CAS) functionality with authentication, compression, and access control. It's a web service built with Axum that handles blob storage, user authentication via PASETO tokens, and PostgreSQL-backed metadata management.
+**courier** is the API service for Hurry, providing content-addressed storage (CAS) functionality with authentication, compression, and access control. It's a web service built with Axum that handles blob storage, account authentication via PASETO tokens, and PostgreSQL-backed metadata management.
 
 ## Development Commands
 
@@ -87,11 +87,11 @@ These scripts are essential for cache correctness validation and performance ana
 
 ### Courier Data Model
 - Organizations: Multi-tenant isolation
-- Users: Belong to organizations, authenticate via API keys
-- API Keys: Long-lived tokens for user authentication
+- Accounts: Belong to organizations, authenticate via API keys
+- API Keys: Long-lived tokens for account authentication
 - CAS Keys: Content-addressed blob identifiers (blake3 hashes)
 - Access Control: Organization-level permissions for CAS keys
-- Frequency Tracking: Per-user CAS key access patterns
+- Frequency Tracking: Per-account CAS key access patterns
 
 ## Development Workflow
 

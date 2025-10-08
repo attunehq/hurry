@@ -7,25 +7,25 @@
 -- sql-schema migration --name {new name here}
 -- ```
 
--- Organizations
-create table organizations (
+-- Organization
+create table organization (
     id bigserial primary key not null,
     name text not null,
     created timestamptz not null default now()
 );
 
--- Users
-create table users (
+-- Account
+create table account (
     id bigserial primary key not null,
-    organization_id bigint references organizations(id) not null,
+    organization_id bigint references organization(id) not null,
     email text not null unique,
     created timestamptz not null default now()
 );
 
--- API Keys
-create table api_keys (
+-- API Key
+create table api_key (
     id bigserial primary key not null,
-    user_id bigint references users(id) not null,
+    account_id bigint references account(id) not null,
     content text not null,
     created timestamptz not null default now(),
     accessed timestamptz not null default now(),
@@ -34,7 +34,7 @@ create table api_keys (
 );
 
 -- CAS Key Index
-create table cas_keys (
+create table cas_key (
     id bigserial primary key not null,
     content bytea not null,
     created timestamptz not null default now(),
@@ -43,19 +43,19 @@ create table cas_keys (
 
 -- Access Control
 create table cas_access (
-    org_id bigint references organizations(id) not null,
-    cas_key_id bigint references cas_keys(id) not null,
+    org_id bigint references organization(id) not null,
+    cas_key_id bigint references cas_key(id) not null,
     created timestamptz not null default now(),
     primary key (org_id, cas_key_id)
 );
 
 -- Frequency Tracking
-create table frequency_user_cas_key (
-    user_id bigint references users(id) not null,
-    cas_key_id bigint references cas_keys(id) not null,
+create table frequency_account_cas_key (
+    account_id bigint references account(id) not null,
+    cas_key_id bigint references cas_key(id) not null,
     accessed timestamptz not null default now(),
-    primary key (user_id, cas_key_id, accessed)
+    primary key (account_id, cas_key_id, accessed)
 );
 
-create index idx_frequency_user_key_recent
-    on frequency_user_cas_key(user_id, cas_key_id, accessed desc);
+create index idx_frequency_account_key_recent
+    on frequency_account_cas_key(account_id, cas_key_id, accessed desc);

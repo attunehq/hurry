@@ -1,0 +1,9 @@
+Random diagnostic output
+cargo:rustc-cfg=feature_enabled
+More build script output
+cargo:rerun-if-changed=__PROFILE__/src/lib.rs
+cargo:warning=Deprecated feature used
+
+cargo:rustc-link-search=__PROFILE__/lib
+cargo:unknown-directive=should_be_preserved
+Final output line

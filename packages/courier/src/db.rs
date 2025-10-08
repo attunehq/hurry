@@ -18,7 +18,7 @@ use futures::StreamExt;
 use sqlx::{PgPool, migrate::Migrator};
 
 use crate::{
-    auth::{AuthenticatedToken, OrgId, RawToken, UserId},
+    auth::{AccountId, AuthenticatedToken, OrgId, RawToken},
     storage::Key,
 };
 
@@ -65,60 +65,60 @@ impl Postgres {
         token: RawToken,
     ) -> Result<Option<AuthenticatedToken>> {
         sqlx::query!(
-            "select users.id
-            from users
-            join api_keys on users.id = api_keys.user_id
-            where users.organization_id = $1
-            and api_keys.content = $2",
+            "select account.id
+            from account
+            join api_key on account.id = api_key.account_id
+            where account.organization_id = $1
+            and api_key.content = $2",
             org_id.as_i64(),
             token.as_str(),
         )
         .fetch_optional(&self.pool)
         .await
-        .context("fetch user id for token")
+        .context("fetch account id for token")
         .map(|query| {
             query.map(|row| AuthenticatedToken {
-                user_id: UserId::from_i64(row.id),
+                account_id: AccountId::from_i64(row.id),
                 org_id,
                 token,
             })
         })
     }
 
-    /// Check if the given user has access to the given CAS key.
-    #[tracing::instrument(name = "Postgres::user_has_cas_key")]
-    pub async fn user_has_cas_key(&self, user_id: UserId, key: &Key) -> Result<bool> {
+    /// Check if the given account has access to the given CAS key.
+    #[tracing::instrument(name = "Postgres::account_has_cas_key")]
+    pub async fn account_has_cas_key(&self, account_id: AccountId, key: &Key) -> Result<bool> {
         sqlx::query!(
             "select exists(
             select 1 from cas_access
-            join users on cas_access.org_id = users.organization_id
-            where users.id = $1
-            and cas_access.cas_key_id = (select id from cas_keys where content = $2))",
-            user_id.as_i64(),
+            join account on cas_access.org_id = account.organization_id
+            where account.id = $1
+            and cas_access.cas_key_id = (select id from cas_key where content = $2))",
+            account_id.as_i64(),
             key.as_bytes(),
         )
         .fetch_one(&self.pool)
         .await
-        .context("fetch user has cas key")
+        .context("fetch account has cas key")
         .map(|query| query.exists.unwrap_or(false))
     }
 
-    /// Get the allowed CAS keys for the given user.
+    /// Get the allowed CAS keys for the given account.
     ///
-    /// Returns the top N most frequently accessed keys for the user based on
+    /// Returns the top N most frequently accessed keys for the account based on
     /// access patterns over the last 7 days.
-    #[tracing::instrument(name = "Postgres::user_allowed_cas_keys")]
-    pub async fn user_allowed_cas_keys(&self, user_id: UserId, limit: u64) -> Result<HashSet<Key>> {
+    #[tracing::instrument(name = "Postgres::account_allowed_cas_keys")]
+    pub async fn account_allowed_cas_keys(&self, account_id: AccountId, limit: u64) -> Result<HashSet<Key>> {
         let mut rows = sqlx::query!(
-            "select cas_keys.content, count(*) as freq
-            from frequency_user_cas_key
-            join cas_keys on frequency_user_cas_key.cas_key_id = cas_keys.id
-            where frequency_user_cas_key.user_id = $1
-            and frequency_user_cas_key.accessed > now() - interval '7 days'
-            group by cas_keys.id, cas_keys.content
+            "select cas_key.content, count(*) as freq
+            from frequency_account_cas_key
+            join cas_key on frequency_account_cas_key.cas_key_id = cas_key.id
+            where frequency_account_cas_key.account_id = $1
+            and frequency_account_cas_key.accessed > now() - interval '7 days'
+            group by cas_key.id, cas_key.content
             order by freq desc
             limit $2",
-            user_id.as_i64(),
+            account_id.as_i64(),
             limit as i64,
         )
         .fetch(&self.pool);
@@ -151,7 +151,7 @@ impl Postgres {
         // overhead.
         sqlx::query!(
             "with inserted as (
-                insert into cas_keys (content)
+                insert into cas_key (content)
                 values ($2)
                 on conflict (content) do nothing
                 returning id
@@ -159,7 +159,7 @@ impl Postgres {
             key_id as (
                 select id from inserted
                 union all
-                select id from cas_keys where content = $2
+                select id from cas_key where content = $2
                 limit 1
             )
             insert into cas_access (org_id, cas_key_id)
@@ -175,15 +175,15 @@ impl Postgres {
         Ok(())
     }
 
-    /// Record that a user accessed a CAS key.
+    /// Record that an account accessed a CAS key.
     ///
     /// This is used for frequency tracking to preload hot keys into memory.
     #[tracing::instrument(name = "Postgres::record_cas_key_access")]
-    pub async fn record_cas_key_access(&self, user_id: UserId, key: &Key) -> Result<()> {
+    pub async fn record_cas_key_access(&self, account_id: AccountId, key: &Key) -> Result<()> {
         sqlx::query!(
-            "insert into frequency_user_cas_key (user_id, cas_key_id)
-            select $1, id from cas_keys where content = $2",
-            user_id.as_i64(),
+            "insert into frequency_account_cas_key (account_id, cas_key_id)
+            select $1, id from cas_key where content = $2",
+            account_id.as_i64(),
             key.as_bytes(),
         )
         .execute(&self.pool)

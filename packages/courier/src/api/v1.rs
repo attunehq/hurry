@@ -29,7 +29,7 @@ mod tests {
         fixtures("../../schema/fixtures/auth.sql")
     )]
     async fn full_client_workflow(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;

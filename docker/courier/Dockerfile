@@ -1,3 +1,5 @@
+# TODO: Swap to hurry for caching!
+
 FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /courier
 

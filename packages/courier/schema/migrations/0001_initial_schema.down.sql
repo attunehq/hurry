@@ -1,13 +1,13 @@
-DROP TABLE organizations;
+DROP TABLE organization;
 
-DROP TABLE users;
+DROP TABLE account;
 
-DROP TABLE api_keys;
+DROP TABLE api_key;
 
-DROP TABLE cas_keys;
+DROP TABLE cas_key;
 
 DROP TABLE cas_access;
 
-DROP TABLE frequency_user_cas_key;
+DROP TABLE frequency_account_cas_key;
 
-DROP INDEX idx_frequency_user_key_recent;
+DROP INDEX idx_frequency_account_key_recent;
