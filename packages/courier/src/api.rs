@@ -126,11 +126,11 @@ pub(crate) mod test_helpers {
 
     use crate::storage::Key;
 
-    /// Mint a stateless token for the given user token and org ID.
-    pub async fn mint_token(server: &TestServer, user_token: &str, org_id: u64) -> Result<String> {
+    /// Mint a stateless token for the given token and org ID.
+    pub async fn mint_token(server: &TestServer, token: &str, org_id: u64) -> Result<String> {
         let response = server
             .post("/api/v1/auth")
-            .add_header("Authorization", format!("Bearer {user_token}"))
+            .add_header("Authorization", format!("Bearer {token}"))
             .add_header("x-org-id", org_id.to_string())
             .await;
 

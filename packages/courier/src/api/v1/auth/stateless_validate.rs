@@ -1,22 +1,22 @@
 use axum::Json;
 use serde::Serialize;
 
-use crate::auth::{OrgId, StatelessToken, UserId};
+use crate::auth::{AccountId, OrgId, StatelessToken};
 
 #[derive(Debug, Serialize)]
 pub struct StatelessTokenMetadata {
     pub org_id: OrgId,
-    pub user_id: UserId,
+    pub account_id: AccountId,
 }
 
-/// Validates a stateless token and returns the org and user IDs parsed from the
+/// Validates a stateless token and returns the org and account IDs parsed from the
 /// token. This endpoint is mainly intended for debugging/validating that the
 /// client token implementation is working correctly.
 #[tracing::instrument]
 pub async fn handle(token: StatelessToken) -> Json<StatelessTokenMetadata> {
     Json(StatelessTokenMetadata {
         org_id: token.org_id,
-        user_id: token.user_id,
+        account_id: token.account_id,
     })
 }
 
@@ -33,7 +33,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn validate_stateless_token_happy_path(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
@@ -59,7 +59,7 @@ mod tests {
             metadata,
             json!({
                 "org_id": 1,
-                "user_id": 1
+                "account_id": 1
             })
         );
 
@@ -125,7 +125,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn validate_with_bearer_prefix_on_stateless(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
@@ -155,8 +155,8 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn validate_token_from_different_org(pool: PgPool) -> Result<()> {
-        const ORG1_TOKEN: &str = "test-token:user1@test1.com";
-        const ORG2_TOKEN: &str = "test-token:user1@test2.com";
+        const ORG1_TOKEN: &str = "test-api-key-account1-org1";
+        const ORG2_TOKEN: &str = "test-api-key-account1-org2";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;

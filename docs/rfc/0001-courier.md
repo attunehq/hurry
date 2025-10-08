@@ -47,23 +47,23 @@ Courier clients are primarily authenticated through a standard API key; they the
 When a client starts a session, it requests a JWT:
 
 1. Client provides `org_id` and `api_key`
-2. Server validates those credentials and mints a JWT containing `user_id` and `org_id`
-3. Server preloads the user's N most frequently accessed CAS keys into the in-memory set `K` for the org
+2. Server validates those credentials and mints a JWT containing `account_id` and `org_id`
+3. Server preloads the account's N most frequently accessed CAS keys into the in-memory set `K` for the org
 4. Server returns the JWT to the client
 
 ### CAS Key Preloading
 
-The N most frequently accessed CAS keys for each active user session are stored in memory, looking something like this:
+The N most frequently accessed CAS keys for each active account session are stored in memory, looking something like this:
 ```rust
 // Pseudocode
-static USER_KEYS = LockfreeHashMap<OrgId, LruHashSet<N, Blake3>>;
+static ACCOUNT_KEYS = LockfreeHashMap<OrgId, LruHashSet<N, Blake3>>;
 ```
 
-The intention here is that when a user negotiates a JWT, the server then loads "these are the CAS keys the user will likely access". Hopefully we'll be able to make N large enough that effectively all requests hit this preloaded set. Doing this allows us to then validate whether the user has access in subsequent requests without actually hitting the database to check permissions.
+The intention here is that when an account negotiates a JWT, the server then loads "these are the CAS keys the account will likely access". Hopefully we'll be able to make N large enough that effectively all requests hit this preloaded set. Doing this allows us to then validate whether the account has access in subsequent requests without actually hitting the database to check permissions.
 
-If the user requests a key that isn't in the set, the server falls back to checking the database for whether the org has access to that key; if so the request is served as normal and also the key is inserted into the set.
+If the account requests a key that isn't in the set, the server falls back to checking the database for whether the org has access to that key; if so the request is served as normal and also the key is inserted into the set.
 
-Different users with the same org get routed to the same backend instance and therefore reference the same set; these sets are additive until all active sessions are dropped and/or time out at which point the entire set is dropped.
+Different accounts with the same org get routed to the same backend instance and therefore reference the same set; these sets are additive until all active sessions are dropped and/or time out at which point the entire set is dropped.
 
 > [!NOTE]
 > To start with we'll set `N` to `100,000`:
@@ -119,12 +119,12 @@ create table organization (
 )
 ```
 
-### Users
+### Accounts
 
-Users belong to a single organization. Each user within an org shares access to the same cached content. We still track them separately so that we can maintain different frequency per user- for example, we expect CI to have a very different frequency of key access than a developer on their local machine. For the service, there is no difference between a bot user and a human user.
+Accounts belong to a single organization. Each account within an org shares access to the same cached content. We still track them separately so that we can maintain different frequency per account - for example, we expect CI to have a very different frequency of key access than a developer on their local machine. For the service, there is no difference between a bot account and a human account.
 
 ```sql
-create table user (
+create table account (
     id bigserial primary key not null,
     organization_id bigint references organization.id not null
 )
@@ -132,12 +132,12 @@ create table user (
 
 ### API Keys
 
-API keys are scoped to individual users for tracking and revocation purposes.
+API keys are scoped to individual accounts for tracking and revocation purposes.
 
 ```sql
 create table api_key (
     id bigserial primary key not null,
-    user_id bigint references user.id not null,
+    account_id bigint references account.id not null,
     content bytea not null,
     unique(content)
 )
@@ -169,14 +169,14 @@ create table cas_access (
 
 ### Frequency Tracking
 
-We want to store frequency of CAS key usage per user.
+We want to store frequency of CAS key usage per account.
 
 ```sql
-create table frequency_user_cas_key (
-  user_id bigint references user.id not null,
+create table frequency_account_cas_key (
+  account_id bigint references account.id not null,
   cas_key_id bigint references cas_key.id not null,
   accessed timestamptz not null default now(),
-  primary key (user_id, cas_key_id, accessed)
+  primary key (account_id, cas_key_id, accessed)
 )
 ```
 
@@ -184,21 +184,21 @@ So checking frequency over a given time period is just "count the rows in a give
 
 We'll add an index to support this:
 ```sql
-create index idx_frequency_user_key_recent
-    on frequency_user_cas_key(user_id, cas_key_id, accessed desc);
+create index idx_frequency_account_key_recent
+    on frequency_account_cas_key(account_id, cas_key_id, accessed desc);
 ```
 
 The query for which will look something like this:
 ```sql
 SELECT cas_key_id, COUNT(*) as freq
-FROM frequency_user_cas_key
-WHERE user_id = ? AND accessed > now() - interval '7 days'
+FROM frequency_account_cas_key
+WHERE account_id = ? AND accessed > now() - interval '7 days'
 GROUP BY cas_key_id
 ORDER BY freq DESC
 LIMIT 100000;
 ```
 
-We'll control the size of the table by removing old records on a timeframe; codebase CAS keys are assumed to be subject to pretty extreme recency bias so we'll probably keep this pretty short, like 7 days or less. If a user isn't working for 7 days the assumption is that the fallback methods of "basing their frequency on the rest of their org" is likely the best bet: they probably went on vacation and are coming back and starting something new.
+We'll control the size of the table by removing old records on a timeframe; codebase CAS keys are assumed to be subject to pretty extreme recency bias so we'll probably keep this pretty short, like 7 days or less. If an account isn't active for 7 days the assumption is that the fallback methods of "basing their frequency on the rest of their org" is likely the best bet: they probably went on vacation and are coming back and starting something new.
 
 ## Content-Addressed Storage
 

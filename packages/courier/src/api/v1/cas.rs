@@ -26,8 +26,8 @@ pub fn router() -> Router<State> {
 /// Check if the given key is allowed for the given token.
 ///
 /// If the key is visible in `keysets` then we can grant access immediately.
-/// Otherwise, we need to check if the user has access to the key in the
-/// database. If the user has access to the key according to the database, then
+/// Otherwise, we need to check if the account has access to the key in the
+/// database. If the account has access to the key according to the database, then
 /// we add the key to `keysets` and grant access. Otherwise, we return `false`.
 #[tracing::instrument]
 async fn check_allowed(
@@ -39,9 +39,9 @@ async fn check_allowed(
     let allowed = keysets.organization(token.org_id);
     if !allowed.contains(key) {
         let access = db
-            .user_has_cas_key(token.user_id, key)
+            .account_has_cas_key(token.account_id, key)
             .await
-            .context("check user has cas key")?;
+            .context("check account has cas key")?;
         if access {
             info!("cas.auth.cache_miss");
             allowed.insert(key.clone());

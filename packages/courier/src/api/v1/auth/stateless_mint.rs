@@ -9,8 +9,8 @@ use crate::{
     db::Postgres,
 };
 
-/// Uses the user API token to validate their authentication and org membership,
-/// then loads the user's most frequently accessed CAS keys into the in-memory
+/// Uses the account API token to validate their authentication and org membership,
+/// then loads the account's most frequently accessed CAS keys into the in-memory
 /// allowed key set and mints a stateless token that allows access to those
 /// keys.
 ///
@@ -32,7 +32,7 @@ use crate::{
 ///
 /// ## Preloading
 ///
-/// The user's most frequently accessed CAS keys are loaded into the in-memory
+/// The account's most frequently accessed CAS keys are loaded into the in-memory
 /// allowed key set when the token is minted. While normally API servers strive
 /// to be stateless, in this implementation we're baking in the assumption that
 /// clients are routed to a stable set of backends based on their org ID headers
@@ -65,7 +65,7 @@ pub async fn handle(
         }
         Ok(Some(token)) => {
             let allowed = db
-                .user_allowed_cas_keys(token.user_id, OrgKeySet::DEFAULT_LIMIT)
+                .account_allowed_cas_keys(token.account_id, OrgKeySet::DEFAULT_LIMIT)
                 .await;
             match allowed {
                 Ok(allowed) => {
@@ -119,14 +119,14 @@ mod tests {
     use serde_json::Value;
     use sqlx::PgPool;
 
-    use crate::auth::{OrgId, RawToken, StatelessToken, UserId};
+    use crate::auth::{AccountId, OrgId, RawToken, StatelessToken};
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn mint_stateless_token_happy_path(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
@@ -143,7 +143,7 @@ mod tests {
 
         let stateless = StatelessToken::deserialize(token).expect("deserialize token");
         pretty_assert_eq!(stateless.org_id, OrgId::from_u64(1));
-        pretty_assert_eq!(stateless.user_id, UserId::from_u64(1));
+        pretty_assert_eq!(stateless.account_id, AccountId::from_u64(1));
         pretty_assert_eq!(stateless.token, RawToken::new(TOKEN));
 
         Ok(())
@@ -174,12 +174,12 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn mint_with_wrong_org_id(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
-        // User1 is in org 1, but we claim they're in org 2
+        // Account1 is in org 1, but we claim they're in org 2
         let response = server
             .post("/api/v1/auth")
             .add_header("Authorization", format!("Bearer {TOKEN}"))
@@ -215,7 +215,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn mint_with_missing_org_id_header(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
@@ -255,7 +255,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn mint_with_bearer_prefix(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
@@ -281,7 +281,7 @@ mod tests {
         fixtures("../../../../schema/fixtures/auth.sql")
     )]
     async fn mint_with_invalid_org_id_format(pool: PgPool) -> Result<()> {
-        const TOKEN: &str = "test-token:user1@test1.com";
+        const TOKEN: &str = "test-api-key-account1-org1";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
