@@ -55,7 +55,7 @@ When a client starts a session, it requests a JWT:
 
 The N most frequently accessed CAS keys for each active user session are stored in memory, looking something like this:
 ```rust
-// Psuedocode
+// Pseudocode
 static USER_KEYS = LockfreeHashMap<OrgId, LruHashSet<N, Blake3>>;
 ```
 
@@ -101,7 +101,7 @@ Writes are simpler: if the user has a valid JWT, they can write new content.
 
 Each JWT has a set expiration time which is tracked server-side so that the server can clean up session resources once it expires. Clients ideally also notify the server when they're done with the JWT by hitting a revocation endpoint, which immediately triggers cleanup.
 
-The specifics of how we'll track this depends on the specifics of our JWT implementation, so I've left off any psuedocode examples.
+The specifics of how we'll track this depends on the specifics of our JWT implementation, so I've left off any pseudocode examples.
 
 ## Database Schema
 
