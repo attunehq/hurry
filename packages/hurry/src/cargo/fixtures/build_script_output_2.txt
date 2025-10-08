@@ -1,0 +1,9 @@
+cargo:rustc-link-search=native=__PROFILE__/native
+cargo:rustc-link-search=dependency=__PROFILE__/deps
+cargo:rustc-link-lib=static=mylib
+cargo:rustc-link-lib=ssl
+cargo:rustc-link-arg=-Wl,-rpath,/custom/path
+cargo:rerun-if-env-changed=PKG_CONFIG_PATH
+cargo:rerun-if-changed=__PROFILE__/wrapper.h
+cargo:rustc-cfg=has_feature="value"
+cargo:metadata=key=value

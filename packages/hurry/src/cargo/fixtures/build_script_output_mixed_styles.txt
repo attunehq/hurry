@@ -1,0 +1,6 @@
+cargo:rustc-cfg=old_style
+cargo::rustc-cfg=current_style
+cargo:warning=Old style warning
+cargo::warning=Current style warning
+cargo:rustc-link-search=__PROFILE__/old
+cargo::rustc-link-search=__PROFILE__/current
