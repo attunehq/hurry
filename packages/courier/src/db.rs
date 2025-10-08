@@ -108,7 +108,11 @@ impl Postgres {
     /// Returns the top N most frequently accessed keys for the account based on
     /// access patterns over the last 7 days.
     #[tracing::instrument(name = "Postgres::account_allowed_cas_keys")]
-    pub async fn account_allowed_cas_keys(&self, account_id: AccountId, limit: u64) -> Result<HashSet<Key>> {
+    pub async fn account_allowed_cas_keys(
+        &self,
+        account_id: AccountId,
+        limit: u64,
+    ) -> Result<HashSet<Key>> {
         let mut rows = sqlx::query!(
             "select cas_key.content, count(*) as freq
             from frequency_account_cas_key
