@@ -1,9 +1,11 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, str::FromStr};
 
 use color_eyre::{
-    Result,
+    Report, Result,
     eyre::{Context, OptionExt, bail, eyre},
 };
+use derive_more::Display;
+use enum_assoc::Assoc;
 use futures::{StreamExt, stream};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -99,52 +101,117 @@ impl BuildScriptOutput {
     }
 }
 
-/// Build scripts communicate with Cargo by printing to stdout. Cargo will
-/// interpret each line that starts with cargo:: as an instruction that will
-/// influence compilation of the package. All other lines are ignored.
+/// The syntax style used for cargo build script directives.
+///
+/// Cargo supports both old single-colon syntax (`cargo:`) and current
+/// double-colon syntax (`cargo::`). Build scripts can mix both styles
+/// in the same output file.
+#[derive(
+    Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize, Display, Assoc,
+)]
+#[display("{}", self.as_str())]
+#[func(pub const fn as_str(&self) -> &str)]
+pub enum BuildScriptOutputLineStyle {
+    /// Old syntax: `cargo:directive=value`
+    #[assoc(as_str = Self::PREFIX_OLD)]
+    Old,
+
+    /// Current syntax: `cargo::directive=value`
+    #[assoc(as_str = Self::PREFIX_CURRENT)]
+    Current,
+}
+
+impl BuildScriptOutputLineStyle {
+    const PREFIX_OLD: &str = "cargo:";
+    const PREFIX_CURRENT: &str = "cargo::";
+
+    /// Parse a line prefixed with a style.
+    /// Returns the style and the rest of the line after the prefix.
+    pub fn parse_line(line: &str) -> Result<(Self, &str)> {
+        if let Some(rest) = line.strip_prefix(Self::PREFIX_CURRENT) {
+            Ok((Self::Current, rest))
+        } else if let Some(rest) = line.strip_prefix(Self::PREFIX_OLD) {
+            Ok((Self::Old, rest))
+        } else {
+            bail!(
+                "line does not start with a known prefix: [{:?}, {:?}]",
+                Self::PREFIX_OLD,
+                Self::PREFIX_CURRENT
+            );
+        }
+    }
+}
+
+impl FromStr for BuildScriptOutputLineStyle {
+    type Err = Report;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            Self::PREFIX_OLD => Ok(Self::Old),
+            Self::PREFIX_CURRENT => Ok(Self::Current),
+            _ => bail!("invalid build script output line style: {s}"),
+        }
+    }
+}
+
+/// Build scripts communicate with Cargo by printing to stdout; this type
+/// describes the possible kinds of lines that can be printed.
 ///
 /// Reference for possible options according to the Cargo docs:
 /// https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
 pub enum BuildScriptOutputLine {
     /// `cargo::rerun-if-changed=PATH`
-    RerunIfChanged(QualifiedPath),
+    RerunIfChanged(BuildScriptOutputLineStyle, QualifiedPath),
 
     /// `cargo::rerun-if-env-changed=VAR`
-    RerunIfEnvChanged(String),
+    RerunIfEnvChanged(BuildScriptOutputLineStyle, String),
 
     /// `cargo::rustc-link-arg=FLAG`
-    RustcLinkArg(String),
+    RustcLinkArg(BuildScriptOutputLineStyle, String),
 
     /// `cargo::rustc-link-lib=LIB`
-    RustcLinkLib(String),
+    RustcLinkLib(BuildScriptOutputLineStyle, String),
 
     /// `cargo::rustc-link-search=[KIND=]PATH`
     RustcLinkSearch {
+        style: BuildScriptOutputLineStyle,
         kind: Option<String>,
         path: QualifiedPath,
     },
 
     /// `cargo::rustc-flags=FLAGS`
-    RustcFlags(String),
+    RustcFlags(BuildScriptOutputLineStyle, String),
 
     /// `cargo::rustc-cfg=KEY[="VALUE"]`
-    RustcCfg(String),
+    RustcCfg {
+        style: BuildScriptOutputLineStyle,
+        key: String,
+        value: Option<String>,
+    },
 
     /// `cargo::rustc-check-cfg=CHECK_CFG`
-    RustcCheckCfg(String),
+    RustcCheckCfg(BuildScriptOutputLineStyle, String),
 
     /// `cargo::rustc-env=VAR=VALUE`
-    RustcEnv { var: String, value: String },
+    RustcEnv {
+        style: BuildScriptOutputLineStyle,
+        var: String,
+        value: String,
+    },
 
     /// `cargo::error=MESSAGE`
-    Error(String),
+    Error(BuildScriptOutputLineStyle, String),
 
     /// `cargo::warning=MESSAGE`
-    Warning(String),
+    Warning(BuildScriptOutputLineStyle, String),
 
     /// `cargo::metadata=KEY=VALUE`
-    Metadata { key: String, value: String },
+    Metadata {
+        style: BuildScriptOutputLineStyle,
+        key: String,
+        value: String,
+    },
 
     /// All other lines that are not cargo directives.
     ///
@@ -163,18 +230,18 @@ pub enum BuildScriptOutputLine {
 }
 
 impl BuildScriptOutputLine {
-    const RERUN_IF_CHANGED: &str = "cargo:rerun-if-changed";
-    const RERUN_IF_ENV_CHANGED: &str = "cargo:rerun-if-env-changed";
-    const RUSTC_LINK_ARG: &str = "cargo:rustc-link-arg";
-    const RUSTC_LINK_LIB: &str = "cargo:rustc-link-lib";
-    const RUSTC_LINK_SEARCH: &str = "cargo:rustc-link-search";
-    const RUSTC_FLAGS: &str = "cargo:rustc-flags";
-    const RUSTC_CFG: &str = "cargo:rustc-cfg";
-    const RUSTC_CHECK_CFG: &str = "cargo:rustc-check-cfg";
-    const RUSTC_ENV: &str = "cargo:rustc-env";
-    const ERROR: &str = "cargo:error";
-    const WARNING: &str = "cargo:warning";
-    const METADATA: &str = "cargo:metadata";
+    const RERUN_IF_CHANGED: &str = "rerun-if-changed";
+    const RERUN_IF_ENV_CHANGED: &str = "rerun-if-env-changed";
+    const RUSTC_LINK_ARG: &str = "rustc-link-arg";
+    const RUSTC_LINK_LIB: &str = "rustc-link-lib";
+    const RUSTC_LINK_SEARCH: &str = "rustc-link-search";
+    const RUSTC_FLAGS: &str = "rustc-flags";
+    const RUSTC_CFG: &str = "rustc-cfg";
+    const RUSTC_CHECK_CFG: &str = "rustc-check-cfg";
+    const RUSTC_ENV: &str = "rustc-env";
+    const ERROR: &str = "error";
+    const WARNING: &str = "warning";
+    const METADATA: &str = "metadata";
 
     /// Parse a line of the build script file.
     #[instrument(name = "BuildScriptOutputLine::parse")]
@@ -190,50 +257,70 @@ impl BuildScriptOutputLine {
 
     /// Inner fallible parser for cargo directives.
     async fn parse_inner(profile: &ProfileDir<'_, Locked>, line: &str) -> Result<Self> {
+        let (style, line) = BuildScriptOutputLineStyle::parse_line(line)?;
         let Some((key, value)) = line.split_once('=') else {
-            return Err(eyre!("line does not contain '='"));
+            return Err(eyre!("directive does not contain '='"));
         };
 
         match key {
             Self::RERUN_IF_CHANGED => {
                 let path = QualifiedPath::parse(profile, value).await?;
-                Ok(Self::RerunIfChanged(path))
+                Ok(Self::RerunIfChanged(style, path))
             }
-            Self::RERUN_IF_ENV_CHANGED => Ok(Self::RerunIfEnvChanged(String::from(value))),
-            Self::RUSTC_LINK_ARG => Ok(Self::RustcLinkArg(String::from(value))),
-            Self::RUSTC_LINK_LIB => Ok(Self::RustcLinkLib(String::from(value))),
+            Self::RERUN_IF_ENV_CHANGED => Ok(Self::RerunIfEnvChanged(style, String::from(value))),
+            Self::RUSTC_LINK_ARG => Ok(Self::RustcLinkArg(style, String::from(value))),
+            Self::RUSTC_LINK_LIB => Ok(Self::RustcLinkLib(style, String::from(value))),
             Self::RUSTC_LINK_SEARCH => {
-                if let Some((kind, path_str)) = value.split_once('=') {
-                    let path = QualifiedPath::parse(profile, path_str).await?;
+                if let Some((kind, path)) = value.split_once('=') {
                     Ok(Self::RustcLinkSearch {
+                        style,
                         kind: Some(String::from(kind)),
-                        path,
+                        path: QualifiedPath::parse(profile, path).await?,
                     })
                 } else {
-                    let path = QualifiedPath::parse(profile, value).await?;
-                    Ok(Self::RustcLinkSearch { kind: None, path })
+                    Ok(Self::RustcLinkSearch {
+                        style,
+                        kind: None,
+                        path: QualifiedPath::parse(profile, value).await?,
+                    })
                 }
             }
-            Self::RUSTC_FLAGS => Ok(Self::RustcFlags(String::from(value))),
-            Self::RUSTC_CFG => Ok(Self::RustcCfg(String::from(value))),
-            Self::RUSTC_CHECK_CFG => Ok(Self::RustcCheckCfg(String::from(value))),
+            Self::RUSTC_FLAGS => Ok(Self::RustcFlags(style, String::from(value))),
+            Self::RUSTC_CFG => {
+                if let Some((key, value)) = value.split_once('=') {
+                    Ok(Self::RustcCfg {
+                        style,
+                        key: String::from(key),
+                        value: Some(String::from(value)),
+                    })
+                } else {
+                    Ok(Self::RustcCfg {
+                        style,
+                        key: String::from(value),
+                        value: None,
+                    })
+                }
+            }
+            Self::RUSTC_CHECK_CFG => Ok(Self::RustcCheckCfg(style, String::from(value))),
             Self::RUSTC_ENV => {
-                if let Some((var, env_value)) = value.split_once('=') {
+                if let Some((var, value)) = value.split_once('=') {
                     Ok(Self::RustcEnv {
+                        style,
                         var: String::from(var),
-                        value: String::from(env_value),
+                        value: String::from(value),
                     })
                 } else {
                     bail!("rustc-env directive missing second '='")
                 }
             }
-            Self::ERROR => Ok(Self::Error(String::from(value))),
-            Self::WARNING => Ok(Self::Warning(String::from(value))),
+            Self::ERROR => Ok(Self::Error(style, String::from(value))),
+            Self::WARNING => Ok(Self::Warning(style, String::from(value))),
             Self::METADATA => {
-                if let Some((meta_key, meta_value)) = value.split_once('=') {
+                if let Some((key, value)) = value.split_once('=') {
                     Ok(Self::Metadata {
-                        key: String::from(meta_key),
-                        value: String::from(meta_value),
+                        style,
+                        key: String::from(key),
+                        value: String::from(value),
                     })
                 } else {
                     bail!("metadata directive missing second '='")
@@ -247,34 +334,59 @@ impl BuildScriptOutputLine {
     #[instrument(name = "BuildScriptOutputLine::reconstruct")]
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
         match self {
-            Self::RerunIfChanged(path) => {
-                format!("{}={}", Self::RERUN_IF_CHANGED, path.reconstruct(profile))
+            Self::RerunIfChanged(style, path) => {
+                format!(
+                    "{}{}={}",
+                    style.as_str(),
+                    Self::RERUN_IF_CHANGED,
+                    path.reconstruct(profile)
+                )
             }
-            Self::RerunIfEnvChanged(var) => format!("{}={}", Self::RERUN_IF_ENV_CHANGED, var),
-            Self::RustcLinkArg(flag) => format!("{}={}", Self::RUSTC_LINK_ARG, flag),
-            Self::RustcLinkLib(lib) => format!("{}={}", Self::RUSTC_LINK_LIB, lib),
-            Self::RustcLinkSearch {
-                kind: Some(k),
-                path,
-            } => format!(
-                "{}={}={}",
-                Self::RUSTC_LINK_SEARCH,
-                k,
-                path.reconstruct(profile)
-            ),
-            Self::RustcLinkSearch { kind: None, path } => {
-                format!("{}={}", Self::RUSTC_LINK_SEARCH, path.reconstruct(profile))
+            Self::RerunIfEnvChanged(style, var) => {
+                format!("{}{}={}", style.as_str(), Self::RERUN_IF_ENV_CHANGED, var)
             }
-            Self::RustcFlags(flags) => format!("{}={}", Self::RUSTC_FLAGS, flags),
-            Self::RustcCfg(cfg) => format!("{}={}", Self::RUSTC_CFG, cfg),
-            Self::RustcCheckCfg(check_cfg) => format!("{}={}", Self::RUSTC_CHECK_CFG, check_cfg),
-            Self::RustcEnv { var, value } => {
-                format!("{}={}={}", Self::RUSTC_ENV, var, value)
+            Self::RustcLinkArg(style, flag) => {
+                format!("{}{}={}", style.as_str(), Self::RUSTC_LINK_ARG, flag)
             }
-            Self::Error(msg) => format!("{}={}", Self::ERROR, msg),
-            Self::Warning(msg) => format!("{}={}", Self::WARNING, msg),
-            Self::Metadata { key, value } => {
-                format!("{}={}={}", Self::METADATA, key, value)
+            Self::RustcLinkLib(style, lib) => {
+                format!("{}{}={}", style.as_str(), Self::RUSTC_LINK_LIB, lib)
+            }
+            Self::RustcLinkSearch { style, kind, path } => match kind {
+                Some(kind) => format!(
+                    "{}{}={}={}",
+                    style.as_str(),
+                    Self::RUSTC_LINK_SEARCH,
+                    kind,
+                    path.reconstruct(profile)
+                ),
+                None => format!(
+                    "{}{}={}",
+                    style.as_str(),
+                    Self::RUSTC_LINK_SEARCH,
+                    path.reconstruct(profile)
+                ),
+            },
+            Self::RustcFlags(style, flags) => {
+                format!("{}{}={}", style.as_str(), Self::RUSTC_FLAGS, flags)
+            }
+            Self::RustcCfg { style, key, value } => match value {
+                None => {
+                    format!("{}{}={}", style.as_str(), Self::RUSTC_CFG, key)
+                }
+                Some(value) => {
+                    format!("{}{}={}={}", style.as_str(), Self::RUSTC_CFG, key, value)
+                }
+            },
+            Self::RustcCheckCfg(style, check_cfg) => {
+                format!("{}{}={}", style.as_str(), Self::RUSTC_CHECK_CFG, check_cfg)
+            }
+            Self::RustcEnv { style, var, value } => {
+                format!("{}{}={}={}", style.as_str(), Self::RUSTC_ENV, var, value)
+            }
+            Self::Error(style, msg) => format!("{}{}={}", style.as_str(), Self::ERROR, msg),
+            Self::Warning(style, msg) => format!("{}{}={}", style.as_str(), Self::WARNING, msg),
+            Self::Metadata { style, key, value } => {
+                format!("{}{}={}={}", style.as_str(), Self::METADATA, key, value)
             }
             Self::Other(s) => s.to_string(),
         }
@@ -284,271 +396,390 @@ impl BuildScriptOutputLine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cargo::Profile;
+    use crate::cargo::{Profile, Workspace};
     use pretty_assertions::assert_eq as pretty_assert_eq;
+    use simple_test_case::test_case;
 
-    async fn test_profile() -> ProfileDir<'static, Locked> {
-        let workspace = Box::leak(Box::new(
-            super::super::workspace::Workspace::from_argv(&[])
-                .await
-                .unwrap(),
-        ));
-        workspace
+    fn replace_path_placeholders(line: &str, profile: &ProfileDir<Locked>) -> String {
+        line.replace("__PROFILE__", &profile.root().to_string())
+            .replace("__CARGO__", &profile.workspace.cargo_home.to_string())
+    }
+
+    #[test_case("cargo:rerun-if-changed=__PROFILE__/out/build.rs", BuildScriptOutputLineStyle::Old, "__PROFILE__/out/build.rs"; "old_style_profile_root")]
+    #[test_case("cargo::rerun-if-changed=__PROFILE__/out/build.rs", BuildScriptOutputLineStyle::Current, "__PROFILE__/out/build.rs"; "current_style_profile_root")]
+    #[test_case("cargo:rerun-if-changed=__CARGO__/out/build.rs", BuildScriptOutputLineStyle::Old, "__CARGO__/out/build.rs"; "old_style_cargo_home")]
+    #[test_case("cargo::rerun-if-changed=__CARGO__/out/build.rs", BuildScriptOutputLineStyle::Current, "__CARGO__/out/build.rs"; "current_style_cargo_home")]
+    #[tokio::test]
+    async fn parses_rerun_if_changed(
+        line: &str,
+        expected_style: BuildScriptOutputLineStyle,
+        expected_path: &str,
+    ) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
             .open_profile_locked(&Profile::Debug)
             .await
-            .unwrap()
-    }
+            .expect("open profile");
+        let line = replace_path_placeholders(line, &profile);
+        let expected_path = replace_path_placeholders(expected_path, &profile);
 
-    #[tokio::test]
-    async fn parses_rerun_if_changed() {
-        let profile = test_profile().await;
-        let line = format!("cargo:rerun-if-changed={}/out/build.rs", profile.root());
-        let parsed = BuildScriptOutputLine::parse(&profile, &line).await;
-
-        match parsed {
-            BuildScriptOutputLine::RerunIfChanged(_) => {}
+        match BuildScriptOutputLine::parse(&profile, &line).await {
+            BuildScriptOutputLine::RerunIfChanged(style, path) => {
+                pretty_assert_eq!(path.reconstruct(&profile), expected_path);
+                pretty_assert_eq!(style, expected_style);
+            }
             _ => panic!("Expected RerunIfChanged variant"),
         }
-
-        let reconstructed = parsed.reconstruct(&profile);
-        pretty_assert_eq!(reconstructed, line);
     }
 
+    #[test_case("cargo:rerun-if-env-changed=RUST_LOG", BuildScriptOutputLineStyle::Old, "RUST_LOG"; "old_style")]
+    #[test_case("cargo::rerun-if-env-changed=RUST_LOG", BuildScriptOutputLineStyle::Current, "RUST_LOG"; "current_style")]
     #[tokio::test]
-    async fn parses_rerun_if_env_changed() {
-        let profile = test_profile().await;
-        let line = "cargo:rerun-if-env-changed=RUST_LOG";
-        let parsed = BuildScriptOutputLine::parse(&profile, line).await;
+    async fn parses_rerun_if_env_changed(
+        line: &str,
+        expected_style: BuildScriptOutputLineStyle,
+        expected_var: &str,
+    ) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
-        match &parsed {
-            BuildScriptOutputLine::RerunIfEnvChanged(var) => {
-                pretty_assert_eq!(var, "RUST_LOG");
+        match BuildScriptOutputLine::parse(&profile, line).await {
+            BuildScriptOutputLine::RerunIfEnvChanged(style, var) => {
+                pretty_assert_eq!(var, expected_var);
+                pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RerunIfEnvChanged variant"),
         }
-
-        let reconstructed = parsed.reconstruct(&profile);
-        pretty_assert_eq!(reconstructed, line);
     }
 
+    #[test_case("cargo:rustc-link-arg=-Wl,-rpath,/custom/path", BuildScriptOutputLineStyle::Old, "-Wl,-rpath,/custom/path"; "old_style")]
+    #[test_case("cargo::rustc-link-arg=-Wl,-rpath,/custom/path", BuildScriptOutputLineStyle::Current, "-Wl,-rpath,/custom/path"; "current_style")]
     #[tokio::test]
-    async fn parses_rustc_link_arg() {
-        let profile = test_profile().await;
-        let line = "cargo:rustc-link-arg=-Wl,-rpath,/custom/path";
-        let parsed = BuildScriptOutputLine::parse(&profile, line).await;
+    async fn parses_rustc_link_arg(
+        line: &str,
+        expected_style: BuildScriptOutputLineStyle,
+        expected_flag: &str,
+    ) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
-        match &parsed {
-            BuildScriptOutputLine::RustcLinkArg(flag) => {
-                pretty_assert_eq!(flag, "-Wl,-rpath,/custom/path");
+        match BuildScriptOutputLine::parse(&profile, line).await {
+            BuildScriptOutputLine::RustcLinkArg(style, flag) => {
+                pretty_assert_eq!(flag, expected_flag);
+                pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkArg variant"),
         }
-
-        let reconstructed = parsed.reconstruct(&profile);
-        pretty_assert_eq!(reconstructed, line);
     }
 
+    #[test_case("cargo:rustc-link-lib=ssl", BuildScriptOutputLineStyle::Old, "ssl"; "old_style")]
+    #[test_case("cargo::rustc-link-lib=ssl", BuildScriptOutputLineStyle::Current, "ssl"; "current_style")]
     #[tokio::test]
-    async fn parses_rustc_link_lib() {
-        let profile = test_profile().await;
-        let line = "cargo:rustc-link-lib=ssl";
-        let parsed = BuildScriptOutputLine::parse(&profile, line).await;
+    async fn parses_rustc_link_lib(
+        line: &str,
+        expected_style: BuildScriptOutputLineStyle,
+        expected_lib: &str,
+    ) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
-        match &parsed {
-            BuildScriptOutputLine::RustcLinkLib(lib) => {
-                pretty_assert_eq!(lib, "ssl");
+        match BuildScriptOutputLine::parse(&profile, line).await {
+            BuildScriptOutputLine::RustcLinkLib(style, lib) => {
+                pretty_assert_eq!(lib, expected_lib);
+                pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkLib variant"),
         }
-
-        let reconstructed = parsed.reconstruct(&profile);
-        pretty_assert_eq!(reconstructed, line);
     }
 
+    #[test_case("cargo:rustc-link-search=__PROFILE__/native", BuildScriptOutputLineStyle::Old, "__PROFILE__/native"; "old_style")]
+    #[test_case("cargo::rustc-link-search=__PROFILE__/native", BuildScriptOutputLineStyle::Current, "__PROFILE__/native"; "current_style")]
     #[tokio::test]
-    async fn parses_rustc_link_search_without_kind() {
-        let profile = test_profile().await;
-        let line = format!("cargo:rustc-link-search={}/native", profile.root());
-        let parsed = BuildScriptOutputLine::parse(&profile, &line).await;
+    async fn parses_rustc_link_search_without_kind(
+        line: &str,
+        expected_style: BuildScriptOutputLineStyle,
+        expected_path: &str,
+    ) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
+        let line = replace_path_placeholders(line, &profile);
+        let expected_path = replace_path_placeholders(expected_path, &profile);
 
-        match &parsed {
-            BuildScriptOutputLine::RustcLinkSearch { kind, path: _ } => {
-                pretty_assert_eq!(kind, &None);
+        match BuildScriptOutputLine::parse(&profile, &line).await {
+            BuildScriptOutputLine::RustcLinkSearch { style, kind, path } => {
+                pretty_assert_eq!(kind, None);
+                pretty_assert_eq!(path.reconstruct(&profile), expected_path);
+                pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkSearch variant"),
         }
-
-        let reconstructed = parsed.reconstruct(&profile);
-        pretty_assert_eq!(reconstructed, line);
     }
 
+    #[test_case("cargo:rustc-link-search=native=__PROFILE__/lib", BuildScriptOutputLineStyle::Old, "native", "__PROFILE__/lib"; "old_style")]
+    #[test_case("cargo::rustc-link-search=native=__PROFILE__/lib", BuildScriptOutputLineStyle::Current, "native", "__PROFILE__/lib"; "current_style")]
     #[tokio::test]
-    async fn parses_rustc_link_search_with_kind() {
-        let profile = test_profile().await;
-        let line = format!("cargo:rustc-link-search=native={}/lib", profile.root());
-        let parsed = BuildScriptOutputLine::parse(&profile, &line).await;
+    async fn parses_rustc_link_search_with_kind(
+        line: &str,
+        expected_style: BuildScriptOutputLineStyle,
+        expected_kind: &str,
+        expected_path: &str,
+    ) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
+        let line = replace_path_placeholders(line, &profile);
+        let expected_path = replace_path_placeholders(expected_path, &profile);
 
-        match &parsed {
-            BuildScriptOutputLine::RustcLinkSearch { kind, path: _ } => {
-                pretty_assert_eq!(kind, &Some(String::from("native")));
+        match BuildScriptOutputLine::parse(&profile, &line).await {
+            BuildScriptOutputLine::RustcLinkSearch { style, kind, path } => {
+                pretty_assert_eq!(kind, Some(String::from(expected_kind)));
+                pretty_assert_eq!(path.reconstruct(&profile), expected_path);
+                pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkSearch variant"),
         }
-
-        let reconstructed = parsed.reconstruct(&profile);
-        pretty_assert_eq!(reconstructed, line);
     }
 
+    #[test_case("cargo:rustc-flags=-l dylib=foo", BuildScriptOutputLineStyle::Old, "-l dylib=foo"; "old_style")]
+    #[test_case("cargo::rustc-flags=-l dylib=foo", BuildScriptOutputLineStyle::Current, "-l dylib=foo"; "current_style")]
     #[tokio::test]
-    async fn parses_rustc_flags() {
-        let profile = test_profile().await;
-        let line = "cargo:rustc-flags=-l dylib=foo";
-        let parsed = BuildScriptOutputLine::parse(&profile, line).await;
+    async fn parses_rustc_flags(
+        line: &str,
+        expected_style: BuildScriptOutputLineStyle,
+        expected_flags: &str,
+    ) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
-        match &parsed {
-            BuildScriptOutputLine::RustcFlags(flags) => {
-                pretty_assert_eq!(flags, "-l dylib=foo");
+        match BuildScriptOutputLine::parse(&profile, line).await {
+            BuildScriptOutputLine::RustcFlags(style, flags) => {
+                pretty_assert_eq!(flags, expected_flags);
+                pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcFlags variant"),
         }
-
-        let reconstructed = parsed.reconstruct(&profile);
-        pretty_assert_eq!(reconstructed, line);
     }
 
+    #[test_case("cargo:rustc-cfg=feature=\"custom\"", BuildScriptOutputLineStyle::Old, "feature", Some("\"custom\""); "old_style_with_value")]
+    #[test_case("cargo::rustc-cfg=feature=\"custom\"", BuildScriptOutputLineStyle::Current, "feature", Some("\"custom\""); "current_style_with_value")]
+    #[test_case("cargo:rustc-cfg=has_feature", BuildScriptOutputLineStyle::Old, "has_feature", None; "old_style_without_value")]
+    #[test_case("cargo::rustc-cfg=has_feature", BuildScriptOutputLineStyle::Current, "has_feature", None; "current_style_without_value")]
     #[tokio::test]
-    async fn parses_rustc_cfg() {
-        let profile = test_profile().await;
-        let line = "cargo:rustc-cfg=feature=\"custom\"";
-        let parsed = BuildScriptOutputLine::parse(&profile, line).await;
+    async fn parses_rustc_cfg(
+        line: &str,
+        expected_style: BuildScriptOutputLineStyle,
+        expected_key: &str,
+        expected_value: Option<&str>,
+    ) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
-        match &parsed {
-            BuildScriptOutputLine::RustcCfg(cfg) => {
-                pretty_assert_eq!(cfg, "feature=\"custom\"");
+        match BuildScriptOutputLine::parse(&profile, line).await {
+            BuildScriptOutputLine::RustcCfg { style, key, value } => {
+                pretty_assert_eq!(key, expected_key);
+                pretty_assert_eq!(value.as_deref(), expected_value);
+                pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcCfg variant"),
         }
-
-        let reconstructed = parsed.reconstruct(&profile);
-        pretty_assert_eq!(reconstructed, line);
     }
 
+    #[test_case("cargo:rustc-check-cfg=cfg(foo)", BuildScriptOutputLineStyle::Old, "cfg(foo)"; "old_style")]
+    #[test_case("cargo::rustc-check-cfg=cfg(foo)", BuildScriptOutputLineStyle::Current, "cfg(foo)"; "current_style")]
     #[tokio::test]
-    async fn parses_rustc_check_cfg() {
-        let profile = test_profile().await;
-        let line = "cargo:rustc-check-cfg=cfg(foo)";
-        let parsed = BuildScriptOutputLine::parse(&profile, line).await;
+    async fn parses_rustc_check_cfg(
+        line: &str,
+        expected_style: BuildScriptOutputLineStyle,
+        expected_check_cfg: &str,
+    ) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
-        match &parsed {
-            BuildScriptOutputLine::RustcCheckCfg(check_cfg) => {
-                pretty_assert_eq!(check_cfg, "cfg(foo)");
+        match BuildScriptOutputLine::parse(&profile, line).await {
+            BuildScriptOutputLine::RustcCheckCfg(style, check_cfg) => {
+                pretty_assert_eq!(check_cfg, expected_check_cfg);
+                pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcCheckCfg variant"),
         }
-
-        let reconstructed = parsed.reconstruct(&profile);
-        pretty_assert_eq!(reconstructed, line);
     }
 
+    #[test_case("cargo:rustc-env=FOO=bar", BuildScriptOutputLineStyle::Old, "FOO", "bar"; "old_style")]
+    #[test_case("cargo::rustc-env=FOO=bar", BuildScriptOutputLineStyle::Current, "FOO", "bar"; "current_style")]
     #[tokio::test]
-    async fn parses_rustc_env() {
-        let profile = test_profile().await;
-        let line = "cargo:rustc-env=FOO=bar";
-        let parsed = BuildScriptOutputLine::parse(&profile, line).await;
+    async fn parses_rustc_env(
+        line: &str,
+        expected_style: BuildScriptOutputLineStyle,
+        expected_var: &str,
+        expected_value: &str,
+    ) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
-        match &parsed {
-            BuildScriptOutputLine::RustcEnv { var, value } => {
-                pretty_assert_eq!(var, "FOO");
-                pretty_assert_eq!(value, "bar");
+        match BuildScriptOutputLine::parse(&profile, line).await {
+            BuildScriptOutputLine::RustcEnv { style, var, value } => {
+                pretty_assert_eq!(var, expected_var);
+                pretty_assert_eq!(value, expected_value);
+                pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcEnv variant"),
         }
-
-        let reconstructed = parsed.reconstruct(&profile);
-        pretty_assert_eq!(reconstructed, line);
     }
 
+    #[test_case("cargo:error=Something went wrong", BuildScriptOutputLineStyle::Old, "Something went wrong"; "old_style")]
+    #[test_case("cargo::error=Something went wrong", BuildScriptOutputLineStyle::Current, "Something went wrong"; "current_style")]
     #[tokio::test]
-    async fn parses_error() {
-        let profile = test_profile().await;
-        let line = "cargo:error=Something went wrong";
-        let parsed = BuildScriptOutputLine::parse(&profile, line).await;
+    async fn parses_error(
+        line: &str,
+        expected_style: BuildScriptOutputLineStyle,
+        expected_msg: &str,
+    ) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
-        match &parsed {
-            BuildScriptOutputLine::Error(msg) => {
-                pretty_assert_eq!(msg, "Something went wrong");
+        match BuildScriptOutputLine::parse(&profile, line).await {
+            BuildScriptOutputLine::Error(style, msg) => {
+                pretty_assert_eq!(msg, expected_msg);
+                pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected Error variant"),
         }
-
-        let reconstructed = parsed.reconstruct(&profile);
-        pretty_assert_eq!(reconstructed, line);
     }
 
+    #[test_case("cargo:warning=This is a warning", BuildScriptOutputLineStyle::Old, "This is a warning"; "old_style")]
+    #[test_case("cargo::warning=This is a warning", BuildScriptOutputLineStyle::Current, "This is a warning"; "current_style")]
     #[tokio::test]
-    async fn parses_warning() {
-        let profile = test_profile().await;
-        let line = "cargo:warning=This is a warning";
-        let parsed = BuildScriptOutputLine::parse(&profile, line).await;
+    async fn parses_warning(
+        line: &str,
+        expected_style: BuildScriptOutputLineStyle,
+        expected_msg: &str,
+    ) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
-        match &parsed {
-            BuildScriptOutputLine::Warning(msg) => {
-                pretty_assert_eq!(msg, "This is a warning");
+        match BuildScriptOutputLine::parse(&profile, line).await {
+            BuildScriptOutputLine::Warning(style, msg) => {
+                pretty_assert_eq!(msg, expected_msg);
+                pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected Warning variant"),
         }
-
-        let reconstructed = parsed.reconstruct(&profile);
-        pretty_assert_eq!(reconstructed, line);
     }
 
+    #[test_case("cargo:metadata=key=value", BuildScriptOutputLineStyle::Old, "key", "value"; "old_style")]
+    #[test_case("cargo::metadata=key=value", BuildScriptOutputLineStyle::Current, "key", "value"; "current_style")]
     #[tokio::test]
-    async fn parses_metadata() {
-        let profile = test_profile().await;
-        let line = "cargo:metadata=key=value";
-        let parsed = BuildScriptOutputLine::parse(&profile, line).await;
+    async fn parses_metadata(
+        line: &str,
+        expected_style: BuildScriptOutputLineStyle,
+        expected_key: &str,
+        expected_value: &str,
+    ) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
-        match &parsed {
-            BuildScriptOutputLine::Metadata { key, value } => {
-                pretty_assert_eq!(key, "key");
-                pretty_assert_eq!(value, "value");
+        match BuildScriptOutputLine::parse(&profile, line).await {
+            BuildScriptOutputLine::Metadata { style, key, value } => {
+                pretty_assert_eq!(key, expected_key);
+                pretty_assert_eq!(value, expected_value);
+                pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected Metadata variant"),
         }
-
-        let reconstructed = parsed.reconstruct(&profile);
-        pretty_assert_eq!(reconstructed, line);
     }
 
+    #[test_case("OUT_DIR = Some(/path/to/out)"; "debug_output")]
+    #[test_case("cargo:unknown=value"; "unknown_directive")]
+    #[test_case("random text"; "random_text")]
+    #[test_case(""; "empty_line")]
     #[tokio::test]
-    async fn parses_other_lines() {
-        let profile = test_profile().await;
+    async fn parses_other_lines(line: &str) {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
-        let lines = vec![
-            "OUT_DIR = Some(/path/to/out)",
-            "cargo:unknown=value",
-            "random text",
-            "",
-        ];
-
-        for line in lines {
-            let parsed = BuildScriptOutputLine::parse(&profile, line).await;
-
-            match &parsed {
-                BuildScriptOutputLine::Other(content) => {
-                    pretty_assert_eq!(content, line);
-                }
-                _ => panic!("Expected Other variant for line: {}", line),
+        match BuildScriptOutputLine::parse(&profile, line).await {
+            BuildScriptOutputLine::Other(content) => {
+                pretty_assert_eq!(content, line);
             }
-
-            let reconstructed = parsed.reconstruct(&profile);
-            pretty_assert_eq!(reconstructed, line);
+            _ => panic!("Expected Other variant for line: {}", line),
         }
     }
 
     #[tokio::test]
     async fn parses_rustc_env_without_equals() {
-        let profile = test_profile().await;
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
         let line = "cargo:rustc-env=INVALID";
         let parsed = BuildScriptOutputLine::parse(&profile, line).await;
 
@@ -562,7 +793,13 @@ mod tests {
 
     #[tokio::test]
     async fn parses_metadata_without_equals() {
-        let profile = test_profile().await;
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
         let line = "cargo:metadata=INVALID";
         let parsed = BuildScriptOutputLine::parse(&profile, line).await;
 
@@ -576,10 +813,16 @@ mod tests {
 
     #[tokio::test]
     async fn parses_and_reconstructs_real_world_example_1() {
-        let profile = test_profile().await;
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
         let fixture = include_str!("fixtures/build_script_output_1.txt");
-        let input = fixture.replace("__PROFILE_ROOT__", &profile.root().to_string());
+        let input = replace_path_placeholders(fixture, &profile);
 
         let parsed = BuildScriptOutput(
             futures::stream::iter(input.lines())
@@ -594,10 +837,16 @@ mod tests {
 
     #[tokio::test]
     async fn parses_and_reconstructs_real_world_example_2() {
-        let profile = test_profile().await;
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
         let fixture = include_str!("fixtures/build_script_output_2.txt");
-        let input = fixture.replace("__PROFILE_ROOT__", &profile.root().to_string());
+        let input = replace_path_placeholders(fixture, &profile);
 
         let parsed = BuildScriptOutput(
             futures::stream::iter(input.lines())
@@ -612,10 +861,16 @@ mod tests {
 
     #[tokio::test]
     async fn parses_and_reconstructs_mixed_content() {
-        let profile = test_profile().await;
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
 
         let fixture = include_str!("fixtures/build_script_output_mixed.txt");
-        let input = fixture.replace("__PROFILE_ROOT__", &profile.root().to_string());
+        let input = replace_path_placeholders(fixture, &profile);
 
         let parsed = BuildScriptOutput(
             futures::stream::iter(input.lines())
@@ -623,6 +878,45 @@ mod tests {
                 .collect::<Vec<_>>()
                 .await,
         );
+
+        let reconstructed = parsed.reconstruct(&profile);
+        pretty_assert_eq!(reconstructed, input.trim_end());
+    }
+
+    #[tokio::test]
+    async fn parses_and_reconstructs_mixed_styles() {
+        let workspace = Workspace::from_argv(&[])
+            .await
+            .expect("open current workspace");
+        let profile = workspace
+            .open_profile_locked(&Profile::Debug)
+            .await
+            .expect("open profile");
+
+        let fixture = include_str!("fixtures/build_script_output_mixed_styles.txt");
+        let input = replace_path_placeholders(fixture, &profile);
+
+        let parsed = BuildScriptOutput(
+            futures::stream::iter(input.lines())
+                .then(|line| BuildScriptOutputLine::parse(&profile, line))
+                .collect::<Vec<_>>()
+                .await,
+        );
+
+        // Verify we parsed both old and current styles
+        let lines = &parsed.0;
+        match &lines[0] {
+            BuildScriptOutputLine::RustcCfg { style, .. } => {
+                pretty_assert_eq!(style, &BuildScriptOutputLineStyle::Old);
+            }
+            _ => panic!("Expected RustcCfg with Old style"),
+        }
+        match &lines[1] {
+            BuildScriptOutputLine::RustcCfg { style, .. } => {
+                pretty_assert_eq!(style, &BuildScriptOutputLineStyle::Current);
+            }
+            _ => panic!("Expected RustcCfg with Current style"),
+        }
 
         let reconstructed = parsed.reconstruct(&profile);
         pretty_assert_eq!(reconstructed, input.trim_end());

@@ -1399,6 +1399,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "simple_test_case",
  "sqlx",
  "strum",
  "subenum",

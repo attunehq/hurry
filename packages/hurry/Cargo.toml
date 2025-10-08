@@ -66,5 +66,6 @@ async-walkdir.workspace = true
 divan = { workspace = true }
 jwalk = { workspace = true }
 pretty_assertions = { workspace = true }
+simple_test_case.workspace = true
 test-log = { workspace = true, features = ["trace"] }
 xshell = { workspace = true }
