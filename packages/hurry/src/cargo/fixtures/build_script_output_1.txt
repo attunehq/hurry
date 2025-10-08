@@ -1,0 +1,6 @@
+cargo:rustc-cfg=curve25519_dalek_bits="64"
+cargo:rustc-cfg=curve25519_dalek_backend="serial"
+cargo:rustc-env=OUT_DIR=__PROFILE_ROOT__/out
+cargo:rerun-if-changed=__PROFILE_ROOT__/build.rs
+cargo:warning=Using serial backend
+OUT_DIR = Some(__PROFILE_ROOT__/out)
