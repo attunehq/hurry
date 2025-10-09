@@ -20,11 +20,13 @@ use tracing::trace;
 ///
 /// ## Usage
 ///
-/// ```not_rust
-/// let args = vec!["--release", "--package", "foo"];
+/// ```
+/// # use hurry::cargo::CargoBuildArguments;
+/// let args = vec!["--release", "--package", "foo", "--features", "feat1,feat2"];
 /// let parsed = CargoBuildArguments::from_iter(args);
 /// assert!(parsed.is_release());
 /// assert_eq!(parsed.packages(), vec!["foo"]);
+/// assert_eq!(parsed.features(), vec!["feat1", "feat2"]);
 /// ```
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct CargoBuildArguments(Vec<CargoBuildArgument>);
