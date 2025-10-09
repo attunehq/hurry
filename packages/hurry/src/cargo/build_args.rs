@@ -197,10 +197,10 @@ impl From<&CargoBuildArguments> for CargoBuildArguments {
 ///
 /// ## Aliases
 ///
-/// Flags that have short aliases always parse to a single canonical enum variant
-/// and render using the canonical long form. For example, `-p foo` is equivalent
-/// to `--package foo`, so both parse to `Package(String::from("foo"))` and render
-/// as `--package foo`.
+/// Flags that have short aliases always parse to a single canonical enum
+/// variant and render using the canonical long form. For example, `-p foo` is
+/// equivalent to `--package foo`, so both parse to
+/// `Package(String::from("foo"))` and render as `--package foo`.
 ///
 /// The following aliases are supported:
 /// - `-v` → `--verbose`
@@ -216,15 +216,15 @@ impl From<&CargoBuildArguments> for CargoBuildArguments {
 /// ## Generic Flags
 ///
 /// Flags that are not explicitly recognized are parsed as either `GenericFlag`
-/// (for flags without values) or `GenericFlagWithValue` (for flags with values).
-/// This provides forward compatibility with future cargo flags and allows handling
-/// of custom flags without requiring changes to this parser.
+/// (for flags without values) or `GenericValueFlag` (for flags with values).
+/// This provides forward compatibility with future cargo flags and allows
+/// handling of custom flags without requiring changes to this parser.
 ///
 /// ## Rendering
 ///
-/// For flags with values, renders to space-separated format by default
-/// (`--flag value`). Some flags support equals-separated format and will use
-/// that when appropriate.
+/// For flags with values, renders to space-separated format by default (`--flag
+/// value`). Some flags support equals-separated format and will use that when
+/// appropriate.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum CargoBuildArgument {
     /// `-v` or `--verbose` with count (e.g., -vv = 2)
