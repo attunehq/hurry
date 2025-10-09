@@ -1,10 +1,6 @@
-use std::str::FromStr;
-
-use color_eyre::{
-    Result,
-    eyre::{Context, bail},
-};
+use color_eyre::{Result, eyre::Context};
 use itertools::PeekingNext;
+use parse_display::{Display as ParseDisplay, FromStr as ParseFromStr};
 use tracing::trace;
 
 /// Parsed arguments for a `cargo build` invocation.
@@ -592,38 +588,17 @@ impl CargoBuildArgument {
 }
 
 /// Color output setting for `--color`.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, ParseDisplay, ParseFromStr)]
+#[display(style = "kebab-case")]
 pub enum ColorWhen {
     Auto,
     Always,
     Never,
 }
 
-impl std::fmt::Display for ColorWhen {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Auto => write!(f, "auto"),
-            Self::Always => write!(f, "always"),
-            Self::Never => write!(f, "never"),
-        }
-    }
-}
-
-impl FromStr for ColorWhen {
-    type Err = color_eyre::Report;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "auto" => Ok(Self::Auto),
-            "always" => Ok(Self::Always),
-            "never" => Ok(Self::Never),
-            _ => bail!("unknown color mode: {s}"),
-        }
-    }
-}
-
 /// Message format for `--message-format`.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, ParseDisplay, ParseFromStr)]
+#[display(style = "kebab-case")]
 pub enum MessageFormat {
     Human,
     Short,
@@ -631,37 +606,9 @@ pub enum MessageFormat {
     JsonDiagnosticShort,
     JsonDiagnosticRenderedAnsi,
     JsonRenderDiagnostics,
+
+    #[display("{0}")]
     Other(String),
-}
-
-impl std::fmt::Display for MessageFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Human => write!(f, "human"),
-            Self::Short => write!(f, "short"),
-            Self::Json => write!(f, "json"),
-            Self::JsonDiagnosticShort => write!(f, "json-diagnostic-short"),
-            Self::JsonDiagnosticRenderedAnsi => write!(f, "json-diagnostic-rendered-ansi"),
-            Self::JsonRenderDiagnostics => write!(f, "json-render-diagnostics"),
-            Self::Other(s) => write!(f, "{s}"),
-        }
-    }
-}
-
-impl FromStr for MessageFormat {
-    type Err = color_eyre::Report;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "human" => Ok(Self::Human),
-            "short" => Ok(Self::Short),
-            "json" => Ok(Self::Json),
-            "json-diagnostic-short" => Ok(Self::JsonDiagnosticShort),
-            "json-diagnostic-rendered-ansi" => Ok(Self::JsonDiagnosticRenderedAnsi),
-            "json-render-diagnostics" => Ok(Self::JsonRenderDiagnostics),
-            other => Ok(Self::Other(other.to_string())),
-        }
-    }
 }
 
 #[cfg(test)]
