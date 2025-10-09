@@ -932,3 +932,42 @@ pub enum RustcErrorFormat {
     #[display("{0}")]
     Other(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use color_eyre::{Result, Section, SectionExt};
+
+    use super::*;
+
+    #[test]
+    fn parse_build_plan_smoke() -> Result<()> {
+        let _ = color_eyre::install();
+
+        let output = std::process::Command::new("cargo")
+            .args(["build", "--build-plan", "-Z", "unstable-options"])
+            .env("RUSTC_BOOTSTRAP", "1")
+            .output()
+            .expect("failed to execute cargo build-plan");
+
+        assert!(
+            output.status.success(),
+            "cargo build-plan failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let build_plan = serde_json::from_slice::<BuildPlan>(&output.stdout)
+            .with_section(|| {
+                String::from_utf8_lossy(&output.stdout)
+                    .to_string()
+                    .header("Build Plan:")
+            })
+            .context("failed to parse build plan JSON")?;
+
+        assert!(
+            !build_plan.invocations.is_empty(),
+            "build plan should have invocations"
+        );
+
+        Ok(())
+    }
+}
