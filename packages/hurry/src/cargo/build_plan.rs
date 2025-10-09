@@ -437,8 +437,9 @@ pub enum RustcEmitFormat {
     #[assoc(default_file_name = format!("{crate_name}.d"))]
     DepInfo,
 
+    // Does not have a default file name as it is "platform and crate-type
+    // dependent" according to `rustc` documentation.
     #[display("link")]
-    #[assoc(default_file_name = format!("{crate_name}.link"))]
     Link,
 
     #[display("llvm-bc")]
