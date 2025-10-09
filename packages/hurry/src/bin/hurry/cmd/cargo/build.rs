@@ -60,13 +60,6 @@ impl Options {
     pub fn parsed_args(&self) -> CargoBuildArguments {
         CargoBuildArguments::from_iter(&self.argv)
     }
-
-    /// Get the profile specified by the user.
-    #[instrument(name = "Options::profile")]
-    pub fn profile(&self) -> Profile {
-        let args = self.parsed_args();
-        args.profile().map(Profile::from).unwrap_or(Profile::Debug)
-    }
 }
 
 #[instrument]
@@ -81,7 +74,7 @@ pub async fn exec(options: Options) -> Result<()> {
     let workspace = Workspace::from_argv(&args)
         .await
         .context("opening workspace")?;
-    let profile = options.profile();
+    let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
 
     // Open cache.
     let cache = CargoCache::open_default(workspace)
