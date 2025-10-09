@@ -712,10 +712,12 @@ impl std::fmt::Display for RustcLinkSpec {
     }
 }
 
-/// Emit spec: `--emit <type>[=<file>]`
+/// Emit spec: `--emit <type>[=<file>]` or `--emit <type1>,<type2>,...`
+///
+/// Rustc supports emitting multiple output types with comma-separated formats.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct RustcEmitSpec {
-    pub format: RustcEmitFormat,
+    pub formats: Vec<RustcEmitFormat>,
     pub file: Option<String>,
 }
 
@@ -724,21 +726,38 @@ impl FromStr for RustcEmitSpec {
 
     fn from_str(s: &str) -> Result<Self> {
         match s.split_once('=') {
-            Some((format, file)) => Ok(Self {
-                format: format.parse()?,
-                file: Some(file.to_string()),
-            }),
-            None => Ok(Self {
-                format: s.parse()?,
-                file: None,
-            }),
+            Some((formats, file)) => {
+                let formats = formats
+                    .split(',')
+                    .map(|f| f.parse().context("parse emit format"))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Self {
+                    formats,
+                    file: Some(file.to_string()),
+                })
+            }
+            None => {
+                let formats = s
+                    .split(',')
+                    .map(|f| f.parse().context("parse emit format"))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Self {
+                    formats,
+                    file: None,
+                })
+            }
         }
     }
 }
 
 impl std::fmt::Display for RustcEmitSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.format)?;
+        for (i, format) in self.formats.iter().enumerate() {
+            if i > 0 {
+                write!(f, ",")?;
+            }
+            write!(f, "{format}")?;
+        }
         if let Some(file) = &self.file {
             write!(f, "={file}")?;
         }
@@ -890,30 +909,39 @@ pub enum RustcEmbedBitcode {
     Other(String),
 }
 
-/// Extern crate spec: `--extern <name>=<path>`
+/// Extern crate spec: `--extern <name>=<path>` or `--extern <name>`
+///
+/// Some builtin crates like `proc_macro` don't require a path.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct RustcExternSpec {
     pub name: String,
-    pub path: String,
+    pub path: Option<String>,
 }
 
 impl FromStr for RustcExternSpec {
     type Err = Report;
 
     fn from_str(s: &str) -> Result<Self> {
-        let (name, path) = s
-            .split_once('=')
-            .ok_or_else(|| Report::msg("extern spec must be name=path"))?;
-        Ok(Self {
-            name: name.to_string(),
-            path: path.to_string(),
-        })
+        match s.split_once('=') {
+            Some((name, path)) => Ok(Self {
+                name: name.to_string(),
+                path: Some(path.to_string()),
+            }),
+            None => Ok(Self {
+                name: s.to_string(),
+                path: None,
+            }),
+        }
     }
 }
 
 impl std::fmt::Display for RustcExternSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}={}", self.name, self.path)
+        write!(f, "{}", self.name)?;
+        if let Some(path) = &self.path {
+            write!(f, "={path}")?;
+        }
+        Ok(())
     }
 }
 
@@ -936,6 +964,7 @@ pub enum RustcErrorFormat {
 #[cfg(test)]
 mod tests {
     use color_eyre::{Result, Section, SectionExt};
+    use pretty_assertions::assert_eq as pretty_assert_eq;
 
     use super::*;
 
@@ -947,7 +976,7 @@ mod tests {
             .args(["build", "--build-plan", "-Z", "unstable-options"])
             .env("RUSTC_BOOTSTRAP", "1")
             .output()
-            .expect("failed to execute cargo build-plan");
+            .expect("execute cargo build-plan");
 
         assert!(
             output.status.success(),
@@ -961,12 +990,305 @@ mod tests {
                     .to_string()
                     .header("Build Plan:")
             })
-            .context("failed to parse build plan JSON")?;
+            .context("parse build plan JSON")?;
 
         assert!(
             !build_plan.invocations.is_empty(),
             "build plan should have invocations"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_lib_build_args() -> Result<()> {
+        let json = include_str!("build_plan/fixtures/lib_build.json");
+        let args = serde_json::from_str::<RustcInvocationArguments>(json)
+            .context("parse lib build args")?;
+
+        let expected = vec![
+            RustcInvocationArgument::CrateName(String::from("base64")),
+            RustcInvocationArgument::Edition(RustcEdition::Edition2018),
+            RustcInvocationArgument::Positional(String::from(
+                "/Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base64-0.22.1/src/lib.rs",
+            )),
+            RustcInvocationArgument::ErrorFormat(RustcErrorFormat::Json),
+            RustcInvocationArgument::Json(String::from(
+                "diagnostic-rendered-ansi,artifacts,future-incompat",
+            )),
+            RustcInvocationArgument::CrateType(RustcCrateType::Lib),
+            RustcInvocationArgument::Emit(RustcEmitSpec {
+                formats: vec![
+                    RustcEmitFormat::DepInfo,
+                    RustcEmitFormat::Metadata,
+                    RustcEmitFormat::Link,
+                ],
+                file: None,
+            }),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::EmbedBitcode(
+                RustcEmbedBitcode::No,
+            )),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::Debuginfo(2)),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::SplitDebuginfo(
+                RustcSplitDebuginfo::Unpacked,
+            )),
+            RustcInvocationArgument::Cfg(RustcCfgSpec(
+                RustcCfgSpecKey::Feature,
+                RustcCfgSpecValue(String::from("alloc")),
+            )),
+            RustcInvocationArgument::Cfg(RustcCfgSpec(
+                RustcCfgSpecKey::Feature,
+                RustcCfgSpecValue(String::from("default")),
+            )),
+            RustcInvocationArgument::Cfg(RustcCfgSpec(
+                RustcCfgSpecKey::Feature,
+                RustcCfgSpecValue(String::from("std")),
+            )),
+            RustcInvocationArgument::CheckCfg(RustcCheckCfgSpec(String::from("cfg(docsrs,test)"))),
+            RustcInvocationArgument::CheckCfg(RustcCheckCfgSpec(String::from(
+                "cfg(feature, values(\"alloc\", \"default\", \"std\"))",
+            ))),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::Metadata(String::from(
+                "d33a4080aa6108f0",
+            ))),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::ExtraFilename(String::from(
+                "-ac0e04d584580346",
+            ))),
+            RustcInvocationArgument::OutDir(String::from(
+                "/Users/jess/projects/hurry/target/debug/deps",
+            )),
+            RustcInvocationArgument::LibrarySearchPath(RustcLibrarySearchPath(
+                RustcLibrarySearchPathKind::Dependency,
+                String::from("/Users/jess/projects/hurry/target/debug/deps"),
+            )),
+            RustcInvocationArgument::CapLints(RustcLintLevel::Allow),
+        ];
+
+        pretty_assert_eq!(args.0, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_build_script_args() -> Result<()> {
+        let json = include_str!("build_plan/fixtures/build_script.json");
+        let args = serde_json::from_str::<RustcInvocationArguments>(json)
+            .context("parse build script args")?;
+
+        let expected = vec![
+            RustcInvocationArgument::CrateName(String::from("build_script_build")),
+            RustcInvocationArgument::Edition(RustcEdition::Edition2018),
+            RustcInvocationArgument::Positional(String::from(
+                "/Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.219/build.rs",
+            )),
+            RustcInvocationArgument::ErrorFormat(RustcErrorFormat::Json),
+            RustcInvocationArgument::Json(String::from(
+                "diagnostic-rendered-ansi,artifacts,future-incompat",
+            )),
+            RustcInvocationArgument::CrateType(RustcCrateType::Bin),
+            RustcInvocationArgument::Emit(RustcEmitSpec {
+                formats: vec![RustcEmitFormat::DepInfo, RustcEmitFormat::Link],
+                file: None,
+            }),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::EmbedBitcode(
+                RustcEmbedBitcode::No,
+            )),
+            RustcInvocationArgument::Cfg(RustcCfgSpec(
+                RustcCfgSpecKey::Feature,
+                RustcCfgSpecValue(String::from("alloc")),
+            )),
+            RustcInvocationArgument::Cfg(RustcCfgSpec(
+                RustcCfgSpecKey::Feature,
+                RustcCfgSpecValue(String::from("default")),
+            )),
+            RustcInvocationArgument::Cfg(RustcCfgSpec(
+                RustcCfgSpecKey::Feature,
+                RustcCfgSpecValue(String::from("derive")),
+            )),
+            RustcInvocationArgument::Cfg(RustcCfgSpec(
+                RustcCfgSpecKey::Feature,
+                RustcCfgSpecValue(String::from("rc")),
+            )),
+            RustcInvocationArgument::Cfg(RustcCfgSpec(
+                RustcCfgSpecKey::Feature,
+                RustcCfgSpecValue(String::from("serde_derive")),
+            )),
+            RustcInvocationArgument::Cfg(RustcCfgSpec(
+                RustcCfgSpecKey::Feature,
+                RustcCfgSpecValue(String::from("std")),
+            )),
+            RustcInvocationArgument::CheckCfg(RustcCheckCfgSpec(String::from("cfg(docsrs,test)"))),
+            RustcInvocationArgument::CheckCfg(RustcCheckCfgSpec(String::from(
+                "cfg(feature, values(\"alloc\", \"default\", \"derive\", \"rc\", \"serde_derive\", \"std\", \"unstable\"))",
+            ))),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::Metadata(String::from(
+                "b1f9da5bac2a885e",
+            ))),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::ExtraFilename(String::from(
+                "-4403cda6320c8d3c",
+            ))),
+            RustcInvocationArgument::OutDir(String::from(
+                "/Users/jess/projects/hurry/target/debug/build/serde-4403cda6320c8d3c",
+            )),
+            RustcInvocationArgument::LibrarySearchPath(RustcLibrarySearchPath(
+                RustcLibrarySearchPathKind::Dependency,
+                String::from("/Users/jess/projects/hurry/target/debug/deps"),
+            )),
+            RustcInvocationArgument::CapLints(RustcLintLevel::Allow),
+        ];
+
+        pretty_assert_eq!(args.0, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_bin_target_args() -> Result<()> {
+        let json = include_str!("build_plan/fixtures/bin_target.json");
+        let args = serde_json::from_str::<RustcInvocationArguments>(json)
+            .context("parse bin target args")?;
+
+        let expected = vec![
+            RustcInvocationArgument::CrateName(String::from("hurry")),
+            RustcInvocationArgument::Edition(RustcEdition::Edition2024),
+            RustcInvocationArgument::Positional(String::from(
+                "packages/hurry/src/bin/hurry/main.rs",
+            )),
+            RustcInvocationArgument::ErrorFormat(RustcErrorFormat::Json),
+            RustcInvocationArgument::Json(String::from(
+                "diagnostic-rendered-ansi,artifacts,future-incompat",
+            )),
+            RustcInvocationArgument::CrateType(RustcCrateType::Bin),
+            RustcInvocationArgument::Emit(RustcEmitSpec {
+                formats: vec![RustcEmitFormat::DepInfo, RustcEmitFormat::Link],
+                file: None,
+            }),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::EmbedBitcode(
+                RustcEmbedBitcode::No,
+            )),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::Debuginfo(2)),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::SplitDebuginfo(
+                RustcSplitDebuginfo::Unpacked,
+            )),
+            RustcInvocationArgument::Cfg(RustcCfgSpec(
+                RustcCfgSpecKey::Feature,
+                RustcCfgSpecValue(String::from("default")),
+            )),
+            RustcInvocationArgument::CheckCfg(RustcCheckCfgSpec(String::from("cfg(docsrs,test)"))),
+            RustcInvocationArgument::CheckCfg(RustcCheckCfgSpec(String::from(
+                "cfg(feature, values(\"default\"))",
+            ))),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::Metadata(String::from(
+                "00796917b4ea58e8",
+            ))),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::ExtraFilename(String::from(
+                "-e1b02ccff50f16f0",
+            ))),
+            RustcInvocationArgument::OutDir(String::from(
+                "/Users/jess/projects/hurry/target/debug/deps",
+            )),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::Other(
+                String::from("incremental"),
+                Some(String::from(
+                    "/Users/jess/projects/hurry/target/debug/incremental",
+                )),
+            )),
+            RustcInvocationArgument::LibrarySearchPath(RustcLibrarySearchPath(
+                RustcLibrarySearchPathKind::Dependency,
+                String::from("/Users/jess/projects/hurry/target/debug/deps"),
+            )),
+            RustcInvocationArgument::Extern(RustcExternSpec {
+                name: String::from("async_walkdir"),
+                path: Some(String::from(
+                    "/Users/jess/projects/hurry/target/debug/deps/libasync_walkdir-e2da76a81aef6c7d.rlib",
+                )),
+            }),
+            RustcInvocationArgument::Extern(RustcExternSpec {
+                name: String::from("tokio"),
+                path: Some(String::from(
+                    "/Users/jess/projects/hurry/target/debug/deps/libtokio-d6c67f45b37bedc2.rlib",
+                )),
+            }),
+            RustcInvocationArgument::CapLints(RustcLintLevel::Allow),
+        ];
+
+        pretty_assert_eq!(args.0, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_proc_macro_args() -> Result<()> {
+        let json = include_str!("build_plan/fixtures/proc_macro.json");
+        let args = serde_json::from_str::<RustcInvocationArguments>(json)
+            .context("parse proc-macro args")?;
+
+        let expected = vec![
+            RustcInvocationArgument::CrateName(String::from("serde_derive")),
+            RustcInvocationArgument::Edition(RustcEdition::Edition2015),
+            RustcInvocationArgument::Positional(String::from(
+                "/Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_derive-1.0.219/src/lib.rs",
+            )),
+            RustcInvocationArgument::ErrorFormat(RustcErrorFormat::Json),
+            RustcInvocationArgument::Json(String::from(
+                "diagnostic-rendered-ansi,artifacts,future-incompat",
+            )),
+            RustcInvocationArgument::CrateType(RustcCrateType::ProcMacro),
+            RustcInvocationArgument::Emit(RustcEmitSpec {
+                formats: vec![RustcEmitFormat::DepInfo, RustcEmitFormat::Link],
+                file: None,
+            }),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::PreferDynamic),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::EmbedBitcode(
+                RustcEmbedBitcode::No,
+            )),
+            RustcInvocationArgument::Cfg(RustcCfgSpec(
+                RustcCfgSpecKey::Feature,
+                RustcCfgSpecValue(String::from("default")),
+            )),
+            RustcInvocationArgument::CheckCfg(RustcCheckCfgSpec(String::from("cfg(docsrs,test)"))),
+            RustcInvocationArgument::CheckCfg(RustcCheckCfgSpec(String::from(
+                "cfg(feature, values(\"default\", \"deserialize_in_place\"))",
+            ))),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::Metadata(String::from(
+                "7b47d0b71c75bce9",
+            ))),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::ExtraFilename(String::from(
+                "-1fa31a1e1f706456",
+            ))),
+            RustcInvocationArgument::OutDir(String::from(
+                "/Users/jess/projects/hurry/target/debug/deps",
+            )),
+            RustcInvocationArgument::LibrarySearchPath(RustcLibrarySearchPath(
+                RustcLibrarySearchPathKind::Dependency,
+                String::from("/Users/jess/projects/hurry/target/debug/deps"),
+            )),
+            RustcInvocationArgument::Extern(RustcExternSpec {
+                name: String::from("proc_macro2"),
+                path: Some(String::from(
+                    "/Users/jess/projects/hurry/target/debug/deps/libproc_macro2-997ccdc46b2e4671.rlib",
+                )),
+            }),
+            RustcInvocationArgument::Extern(RustcExternSpec {
+                name: String::from("quote"),
+                path: Some(String::from(
+                    "/Users/jess/projects/hurry/target/debug/deps/libquote-49b7c12bb0a8f649.rlib",
+                )),
+            }),
+            RustcInvocationArgument::Extern(RustcExternSpec {
+                name: String::from("syn"),
+                path: Some(String::from(
+                    "/Users/jess/projects/hurry/target/debug/deps/libsyn-ef32486969275305.rlib",
+                )),
+            }),
+            RustcInvocationArgument::Extern(RustcExternSpec {
+                name: String::from("proc_macro"),
+                path: None,
+            }),
+            RustcInvocationArgument::CapLints(RustcLintLevel::Allow),
+        ];
+
+        pretty_assert_eq!(args.0, expected);
 
         Ok(())
     }
