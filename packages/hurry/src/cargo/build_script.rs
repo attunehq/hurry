@@ -13,7 +13,12 @@ use tap::TapFallible;
 use tracing::{instrument, trace};
 
 use super::workspace::ProfileDir;
-use crate::{Locked, cargo::{CargoBuildArguments, QualifiedPath}, fs, path::AbsFilePath};
+use crate::{
+    Locked,
+    cargo::{CargoBuildArguments, QualifiedPath},
+    fs,
+    path::AbsFilePath,
+};
 
 /// Represents a "root output" file, used for build scripts.
 ///
