@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr, sync::LazyLock};
+use std::{collections::HashMap, str::FromStr};
 
 use color_eyre::{Report, Result, eyre::Context};
 use derive_more::Display;
@@ -84,6 +84,7 @@ impl<'de> Deserialize<'de> for RustcInvocationArguments {
             .peekable();
         let mut parsed = Vec::new();
         while let Some(arg) = raw.next() {
+            let arg = RustcInvocationArgument::alias(&arg);
             if !RustcInvocationArgument::flag_accepts_value(&arg) {
                 parsed.push(RustcInvocationArgument::parse(&arg, None));
                 continue;
@@ -260,18 +261,6 @@ impl RustcInvocationArgument {
     const LIBRARY_SEARCH: &'static str = "--library-search";
     const LINK: &'static str = "--link";
     const VERBOSE: &'static str = "--verbose";
-    const ALIASES: &'static [(&'static str, &'static str)] = &[
-        ("-A", "--allow"),
-        ("-W", "--warn"),
-        ("-D", "--deny"),
-        ("-F", "--forbid"),
-        ("-C", "--codegen"),
-        ("-L", "--library-search"),
-        ("-l", "--link"),
-        ("-v", "--verbose"),
-        ("-g", "--codegen=debuginfo=2"),
-        ("-O", "--codegen=opt-level=3"),
-    ];
 
     fn is_flag(flag: &str) -> bool {
         lazy_regex::regex_is_match!(r#"(?:^--|^-).+"#, flag)
@@ -279,7 +268,7 @@ impl RustcInvocationArgument {
 
     fn flag_accepts_value(flag: &str) -> bool {
         Self::is_flag(flag)
-            && match Self::alias(flag) {
+            && match flag {
                 Self::TEST => false,
                 Self::VERBOSE => false,
                 _ => true,
@@ -292,8 +281,6 @@ impl RustcInvocationArgument {
     }
 
     fn parse(flag: &str, value: Option<&str>) -> Self {
-        let flag = Self::alias(flag);
-
         let Some(value) = value else {
             return match flag {
                 Self::TEST => Self::Test,
@@ -346,9 +333,19 @@ impl RustcInvocationArgument {
     }
 
     fn alias(s: &str) -> &str {
-        static ALIASES: LazyLock<HashMap<&str, &str>> =
-            LazyLock::new(|| HashMap::from_iter(RustcInvocationArgument::ALIASES.iter().copied()));
-        ALIASES.get(s).as_deref().unwrap_or(&s)
+        match s {
+            "-A" => "--allow",
+            "-W" => "--warn",
+            "-D" => "--deny",
+            "-F" => "--forbid",
+            "-C" => "--codegen",
+            "-L" => "--library-search",
+            "-l" => "--link",
+            "-v" => "--verbose",
+            "-g" => "--codegen=debuginfo=2",
+            "-O" => "--codegen=opt-level=3",
+            _ => s,
+        }
     }
 }
 
@@ -823,7 +820,7 @@ pub enum RustcLintLevel {
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum RustcCodegenOption {
     /// `debuginfo=<level>`
-    Debuginfo(u8),
+    Debuginfo(String),
 
     /// `opt-level=<level>`
     OptLevel(String),
@@ -852,7 +849,7 @@ impl FromStr for RustcCodegenOption {
 
     fn from_str(s: &str) -> Result<Self> {
         match s.split_once('=') {
-            Some(("debuginfo", level)) => Ok(Self::Debuginfo(level.parse()?)),
+            Some(("debuginfo", level)) => Ok(Self::Debuginfo(level.to_string())),
             Some(("opt-level", level)) => Ok(Self::OptLevel(level.to_string())),
             Some(("metadata", value)) => Ok(Self::Metadata(value.to_string())),
             Some(("extra-filename", value)) => Ok(Self::ExtraFilename(value.to_string())),
@@ -1029,7 +1026,7 @@ mod tests {
             RustcInvocationArgument::Codegen(RustcCodegenOption::EmbedBitcode(
                 RustcEmbedBitcode::No,
             )),
-            RustcInvocationArgument::Codegen(RustcCodegenOption::Debuginfo(2)),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::Debuginfo(String::from("2"))),
             RustcInvocationArgument::Codegen(RustcCodegenOption::SplitDebuginfo(
                 RustcSplitDebuginfo::Unpacked,
             )),
@@ -1167,7 +1164,7 @@ mod tests {
             RustcInvocationArgument::Codegen(RustcCodegenOption::EmbedBitcode(
                 RustcEmbedBitcode::No,
             )),
-            RustcInvocationArgument::Codegen(RustcCodegenOption::Debuginfo(2)),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::Debuginfo(String::from("2"))),
             RustcInvocationArgument::Codegen(RustcCodegenOption::SplitDebuginfo(
                 RustcSplitDebuginfo::Unpacked,
             )),
@@ -1288,6 +1285,92 @@ mod tests {
             }),
             RustcInvocationArgument::CapLints(RustcLintLevel::Allow),
         ];
+
+        pretty_assert_eq!(args.0, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_short_flag_aliases() -> Result<()> {
+        let json = r#"["-A","unused","-W","dead-code","-D","warnings","-F","unsafe-code"]"#;
+        let args = serde_json::from_str::<RustcInvocationArguments>(json)
+            .context("parse short flag aliases")?;
+
+        let expected = vec![
+            RustcInvocationArgument::Allow(String::from("unused")),
+            RustcInvocationArgument::Warn(String::from("dead-code")),
+            RustcInvocationArgument::Deny(String::from("warnings")),
+            RustcInvocationArgument::Forbid(String::from("unsafe-code")),
+        ];
+
+        pretty_assert_eq!(args.0, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_codegen_aliases() -> Result<()> {
+        let json = r#"["-C","opt-level=3","-g","-O"]"#;
+        let args = serde_json::from_str::<RustcInvocationArguments>(json)
+            .context("parse codegen aliases")?;
+
+        let expected = vec![
+            RustcInvocationArgument::Codegen(RustcCodegenOption::OptLevel(String::from("3"))),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::Debuginfo(String::from("2"))),
+            RustcInvocationArgument::Codegen(RustcCodegenOption::OptLevel(String::from("3"))),
+        ];
+
+        pretty_assert_eq!(args.0, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_library_search_alias() -> Result<()> {
+        let json = r#"["-L","dependency=/path/to/deps"]"#;
+        let args = serde_json::from_str::<RustcInvocationArguments>(json)
+            .context("parse library search alias")?;
+
+        let expected = vec![RustcInvocationArgument::LibrarySearchPath(
+            RustcLibrarySearchPath(
+                RustcLibrarySearchPathKind::Dependency,
+                String::from("/path/to/deps"),
+            ),
+        )];
+
+        pretty_assert_eq!(args.0, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_link_alias() -> Result<()> {
+        let json = r#"["-l","static:+whole-archive=mylib"]"#;
+        let args =
+            serde_json::from_str::<RustcInvocationArguments>(json).context("parse link alias")?;
+
+        let expected = vec![RustcInvocationArgument::Link(RustcLinkSpec {
+            kind: Some(RustcLinkKind::Static),
+            modifiers: vec![RustcLinkModifier::WholeArchive(
+                RustcLinkModifierState::Enabled,
+            )],
+            name: String::from("mylib"),
+            rename: None,
+        })];
+
+        pretty_assert_eq!(args.0, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_verbose_alias() -> Result<()> {
+        let json = r#"["-v"]"#;
+        let args = serde_json::from_str::<RustcInvocationArguments>(json)
+            .context("parse verbose alias")?;
+
+        let expected = vec![RustcInvocationArgument::Verbose];
 
         pretty_assert_eq!(args.0, expected);
 
