@@ -5,7 +5,7 @@ use hurry::{
 use location_macros::workspace_dir;
 use tempfile::TempDir;
 
-pub mod cargo;
+// pub mod cargo;
 pub mod fs;
 
 #[track_caller]
