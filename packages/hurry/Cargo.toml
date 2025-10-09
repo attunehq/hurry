@@ -64,6 +64,7 @@ macro_rules_attribute = "0.2.2"
 serde_plain = "1.0.2"
 winnow = "0.7.13"
 parse-display = "0.10.0"
+lazy-regex = { version = "3.4.1", features = ["regex", "std"] }
 
 [dev-dependencies]
 async-walkdir.workspace = true

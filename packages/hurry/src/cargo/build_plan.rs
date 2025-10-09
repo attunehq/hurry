@@ -1,10 +1,12 @@
-use std::{collections::HashMap, str::FromStr};
+use std::{collections::HashMap, str::FromStr, sync::LazyLock};
 
 use color_eyre::{Report, Result, eyre::Context};
 use derive_more::Display;
 use enum_assoc::Assoc;
+use itertools::PeekingNext;
 use parse_display::{Display as ParseDisplay, FromStr as ParseFromStr};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use tracing::trace;
 
 use crate::cargo::unit_graph::CargoCompileMode;
 
@@ -30,18 +32,90 @@ pub struct BuildPlanInvocation {
     // enumerate libraries being linked in.
     pub links: HashMap<String, String>,
     pub program: String,
-    pub args: Vec<String>,
+    pub args: RustcInvocationArguments,
     pub env: HashMap<String, String>,
     pub cwd: String,
 }
 
+/// Ordered list of arguments for a `rustc` invocation.
+///
+/// ## Parsing
+///
+/// This type parses a list of strings as emitted by the Cargo build plan. Each
+/// string is assumed to be a distinct argument to a `rustc` invocation; these
+/// are referred to as "items" below.
+///
+/// This type handles parsing both space-separated (`--flag value`) and
+/// equals-separated (`--flag=value`) flag formats. For flags without values,
+/// parses the flag standalone (e.g. `--flag`).
+///
+/// Since we strive to handle arbitrary input this does rely on some heuristics.
+/// For each new item:
+/// - Whether the item is a flag is determined by checking if it starts with
+///   either `--` or `-`; if it does then it is considered a flag.
+/// - If the item is not a flag, it is parsed as a positional argument.
+/// - If the flag is known to not accept a value, it is parsed as a positional
+///   argument (for example, `--verbose`).
+/// - If the flag has an equals-separated value, it is parsed
+///   as a flag and value immediately (for example, `--flag=value`).
+/// - Otherwise, the next item is checked to see if it is also a flag.
+///   - If it is, the current flag is parsed as a positional argument and the
+///   and the process starts over from the top for the next flag.
+///   - If the next item is not a flag, the pair of items are parsed as a flag
+///     and value (for example, `--flag value`).
+#[derive(Debug)]
+pub struct RustcInvocationArguments(Vec<RustcInvocationArgument>);
+
+impl IntoIterator for RustcInvocationArguments {
+    type Item = RustcInvocationArgument;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'de> Deserialize<'de> for RustcInvocationArguments {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut raw = Vec::<String>::deserialize(deserializer)?
+            .into_iter()
+            .peekable();
+        let mut parsed = Vec::new();
+        while let Some(arg) = raw.next() {
+            if !RustcInvocationArgument::flag_accepts_value(&arg) {
+                parsed.push(RustcInvocationArgument::parse(&arg, None));
+                continue;
+            }
+
+            if let Some((flag, value)) = RustcInvocationArgument::split_equals(&arg) {
+                parsed.push(RustcInvocationArgument::parse(flag, Some(value)));
+                continue;
+            }
+
+            match raw.peeking_next(|upcoming| !RustcInvocationArgument::is_flag(upcoming)) {
+                Some(upcoming) => {
+                    parsed.push(RustcInvocationArgument::parse(&arg, Some(&upcoming)));
+                }
+                None => {
+                    parsed.push(RustcInvocationArgument::parse(&arg, None));
+                }
+            }
+        }
+
+        Ok(Self(parsed))
+    }
+}
+
 /// A parsed argument for a `rustc` invocation.
 ///
-/// ## Parsing format
+/// ## Parsing
 ///
-/// For flags with values, handles parsing both space-separated (`--flag value`)
-/// and equals-separated (`--flag=value`) flag formats. For flags without
-/// values, parses the flag standalone (e.g. `--flag`).
+/// Since parsing arguments relies on state over multiple items in a collection
+/// of arguments, this type does not handle parsing fully on its own (which is
+/// why it doesn't implement `Deserialize`). Instead, use
+/// `RustcInvocationArguments` to parse a collection of this type.
 ///
 /// ## Rendering format
 ///
@@ -141,25 +215,141 @@ pub enum RustcInvocationArgument {
     /// `-C <opt>[=<value>]` or `--codegen <opt>[=<value>]`
     Codegen(RustcCodegenOption),
 
-    /// `-g` (alias for `-C debuginfo=2`)
-    /// Parsed as `Codegen(Debuginfo(2))`
+    /// `--extern <name>=<path>`
+    Extern(RustcExternSpec),
 
-    /// `-O` (alias for `-C opt-level=3`)
-    /// Parsed as `Codegen(OptLevel(3))`
+    /// `--error-format <format>`
+    ErrorFormat(RustcErrorFormat),
+
+    /// `--json <options>`
+    Json(String),
 
     /// `-v` or `--verbose`
     Verbose,
 
-    /// Any other unrecognized variant.
-    ///
-    /// `key` is the argument key and `value` is the argument value; e.g. these
-    /// are all equivalent:
-    /// ```not_rust
-    /// "--someflag=somevalue"
-    /// ["--someflag", "somevalue"]
-    /// Other("--someflag", "somevalue")
-    /// ```
-    Other(String, String),
+    /// Positional argument without a flag
+    Positional(String),
+
+    /// Any generic argument and flag that isn't explicitly handled.
+    Generic(String, String),
+}
+
+impl RustcInvocationArgument {
+    const CFG: &'static str = "--cfg";
+    const CHECK_CFG: &'static str = "--check-cfg";
+    const CRATE_NAME: &'static str = "--crate-name";
+    const CRATE_TYPE: &'static str = "--crate-type";
+    const EDITION: &'static str = "--edition";
+    const EMIT: &'static str = "--emit";
+    const PRINT: &'static str = "--print";
+    const OUTPUT: &'static str = "-o";
+    const OUT_DIR: &'static str = "--out-dir";
+    const EXPLAIN: &'static str = "--explain";
+    const TEST: &'static str = "--test";
+    const TARGET: &'static str = "--target";
+    const ALLOW: &'static str = "--allow";
+    const WARN: &'static str = "--warn";
+    const FORCE_WARN: &'static str = "--force-warn";
+    const DENY: &'static str = "--deny";
+    const FORBID: &'static str = "--forbid";
+    const CAP_LINTS: &'static str = "--cap-lints";
+    const CODEGEN: &'static str = "--codegen";
+    const EXTERN: &'static str = "--extern";
+    const ERROR_FORMAT: &'static str = "--error-format";
+    const JSON: &'static str = "--json";
+    const LIBRARY_SEARCH: &'static str = "--library-search";
+    const LINK: &'static str = "--link";
+    const VERBOSE: &'static str = "--verbose";
+    const ALIASES: &'static [(&'static str, &'static str)] = &[
+        ("-A", "--allow"),
+        ("-W", "--warn"),
+        ("-D", "--deny"),
+        ("-F", "--forbid"),
+        ("-C", "--codegen"),
+        ("-L", "--library-search"),
+        ("-l", "--link"),
+        ("-v", "--verbose"),
+        ("-g", "--codegen=debuginfo=2"),
+        ("-O", "--codegen=opt-level=3"),
+    ];
+
+    fn is_flag(flag: &str) -> bool {
+        lazy_regex::regex_is_match!(r#"(?:^--|^-).+"#, flag)
+    }
+
+    fn flag_accepts_value(flag: &str) -> bool {
+        Self::is_flag(flag)
+            && match Self::alias(flag) {
+                Self::TEST => false,
+                Self::VERBOSE => false,
+                _ => true,
+            }
+    }
+
+    fn split_equals(flag: &str) -> Option<(&str, &str)> {
+        lazy_regex::regex_captures!(r#"^(?P<flag>[^=]+)=(?P<value>.+)$"#, flag)
+            .map(|(_, flag, value)| (flag, value))
+    }
+
+    fn parse(flag: &str, value: Option<&str>) -> Self {
+        let flag = Self::alias(flag);
+
+        let Some(value) = value else {
+            return match flag {
+                Self::TEST => Self::Test,
+                Self::VERBOSE => Self::Verbose,
+                _ => Self::Positional(flag.to_string()),
+            };
+        };
+
+        match Self::parse_inner(flag, value) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                trace!(
+                    ?flag,
+                    ?value,
+                    ?err,
+                    "failed to parse rustc invocation argument"
+                );
+                Self::Generic(flag.to_string(), value.to_string())
+            }
+        }
+    }
+
+    fn parse_inner(flag: &str, value: &str) -> Result<Self> {
+        match flag {
+            Self::CFG => Ok(Self::Cfg(value.parse()?)),
+            Self::CHECK_CFG => Ok(Self::CheckCfg(value.parse()?)),
+            Self::CRATE_NAME => Ok(Self::CrateName(value.to_string())),
+            Self::CRATE_TYPE => Ok(Self::CrateType(value.parse()?)),
+            Self::EDITION => Ok(Self::Edition(value.parse()?)),
+            Self::EMIT => Ok(Self::Emit(value.parse()?)),
+            Self::PRINT => Ok(Self::Print(value.parse()?)),
+            Self::OUTPUT => Ok(Self::Output(value.to_string())),
+            Self::OUT_DIR => Ok(Self::OutDir(value.to_string())),
+            Self::EXPLAIN => Ok(Self::Explain(value.to_string())),
+            Self::TARGET => Ok(Self::Target(value.to_string())),
+            Self::ALLOW => Ok(Self::Allow(value.to_string())),
+            Self::WARN => Ok(Self::Warn(value.to_string())),
+            Self::FORCE_WARN => Ok(Self::ForceWarn(value.to_string())),
+            Self::DENY => Ok(Self::Deny(value.to_string())),
+            Self::FORBID => Ok(Self::Forbid(value.to_string())),
+            Self::CAP_LINTS => Ok(Self::CapLints(value.parse()?)),
+            Self::CODEGEN => Ok(Self::Codegen(value.parse()?)),
+            Self::EXTERN => Ok(Self::Extern(value.parse()?)),
+            Self::ERROR_FORMAT => Ok(Self::ErrorFormat(value.parse()?)),
+            Self::JSON => Ok(Self::Json(value.to_string())),
+            Self::LIBRARY_SEARCH => Ok(Self::LibrarySearchPath(value.parse()?)),
+            Self::LINK => Ok(Self::Link(value.parse()?)),
+            _ => Ok(Self::Generic(flag.to_string(), value.to_string())),
+        }
+    }
+
+    fn alias(s: &str) -> &str {
+        static ALIASES: LazyLock<HashMap<&str, &str>> =
+            LazyLock::new(|| HashMap::from_iter(RustcInvocationArgument::ALIASES.iter().copied()));
+        ALIASES.get(s).as_deref().unwrap_or(&s)
+    }
 }
 
 /// Type of crate for the compiler to emit.
@@ -618,6 +808,21 @@ pub enum RustcCodegenOption {
     /// `opt-level=<level>`
     OptLevel(String),
 
+    /// `metadata=<value>`
+    Metadata(String),
+
+    /// `extra-filename=<value>`
+    ExtraFilename(String),
+
+    /// `split-debuginfo=<value>`
+    SplitDebuginfo(RustcSplitDebuginfo),
+
+    /// `embed-bitcode=<value>`
+    EmbedBitcode(RustcEmbedBitcode),
+
+    /// `prefer-dynamic`
+    PreferDynamic,
+
     /// Any other codegen option
     Other(String, Option<String>),
 }
@@ -629,7 +834,12 @@ impl FromStr for RustcCodegenOption {
         match s.split_once('=') {
             Some(("debuginfo", level)) => Ok(Self::Debuginfo(level.parse()?)),
             Some(("opt-level", level)) => Ok(Self::OptLevel(level.to_string())),
+            Some(("metadata", value)) => Ok(Self::Metadata(value.to_string())),
+            Some(("extra-filename", value)) => Ok(Self::ExtraFilename(value.to_string())),
+            Some(("split-debuginfo", value)) => Ok(Self::SplitDebuginfo(value.parse()?)),
+            Some(("embed-bitcode", value)) => Ok(Self::EmbedBitcode(value.parse()?)),
             Some((key, value)) => Ok(Self::Other(key.to_string(), Some(value.to_string()))),
+            None if s == "prefer-dynamic" => Ok(Self::PreferDynamic),
             None => Ok(Self::Other(s.to_string(), None)),
         }
     }
@@ -640,8 +850,85 @@ impl std::fmt::Display for RustcCodegenOption {
         match self {
             Self::Debuginfo(level) => write!(f, "debuginfo={level}"),
             Self::OptLevel(level) => write!(f, "opt-level={level}"),
+            Self::Metadata(value) => write!(f, "metadata={value}"),
+            Self::ExtraFilename(value) => write!(f, "extra-filename={value}"),
+            Self::SplitDebuginfo(value) => write!(f, "split-debuginfo={value}"),
+            Self::EmbedBitcode(value) => write!(f, "embed-bitcode={value}"),
+            Self::PreferDynamic => write!(f, "prefer-dynamic"),
             Self::Other(key, Some(value)) => write!(f, "{key}={value}"),
             Self::Other(key, None) => write!(f, "{key}"),
         }
     }
+}
+
+/// Split debuginfo mode.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, ParseDisplay, ParseFromStr)]
+pub enum RustcSplitDebuginfo {
+    #[display("off")]
+    Off,
+
+    #[display("packed")]
+    Packed,
+
+    #[display("unpacked")]
+    Unpacked,
+
+    #[display("{0}")]
+    Other(String),
+}
+
+/// Embed bitcode mode.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, ParseDisplay, ParseFromStr)]
+pub enum RustcEmbedBitcode {
+    #[display("yes")]
+    Yes,
+
+    #[display("no")]
+    No,
+
+    #[display("{0}")]
+    Other(String),
+}
+
+/// Extern crate spec: `--extern <name>=<path>`
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+pub struct RustcExternSpec {
+    pub name: String,
+    pub path: String,
+}
+
+impl FromStr for RustcExternSpec {
+    type Err = Report;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let (name, path) = s
+            .split_once('=')
+            .ok_or_else(|| Report::msg("extern spec must be name=path"))?;
+        Ok(Self {
+            name: name.to_string(),
+            path: path.to_string(),
+        })
+    }
+}
+
+impl std::fmt::Display for RustcExternSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}={}", self.name, self.path)
+    }
+}
+
+/// Error format for compiler output.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, ParseDisplay, ParseFromStr)]
+pub enum RustcErrorFormat {
+    #[display("human")]
+    Human,
+
+    #[display("json")]
+    Json,
+
+    #[display("short")]
+    Short,
+
+    #[display("{0}")]
+    Other(String),
 }
