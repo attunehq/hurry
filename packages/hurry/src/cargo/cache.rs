@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, str::FromStr as _};
+use std::{collections::HashMap, fmt::Debug, path::PathBuf, str::FromStr as _};
 
 use cargo_metadata::TargetKind;
 use color_eyre::{
@@ -15,7 +15,8 @@ use tracing::{debug, instrument, trace};
 use crate::{
     Locked,
     cargo::{
-        self, BuildPlan, CargoCompileMode, Profile, ProfileDir, RustcMetadata, UnitGraph, Workspace,
+        self, BuildPlan, CargoBuildArguments, CargoCompileMode, Profile, ProfileDir, RustcMetadata,
+        UnitGraph, Workspace,
     },
     cas::FsCas,
     fs, mk_rel_dir, mk_rel_file,
@@ -67,8 +68,12 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::artifacts")]
-    pub async fn artifact_plan(&self, profile: &Profile) -> Result<Vec<ArtifactPlan>> {
-        let rustc = RustcMetadata::from_argv(&self.ws.root, &[])
+    pub async fn artifact_plan(
+        &self,
+        profile: &Profile,
+        args: impl AsRef<CargoBuildArguments> + Debug,
+    ) -> Result<Vec<ArtifactPlan>> {
+        let rustc = RustcMetadata::from_argv(&self.ws.root, args)
             .await
             .context("parsing rustc metadata")?;
         trace!(?rustc, "rustc metadata");

@@ -1,7 +1,7 @@
-use std::marker::PhantomData;
+use std::{fmt::Debug, marker::PhantomData};
 
 use color_eyre::{Result, eyre::Context};
-use derive_more::{Debug, Display};
+use derive_more::{Debug as DebugExt, Display};
 use location_macros::workspace_dir;
 use tap::{Pipe as _, Tap as _, TapFallible as _};
 use tokio::task::spawn_blocking;
@@ -14,7 +14,7 @@ use crate::{
     path::{AbsDirPath, JoinWith as _, TryJoinWith as _},
 };
 
-use super::{Profile, read_argv};
+use super::{CargoBuildArguments, Profile};
 
 /// Represents a Cargo workspace with caching metadata.
 ///
@@ -24,7 +24,7 @@ use super::{Profile, read_argv};
 ///
 /// Note: For hurry's purposes, workspace and non-workspace projects
 /// are treated identically.
-#[derive(Clone, Eq, PartialEq, Debug, Display)]
+#[derive(Clone, Eq, PartialEq, DebugExt, Display)]
 #[display("{root}")]
 pub struct Workspace {
     /// The root directory of the workspace.
@@ -42,14 +42,18 @@ pub struct Workspace {
 impl Workspace {
     /// Create a workspace by parsing `cargo metadata` from the given directory.
     #[instrument(name = "Workspace::from_argv_in_dir")]
-    pub async fn from_argv_in_dir(path: &AbsDirPath, argv: &[String]) -> Result<Self> {
+    pub async fn from_argv_in_dir(
+        path: &AbsDirPath,
+        args: impl AsRef<CargoBuildArguments> + Debug,
+    ) -> Result<Self> {
+        let args = args.as_ref();
         // TODO: Maybe we should just replicate this logic and perform it
         // statically using filesystem operations instead of shelling out? This
         // costs something on the order of 200ms, which is not _terrible_ but
         // feels much slower than if we just did our own filesystem reads,
         // especially since we don't actually use any of the logic except the
         // paths.
-        let manifest_path = read_argv(argv, "--manifest-path").map(String::from);
+        let manifest_path = args.manifest_path().map(String::from);
         let cmd_current_dir = path.as_std_path().to_path_buf();
         let metadata = spawn_blocking(move || -> Result<_> {
             cargo_metadata::MetadataCommand::new()
@@ -94,9 +98,9 @@ impl Workspace {
     /// Convenience method that calls `from_argv_in_dir`
     /// using the current working directory as the workspace root.
     #[instrument(name = "Workspace::from_argv")]
-    pub async fn from_argv(argv: &[String]) -> Result<Self> {
+    pub async fn from_argv(args: impl AsRef<CargoBuildArguments> + Debug) -> Result<Self> {
         let pwd = AbsDirPath::current().context("get working directory")?;
-        Self::from_argv_in_dir(&pwd, argv).await
+        Self::from_argv_in_dir(&pwd, args).await
     }
 
     /// Initialize the target directory structure for a build profile.
@@ -160,7 +164,7 @@ impl Workspace {
 /// - `Unlocked`: No file operations allowed
 /// - `Locked`: Exclusive access with file index and directory
 /// - Locking is compatible with Cargo's own locking mechanism
-#[derive(Debug, Clone)]
+#[derive(DebugExt, Clone)]
 pub struct ProfileDir<'ws, State> {
     #[debug(skip)]
     state: PhantomData<State>,

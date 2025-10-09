@@ -30,6 +30,11 @@ use tracing::trace;
 pub struct CargoBuildArguments(Vec<CargoBuildArgument>);
 
 impl CargoBuildArguments {
+    /// Create an empty set of arguments.
+    pub fn empty() -> Self {
+        Self(Vec::new())
+    }
+
     /// Parse from an iterator of strings.
     pub fn from_iter(args: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         let mut raw = args.into_iter().map(|s| s.as_ref().to_string()).peekable();
@@ -171,6 +176,18 @@ impl IntoIterator for CargoBuildArguments {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
+    }
+}
+
+impl AsRef<CargoBuildArguments> for CargoBuildArguments {
+    fn as_ref(&self) -> &CargoBuildArguments {
+        self
+    }
+}
+
+impl From<&CargoBuildArguments> for CargoBuildArguments {
+    fn from(args: &CargoBuildArguments) -> Self {
+        args.clone()
     }
 }
 

@@ -13,7 +13,7 @@ use tap::TapFallible;
 use tracing::{instrument, trace};
 
 use super::workspace::ProfileDir;
-use crate::{Locked, cargo::QualifiedPath, fs, path::AbsFilePath};
+use crate::{Locked, cargo::{CargoBuildArguments, QualifiedPath}, fs, path::AbsFilePath};
 
 /// Represents a "root output" file, used for build scripts.
 ///
@@ -415,7 +415,7 @@ mod tests {
         expected_style: BuildScriptOutputLineStyle,
         expected_path: &str,
     ) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -442,7 +442,7 @@ mod tests {
         expected_style: BuildScriptOutputLineStyle,
         expected_var: &str,
     ) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -467,7 +467,7 @@ mod tests {
         expected_style: BuildScriptOutputLineStyle,
         expected_flag: &str,
     ) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -492,7 +492,7 @@ mod tests {
         expected_style: BuildScriptOutputLineStyle,
         expected_lib: &str,
     ) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -517,7 +517,7 @@ mod tests {
         expected_style: BuildScriptOutputLineStyle,
         expected_path: &str,
     ) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -546,7 +546,7 @@ mod tests {
         expected_kind: &str,
         expected_path: &str,
     ) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -574,7 +574,7 @@ mod tests {
         expected_style: BuildScriptOutputLineStyle,
         expected_flags: &str,
     ) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -602,7 +602,7 @@ mod tests {
         expected_key: &str,
         expected_value: Option<&str>,
     ) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -628,7 +628,7 @@ mod tests {
         expected_style: BuildScriptOutputLineStyle,
         expected_check_cfg: &str,
     ) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -654,7 +654,7 @@ mod tests {
         expected_var: &str,
         expected_value: &str,
     ) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -680,7 +680,7 @@ mod tests {
         expected_style: BuildScriptOutputLineStyle,
         expected_msg: &str,
     ) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -705,7 +705,7 @@ mod tests {
         expected_style: BuildScriptOutputLineStyle,
         expected_msg: &str,
     ) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -731,7 +731,7 @@ mod tests {
         expected_key: &str,
         expected_value: &str,
     ) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -755,7 +755,7 @@ mod tests {
     #[test_case(""; "empty_line")]
     #[tokio::test]
     async fn parses_other_lines(line: &str) {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -773,7 +773,7 @@ mod tests {
 
     #[tokio::test]
     async fn parses_rustc_env_without_equals() {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -793,7 +793,7 @@ mod tests {
 
     #[tokio::test]
     async fn parses_metadata_without_equals() {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -813,7 +813,7 @@ mod tests {
 
     #[tokio::test]
     async fn parses_and_reconstructs_real_world_example_1() {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -837,7 +837,7 @@ mod tests {
 
     #[tokio::test]
     async fn parses_and_reconstructs_real_world_example_2() {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -861,7 +861,7 @@ mod tests {
 
     #[tokio::test]
     async fn parses_and_reconstructs_mixed_content() {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
@@ -885,7 +885,7 @@ mod tests {
 
     #[tokio::test]
     async fn parses_and_reconstructs_mixed_styles() {
-        let workspace = Workspace::from_argv(&[])
+        let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
         let profile = workspace
