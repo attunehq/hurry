@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT content_hash\n            FROM library_unit_build\n            WHERE\n                package_id = $1\n                AND target = $2\n                AND library_crate_compilation_unit_hash = $3\n                AND build_script_compilation_unit_hash = $4\n                AND build_script_execution_unit_hash = $5\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "content_hash",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7dea7b793d4b0c15675c5416df4b69049a4a96effabbdde1b351df5d8593bdf6"
+}

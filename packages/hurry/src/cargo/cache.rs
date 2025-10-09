@@ -5,7 +5,7 @@ use color_eyre::{
     Result,
     eyre::{Context as _, OptionExt, bail},
 };
-use futures::StreamExt;
+use futures::TryStreamExt as _;
 use serde::Serialize;
 use sqlx::{
     SqlitePool,
@@ -109,7 +109,7 @@ impl CargoCache {
         let mut build_script_program_file_to_index = HashMap::new();
         let mut build_script_executions = HashMap::new();
         let mut artifacts = Vec::new();
-        for (i, invocation) in build_plan.invocations.clone().into_iter().enumerate() {
+        for (i, invocation) in build_plan.invocations.iter().cloned().enumerate() {
             trace!(?invocation, "build plan invocation");
             // For each invocation, figure out what kind it is:
             // 1. Compiling a build script.
@@ -278,15 +278,11 @@ impl CargoCache {
         let build_script_files = match artifact.build_script_files {
             Some(build_script_files) => {
                 let compiled_files = fs::walk_files(&build_script_files.compiled_dir)
-                    .collect::<Vec<_>>()
-                    .await
-                    .into_iter()
-                    .collect::<Result<Vec<_>>>()?;
+                    .try_collect::<Vec<_>>()
+                    .await?;
                 let output_files = fs::walk_files(&build_script_files.output_dir)
-                    .collect::<Vec<_>>()
-                    .await
-                    .into_iter()
-                    .collect::<Result<Vec<_>>>()?;
+                    .try_collect::<Vec<_>>()
+                    .await?;
                 compiled_files
                     .into_iter()
                     .chain(output_files.into_iter())
@@ -479,7 +475,7 @@ impl CargoCache {
         // TODO: Implement.
         //
         // TODO: Make sure to warn on ambiguous restores.
-        Ok(())
+        todo!()
     }
 }
 
