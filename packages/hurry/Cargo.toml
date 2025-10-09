@@ -53,18 +53,13 @@ location-macros = {workspace = true }
 futures = { workspace = true }
 tempfile = { workspace = true }
 home = { workspace = true }
-regex = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
 jiff = { workspace = true }
 const-str = { workspace = true, features = ["std", "all"] }
 duplicate = { workspace = true }
 paste = { workspace = true }
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite"] }
-macro_rules_attribute = "0.2.2"
-serde_plain = "1.0.2"
-winnow = "0.7.13"
-parse-display = "0.10.0"
-lazy-regex = { version = "3.4.1", features = ["regex", "std"] }
+sqlx = { workspace = true, features = ["runtime-tokio", "sqlite"] }
+parse-display = { workspace = true }
+lazy-regex = { workspace = true, features = ["regex", "std"] }
 
 [dev-dependencies]
 async-walkdir.workspace = true
