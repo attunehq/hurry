@@ -100,7 +100,7 @@ pub fn invocation_log_dir(workspace_target_dir: &AbsDirPath) -> AbsDirPath {
 pub struct RustcInvocation {}
 
 impl RustcInvocation {
-    pub fn from_argv(argv: &[String]) -> Self {
+    pub fn from_argv(_argv: &[String]) -> Self {
         Self {}
     }
 }

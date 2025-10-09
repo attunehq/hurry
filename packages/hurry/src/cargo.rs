@@ -26,7 +26,7 @@ mod workspace;
 
 pub use build_plan::BuildPlan;
 pub use build_script::{BuildScriptOutput, RootOutput};
-pub use cache::CargoCache;
+pub use cache::{ArtifactPlan, BuiltArtifact, CargoCache};
 pub use dep_info::{DepInfo, DepInfoLine};
 pub use dependency::{Dependency, DependencyBuild, Optimizations};
 pub use path::QualifiedPath;

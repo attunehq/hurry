@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use crate::cargo::unit_graph::CargoCompileMode;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct BuildPlan {
     pub invocations: Vec<BuildPlanInvocation>,
     pub inputs: Vec<String>,
@@ -12,7 +12,7 @@ pub struct BuildPlan {
 
 // Note that these fields are all undocumented. To see their definition, see
 // https://github.com/rust-lang/cargo/blob/0436f86288a4d9bce1c712c4eea5b05eb82682b9/src/cargo/core/compiler/build_plan.rs#L21-L34
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct BuildPlanInvocation {
     pub package_name: String,
     pub package_version: String,

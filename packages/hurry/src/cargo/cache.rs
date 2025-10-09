@@ -1,32 +1,33 @@
-use std::{collections::HashMap, path::PathBuf, str::FromStr as _};
+use std::{collections::HashMap, io::Write, path::PathBuf, str::FromStr as _, time::UNIX_EPOCH};
 
 use cargo_metadata::TargetKind;
 use color_eyre::{
     Result,
     eyre::{Context as _, OptionExt, bail},
 };
+use futures::StreamExt;
+use serde::Serialize;
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use tap::Pipe as _;
-use tracing::{debug, instrument, trace};
+use tracing::{debug, error, instrument, trace, warn};
 
 use crate::{
-    Locked,
-    cargo::{
-        self, BuildPlan, CargoCompileMode, Profile, ProfileDir, RustcMetadata, UnitGraph, Workspace,
-    },
+    cargo::{self, BuildPlan, CargoCompileMode, Profile, RustcMetadata, Workspace},
     cas::FsCas,
-    fs, mk_rel_dir, mk_rel_file,
-    path::{AbsDirPath, JoinWith as _},
+    fs,
+    hash::Blake3,
+    mk_rel_dir, mk_rel_file,
+    path::{AbsDirPath, AbsFilePath, JoinWith as _},
 };
 
 #[derive(Debug, Clone)]
 pub struct CargoCache {
     cas: FsCas,
     db: SqlitePool,
-    pub ws: Workspace,
+    ws: Workspace,
 }
 
 impl CargoCache {
@@ -89,7 +90,11 @@ impl CargoCache {
         // [^1]: https://github.com/rust-lang/cargo/issues/7614
         // [^2]: https://doc.rust-lang.org/cargo/reference/unstable.html#unit-graph
 
-        // TODO: Pass the rest of the `cargo build` flags in.
+        // TODO: Pass the rest of the `cargo build` flags in, so the build plan
+        // is an accurate reflection of the user's build.
+        //
+        // FIXME: Why does running this clear all the compiled artifacts from
+        // the target folder?
         let build_plan = cargo::invoke_output(
             "build",
             ["--build-plan", "-Z", "unstable-options"],
@@ -104,14 +109,14 @@ impl CargoCache {
         let mut build_script_program_file_to_index = HashMap::new();
         let mut build_script_executions = HashMap::new();
         let mut artifacts = Vec::new();
-        for (i, invocation) in build_plan.invocations.iter().enumerate() {
+        for (i, invocation) in build_plan.invocations.clone().into_iter().enumerate() {
             trace!(?invocation, "build plan invocation");
             // For each invocation, figure out what kind it is:
             // 1. Compiling a build script.
             // 2. Running a build script.
             // 3. Compiling a dependency.
             // 4. Compiling first-party code.
-            if invocation.target_kind == &[TargetKind::CustomBuild] {
+            if invocation.target_kind == [TargetKind::CustomBuild] {
                 match invocation.compile_mode {
                     CargoCompileMode::Build => {
                         if let Some(output_file) = invocation.outputs.first() {
@@ -131,10 +136,10 @@ impl CargoCache {
                             build_script_index_to_dir.insert(i, out_dir);
 
                             // Second, we record the executable program.
-                            for file in &invocation.outputs {
+                            for file in invocation.outputs {
                                 build_script_program_file_to_index.insert(file, i);
                             }
-                            for (fslink, _orig) in &invocation.links {
+                            for (fslink, _orig) in invocation.links {
                                 build_script_program_file_to_index.insert(fslink, i);
                             }
                         } else {
@@ -160,7 +165,8 @@ impl CargoCache {
                         let out_dir = invocation
                             .env
                             .get("OUT_DIR")
-                            .ok_or_eyre("build script execution should set OUT_DIR")?;
+                            .ok_or_eyre("build script execution should set OUT_DIR")?
+                            .clone();
 
                         build_script_executions.insert(i, (build_script_index, out_dir));
                     }
@@ -169,7 +175,7 @@ impl CargoCache {
                         invocation.compile_mode
                     ),
                 }
-            } else if invocation.target_kind == &[TargetKind::Bin] {
+            } else if invocation.target_kind == [TargetKind::Bin] {
                 // Binaries are _always_ first-party code. Do nothing for now.
                 continue;
             } else if invocation.target_kind.contains(&TargetKind::Lib)
@@ -193,7 +199,7 @@ impl CargoCache {
                     // There might be other build scripts for the same name and
                     // version (but different features), but they won't be
                     // listed as a `dep`.
-                    if dep.target_kind == &[TargetKind::CustomBuild]
+                    if dep.target_kind == [TargetKind::CustomBuild]
                         && dep.compile_mode == CargoCompileMode::RunCustomBuild
                         && dep.package_name == invocation.package_name
                         && dep.package_version == invocation.package_version
@@ -203,21 +209,30 @@ impl CargoCache {
                     }
                 }
 
+                let compiled_files: Vec<AbsFilePath> = invocation
+                    .outputs
+                    .into_iter()
+                    .map(|f| AbsFilePath::try_from(f).unwrap())
+                    .collect();
                 let build_script = match build_script_execution_index {
                     Some(build_script_execution_index) => {
                         let (build_script_index, build_script_output_dir) = build_script_executions
-                            .get(&build_script_execution_index)
+                            .get(build_script_execution_index)
                             .ok_or_eyre(
                                 "build script execution should have recorded output directory",
                             )?;
-                        let build_script_dir = build_script_index_to_dir
+                        let build_script_output_dir =
+                            AbsDirPath::try_from(build_script_output_dir)?;
+                        let build_script_compiled_dir = build_script_index_to_dir
                             .get(build_script_index)
                             .ok_or_eyre(
                                 "build script index should have recorded compilation directory",
                             )?;
+                        let build_script_compiled_dir =
+                            AbsDirPath::try_from(build_script_compiled_dir)?;
                         Some(BuildScriptDirs {
-                            compiled_dir: build_script_dir.to_string_lossy().to_string(),
-                            output_dir: build_script_output_dir.to_string(),
+                            compiled_dir: build_script_compiled_dir,
+                            output_dir: build_script_output_dir,
                         })
                     }
                     None => None,
@@ -228,15 +243,19 @@ impl CargoCache {
                 // script outputs directory. These are the files that we're
                 // going to save for this artifact.
                 debug!(
-                    compiled = ?invocation.outputs,
+                    compiled = ?compiled_files,
                     build_script = ?build_script,
                     deps = ?invocation.deps,
                     "artifacts to save"
                 );
                 artifacts.push(ArtifactPlan {
-                    package_name: invocation.package_name.clone(),
-                    package_version: invocation.package_version.clone(),
-                    compiled_files: invocation.outputs.clone(),
+                    package_name: invocation.package_name,
+                    package_version: invocation.package_version,
+                    // TODO: We assume it's the same target as the host, but we
+                    // really should be parsing this from the `rustc`
+                    // invocation.
+                    target: rustc.host_target.clone(),
+                    compiled_files,
                     build_script_files: build_script,
                 });
 
@@ -251,8 +270,226 @@ impl CargoCache {
 
         Ok(artifacts)
     }
+
+    #[instrument(name = "CargoCache::save")]
+    pub async fn save(&self, artifact: BuiltArtifact) -> Result<()> {
+        // Determine which files will be saved.
+        let compiled_files = artifact.compiled_files;
+        let build_script_files = match artifact.build_script_files {
+            Some(build_script_files) => {
+                let compiled_files = fs::walk_files(&build_script_files.compiled_dir)
+                    .collect::<Vec<_>>()
+                    .await
+                    .into_iter()
+                    .collect::<Result<Vec<_>>>()?;
+                let output_files = fs::walk_files(&build_script_files.output_dir)
+                    .collect::<Vec<_>>()
+                    .await
+                    .into_iter()
+                    .collect::<Result<Vec<_>>>()?;
+                compiled_files
+                    .into_iter()
+                    .chain(output_files.into_iter())
+                    .collect()
+            }
+            None => vec![],
+        };
+        let files_to_save = compiled_files
+            .into_iter()
+            .chain(build_script_files.into_iter())
+            .collect::<Vec<_>>();
+
+        // For each file, save it into the CAS and calculate its key.
+        //
+        // TODO: Fuse this operation with the loop above where we discover the
+        // needed files? Would that give better performance?
+        let mut library_unit_files = vec![];
+        for file in files_to_save {
+            match fs::read_buffered(&file).await? {
+                Some(content) => {
+                    let key = self.cas.store(&content).await?;
+                    library_unit_files.push((file, key));
+                }
+                None => {
+                    // Note that this is not necessarily incorrect! For example,
+                    // Cargo seems to claim to emit `.dwp` files for its `.so`s,
+                    // but those don't seem to be there by the time the process
+                    // actually finishes. I'm not sure if they're deleted or
+                    // just never written.
+                    warn!("failed to read file: {}", file);
+                }
+            }
+        }
+
+        // Calculate the content hash.
+        let content_hash = {
+            let mut hasher = blake3::Hasher::new();
+            let bytes = serde_json::to_vec(&LibraryUnitHash::new(library_unit_files.clone()))?;
+            hasher.write_all(&bytes)?;
+            hasher.finalize().to_hex().to_string()
+        };
+
+        // Save the library unit into the database.
+        let mut tx = self.db.begin().await?;
+
+        // Find or create the package.
+        let package_id = match sqlx::query!(
+            // TODO: Why does this require a type override? Shouldn't sqlx infer
+            // the non-nullability from the INTEGER PRIMARY KEY column type?
+            "SELECT id AS \"id!: i64\" FROM package WHERE name = $1 AND version = $2",
+            artifact.package_name,
+            artifact.package_version
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            Some(row) => row.id,
+            None => {
+                sqlx::query!(
+                    "INSERT INTO package (name, version) VALUES ($1, $2) RETURNING id",
+                    artifact.package_name,
+                    artifact.package_version
+                )
+                .fetch_one(&mut *tx)
+                .await?
+                .id
+            }
+        };
+        // Check whether a library unit build exists.
+        match sqlx::query!(
+            r#"
+            SELECT content_hash
+            FROM library_unit_build
+            WHERE
+                package_id = $1
+                AND target = $2
+                AND library_crate_compilation_unit_hash = $3
+                AND build_script_compilation_unit_hash = $4
+                AND build_script_execution_unit_hash = $5
+            "#,
+            package_id,
+            artifact.target,
+            artifact.library_crate_compilation_unit_hash,
+            artifact.build_script_compilation_unit_hash,
+            artifact.build_script_execution_unit_hash
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            Some(row) => {
+                // If it does exist, and the content hash is the same, there is
+                // nothing more to do. If it exists but the content hash is
+                // different, then something has gone wrong with our cache key,
+                // and we should log an error message.
+                if row.content_hash != content_hash {
+                    error!(expected = ?row.content_hash, actual = ?content_hash, "content hash mismatch");
+                }
+            }
+            None => {
+                // Insert the library unit build.
+                let library_unit_build_id = sqlx::query!(
+                    r#"
+                    INSERT INTO library_unit_build (
+                        package_id,
+                        target,
+                        library_crate_compilation_unit_hash,
+                        build_script_compilation_unit_hash,
+                        build_script_execution_unit_hash,
+                        content_hash
+                    ) VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING id AS "id!: i64"
+                    "#,
+                    package_id,
+                    artifact.target,
+                    artifact.library_crate_compilation_unit_hash,
+                    artifact.build_script_compilation_unit_hash,
+                    artifact.build_script_execution_unit_hash,
+                    content_hash
+                )
+                .fetch_one(&mut *tx)
+                .await?
+                .id;
+
+                // Insert each file.
+                for (file, key) in library_unit_files {
+                    let key = key.as_str();
+                    // Find or create CAS object.
+                    let object_id = match sqlx::query!(
+                        "SELECT id AS \"id!: i64\" FROM object WHERE key = $1",
+                        key
+                    )
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    {
+                        Some(row) => row.id,
+                        None => {
+                            sqlx::query!("INSERT INTO object (key) VALUES ($1) RETURNING id", key)
+                                .fetch_one(&mut *tx)
+                                .await?
+                                .id
+                        }
+                    };
+
+                    // TODO: Would it be faster to gather this during the
+                    // walking?
+                    let metadata = fs::Metadata::from_file(&file)
+                        .await?
+                        .ok_or_eyre("could not stat file metadata")?;
+
+                    // We need to do this because SQLite does not support
+                    // 128-bit integers.
+                    let mtime_bytes = metadata
+                        .mtime
+                        .duration_since(UNIX_EPOCH)?
+                        .as_nanos()
+                        .to_be_bytes();
+                    let mtime_slice = mtime_bytes.as_slice();
+
+                    let filepath = file.to_string();
+
+                    sqlx::query!(
+                        r#"
+                        INSERT INTO library_unit_build_artifact (
+                            library_unit_build_id,
+                            object_id,
+                            path,
+                            mtime,
+                            executable
+                        ) VALUES ($1, $2, $3, $4, $5)
+                         "#,
+                        library_unit_build_id,
+                        object_id,
+                        filepath,
+                        mtime_slice,
+                        metadata.executable
+                    )
+                    .execute(&mut *tx)
+                    .await?;
+                }
+            }
+        };
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    #[instrument(name = "CargoCache::restore")]
+    pub async fn restore(&self, artifact: &ArtifactPlan) -> Result<()> {
+        // TODO: Implement.
+        //
+        // TODO: Make sure to warn on ambiguous restores.
+        Ok(())
+    }
 }
 
+/// An ArtifactPlan represents the information known about a library unit (i.e.
+/// a library crate, its build script, and its build script outputs) statically
+/// at plan-time.
+///
+/// In particular, this information does _not_ include information derived from
+/// compiling and running the build script, such as `rustc` flags from build
+/// script output directives.
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct ArtifactPlan {
     // Partial artifact key information. Note that this is only derived from the
@@ -261,200 +498,142 @@ pub struct ArtifactPlan {
     // interactively.
     //
     // TODO: There are more fields here that we can know from the planning stage
-    // that need to be added (e.g. target, features).
+    // that need to be added (e.g. features).
     package_name: String,
     package_version: String,
+    target: String,
 
     // Artifact folders to save and restore.
-    //
-    // TODO: These should probably be `QualifiedPath`s.
-    compiled_files: Vec<String>,
+    compiled_files: Vec<AbsFilePath>,
     build_script_files: Option<BuildScriptDirs>,
 }
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct BuildScriptDirs {
-    // TODO: These should probably be `QualifiedPath`s.
-    compiled_dir: String,
-    output_dir: String,
+    compiled_dir: AbsDirPath,
+    output_dir: AbsDirPath,
 }
 
-/*
+/// A BuiltArtifact represents the information known about a library unit (i.e.
+/// a library crate, its build script, and its build script outputs) after it
+/// has been built.
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub struct BuiltArtifact {
+    package_name: String,
+    package_version: String,
 
+    target: String,
 
-    /// Store the contents of the file referenced by the path in the CAS.
-    #[instrument(name = "ProfileDir::store_cas")]
-    pub async fn store_cas(
-        &self,
-        cas: &FsCas,
-        file: &RelFilePath,
-    ) -> Result<(Blake3, AbsFilePath)> {
-        let file = self.root.join(file);
-        let raw = fs::must_read_buffered(&file).await.context("read file")?;
+    compiled_files: Vec<AbsFilePath>,
+    build_script_files: Option<BuildScriptDirs>,
 
-        // TODO: If we keep rewrites with this sort of structure we probably
-        // want to turn them into a more generic operation instead of having to
-        // retype all this boilerplate every time.
-        let content = match CasRewrite::from_path(&file) {
-            CasRewrite::None => raw,
-            CasRewrite::RootOutput => RootOutput::from_file(self, &file)
-                .await
-                .context("parse")?
-                .pipe_ref(serde_json::to_vec)
-                .context("serialize")?,
-            CasRewrite::BuildScriptOutput => BuildScriptOutput::from_file(self, &file)
-                .await
-                .context("parse")?
-                .pipe_ref(serde_json::to_vec)
-                .context("serialize")?,
-            CasRewrite::DepInfo => DepInfo::from_file(self, &file)
-                .await
-                .context("parse")?
-                .pipe_ref(serde_json::to_vec)
-                .context("serialize")?,
-        };
-
-        cas.store(&content)
-            .await
-            .context("store content in CAS")
-            .map(|key| (key, file))
-    }
-
-    /// Get the content from the CAS referenced by the key and restore it
-    /// to the provided path.
-    #[instrument(name = "ProfileDir::restore_cas")]
-    pub async fn restore_cas(
-        &self,
-        cas: &FsCas,
-        key: &Blake3,
-        file: &RelFilePath,
-    ) -> Result<AbsFilePath> {
-        let file = self.root.join(file);
-        let content = cas.must_get(key).await.context("get content from CAS")?;
-
-        // TODO: If we keep rewrites with this sort of structure we probably
-        // want to turn them into a more generic operation instead of having to
-        // retype all this boilerplate every time.
-        let raw = match CasRewrite::from_path(&file) {
-            CasRewrite::None => content,
-            CasRewrite::RootOutput => serde_json::from_slice::<RootOutput>(&content)
-                .context("deserialize")
-                .map(|f| f.reconstruct(self).into_bytes())?,
-            CasRewrite::BuildScriptOutput => serde_json::from_slice::<BuildScriptOutput>(&content)
-                .context("deserialize")
-                .map(|f| f.reconstruct(self).into_bytes())?,
-            CasRewrite::DepInfo => serde_json::from_slice::<DepInfo>(&content)
-                .context("deserialize")
-                .map(|f| f.reconstruct(self).into_bytes())?,
-        };
-        fs::write(&file, &raw)
-            .await
-            .context("write file")
-            .map(|_| file)
-    }
-*/
-
-/*
-
-
-/// Some files need to be rewritten when stored in or restored from the CAS.
-/// This type supports parsing a path to determine whether it should be
-/// rewritten, and if so using what strategy.
-///
-/// A core intention of this type is to _always_ only replace things that
-/// `hurry` can actually _parse_- no blanket "replace all" functionality.
-/// The reasoning here is that while we want to make builds faster,
-/// we **cannot** make them incorrect; if we skip rewriting something
-/// that Cargo needs it'll simply recompile while if we overzealously rewrite
-/// things we don't actually know anything about we might cause subtle and
-/// bugs in the compilation phase which we absolutely cannot afford to do.
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
-enum CasRewrite {
-    /// No rewriting should take place.
-    #[default]
-    None,
-
-    /// This is a "dep-info" file, so use the "dep-info" rewrite strategy.
-    DepInfo,
-
-    /// This is a "root output" file, used for build scripts.
-    ///
-    /// This file contains the fully qualified path to `out`, which is the
-    /// directory where script can output files (provided to the script as
-    /// $OUT_DIR).
-    ///
-    /// These are correct to rewrite because the content of the `out` directory
-    /// should have also been restored, but even if it wasn't it's certainly not
-    /// correct to try to read or write content from the old location.
-    ///
-    /// Example taken from an actual project:
-    /// ```not_rust
-    /// /Users/jess/scratch/example/target/debug/build/rustls-5590c033895e7e9a/out
-    /// ```
-    RootOutput,
-
-    /// This is an "output" file, which is the output of the build script when
-    /// it was executed.
-    ///
-    /// These are correct to rewrite because paths in this output will almost
-    /// definitely be referencing either something local or something in
-    /// `$CARGO_HOME`.
-    ///
-    /// Example output taken from an actual project:
-    /// ```not_rust
-    /// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
-    /// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
-    /// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
-    /// OUT_DIR = Some(/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out)
-    /// cargo:rustc-link-search=native=/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out
-    /// cargo:root=/Users/jess/scratch/example/target/debug/build/zstd-sys-eb89796c05cc5c90/out
-    /// cargo:include=/Users/jess/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zstd-sys-2.0.15+zstd.1.5.7/zstd/lib
-    /// ```
-    ///
-    /// Reference: https://doc.rust-lang.org/cargo/reference/build-scripts.html
-    BuildScriptOutput,
+    library_crate_compilation_unit_hash: String,
+    build_script_compilation_unit_hash: Option<String>,
+    build_script_execution_unit_hash: Option<String>,
 }
 
-impl CasRewrite {
-    /// Determine the rewrite strategy from the file path.
-    fn from_path(target: &AbsFilePath) -> Self {
-        // `.rev()` and `.take(1)` are because while we're iterating over
-        // components, we really don't care about reading the whole path- just
-        // the few elements at the end.
-        target
-            .component_strs_lossy()
-            .rev()
-            .tuple_windows()
-            .take(1)
-            .find_map(|(name, _, gparent)| {
-                // Theoretically, we could blanket rewrite all paths in all text
-                // files- but we follow a conservative approach here because
-                // above all we don't want to silently cause miscompilations and
-                // we don't want to do more work than is needed.
-                //
-                // For example, we don't rewrite `stderr` output files for build
-                // scripts, because they're only for humans to read. Also some
-                // example projects emit other arbitrary text files; e.g. the
-                // build script for `aws-lc-sys` emits a file at
-                // `./target/debug/build/aws-lc-sys-3f4f475625566422/out/memcmp_invalid_stripped_check.dSYM/Contents/Resources/Relocations/aarch64/memcmp_invalid_stripped_check.yml`
-                // which we don't try to replace because we don't really know
-                // anything about this file.
-                //
-                // We do know however that it's common practice in the Rust
-                // community to back up and restore files in `target` for
-                // caching, so we can only assume that library authors know this
-                // and can recover from or at least detect this sort of scenario
-                // if they care.
-                let ext = name.rsplit_once('.').map(|(_, ext)| ext);
-                match (gparent.as_ref(), name.as_ref(), ext) {
-                    ("build", "output", _) => Some(Self::BuildScriptOutput),
-                    ("build", "root-output", _) => Some(Self::RootOutput),
-                    (_, _, Some("d")) => Some(Self::DepInfo),
-                    _ => None,
+impl BuiltArtifact {
+    /// Given an `ArtifactPlan`, read the build script output directories on
+    /// disk and construct a `BuiltArtifact`.
+    #[instrument(name = "BuiltArtifact::from_plan")]
+    pub async fn from_plan(plan: ArtifactPlan) -> Result<Self> {
+        // TODO: Read the build script output from the build folders, and parse
+        // the output for directives. Use this to construct the rustc
+        // invocation, and use all of this information to fully construct the
+        // cache key.
+
+        // FIXME: What we actually do right now is just copy fields and ignore
+        // that dynamic fields might not be captured by the unit hash. This
+        // behavior is incorrect! We are only ignoring this for now so we can
+        // get something simple working end-to-end.
+
+        let library_crate_compilation_unit_hash = {
+            let compiled_file = plan
+                .compiled_files
+                .first()
+                .ok_or_eyre("no compiled files")?;
+            let filename = compiled_file
+                .file_name()
+                .ok_or_eyre("no filename")?
+                .to_string_lossy();
+            let filename = filename.split_once('.').ok_or_eyre("no extension")?.0;
+
+            filename
+                .rsplit_once('-')
+                .ok_or_eyre("no unit hash suffix")?
+                .1
+                .to_string()
+        };
+        let (build_script_compilation_unit_hash, build_script_execution_unit_hash) =
+            match &plan.build_script_files {
+                Some(build_script_files) => {
+                    let build_script_compilation_unit_hash = {
+                        let filename = &build_script_files
+                            .compiled_dir
+                            .file_name()
+                            .ok_or_eyre("no filename")?
+                            .to_string_lossy();
+
+                        filename
+                            .rsplit_once('-')
+                            .ok_or_eyre("no unit hash suffix")?
+                            .1
+                            .to_string()
+                    };
+                    let build_script_execution_unit_hash = {
+                        let out_dir_path = &build_script_files
+                            .output_dir
+                            .parent()
+                            .ok_or_eyre("out_dir has no parent")?;
+                        let filename = out_dir_path
+                            .file_name()
+                            .ok_or_eyre("out_dir has no filename")?
+                            .to_string_lossy();
+
+                        filename
+                            .rsplit_once('-')
+                            .ok_or_eyre("no unit hash suffix")?
+                            .1
+                            .to_string()
+                    };
+                    (
+                        Some(build_script_compilation_unit_hash),
+                        Some(build_script_execution_unit_hash),
+                    )
                 }
-            })
-            .unwrap_or_default()
+                None => (None, None),
+            };
+
+        Ok(BuiltArtifact {
+            package_name: plan.package_name,
+            package_version: plan.package_version,
+
+            target: plan.target,
+
+            compiled_files: plan.compiled_files,
+            build_script_files: plan.build_script_files,
+
+            library_crate_compilation_unit_hash,
+            build_script_compilation_unit_hash,
+            build_script_execution_unit_hash,
+        })
     }
 }
 
-*/
+/// A content hash of a library unit's artifacts.
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize)]
+struct LibraryUnitHash {
+    files: Vec<(AbsFilePath, Blake3)>,
+}
+
+impl LibraryUnitHash {
+    /// Construct a library unit hash out of the files in the library unit.
+    ///
+    /// This constructor always ensures that the files are sorted, so any two
+    /// sets of files with the same paths and contents will produce the same
+    /// hash.
+    fn new(mut files: Vec<(AbsFilePath, Blake3)>) -> Self {
+        files.sort();
+        Self { files }
+    }
+}

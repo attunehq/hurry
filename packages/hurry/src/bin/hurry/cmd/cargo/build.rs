@@ -4,28 +4,12 @@
 //! - `docs/DESIGN.md`
 //! - `docs/development/cargo.md`
 
-use std::{
-    collections::HashMap,
-    ffi::OsStr,
-    fmt::Debug,
-    process::Stdio,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::fmt::Debug;
 
-use cargo_metadata::{Artifact, PackageId};
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
-use hurry::{
-    cargo::{
-        self, CargoCache, Handles, INVOCATION_LOG_DIR_ENV_VAR, Profile, Workspace,
-        invocation_log_dir,
-    },
-    cas::FsCas,
-    fs,
-    path::TryJoinWith as _,
-};
-use tokio::io::AsyncBufReadExt;
-use tracing::{debug, error, info, instrument, warn};
+use hurry::cargo::{self, BuiltArtifact, CargoCache, Profile, Workspace};
+use tracing::{debug, info, instrument};
 
 /// Options for `cargo build`.
 //
@@ -81,16 +65,17 @@ pub async fn exec(options: Options) -> Result<()> {
     // because we are not actually running build scripts, these "expected
     // artifacts" do not contain fully unambiguous cache key information.
     let artifacts = cache
-        // TODO: Pass the rest of the `cargo build` flags in, so the build plan
-        // is an accurate reflection of the user's build.
         .artifact_plan(&profile)
         .await
         .context("calculating expected artifacts")?;
 
-    // TODO: Restore artifacts.
+    // Restore artifacts.
     if !options.skip_restore {
         info!("Restoring artifacts");
-        // TODO: Make sure to warn on ambiguous restores.
+
+        for artifact in &artifacts {
+            cache.restore(artifact).await?;
+        }
     }
 
     // Run the build.
@@ -156,6 +141,11 @@ pub async fn exec(options: Options) -> Result<()> {
         // TODO: Add `RUSTC_WRAPPER` wrapper that records invocations in "debug
         // mode", so we can assert that our invocation reconstruction works
         // properly. Maybe that should be added to a test harness?
+
+        // TODO: Maybe we can also use `strace`/`dtrace` to trace child
+        // processes, and use that to determine invocation and OUT_DIR from argv
+        // and environment variables?
+
         cargo::invoke("build", &options.argv)
             .await
             .context("build with cargo")?;
@@ -169,14 +159,13 @@ pub async fn exec(options: Options) -> Result<()> {
     // Cache the built artifacts.
     if !options.skip_backup {
         info!("Caching built artifacts");
-        for artifact in artifacts {
-            // TODO: Read the build script output from the build folders, and
-            // parse the output for directives. Use this to construct the rustc
-            // invocation, and use all of this information to fully construct
-            // the cache key.
-
-            // TODO: Cache the artifact.
+        for artifact_plan in artifacts {
+            // Construct the full artifact key.
+            let artifact = BuiltArtifact::from_plan(artifact_plan).await?;
             debug!(?artifact, "caching artifact");
+
+            // Cache the artifact.
+            cache.save(artifact).await?;
         }
     }
 
