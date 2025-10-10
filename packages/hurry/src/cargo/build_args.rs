@@ -1,4 +1,7 @@
-use color_eyre::{Result, eyre::Context};
+use color_eyre::{
+    Result,
+    eyre::{Context, ContextCompat},
+};
 use itertools::PeekingNext;
 use parse_display::{Display as ParseDisplay, FromStr as ParseFromStr};
 use tracing::trace;
@@ -233,9 +236,13 @@ pub enum CargoBuildArgument {
     Color(ColorWhen),
 
     /// `--config <key=value>`
-    Config(String),
+    Config(String, String),
 
     /// `-Z <flag>`
+    ///
+    /// Note: We don't parse the flag value further (e.g., `-Z build-std=core`)
+    /// since these are unstable; if we end up needing to parse them we can do
+    /// so in a helper function or add additional typing later.
     UnstableFlag(String),
 
     /// `--frozen`
@@ -326,7 +333,7 @@ pub enum CargoBuildArgument {
     UnitGraph,
 
     /// `--timings[=<fmts>]` (unstable)
-    Timings(Option<String>),
+    Timings(Vec<String>),
 
     /// `--manifest-path <path>`
     ManifestPath(String),
@@ -475,7 +482,7 @@ impl CargoBuildArgument {
                 Self::BENCH => Self::Bench(None),
                 Self::JOBS => Self::Jobs(None),
                 Self::TARGET => Self::Target(None),
-                Self::TIMINGS => Self::Timings(None),
+                Self::TIMINGS => Self::Timings(Vec::new()),
                 _ if Self::is_flag(flag) => Self::GenericFlag(flag.to_string()),
                 _ => Self::Positional(flag.to_string()),
             };
@@ -494,7 +501,12 @@ impl CargoBuildArgument {
     fn parse_inner(flag: &str, value: &str) -> Result<Self> {
         match flag {
             Self::COLOR => Ok(Self::Color(value.parse()?)),
-            Self::CONFIG => Ok(Self::Config(value.to_string())),
+            Self::CONFIG => {
+                let (key, val) = value
+                    .split_once('=')
+                    .context("config value must be in key=value format")?;
+                Ok(Self::Config(key.to_string(), val.to_string()))
+            }
             Self::UNSTABLE => Ok(Self::UnstableFlag(value.to_string())),
             Self::PACKAGE => Ok(Self::Package(value.to_string())),
             Self::EXCLUDE => Ok(Self::Exclude(value.to_string())),
@@ -515,7 +527,14 @@ impl CargoBuildArgument {
             Self::TARGET => Ok(Self::Target(Some(value.to_string()))),
             Self::TARGET_DIR => Ok(Self::TargetDir(value.to_string())),
             Self::ARTIFACT_DIR => Ok(Self::ArtifactDir(value.to_string())),
-            Self::TIMINGS => Ok(Self::Timings(Some(value.to_string()))),
+            Self::TIMINGS => {
+                let formats = value
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect();
+                Ok(Self::Timings(formats))
+            }
             Self::MANIFEST_PATH => Ok(Self::ManifestPath(value.to_string())),
             Self::LOCKFILE_PATH => Ok(Self::LockfilePath(value.to_string())),
             Self::MESSAGE_FORMAT => Ok(Self::MessageFormat(value.parse()?)),
@@ -534,7 +553,9 @@ impl CargoBuildArgument {
             }
             Self::Quiet => vec![Self::QUIET.to_string()],
             Self::Color(when) => vec![Self::COLOR.to_string(), when.to_string()],
-            Self::Config(cfg) => vec![Self::CONFIG.to_string(), cfg.clone()],
+            Self::Config(key, value) => {
+                vec![Self::CONFIG.to_string(), format!("{key}={value}")]
+            }
             Self::UnstableFlag(flag) => vec![Self::UNSTABLE.to_string(), flag.clone()],
             Self::Frozen => vec![Self::FROZEN.to_string()],
             Self::Locked => vec![Self::LOCKED.to_string()],
@@ -573,8 +594,13 @@ impl CargoBuildArgument {
             Self::ArtifactDir(dir) => vec![Self::ARTIFACT_DIR.to_string(), dir.clone()],
             Self::BuildPlan => vec![Self::BUILD_PLAN.to_string()],
             Self::UnitGraph => vec![Self::UNIT_GRAPH.to_string()],
-            Self::Timings(None) => vec![Self::TIMINGS.to_string()],
-            Self::Timings(Some(fmts)) => vec![Self::TIMINGS.to_string(), fmts.clone()],
+            Self::Timings(formats) => {
+                if formats.is_empty() {
+                    vec![Self::TIMINGS.to_string()]
+                } else {
+                    vec![Self::TIMINGS.to_string(), formats.join(",")]
+                }
+            }
             Self::ManifestPath(path) => vec![Self::MANIFEST_PATH.to_string(), path.clone()],
             Self::LockfilePath(path) => vec![Self::LOCKFILE_PATH.to_string(), path.clone()],
             Self::IgnoreRustVersion => vec![Self::IGNORE_RUST_VERSION.to_string()],
@@ -594,6 +620,9 @@ pub enum ColorWhen {
     Auto,
     Always,
     Never,
+
+    #[display("{0}")]
+    Other(String),
 }
 
 /// Message format for `--message-format`.
@@ -793,6 +822,68 @@ mod tests {
         // We don't test against the _original_ input because normalization
         // occurs, but at the very least we should be able to roundtrip
         // `CargoBuildArguments` itself.
+        let reparsed = CargoBuildArguments::from_iter(reconstructed);
+        pretty_assert_eq!(args, reparsed);
+    }
+
+    #[test_case(&["--config", "build.jobs=4"], "build.jobs", "4"; "space_separated")]
+    #[test_case(&["--config=build.jobs=4"], "build.jobs", "4"; "equals_separated")]
+    #[test_case(&["--config", "net.git-fetch-with-cli=true"], "net.git-fetch-with-cli", "true"; "boolean_value")]
+    #[test_case(&["--config", "target.x86_64-unknown-linux-gnu.linker=\"clang\""], "target.x86_64-unknown-linux-gnu.linker", "\"clang\""; "quoted_value")]
+    #[test]
+    fn parses_config(args: &[&str], expected_key: &str, expected_value: &str) {
+        let parsed = CargoBuildArguments::from_iter(args.to_vec());
+        let expected = vec![CargoBuildArgument::Config(
+            String::from(expected_key),
+            String::from(expected_value),
+        )];
+        pretty_assert_eq!(parsed.0, expected);
+    }
+
+    #[test_case(&["--config", "build.jobs=4", "--config=net.git-fetch-with-cli=true"]; "multiple_configs")]
+    #[test]
+    fn parses_multiple_config_flags(args: &[&str]) {
+        let parsed = CargoBuildArguments::from_iter(args.to_vec());
+        let expected = vec![
+            CargoBuildArgument::Config(String::from("build.jobs"), String::from("4")),
+            CargoBuildArgument::Config(
+                String::from("net.git-fetch-with-cli"),
+                String::from("true"),
+            ),
+        ];
+        pretty_assert_eq!(parsed.0, expected);
+    }
+
+    #[test]
+    fn roundtrip_config() {
+        let original = vec!["--config", "build.jobs=4", "--release"];
+        let args = CargoBuildArguments::from_iter(original.clone());
+        let reconstructed = args.to_argv();
+
+        let reparsed = CargoBuildArguments::from_iter(reconstructed);
+        pretty_assert_eq!(args, reparsed);
+    }
+
+    #[test_case(&["--timings"], Vec::<&str>::new(); "no_formats")]
+    #[test_case(&["--timings", "html"], vec!["html"]; "single_format_space")]
+    #[test_case(&["--timings=html"], vec!["html"]; "single_format_equals")]
+    #[test_case(&["--timings", "html,json"], vec!["html", "json"]; "multiple_formats_space")]
+    #[test_case(&["--timings=html,json"], vec!["html", "json"]; "multiple_formats_equals")]
+    #[test]
+    fn parses_timings(args: &[&str], expected: Vec<&str>) {
+        let parsed = CargoBuildArguments::from_iter(args.to_vec());
+        let expected = vec![CargoBuildArgument::Timings(
+            expected.iter().map(|s| String::from(*s)).collect(),
+        )];
+        pretty_assert_eq!(parsed.0, expected);
+    }
+
+    #[test]
+    fn roundtrip_timings() {
+        let original = vec!["--timings=html,json", "--release"];
+        let args = CargoBuildArguments::from_iter(original.clone());
+        let reconstructed = args.to_argv();
+
         let reparsed = CargoBuildArguments::from_iter(reconstructed);
         pretty_assert_eq!(args, reparsed);
     }
