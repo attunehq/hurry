@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with inserted as (\n                insert into cas_key (content)\n                values ($2)\n                on conflict (content) do nothing\n                returning id\n            ),\n            key_id as (\n                select id from inserted\n                union all\n                select id from cas_key where content = $2\n                limit 1\n            )\n            insert into cas_access (org_id, cas_key_id)\n            select $1, id from key_id\n            on conflict (org_id, cas_key_id) do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "81d26bfb0b830144e7517ebc898f76418fb467f50d824667bd6dbfb6097d0123"
+}

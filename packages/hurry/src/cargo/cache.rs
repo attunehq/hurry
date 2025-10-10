@@ -7,6 +7,7 @@ use color_eyre::{
 };
 use sqlx::{
     SqlitePool,
+    migrate::Migrator,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use tap::Pipe as _;
@@ -31,6 +32,9 @@ pub struct CargoCache {
 }
 
 impl CargoCache {
+    /// The migrator for the database.
+    pub const MIGRATOR: Migrator = sqlx::migrate!("./schema/migrations");
+
     #[instrument(name = "CargoCache::open")]
     async fn open(cas: FsCas, conn: &str, ws: Workspace) -> Result<Self> {
         let options = SqliteConnectOptions::from_str(conn)
@@ -40,7 +44,7 @@ impl CargoCache {
             .connect_with(options)
             .await
             .context("connecting to cargo cache database")?;
-        sqlx::migrate!("src/cargo/cache/db/migrations")
+        Self::MIGRATOR
             .run(&db)
             .await
             .context("running migrations")?;
@@ -463,3 +467,16 @@ impl CasRewrite {
 }
 
 */
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[sqlx::test(migrator = "crate::cargo::cache::CargoCache::MIGRATOR")]
+    async fn open_test_database(pool: SqlitePool) {
+        sqlx::query("select 1")
+            .fetch_one(&pool)
+            .await
+            .expect("select 1");
+    }
+}

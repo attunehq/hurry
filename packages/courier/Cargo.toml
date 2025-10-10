@@ -1,0 +1,43 @@
+[package]
+name = "courier"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+axum = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["io"] }
+tower = { workspace = true, features = ["buffer", "limit", "load-shed"] }
+tower-http = { workspace = true, features = ["trace", "limit", "timeout", "compression-full", "decompression-full"] }
+sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate"] }
+serde = { workspace = true, features = ["derive"] }
+async-compression = { workspace = true, features = ["tokio", "zstd"] }
+blake3 = { workspace = true }
+hex = { workspace = true }
+zstd = { workspace = true }
+color-eyre = { workspace = true }
+tracing = { workspace = true }
+tracing-error = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-tree = { workspace = true, features = ["time"] }
+clap = { workspace = true, features = ["derive", "env"] }
+atomic-time = { workspace = true }
+tap = { workspace = true }
+derive_more = { workspace = true, features = ["full"] }
+uuid = { workspace = true, features = ["v4"] }
+aerosol = { workspace = true, features = ["async", "axum", "axum-extra", "tracing"] }
+futures = { workspace = true }
+const-str = { workspace = true, features = ["all"] }
+hashlru = { workspace = true }
+rusty_paseto = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+async-tempfile = { workspace = true }
+axum-test = { workspace = true, features = ["all"] }
+pretty_assertions = { workspace = true }
+proptest = { workspace = true }
+serde_json.workspace = true
+simple_test_case.workspace = true
+test-log = { workspace = true, features = ["trace"] }
+test-strategy = { workspace = true }
