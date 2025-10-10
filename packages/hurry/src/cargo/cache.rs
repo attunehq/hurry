@@ -1,4 +1,10 @@
-use std::{collections::HashMap, io::Write, path::PathBuf, str::FromStr as _, time::UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    io::Write,
+    path::PathBuf,
+    str::FromStr as _,
+    time::{Duration, UNIX_EPOCH},
+};
 
 use cargo_metadata::TargetKind;
 use color_eyre::{
@@ -214,6 +220,20 @@ impl CargoCache {
                     .into_iter()
                     .map(|f| AbsFilePath::try_from(f).unwrap())
                     .collect();
+                let library_crate_compilation_unit_hash = {
+                    let compiled_file = compiled_files.first().ok_or_eyre("no compiled files")?;
+                    let filename = compiled_file
+                        .file_name()
+                        .ok_or_eyre("no filename")?
+                        .to_string_lossy();
+                    let filename = filename.split_once('.').ok_or_eyre("no extension")?.0;
+
+                    filename
+                        .rsplit_once('-')
+                        .ok_or_eyre("no unit hash suffix")?
+                        .1
+                        .to_string()
+                };
                 let build_script = match build_script_execution_index {
                     Some(build_script_execution_index) => {
                         let (build_script_index, build_script_output_dir) = build_script_executions
@@ -230,12 +250,59 @@ impl CargoCache {
                             )?;
                         let build_script_compiled_dir =
                             AbsDirPath::try_from(build_script_compiled_dir)?;
-                        Some(BuildScriptDirs {
-                            compiled_dir: build_script_compiled_dir,
-                            output_dir: build_script_output_dir,
-                        })
+                        let build_script_compilation_unit_hash = {
+                            let filename = &build_script_compiled_dir
+                                .file_name()
+                                .ok_or_eyre("no filename")?
+                                .to_string_lossy();
+
+                            filename
+                                .rsplit_once('-')
+                                .ok_or_eyre("no unit hash suffix")?
+                                .1
+                                .to_string()
+                        };
+                        let build_script_output_unit_hash = {
+                            let out_dir_path = &build_script_output_dir
+                                .parent()
+                                .ok_or_eyre("out_dir has no parent")?;
+                            let filename = out_dir_path
+                                .file_name()
+                                .ok_or_eyre("out_dir has no filename")?
+                                .to_string_lossy();
+
+                            filename
+                                .rsplit_once('-')
+                                .ok_or_eyre("no unit hash suffix")?
+                                .1
+                                .to_string()
+                        };
+                        Some((
+                            BuildScriptDirs {
+                                compiled_dir: build_script_compiled_dir,
+                                output_dir: build_script_output_dir,
+                            },
+                            build_script_compilation_unit_hash,
+                            build_script_output_unit_hash,
+                        ))
                     }
                     None => None,
+                };
+                let (
+                    build_script_files,
+                    build_script_compilation_unit_hash,
+                    build_script_execution_unit_hash,
+                ) = match build_script {
+                    Some((
+                        build_script_files,
+                        build_script_compilation_unit_hash,
+                        build_script_execution_unit_hash,
+                    )) => (
+                        Some(build_script_files),
+                        Some(build_script_compilation_unit_hash),
+                        Some(build_script_execution_unit_hash),
+                    ),
+                    None => (None, None, None),
                 };
 
                 // Given a dependency being compiled, we need to determine the
@@ -244,7 +311,7 @@ impl CargoCache {
                 // going to save for this artifact.
                 debug!(
                     compiled = ?compiled_files,
-                    build_script = ?build_script,
+                    build_script = ?build_script_files,
                     deps = ?invocation.deps,
                     "artifacts to save"
                 );
@@ -256,7 +323,10 @@ impl CargoCache {
                     // invocation.
                     target: rustc.host_target.clone(),
                     compiled_files,
-                    build_script_files: build_script,
+                    build_script_files,
+                    library_crate_compilation_unit_hash,
+                    build_script_compilation_unit_hash,
+                    build_script_execution_unit_hash,
                 });
 
                 // TODO: If needed, we could try to read previous build script
@@ -300,11 +370,12 @@ impl CargoCache {
         // TODO: Fuse this operation with the loop above where we discover the
         // needed files? Would that give better performance?
         let mut library_unit_files = vec![];
-        for file in files_to_save {
-            match fs::read_buffered(&file).await? {
+        for path in files_to_save {
+            match fs::read_buffered(&path).await? {
                 Some(content) => {
                     let key = self.cas.store(&content).await?;
-                    library_unit_files.push((file, key));
+                    debug!(?path, ?key, "stored object");
+                    library_unit_files.push((path, key));
                 }
                 None => {
                     // Note that this is not necessarily incorrect! For example,
@@ -312,7 +383,7 @@ impl CargoCache {
                     // but those don't seem to be there by the time the process
                     // actually finishes. I'm not sure if they're deleted or
                     // just never written.
-                    warn!("failed to read file: {}", file);
+                    warn!("failed to read file: {}", path);
                 }
             }
         }
@@ -324,6 +395,7 @@ impl CargoCache {
             hasher.write_all(&bytes)?;
             hasher.finalize().to_hex().to_string()
         };
+        debug!(?content_hash, "calculated content hash");
 
         // Save the library unit into the database.
         let mut tx = self.db.begin().await?;
@@ -472,10 +544,119 @@ impl CargoCache {
 
     #[instrument(name = "CargoCache::restore")]
     pub async fn restore(&self, artifact: &ArtifactPlan) -> Result<()> {
-        // TODO: Implement.
-        //
-        // TODO: Make sure to warn on ambiguous restores.
-        todo!()
+        // See if there are any saved artifacts that match.
+        let mut tx = self.db.begin().await?;
+        let unit_builds = sqlx::query!(
+            r#"
+            SELECT
+                library_unit_build.id AS "id!: i64",
+                library_unit_build.content_hash
+            FROM package
+            JOIN library_unit_build ON package.id = library_unit_build.package_id
+            WHERE
+                package.name = $1
+                AND package.version = $2
+                AND target = $3
+                AND library_crate_compilation_unit_hash = $4
+                AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($5, '')
+                AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($6, '')
+        "#,
+            artifact.package_name,
+            artifact.package_version,
+            artifact.target,
+            artifact.library_crate_compilation_unit_hash,
+            artifact.build_script_compilation_unit_hash,
+            artifact.build_script_execution_unit_hash
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let unit_to_restore = match unit_builds.split_first() {
+            Some((first, rest)) => {
+                if rest.len() > 0 {
+                    // If there are multiple matching library units, choose the
+                    // canonical unit to restore.
+                    //
+                    // TODO: We only do this today because our keys are
+                    // insufficiently precise (in particular, we aren't able to
+                    // key on predicted dynamic fields from build script
+                    // execution). We can probably do a lot better.
+                    if rest
+                        .iter()
+                        .all(|unit| unit.content_hash == first.content_hash)
+                    {
+                        // If all the units have the same content hash, then we
+                        // can restore any of them. This should generally not
+                        // happen, but can occur sometimes due to cache database
+                        // corruption.
+                        first.id
+                    } else {
+                        // If there are any units with different content hash,
+                        // then we should emit a warning and choose not to
+                        // restore any of them.
+                        warn!(
+                            ?artifact,
+                            ?unit_builds,
+                            "multiple matching library unit builds found"
+                        );
+                        return Ok(());
+                    }
+                } else {
+                    // Otherwise, just restore the matching unit.
+                    first.id
+                }
+            }
+            None => {
+                // If there are no matching library units, there's nothing to restore.
+                debug!(?artifact, "no matching library unit build found");
+                return Ok(());
+            }
+        };
+
+        // Restore the unit.
+        let objects = sqlx::query!(
+            r#"
+            SELECT
+                object.key,
+                library_unit_build_artifact.path,
+                library_unit_build_artifact.mtime,
+                library_unit_build_artifact.executable
+            FROM library_unit_build_artifact
+            JOIN object ON library_unit_build_artifact.object_id = object.id
+            WHERE
+                library_unit_build_artifact.library_unit_build_id = $1
+        "#,
+            unit_to_restore
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        for object in objects {
+            // TODO: Why is this backed by a String? Why don't we store this as
+            // a BLOB?
+            let key = Blake3(object.key);
+            // TODO: Instead of reading and then writing, maybe we should change
+            // the API shape to directly do a copy on supported filesystems?
+            let data = self.cas.must_get(&key).await?;
+            // TODO: These are currently all absolute paths. We need to
+            // implement relative path rewrites for portability.
+            let path = AbsFilePath::try_from(object.path)?;
+            let mtime = {
+                let mtime_bytes: Result<[u8; 16], _> = object.mtime.try_into();
+                let mtime_nanos =
+                    u128::from_be_bytes(mtime_bytes.or_else(|_| bail!("could not read mtime"))?);
+                // TODO: Is this conversion safe? It will truncate, but probably
+                // not outside the range we care about. Maybe we really should
+                // serialize to TEXT just to get rid of this headache.
+                UNIX_EPOCH + Duration::from_nanos(mtime_nanos as u64)
+            };
+            let metadata = fs::Metadata {
+                mtime,
+                executable: object.executable,
+            };
+            fs::write(&path, &data).await?;
+            metadata.set_file(&path).await?;
+        }
+        Ok(())
     }
 }
 
@@ -502,6 +683,11 @@ pub struct ArtifactPlan {
     // Artifact folders to save and restore.
     compiled_files: Vec<AbsFilePath>,
     build_script_files: Option<BuildScriptDirs>,
+
+    // Unit hashes.
+    library_crate_compilation_unit_hash: String,
+    build_script_compilation_unit_hash: Option<String>,
+    build_script_execution_unit_hash: Option<String>,
 }
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
@@ -542,64 +728,6 @@ impl BuiltArtifact {
         // that dynamic fields might not be captured by the unit hash. This
         // behavior is incorrect! We are only ignoring this for now so we can
         // get something simple working end-to-end.
-
-        let library_crate_compilation_unit_hash = {
-            let compiled_file = plan
-                .compiled_files
-                .first()
-                .ok_or_eyre("no compiled files")?;
-            let filename = compiled_file
-                .file_name()
-                .ok_or_eyre("no filename")?
-                .to_string_lossy();
-            let filename = filename.split_once('.').ok_or_eyre("no extension")?.0;
-
-            filename
-                .rsplit_once('-')
-                .ok_or_eyre("no unit hash suffix")?
-                .1
-                .to_string()
-        };
-        let (build_script_compilation_unit_hash, build_script_execution_unit_hash) =
-            match &plan.build_script_files {
-                Some(build_script_files) => {
-                    let build_script_compilation_unit_hash = {
-                        let filename = &build_script_files
-                            .compiled_dir
-                            .file_name()
-                            .ok_or_eyre("no filename")?
-                            .to_string_lossy();
-
-                        filename
-                            .rsplit_once('-')
-                            .ok_or_eyre("no unit hash suffix")?
-                            .1
-                            .to_string()
-                    };
-                    let build_script_execution_unit_hash = {
-                        let out_dir_path = &build_script_files
-                            .output_dir
-                            .parent()
-                            .ok_or_eyre("out_dir has no parent")?;
-                        let filename = out_dir_path
-                            .file_name()
-                            .ok_or_eyre("out_dir has no filename")?
-                            .to_string_lossy();
-
-                        filename
-                            .rsplit_once('-')
-                            .ok_or_eyre("no unit hash suffix")?
-                            .1
-                            .to_string()
-                    };
-                    (
-                        Some(build_script_compilation_unit_hash),
-                        Some(build_script_execution_unit_hash),
-                    )
-                }
-                None => (None, None),
-            };
-
         Ok(BuiltArtifact {
             package_name: plan.package_name,
             package_version: plan.package_version,
@@ -609,9 +737,9 @@ impl BuiltArtifact {
             compiled_files: plan.compiled_files,
             build_script_files: plan.build_script_files,
 
-            library_crate_compilation_unit_hash,
-            build_script_compilation_unit_hash,
-            build_script_execution_unit_hash,
+            library_crate_compilation_unit_hash: plan.library_crate_compilation_unit_hash,
+            build_script_compilation_unit_hash: plan.build_script_compilation_unit_hash,
+            build_script_execution_unit_hash: plan.build_script_execution_unit_hash,
         })
     }
 }

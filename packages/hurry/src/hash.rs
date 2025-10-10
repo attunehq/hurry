@@ -12,7 +12,7 @@ use crate::{fs, path::AbsFilePath};
 
 /// A Blake3 hash.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Serialize, Deserialize)]
-pub struct Blake3(String);
+pub struct Blake3(pub String);
 
 impl Blake3 {
     /// Hash the contents of the file at the specified path.
