@@ -11,7 +11,10 @@ use color_eyre::{
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::path::{AbsDirPath, TryJoinWith as _};
+use crate::{
+    cargo::CargoBuildArguments,
+    path::{AbsDirPath, TryJoinWith as _},
+};
 
 /// Rust compiler metadata for cache key generation.
 ///
@@ -42,13 +45,19 @@ pub struct RustcMetadata {
 impl RustcMetadata {
     /// Get platform metadata from the current compiler.
     #[instrument(name = "RustcMetadata::from_argv")]
-    pub async fn from_argv(workspace_root: &AbsDirPath, _argv: &[String]) -> Result<Self> {
+    pub async fn from_argv(
+        workspace_root: &AbsDirPath,
+        _args: impl AsRef<CargoBuildArguments> + Debug,
+    ) -> Result<Self> {
         // TODO: Is this the correct `rustc` to use? Do we need to specially
         // handle interactions with `rustup` and `rust-toolchain.toml`?
         let mut cmd = tokio::process::Command::new("rustc");
 
         // Bypasses the check that disallows using unstable commands on stable.
         cmd.env("RUSTC_BOOTSTRAP", "1");
+
+        // TODO: What args, if any, should we be forwarding from the ones the
+        // user passed in? Today we don't forward anything.
         cmd.args(["-Z", "unstable-options", "--print", "target-spec-json"]);
         cmd.current_dir(workspace_root.as_std_path());
         let output = cmd.output().await.context("run rustc")?;
@@ -100,7 +109,7 @@ pub fn invocation_log_dir(workspace_target_dir: &AbsDirPath) -> AbsDirPath {
 pub struct RustcInvocation {}
 
 impl RustcInvocation {
-    pub fn from_argv(argv: &[String]) -> Self {
+    pub fn from_argv(_args: impl AsRef<CargoBuildArguments>) -> Self {
         Self {}
     }
 }

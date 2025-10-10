@@ -17,8 +17,8 @@ use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use hurry::{
     cargo::{
-        self, CargoCache, Handles, INVOCATION_LOG_DIR_ENV_VAR, Profile, Workspace,
-        invocation_log_dir,
+        self, CargoBuildArguments, CargoCache, Handles, INVOCATION_LOG_DIR_ENV_VAR, Profile,
+        Workspace, invocation_log_dir,
     },
     cas::FsCas,
     fs,
@@ -55,10 +55,10 @@ pub struct Options {
 }
 
 impl Options {
-    /// Get the profile specified by the user.
-    #[instrument(name = "Options::profile")]
-    pub fn profile(&self) -> Profile {
-        Profile::from_argv(&self.argv)
+    /// Parse the cargo build arguments.
+    #[instrument(name = "Options::parsed_args")]
+    pub fn parsed_args(&self) -> CargoBuildArguments {
+        CargoBuildArguments::from_iter(&self.argv)
     }
 }
 
@@ -66,11 +66,15 @@ impl Options {
 pub async fn exec(options: Options) -> Result<()> {
     info!("Starting");
 
+    // Parse and validate cargo build arguments.
+    let args = options.parsed_args();
+    debug!(?args, "parsed cargo build arguments");
+
     // Open workspace.
-    let workspace = Workspace::from_argv(&options.argv)
+    let workspace = Workspace::from_argv(&args)
         .await
         .context("opening workspace")?;
-    let profile = options.profile();
+    let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
 
     // Open cache.
     let cache = CargoCache::open_default(workspace)
@@ -81,9 +85,7 @@ pub async fn exec(options: Options) -> Result<()> {
     // because we are not actually running build scripts, these "expected
     // artifacts" do not contain fully unambiguous cache key information.
     let artifacts = cache
-        // TODO: Pass the rest of the `cargo build` flags in, so the build plan
-        // is an accurate reflection of the user's build.
-        .artifact_plan(&profile)
+        .artifact_plan(&profile, &args)
         .await
         .context("calculating expected artifacts")?;
 
