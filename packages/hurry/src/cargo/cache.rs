@@ -360,8 +360,8 @@ impl CargoCache {
                 package_id = $1
                 AND target = $2
                 AND library_crate_compilation_unit_hash = $3
-                AND build_script_compilation_unit_hash = $4
-                AND build_script_execution_unit_hash = $5
+                AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($4, '')
+                AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($5, '')
             "#,
             package_id,
             artifact.target,
