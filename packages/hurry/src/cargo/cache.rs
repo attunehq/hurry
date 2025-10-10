@@ -77,7 +77,7 @@ impl CargoCache {
         profile: &Profile,
         args: impl AsRef<CargoBuildArguments> + Debug,
     ) -> Result<Vec<ArtifactPlan>> {
-        let rustc = RustcMetadata::from_argv(&self.ws.root, args)
+        let rustc = RustcMetadata::from_argv(&self.ws.root, &args)
             .await
             .context("parsing rustc metadata")?;
         trace!(?rustc, "rustc metadata");
@@ -98,15 +98,21 @@ impl CargoCache {
         // [^1]: https://github.com/rust-lang/cargo/issues/7614
         // [^2]: https://doc.rust-lang.org/cargo/reference/unstable.html#unit-graph
 
-        // TODO: Pass the rest of the `cargo build` flags in.
-        let build_plan = cargo::invoke_output(
-            "build",
-            ["--build-plan", "-Z", "unstable-options"],
-            [("RUSTC_BOOTSTRAP", "1")],
-        )
-        .await?
-        .pipe(|output| serde_json::from_slice::<BuildPlan>(&output.stdout))
-        .context("parsing build plan")?;
+        // From testing locally, it doesn't seem to matter in which order we
+        // pass the flags but we pass the user flags first just in case as that
+        // seems like it'd follow the principle of least surprise if ordering
+        // ever does matter.
+        let mut build_args = args.as_ref().to_argv();
+        build_args.extend([
+            String::from("--build-plan"),
+            String::from("-Z"),
+            String::from("unstable-options"),
+        ]);
+
+        let build_plan = cargo::invoke_output("build", build_args, [("RUSTC_BOOTSTRAP", "1")])
+            .await?
+            .pipe(|output| serde_json::from_slice::<BuildPlan>(&output.stdout))
+            .context("parsing build plan")?;
         trace!(?build_plan, "build plan");
 
         let mut build_script_index_to_dir = HashMap::new();
@@ -471,6 +477,7 @@ impl CasRewrite {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq as pretty_assert_eq;
 
     #[sqlx::test(migrator = "crate::cargo::cache::CargoCache::MIGRATOR")]
     async fn open_test_database(pool: SqlitePool) {
@@ -478,5 +485,35 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("select 1");
+    }
+
+    #[tokio::test]
+    async fn build_plan_flag_order_does_not_matter() {
+        // This is a relatively basic test to start with; if we find other edge
+        // cases we want to test we should add them here (or in a similar test).
+        let user_args = ["--release"];
+        let tool_args = ["--build-plan", "-Z", "unstable-options"];
+        let env = [("RUSTC_BOOTSTRAP", "1")];
+        let cmd = "build";
+
+        let args = user_args.iter().chain(tool_args.iter());
+        let user_args_first = match cargo::invoke_output(cmd, args, env).await {
+            Ok(output) => output.stdout,
+            Err(e) => panic!("user args first should succeed: {e}"),
+        };
+
+        let args = tool_args.iter().chain(user_args.iter());
+        let tool_args_first = match cargo::invoke_output(cmd, args, env).await {
+            Ok(output) => output.stdout,
+            Err(e) => panic!("tool args first should succeed: {e}"),
+        };
+
+        let user_plan = serde_json::from_slice::<BuildPlan>(&user_args_first).unwrap();
+        let tool_plan = serde_json::from_slice::<BuildPlan>(&tool_args_first).unwrap();
+        pretty_assert_eq!(
+            user_plan,
+            tool_plan,
+            "both orderings should produce same build plan"
+        );
     }
 }

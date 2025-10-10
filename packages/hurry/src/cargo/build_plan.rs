@@ -10,7 +10,7 @@ use tracing::trace;
 
 use crate::cargo::unit_graph::CargoCompileMode;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Debug, Deserialize)]
 pub struct BuildPlan {
     pub invocations: Vec<BuildPlanInvocation>,
     pub inputs: Vec<String>,
@@ -18,7 +18,7 @@ pub struct BuildPlan {
 
 // Note that these fields are all undocumented. To see their definition, see
 // https://github.com/rust-lang/cargo/blob/0436f86288a4d9bce1c712c4eea5b05eb82682b9/src/cargo/core/compiler/build_plan.rs#L21-L34
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Debug, Deserialize)]
 pub struct BuildPlanInvocation {
     pub package_name: String,
     pub package_version: String,
@@ -63,7 +63,7 @@ pub struct BuildPlanInvocation {
 ///   and the process starts over from the top for the next flag.
 ///   - If the next item is not a flag, the pair of items are parsed as a flag
 ///     and value (for example, `--flag value`).
-#[derive(Debug)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct RustcInvocationArguments(Vec<RustcInvocationArgument>);
 
 impl IntoIterator for RustcInvocationArguments {
