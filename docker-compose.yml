@@ -1,0 +1,63 @@
+name: "courier"
+services:
+  courier:
+    build:
+      context: .
+      dockerfile: ./docker/courier/Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - .scratch/courier/cas:/data/cas
+    env_file: ./.env
+    environment:
+      - DATABASE_URL=postgres://courier:courier@postgres:5432/courier
+      - CAS_ROOT=/data/cas
+    command: ["serve"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      interval: 1s
+      timeout: 5s
+    networks:
+      - dev
+    restart: on-failure
+
+  postgres:
+    image: postgres:18
+    environment:
+      - POSTGRES_USER=courier
+      - POSTGRES_PASSWORD=courier
+      - POSTGRES_DB=courier
+    ports:
+      - "5432:5432"
+    volumes:
+      - .scratch/postgres/data:/var/lib/postgresql/18/docker
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "courier"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+    networks:
+      - dev
+    restart: on-failure
+
+  migrate:
+    build:
+      context: .
+      dockerfile: ./docker/courier/Dockerfile
+    environment:
+      - DATABASE_URL=postgres://courier:courier@postgres:5432/courier
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - dev
+    restart: on-failure
+
+networks:
+  dev:
