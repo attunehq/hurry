@@ -13,6 +13,7 @@ use itertools::Itertools;
 use tokio::process::Child;
 use tracing::{instrument, trace};
 
+mod build_args;
 mod build_plan;
 mod build_script;
 mod cache;
@@ -24,6 +25,7 @@ mod rustc;
 mod unit_graph;
 mod workspace;
 
+pub use build_args::{CargoBuildArgument, CargoBuildArguments, ColorWhen, MessageFormat};
 pub use build_plan::BuildPlan;
 pub use build_script::{BuildScriptOutput, RootOutput};
 pub use cache::{ArtifactPlan, BuiltArtifact, CargoCache};

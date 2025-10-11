@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select cas_key.content, count(*) as freq\n            from frequency_account_cas_key\n            join cas_key on frequency_account_cas_key.cas_key_id = cas_key.id\n            where frequency_account_cas_key.account_id = $1\n            and frequency_account_cas_key.accessed > now() - interval '7 days'\n            group by cas_key.id, cas_key.content\n            order by freq desc\n            limit $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "freq",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "878eafd8cc8d921acaacb40e7919739711c6597bef2f711dad4f7b15612d2e54"
+}

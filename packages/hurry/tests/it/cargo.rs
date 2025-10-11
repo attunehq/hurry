@@ -2,7 +2,8 @@ use color_eyre::{Result, eyre::Context};
 use hurry::{
     cache::{FsCache, FsCas},
     cargo::{
-        Dependency, Profile, Workspace, cache_target_from_workspace, restore_target_from_cache,
+        CargoBuildArguments, Dependency, Profile, Workspace, cache_target_from_workspace,
+        restore_target_from_cache,
     },
     fs,
     hash::Blake3,
@@ -18,7 +19,7 @@ fn progress_noop(_key: &Blake3, _dep: &Dependency) {}
 #[test_log::test(tokio::test)]
 async fn open_workspace() -> Result<()> {
     let workspace = current_workspace();
-    Workspace::from_argv_in_dir(&workspace, &[])
+    Workspace::from_argv_in_dir(&workspace, CargoBuildArguments::empty())
         .await
         .context("open workspace")
         .map(drop)
@@ -27,7 +28,8 @@ async fn open_workspace() -> Result<()> {
 #[test_log::test(tokio::test)]
 async fn open_index_workspace() -> Result<()> {
     let workspace = current_workspace();
-    let workspace = Workspace::from_argv_in_dir(&workspace, &[])
+    let args = CargoBuildArguments::empty();
+    let workspace = Workspace::from_argv_in_dir(&workspace, &args)
         .await
         .context("open workspace")?;
     workspace
@@ -52,7 +54,8 @@ async fn backup_workspace() -> Result<()> {
         .await
         .context("lock cache")?;
 
-    let workspace = Workspace::from_argv_in_dir(&workspace, &[])
+    let args = CargoBuildArguments::empty();
+    let workspace = Workspace::from_argv_in_dir(&workspace, &args)
         .await
         .context("open workspace")?;
     let target = workspace
@@ -85,7 +88,7 @@ async fn restore_workspace() -> Result<()> {
         .context("lock cache")?;
 
     {
-        let local_workspace = Workspace::from_argv_in_dir(&local_workspace_root, &[])
+        let local_workspace = Workspace::from_argv_in_dir(&local_workspace_root, CargoBuildArguments::empty())
             .await
             .context("open local workspace")?;
         let target = local_workspace
@@ -106,7 +109,7 @@ async fn restore_workspace() -> Result<()> {
             .context("remove temp target")?;
     }
 
-    let temp_workspace = Workspace::from_argv_in_dir(&temp_workspace_root, &[])
+    let temp_workspace = Workspace::from_argv_in_dir(&temp_workspace_root, CargoBuildArguments::empty())
         .await
         .context("open temp workspace")?;
     let target = temp_workspace
