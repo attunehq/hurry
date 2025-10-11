@@ -12,10 +12,9 @@ use serde::{Deserialize, Serialize};
 use tap::TapFallible;
 use tracing::{instrument, trace};
 
-use super::workspace::ProfileDir;
 use crate::{
     Locked,
-    cargo::{QualifiedPath},
+    cargo::{QualifiedPath, workspace::ProfileDir},
     fs,
     path::AbsFilePath,
 };

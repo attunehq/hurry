@@ -52,17 +52,17 @@ impl CargoBuildArguments {
             // Apply aliases to normalize short flags to long form
             let arg = CargoBuildArgument::alias(&arg);
 
-            if !CargoBuildArgument::is_flag(&arg) {
+            if !CargoBuildArgument::is_flag(arg) {
                 parsed.push(CargoBuildArgument::Positional(arg.to_string()));
                 continue;
             }
 
-            if !CargoBuildArgument::flag_accepts_value(&arg) {
-                parsed.push(CargoBuildArgument::parse(&arg, None));
+            if !CargoBuildArgument::flag_accepts_value(arg) {
+                parsed.push(CargoBuildArgument::parse(arg, None));
                 continue;
             }
 
-            if let Some((flag, value)) = CargoBuildArgument::split_equals(&arg) {
+            if let Some((flag, value)) = CargoBuildArgument::split_equals(arg) {
                 let flag = CargoBuildArgument::alias(flag);
                 parsed.push(CargoBuildArgument::parse(flag, Some(value)));
                 continue;
@@ -70,10 +70,10 @@ impl CargoBuildArguments {
 
             match raw.peeking_next(|upcoming| !CargoBuildArgument::is_flag(upcoming)) {
                 Some(upcoming) => {
-                    parsed.push(CargoBuildArgument::parse(&arg, Some(&upcoming)));
+                    parsed.push(CargoBuildArgument::parse(arg, Some(&upcoming)));
                 }
                 None => {
-                    parsed.push(CargoBuildArgument::parse(&arg, None));
+                    parsed.push(CargoBuildArgument::parse(arg, None));
                 }
             }
         }
