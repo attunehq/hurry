@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use color_eyre::{Result, eyre::Context};
 use derive_more::Display;
 use tap::Pipe;
-use tracing::{instrument, debug};
+use tracing::{debug, instrument};
 
 use crate::{
     fs,

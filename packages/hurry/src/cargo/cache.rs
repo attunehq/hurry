@@ -26,7 +26,7 @@ use crate::{
     fs,
     hash::Blake3,
     mk_rel_dir, mk_rel_file,
-    path::{AbsDirPath, AbsFilePath, JoinWith as _},
+    path::{AbsDirPath, AbsFilePath, JoinWith as _, TryJoinWith as _},
 };
 
 #[derive(Debug, Clone)]
@@ -215,13 +215,13 @@ impl CargoCache {
                     }
                 }
 
-                let compiled_files: Vec<AbsFilePath> = invocation
+                let lib_files: Vec<AbsFilePath> = invocation
                     .outputs
                     .into_iter()
                     .map(|f| AbsFilePath::try_from(f).unwrap())
                     .collect();
                 let library_crate_compilation_unit_hash = {
-                    let compiled_file = compiled_files.first().ok_or_eyre("no compiled files")?;
+                    let compiled_file = lib_files.first().ok_or_eyre("no compiled files")?;
                     let filename = compiled_file
                         .file_name()
                         .ok_or_eyre("no filename")?
@@ -241,8 +241,12 @@ impl CargoCache {
                             .ok_or_eyre(
                                 "build script execution should have recorded output directory",
                             )?;
+                        // We take the parent because this is always the `/out`
+                        // folder of the build script.
                         let build_script_output_dir =
-                            AbsDirPath::try_from(build_script_output_dir)?;
+                            AbsDirPath::try_from(build_script_output_dir)?
+                                .parent()
+                                .ok_or_eyre("build script output directory has no parent")?;
                         let build_script_compiled_dir = build_script_index_to_dir
                             .get(build_script_index)
                             .ok_or_eyre(
@@ -263,10 +267,7 @@ impl CargoCache {
                                 .to_string()
                         };
                         let build_script_output_unit_hash = {
-                            let out_dir_path = &build_script_output_dir
-                                .parent()
-                                .ok_or_eyre("out_dir has no parent")?;
-                            let filename = out_dir_path
+                            let filename = &build_script_output_dir
                                 .file_name()
                                 .ok_or_eyre("out_dir has no filename")?
                                 .to_string_lossy();
@@ -310,7 +311,7 @@ impl CargoCache {
                 // script outputs directory. These are the files that we're
                 // going to save for this artifact.
                 debug!(
-                    compiled = ?compiled_files,
+                    compiled = ?lib_files,
                     build_script = ?build_script_files,
                     deps = ?invocation.deps,
                     "artifacts to save"
@@ -322,7 +323,8 @@ impl CargoCache {
                     // really should be parsing this from the `rustc`
                     // invocation.
                     target: rustc.host_target.clone(),
-                    compiled_files,
+                    profile: profile.clone(),
+                    lib_files,
                     build_script_files,
                     library_crate_compilation_unit_hash,
                     build_script_compilation_unit_hash,
@@ -343,24 +345,74 @@ impl CargoCache {
 
     #[instrument(name = "CargoCache::save")]
     pub async fn save(&self, artifact: BuiltArtifact) -> Result<()> {
+        // TODO: We should probably not be re-locking and unlocking on a per-artifact basis. Maybe
+        // this method should instead take a Vec?
+        let profile_dir = self.ws.open_profile_locked(&artifact.profile).await?;
+
         // Determine which files will be saved.
-        let compiled_files = artifact.compiled_files;
+        let lib_files = {
+            let lib_fingerprint_dir = profile_dir.root().try_join_dirs(&[
+                String::from(".fingerprint"),
+                format!(
+                    "{}-{}",
+                    artifact.package_name, artifact.library_crate_compilation_unit_hash
+                ),
+            ])?;
+            let lib_fingerprint_files = fs::walk_files(&lib_fingerprint_dir)
+                .try_collect::<Vec<_>>()
+                .await?;
+            artifact
+                .lib_files
+                .into_iter()
+                .chain(lib_fingerprint_files.into_iter())
+                .collect::<Vec<_>>()
+        };
         let build_script_files = match artifact.build_script_files {
             Some(build_script_files) => {
                 let compiled_files = fs::walk_files(&build_script_files.compiled_dir)
                     .try_collect::<Vec<_>>()
                     .await?;
+                let compiled_fingerprint_dir = profile_dir.root().try_join_dirs(&[
+                    String::from(".fingerprint"),
+                    format!(
+                        "{}-{}",
+                        artifact.package_name,
+                        artifact
+                            .build_script_compilation_unit_hash
+                            .as_ref()
+                            .expect("build script files have compilation unit hash")
+                    ),
+                ])?;
+                let compiled_fingerprint_files = fs::walk_files(&compiled_fingerprint_dir)
+                    .try_collect::<Vec<_>>()
+                    .await?;
                 let output_files = fs::walk_files(&build_script_files.output_dir)
+                    .try_collect::<Vec<_>>()
+                    .await?;
+                let output_fingerprint_dir = profile_dir.root().try_join_dirs(&[
+                    String::from(".fingerprint"),
+                    format!(
+                        "{}-{}",
+                        artifact.package_name,
+                        artifact
+                            .build_script_execution_unit_hash
+                            .as_ref()
+                            .expect("build script files have execution unit hash")
+                    ),
+                ])?;
+                let output_fingerprint_files = fs::walk_files(&output_fingerprint_dir)
                     .try_collect::<Vec<_>>()
                     .await?;
                 compiled_files
                     .into_iter()
+                    .chain(compiled_fingerprint_files.into_iter())
                     .chain(output_files.into_iter())
+                    .chain(output_fingerprint_files.into_iter())
                     .collect()
             }
             None => vec![],
         };
-        let files_to_save = compiled_files
+        let files_to_save = lib_files
             .into_iter()
             .chain(build_script_files.into_iter())
             .collect::<Vec<_>>();
@@ -573,7 +625,7 @@ impl CargoCache {
 
         let unit_to_restore = match unit_builds.split_first() {
             Some((first, rest)) => {
-                if rest.len() > 0 {
+                if !rest.is_empty() {
                     // If there are multiple matching library units, choose the
                     // canonical unit to restore.
                     //
@@ -679,9 +731,10 @@ pub struct ArtifactPlan {
     package_name: String,
     package_version: String,
     target: String,
+    profile: Profile,
 
     // Artifact folders to save and restore.
-    compiled_files: Vec<AbsFilePath>,
+    lib_files: Vec<AbsFilePath>,
     build_script_files: Option<BuildScriptDirs>,
 
     // Unit hashes.
@@ -703,10 +756,10 @@ pub struct BuildScriptDirs {
 pub struct BuiltArtifact {
     package_name: String,
     package_version: String,
-
     target: String,
+    profile: Profile,
 
-    compiled_files: Vec<AbsFilePath>,
+    lib_files: Vec<AbsFilePath>,
     build_script_files: Option<BuildScriptDirs>,
 
     library_crate_compilation_unit_hash: String,
@@ -731,10 +784,10 @@ impl BuiltArtifact {
         Ok(BuiltArtifact {
             package_name: plan.package_name,
             package_version: plan.package_version,
-
             target: plan.target,
+            profile: plan.profile,
 
-            compiled_files: plan.compiled_files,
+            lib_files: plan.lib_files,
             build_script_files: plan.build_script_files,
 
             library_crate_compilation_unit_hash: plan.library_crate_compilation_unit_hash,
