@@ -991,6 +991,7 @@ dependencies = [
  "color-eyre",
  "const-str",
  "derive_more",
+ "dotenvy",
  "futures",
  "hashlru",
  "hex",

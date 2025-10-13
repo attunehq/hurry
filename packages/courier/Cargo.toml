@@ -43,3 +43,6 @@ serde_json.workspace = true
 simple_test_case.workspace = true
 test-log = { workspace = true, features = ["trace"] }
 test-strategy = { workspace = true }
+
+[build-dependencies]
+dotenvy = "0.15.7"

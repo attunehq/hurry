@@ -1,6 +1,12 @@
 fn main() {
     println!("cargo:rerun-if-changed=schema/migrations");
 
+    // This allows Rust Analyzer to read the `.env` file, plus allows
+    // compilation in general without requiring users to configure their local
+    // environment.
+    #[cfg(debug_assertions)]
+    let _ = dotenvy::dotenv();
+
     #[cfg(debug_assertions)]
     sqlx_env_var_tests();
 }
