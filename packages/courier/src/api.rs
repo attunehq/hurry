@@ -45,11 +45,7 @@ pub mod v1;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_BODY_SIZE: usize = 100 * 1024 * 1024;
 
-pub type State = Aero![
-    crate::db::Postgres,
-    crate::storage::Disk,
-    crate::auth::KeySets,
-];
+pub type State = Aero![crate::db::Postgres, crate::storage::Disk,];
 
 pub fn router(state: State) -> Router {
     let middleware = ServiceBuilder::new()
@@ -107,8 +103,7 @@ pub async fn test_server(
     let (storage, temp) = crate::storage::Disk::new_temp()
         .await
         .context("create temp storage")?;
-    let keysets = crate::auth::KeySets::new();
-    let state = Aero::new().with(keysets).with(storage).with(db);
+    let state = Aero::new().with(storage).with(db);
     let router = crate::api::router(state);
     axum_test::TestServerConfig::default()
         .build(router)
@@ -122,26 +117,8 @@ pub(crate) mod test_helpers {
     use axum::http::StatusCode;
     use axum_test::TestServer;
     use color_eyre::Result;
-    use serde_json::Value;
 
     use crate::storage::Key;
-
-    /// Mint a stateless token for the given token and org ID.
-    pub async fn mint_token(server: &TestServer, token: &str, org_id: u64) -> Result<String> {
-        let response = server
-            .post("/api/v1/auth")
-            .add_header("Authorization", format!("Bearer {token}"))
-            .add_header("x-org-id", org_id.to_string())
-            .await;
-
-        response.assert_status_ok();
-        let body = response.json::<Value>();
-        let token = body["token"]
-            .as_str()
-            .expect("token as a string")
-            .to_string();
-        Ok(token)
-    }
 
     /// Generate test content and compute its key.
     pub fn test_blob(content: &[u8]) -> (Vec<u8>, Key) {
@@ -150,11 +127,10 @@ pub(crate) mod test_helpers {
     }
 
     /// Write a blob to CAS and return the key.
-    pub async fn write_cas(server: &TestServer, token: &str, content: &[u8]) -> Result<Key> {
+    pub async fn write_cas(server: &TestServer, content: &[u8]) -> Result<Key> {
         let (_, key) = test_blob(content);
         let response = server
             .put(&format!("/api/v1/cas/{key}"))
-            .add_header("Authorization", token)
             .bytes(Bytes::copy_from_slice(content))
             .await;
 

@@ -15,10 +15,9 @@ use tracing_error::ErrorLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_tree::time::FormatTime;
 
-use crate::{auth::KeySets, db::Postgres};
+use crate::db::Postgres;
 
 mod api;
-mod auth;
 mod db;
 mod storage;
 
@@ -106,8 +105,7 @@ async fn serve(config: ServeConfig) -> Result<()> {
     let db = Postgres::connect(&config.database_url)
         .await
         .context("connect to database")?;
-    let key_cache = KeySets::new();
-    let router = api::router(Aero::new().with(key_cache).with(storage).with(db));
+    let router = api::router(Aero::new().with(storage).with(db));
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
