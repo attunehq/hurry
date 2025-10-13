@@ -146,8 +146,8 @@ impl Postgres {
         // pattern in a single round trip without creating dead tuples:
         //
         // 1. `inserted` CTE: tries to insert the key, returns ID if successful
-        // 2. `key_id` CTE: unions the insert result with a fallback SELECT that
-        //    only runs if the insert returned nothing (due to conflict)
+        // 2. `key_id` CTE: unions the insert result with a fallback SELECT that only
+        //    runs if the insert returned nothing (due to conflict)
         // 3. Final INSERT: grants access using the key ID from step 2
         //
         // We avoid using `ON CONFLICT DO UPDATE` because that creates dead

@@ -13,17 +13,17 @@ use crate::{
 
 /// Write the content to the CAS for the given key.
 ///
-/// This handler implements the PUT endpoint for storing blob content. It streams the
-/// request body to disk (compressing with zstd), validates the hash matches the
-/// provided key, grants database access to the organization, and asynchronously
-/// records access frequency for cache warming.
+/// This handler implements the PUT endpoint for storing blob content. It
+/// streams the request body to disk (compressing with zstd), validates the hash
+/// matches the provided key, grants database access to the organization, and
+/// asynchronously records access frequency for cache warming.
 ///
 /// ## Security
 ///
-/// All accounts have visibility into all keys that any account in the organization
-/// has ever written. This is intentional, because we expect accounts to be used
-/// by developers on their local machines as well as in CI or other environments
-/// like docker builds.
+/// All accounts have visibility into all keys that any account in the
+/// organization has ever written. This is intentional, because we expect
+/// accounts to be used by developers on their local machines as well as in CI
+/// or other environments like docker builds.
 ///
 /// Even if another organization has written content with the same key, this
 /// content is not visible to the current organization unless they have also
@@ -80,12 +80,10 @@ pub async fn handle(
             // 1. We can't transact across disk and database
             // 2. Writes are idempotent, a retry will succeed
             // 3. Storage is cheaper than blocking writes on database operations
-            // 4. Orphaned blobs are a tolerable edge case vs. high write
-            //    latency
-            // 5. We will likely add a cleanup job for orphaned temp blobs in
-            //    the future (reference comments around temp files in
-            //    [`Disk::write`]) and we can just clean these up at the same
-            //    time.
+            // 4. Orphaned blobs are a tolerable edge case vs. high write latency
+            // 5. We will likely add a cleanup job for orphaned temp blobs in the future
+            //    (reference comments around temp files in [`Disk::write`]) and we can just
+            //    clean these up at the same time.
             if let Err(err) = db.grant_org_cas_key(token.org_id, &key).await {
                 error!(?err, account = ?token.account_id, org = ?token.org_id, "grant org access to cas key");
                 return CasWriteResponse::Error(err);

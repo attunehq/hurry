@@ -9,9 +9,9 @@ pub struct StatelessTokenMetadata {
     pub account_id: AccountId,
 }
 
-/// Validates a stateless token and returns the org and account IDs parsed from the
-/// token. This endpoint is mainly intended for debugging/validating that the
-/// client token implementation is working correctly.
+/// Validates a stateless token and returns the org and account IDs parsed from
+/// the token. This endpoint is mainly intended for debugging/validating that
+/// the client token implementation is working correctly.
 #[tracing::instrument]
 pub async fn handle(token: StatelessToken) -> Json<StatelessTokenMetadata> {
     Json(StatelessTokenMetadata {

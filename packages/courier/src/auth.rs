@@ -39,9 +39,9 @@ static STATELESS_TOKEN_SECRET: LazyLock<PasetoSymmetricKey<PasetoV4, PasetoLocal
         PasetoSymmetricKey::from(PasetoKey::from(key))
     });
 
-/// Stateless token providing pre-authorized org and account IDs, plus the original
-/// token used to mint the stateless token (intended to support interacting with
-/// the database).
+/// Stateless token providing pre-authorized org and account IDs, plus the
+/// original token used to mint the stateless token (intended to support
+/// interacting with the database).
 ///
 /// This type is technically equivalent to [`AuthenticatedToken`], but has
 /// different semantics; due to this it is possible to freely convert between

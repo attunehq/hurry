@@ -9,10 +9,10 @@ use crate::{
     db::Postgres,
 };
 
-/// Uses the account API token to validate their authentication and org membership,
-/// then loads the account's most frequently accessed CAS keys into the in-memory
-/// allowed key set and mints a stateless token that allows access to those
-/// keys.
+/// Uses the account API token to validate their authentication and org
+/// membership, then loads the account's most frequently accessed CAS keys into
+/// the in-memory allowed key set and mints a stateless token that allows access
+/// to those keys.
 ///
 /// The intention here is that:
 /// - Clients (hurry) will need to access a large number of keys
@@ -32,11 +32,11 @@ use crate::{
 ///
 /// ## Preloading
 ///
-/// The account's most frequently accessed CAS keys are loaded into the in-memory
-/// allowed key set when the token is minted. While normally API servers strive
-/// to be stateless, in this implementation we're baking in the assumption that
-/// clients are routed to a stable set of backends based on their org ID headers
-/// by the ingress, so we can safely store _some_ state.
+/// The account's most frequently accessed CAS keys are loaded into the
+/// in-memory allowed key set when the token is minted. While normally API
+/// servers strive to be stateless, in this implementation we're baking in the
+/// assumption that clients are routed to a stable set of backends based on
+/// their org ID headers by the ingress, so we can safely store _some_ state.
 ///
 /// ## Expiration
 ///

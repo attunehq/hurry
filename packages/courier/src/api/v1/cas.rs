@@ -27,8 +27,9 @@ pub fn router() -> Router<State> {
 ///
 /// If the key is visible in `keysets` then we can grant access immediately.
 /// Otherwise, we need to check if the account has access to the key in the
-/// database. If the account has access to the key according to the database, then
-/// we add the key to `keysets` and grant access. Otherwise, we return `false`.
+/// database. If the account has access to the key according to the database,
+/// then we add the key to `keysets` and grant access. Otherwise, we return
+/// `false`.
 #[tracing::instrument]
 async fn check_allowed(
     keysets: &KeySets,

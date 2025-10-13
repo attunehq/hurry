@@ -13,16 +13,16 @@ use crate::{
 
 /// Read the content from the CAS for the given key.
 ///
-/// This handler implements the GET endpoint for retrieving blob content. It performs
-/// authorization, streams the content from disk (decompressing on the fly), and
-/// asynchronously records access frequency for cache warming.
+/// This handler implements the GET endpoint for retrieving blob content. It
+/// performs authorization, streams the content from disk (decompressing on the
+/// fly), and asynchronously records access frequency for cache warming.
 ///
 /// ## Security
 ///
-/// All accounts have visibility into all keys that any account in the organization
-/// has ever written. This is intentional, because we expect accounts to be used
-/// by developers on their local machines as well as in CI or other environments
-/// like docker builds.
+/// All accounts have visibility into all keys that any account in the
+/// organization has ever written. This is intentional, because we expect
+/// accounts to be used by developers on their local machines as well as in CI
+/// or other environments like docker builds.
 ///
 /// Even if another organization has written content with the same key, this
 /// content is not visible to the current organization unless they have also

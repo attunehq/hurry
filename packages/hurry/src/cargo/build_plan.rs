@@ -56,8 +56,8 @@ pub struct BuildPlanInvocation {
 /// - If the item is not a flag, it is parsed as a positional argument.
 /// - If the flag is known to not accept a value, it is parsed as a positional
 ///   argument (for example, `--verbose`).
-/// - If the flag has an equals-separated value, it is parsed
-///   as a flag and value immediately (for example, `--flag=value`).
+/// - If the flag has an equals-separated value, it is parsed as a flag and
+///   value immediately (for example, `--flag=value`).
 /// - Otherwise, the next item is checked to see if it is also a flag.
 ///   - If it is, the current flag is parsed as a positional argument and the
 ///   and the process starts over from the top for the next flag.

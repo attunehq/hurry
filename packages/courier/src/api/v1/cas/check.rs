@@ -12,9 +12,9 @@ use crate::{
 
 /// Check whether the given key exists in the CAS.
 ///
-/// This handler implements the HEAD endpoint for checking blob existence without
-/// downloading the full content. It performs authorization and then checks if the
-/// blob exists on disk.
+/// This handler implements the HEAD endpoint for checking blob existence
+/// without downloading the full content. It performs authorization and then
+/// checks if the blob exists on disk.
 ///
 /// ## TOCTOU (Time of Check Time of Use)
 ///
@@ -42,10 +42,10 @@ use crate::{
 ///
 /// ## Security
 ///
-/// All accounts have visibility into all keys that any account in the organization
-/// has ever written. This is intentional, because we expect accounts to be used
-/// by developers on their local machines as well as in CI or other environments
-/// like docker builds.
+/// All accounts have visibility into all keys that any account in the
+/// organization has ever written. This is intentional, because we expect
+/// accounts to be used by developers on their local machines as well as in CI
+/// or other environments like docker builds.
 ///
 /// Even if another organization has written content with the same key, this
 /// content is not visible to the current organization unless they have also
