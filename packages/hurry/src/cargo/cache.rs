@@ -234,8 +234,8 @@ impl CargoCache {
                 let lib_files: Vec<AbsFilePath> = invocation
                     .outputs
                     .into_iter()
-                    .map(|f| AbsFilePath::try_from(f).unwrap())
-                    .collect();
+                    .map(|f| AbsFilePath::try_from(f).context("parsing build plan output file"))
+                    .collect::<Result<Vec<_>>>()?;
                 let library_crate_compilation_unit_hash = {
                     let compiled_file = lib_files.first().ok_or_eyre("no compiled files")?;
                     let filename = compiled_file
@@ -380,7 +380,7 @@ impl CargoCache {
             artifact
                 .lib_files
                 .into_iter()
-                .chain(lib_fingerprint_files.into_iter())
+                .chain(lib_fingerprint_files)
                 .collect::<Vec<_>>()
         };
         let build_script_files = match artifact.build_script_files {
@@ -421,17 +421,14 @@ impl CargoCache {
                     .await?;
                 compiled_files
                     .into_iter()
-                    .chain(compiled_fingerprint_files.into_iter())
-                    .chain(output_files.into_iter())
-                    .chain(output_fingerprint_files.into_iter())
+                    .chain(compiled_fingerprint_files)
+                    .chain(output_files)
+                    .chain(output_fingerprint_files)
                     .collect()
             }
             None => vec![],
         };
-        let files_to_save = lib_files
-            .into_iter()
-            .chain(build_script_files.into_iter())
-            .collect::<Vec<_>>();
+        let files_to_save = lib_files.into_iter().chain(build_script_files);
 
         // For each file, save it into the CAS and calculate its key.
         //
@@ -640,42 +637,39 @@ impl CargoCache {
         .await?;
 
         let unit_to_restore = match unit_builds.split_first() {
+            // If there is one matching unit, just restore that one.
+            Some((first, [])) => first.id,
+            // If there are multiple matching library units, choose the
+            // canonical unit to restore.
+            //
+            // TODO: We only do this today because our keys are
+            // insufficiently precise (in particular, we aren't able to
+            // key on predicted dynamic fields from build script
+            // execution). We can probably do a lot better.
             Some((first, rest)) => {
-                if !rest.is_empty() {
-                    // If there are multiple matching library units, choose the
-                    // canonical unit to restore.
-                    //
-                    // TODO: We only do this today because our keys are
-                    // insufficiently precise (in particular, we aren't able to
-                    // key on predicted dynamic fields from build script
-                    // execution). We can probably do a lot better.
-                    if rest
-                        .iter()
-                        .all(|unit| unit.content_hash == first.content_hash)
-                    {
-                        // If all the units have the same content hash, then we
-                        // can restore any of them. This should generally not
-                        // happen, but can occur sometimes due to cache database
-                        // corruption.
-                        first.id
-                    } else {
-                        // If there are any units with different content hash,
-                        // then we should emit a warning and choose not to
-                        // restore any of them.
-                        warn!(
-                            ?artifact,
-                            ?unit_builds,
-                            "multiple matching library unit builds found"
-                        );
-                        return Ok(());
-                    }
-                } else {
-                    // Otherwise, just restore the matching unit.
+                if rest
+                    .iter()
+                    .all(|unit| unit.content_hash == first.content_hash)
+                {
+                    // If all the units have the same content hash, then we
+                    // can restore any of them. This should generally not
+                    // happen, but can occur sometimes due to cache database
+                    // corruption.
                     first.id
+                } else {
+                    // If there are any units with different content hash,
+                    // then we should emit a warning and choose not to
+                    // restore any of them.
+                    warn!(
+                        ?artifact,
+                        ?unit_builds,
+                        "multiple matching library unit builds found"
+                    );
+                    return Ok(());
                 }
             }
+            // If there are no matching library units, there's nothing to restore.
             None => {
-                // If there are no matching library units, there's nothing to restore.
                 debug!(?artifact, "no matching library unit build found");
                 return Ok(());
             }
@@ -701,7 +695,7 @@ impl CargoCache {
         for object in objects {
             // TODO: Why is this backed by a String? Why don't we store this as
             // a BLOB?
-            let key = Blake3(object.key);
+            let key = Blake3::from_hex_string(&object.key)?;
             // TODO: Instead of reading and then writing, maybe we should change
             // the API shape to directly do a copy on supported filesystems?
             let data = self.cas.must_get(&key).await?;

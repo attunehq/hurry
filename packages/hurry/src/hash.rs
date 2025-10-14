@@ -2,7 +2,10 @@
 
 use std::fmt::Debug;
 
-use color_eyre::{Result, eyre::Context};
+use color_eyre::{
+    Result,
+    eyre::{Context, bail},
+};
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
@@ -12,9 +15,19 @@ use crate::{fs, path::AbsFilePath};
 
 /// A Blake3 hash.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, Serialize, Deserialize)]
-pub struct Blake3(pub String);
+pub struct Blake3(String);
 
 impl Blake3 {
+    /// Parse a hex string into a Blake3 hash.
+    pub fn from_hex_string(s: impl Into<String>) -> Result<Self> {
+        let s = s.into();
+        let bytes = hex::decode(&s).context("decode hex")?;
+        if bytes.len() != 32 {
+            bail!("invalid hash length");
+        }
+        Ok(Self(s))
+    }
+
     /// Hash the contents of the file at the specified path.
     #[instrument(name = "Blake3::from_file")]
     pub async fn from_file(path: &AbsFilePath) -> Result<Self> {
