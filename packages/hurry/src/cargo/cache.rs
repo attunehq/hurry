@@ -361,8 +361,8 @@ impl CargoCache {
 
     #[instrument(name = "CargoCache::save")]
     pub async fn save(&self, artifact: BuiltArtifact) -> Result<()> {
-        // TODO: We should probably not be re-locking and unlocking on a per-artifact basis. Maybe
-        // this method should instead take a Vec?
+        // TODO: We should probably not be re-locking and unlocking on a per-artifact
+        // basis. Maybe this method should instead take a Vec?
         let profile_dir = self.ws.open_profile_locked(&artifact.profile).await?;
 
         // Determine which files will be saved.
