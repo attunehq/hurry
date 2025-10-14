@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            cargo_object.key,\n            cargo_library_unit_build_artifact.path,\n            cargo_library_unit_build_artifact.mtime,\n            cargo_library_unit_build_artifact.executable\n        FROM cargo_library_unit_build_artifact\n        JOIN cargo_object ON cargo_library_unit_build_artifact.object_id = cargo_object.id\n        WHERE\n            cargo_library_unit_build_artifact.library_unit_build_id = $1\n    ",
+  "query": "\n            SELECT\n                cargo_object.key,\n                cargo_library_unit_build_artifact.path,\n                cargo_library_unit_build_artifact.mtime,\n                cargo_library_unit_build_artifact.executable\n            FROM cargo_library_unit_build_artifact\n            JOIN cargo_object ON cargo_library_unit_build_artifact.object_id = cargo_object.id\n            WHERE\n                cargo_library_unit_build_artifact.library_unit_build_id = $1\n            ",
   "describe": {
     "columns": [
       {
@@ -36,5 +36,5 @@
       false
     ]
   },
-  "hash": "dfffcac39cfe6218422de4488643f2996c6639e2d076ba0c42e5ea1533d88d07"
+  "hash": "bba09744dd15e2d6daca650c400ffb875d1e137d111effae0b18345c9eb030d9"
 }
