@@ -8,7 +8,7 @@ This is a monorepo containing two main projects:
 
 **hurry** is a Rust tool that accelerates Cargo builds by intelligently caching and restoring build artifacts across git branches, worktrees, and development contexts. It provides drop-in replacements for common Cargo commands with significant performance improvements.
 
-**courier** is the API service for Hurry, providing content-addressed storage (CAS) functionality with authentication, compression, and access control. It's a web service built with Axum that handles blob storage, account authentication via PASETO tokens, and PostgreSQL-backed metadata management.
+**courier** is the API service for Hurry, providing content-addressed storage (CAS) functionality. It's a simple web service built with Axum that handles blob storage with zstd compression, optimized for on-premise deployments where authentication is not a concern. PostgreSQL is available for future distributed caching features.
 
 ## Development Commands
 
@@ -23,6 +23,12 @@ This is a monorepo containing two main projects:
 - **Install hurry locally**: `cargo install --path ./packages/hurry --locked`
 - **Run tests for a package**: `cargo nextest run -p {PACKAGE_NAME}`
 - **Run benchmarks**: `cargo bench --package hurry`
+- **Makefile shortcuts**: Common development commands are available via `make`:
+  - `make format`: Format code with cargo +nightly fmt
+  - `make check`: Run clippy linter
+  - `make check-fix`: Run clippy with automatic fixes
+  - `make precommit`: Run format, check-fix, and sqlx-prepare before committing
+  - `make sqlx-prepare`: Prepare sqlx metadata for both courier and hurry packages
 
 ### Hurry-specific Commands
 
@@ -51,9 +57,10 @@ These scripts are essential for cache correctness validation and performance ana
   - Via sqlx-cli: `cargo sqlx migrate run --source packages/courier/schema/migrations/ --database-url "$COURIER_DATABASE_URL"` (recommended for dev, faster)
   - Via courier binary: `docker compose run --build migrate` (for testing production-like deployments)
 - **Generate new migration**: `sql-schema migration --name {migration_name}` (after editing `schema/schema.sql`)
-- **Run tests with fixtures**: Tests use `#[sqlx::test]` macro with automatic fixture loading
+- **Prepare sqlx metadata**: `make sqlx-prepare` or manually run `cd packages/courier && cargo sqlx prepare --database-url "$COURIER_DATABASE_URL"`
 - **Note**: Migrations are not auto-applied on server startup to prevent accidental production migrations
 - **Note**: When using sqlx-cli commands, you must manually specify `--database-url "$COURIER_DATABASE_URL"` since sqlx doesn't support per-package database URLs
+- **Note**: sqlx metadata files are now stored per-package in `packages/{package}/.sqlx/` rather than at the workspace root
 
 #### Testing
 - **Run API tests**: `RUST_BACKTRACE=1 cargo test --package courier` or `cargo nextest run -p courier`
@@ -63,7 +70,7 @@ These scripts are essential for cache correctness validation and performance ana
 
 ### Workspace Structure
 - `packages/hurry/`: Core hurry implementation with modules for caching (`cache/`), cargo integration (`cargo/`), filesystem operations (`fs.rs`), and hashing (`hash.rs`)
-- `packages/courier/`: API service with modules for API routes (`api/`), authentication (`auth.rs`), database (`db.rs`), and storage (`storage.rs`)
+- `packages/courier/`: API service with modules for API routes (`api/`), database (`db.rs`), and storage (`storage.rs`)
 - `packages/e2e/`: End-to-end integration tests that simulate real-world usage scenarios
 - `static/cargo/`: Contains cache markers and metadata for build artifact management
 
@@ -74,24 +81,20 @@ These scripts are essential for cache correctness validation and performance ana
 
 ### Courier Components
 - API routes (`packages/courier/src/api/`): Versioned HTTP handlers using Axum
-  - `/api/v1/auth`: Token minting and validation endpoints
   - `/api/v1/cas`: Content-addressed storage read/write/check operations
+  - `/api/v1/cache/cargo`: Distributed cargo build cache save/restore endpoints
   - `/api/v1/health`: Health check endpoint
-- Authentication (`packages/courier/src/auth.rs`): PASETO-based stateless tokens with per-instance secrets, LRU caching for CAS key validation
-- Database (`packages/courier/src/db.rs`): PostgreSQL integration via sqlx with migrations
+- Database (`packages/courier/src/db.rs`): PostgreSQL integration via sqlx with migrations for distributed caching
 - Storage (`packages/courier/src/storage.rs`): Disk-based CAS with zstd compression, blake3 hashing, atomic writes
 - Schema (`packages/courier/schema/`): SQL schema definitions and migration files
   - `schema.sql`: Canonical database state (hand-maintained)
   - `migrations/`: Generated up/down migrations via `sql-schema`
-  - `fixtures/`: Test data fixtures
 
-### Courier Data Model
-- Organizations: Multi-tenant isolation
-- Accounts: Belong to organizations, authenticate via API keys
-- API Keys: Long-lived tokens for account authentication
-- CAS Keys: Content-addressed blob identifiers (blake3 hashes)
-- Access Control: Organization-level permissions for CAS keys
-- Frequency Tracking: Per-account CAS key access patterns
+### Courier Data Model (Distributed Caching)
+- `cargo_object`: Content-addressed storage keys (blake3 hashes)
+- `cargo_package`: Package name and version pairs
+- `cargo_library_unit_build`: Represents a specific build configuration with compilation unit hashes
+- `cargo_library_unit_build_artifact`: Individual build artifacts with paths, mtimes, and executable flags
 
 ## Development Workflow
 
@@ -110,13 +113,6 @@ These scripts are essential for cache correctness validation and performance ana
 6. Iterate on code: Tests use isolated databases via `#[sqlx::test]` macro
 7. Schema changes: Edit `schema/schema.sql` → run `sql-schema migration --name {name}` → review migrations → apply with sqlx-cli
 
-### Courier Authentication Flow
-1. Client presents long-lived API key via `Authorization: Bearer <key>` header
-2. Client includes `x-org-id` header to specify organization context
-3. Server validates key against database, returns short-lived stateless PASETO token
-4. Client uses stateless token for subsequent CAS operations (read/write/check)
-5. Stateless tokens are instance-specific (not valid across server restarts or different instances)
-
 ## Testing Strategy
 
 ### General Testing Principles
@@ -130,10 +126,9 @@ These scripts are essential for cache correctness validation and performance ana
 - Benchmarks: Performance regression testing via `cargo bench`
 
 ### Courier Testing
-- API tests: Use `#[sqlx::test]` macro for automatic database setup with migrations and fixtures
+- API tests: Use `#[sqlx::test]` macro for automatic database setup with migrations
 - Test isolation: Each test gets its own PostgreSQL database instance and temporary storage directory
-- Test helpers: Use `test_server()` to create isolated test server, `mint_token()` and `write_cas()` for auth/storage operations
-- Fixtures: Test data in `schema/fixtures/*.sql` loaded automatically by test macro
+- Test helpers: Use `test_server()` to create isolated test server, `write_cas()` for storage operations
 
 ## Cache Correctness
 

@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use color_eyre::{Result, eyre::Context};
 use derive_more::Display;
 use tap::Pipe;
-use tracing::{instrument, trace};
+use tracing::{debug, instrument};
 
 use crate::{
     fs,
@@ -53,7 +53,6 @@ impl FsCas {
     pub async fn open_dir(root: &AbsDirPath) -> Result<Self> {
         let root = root.clone();
         fs::create_dir_all(&root).await?;
-        trace!(?root, "open cas");
         Ok(Self { root })
     }
 
@@ -69,7 +68,7 @@ impl FsCas {
         let key = Blake3::from_buffer(content);
         let dst = self.root.try_join_file(key.as_str())?;
         fs::write(&dst, content).await?;
-        trace!(?key, bytes = ?content.len(), "stored content");
+        debug!(?key, bytes = ?content.len(), "stored content");
         Ok(key)
     }
 

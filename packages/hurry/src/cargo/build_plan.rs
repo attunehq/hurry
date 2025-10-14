@@ -60,7 +60,7 @@ pub struct BuildPlanInvocation {
 ///   value immediately (for example, `--flag=value`).
 /// - Otherwise, the next item is checked to see if it is also a flag.
 ///   - If it is, the current flag is parsed as a positional argument and the
-///   and the process starts over from the top for the next flag.
+///     and the process starts over from the top for the next flag.
 ///   - If the next item is not a flag, the pair of items are parsed as a flag
 ///     and value (for example, `--flag value`).
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -85,22 +85,22 @@ impl<'de> Deserialize<'de> for RustcInvocationArguments {
         let mut parsed = Vec::new();
         while let Some(arg) = raw.next() {
             let arg = RustcInvocationArgument::alias(&arg);
-            if !RustcInvocationArgument::flag_accepts_value(&arg) {
-                parsed.push(RustcInvocationArgument::parse(&arg, None));
+            if !RustcInvocationArgument::flag_accepts_value(arg) {
+                parsed.push(RustcInvocationArgument::parse(arg, None));
                 continue;
             }
 
-            if let Some((flag, value)) = RustcInvocationArgument::split_equals(&arg) {
+            if let Some((flag, value)) = RustcInvocationArgument::split_equals(arg) {
                 parsed.push(RustcInvocationArgument::parse(flag, Some(value)));
                 continue;
             }
 
             match raw.peeking_next(|upcoming| !RustcInvocationArgument::is_flag(upcoming)) {
                 Some(upcoming) => {
-                    parsed.push(RustcInvocationArgument::parse(&arg, Some(&upcoming)));
+                    parsed.push(RustcInvocationArgument::parse(arg, Some(&upcoming)));
                 }
                 None => {
-                    parsed.push(RustcInvocationArgument::parse(&arg, None));
+                    parsed.push(RustcInvocationArgument::parse(arg, None));
                 }
             }
         }
@@ -267,12 +267,7 @@ impl RustcInvocationArgument {
     }
 
     fn flag_accepts_value(flag: &str) -> bool {
-        Self::is_flag(flag)
-            && match flag {
-                Self::TEST => false,
-                Self::VERBOSE => false,
-                _ => true,
-            }
+        Self::is_flag(flag) && !matches!(flag, Self::TEST | Self::VERBOSE)
     }
 
     fn split_equals(flag: &str) -> Option<(&str, &str)> {

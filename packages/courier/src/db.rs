@@ -7,20 +7,16 @@
 //! serialize or deserialize these types, create public-facing types that do so
 //! and are able to convert back and forth with the internal types.
 
-use std::collections::HashSet;
-
+use bon::Builder;
 use color_eyre::{
-    Result,
-    eyre::{Context, bail},
+    Result, Section, SectionExt,
+    eyre::{Context, Report, bail},
 };
 use derive_more::Debug;
 use futures::StreamExt;
+use num_traits::ToPrimitive;
 use sqlx::{PgPool, migrate::Migrator};
-
-use crate::{
-    auth::{AccountId, AuthenticatedToken, OrgId, RawToken},
-    storage::Key,
-};
+use tracing::{debug, warn};
 
 /// A connected Postgres database instance.
 #[derive(Clone, Debug)]
@@ -52,155 +48,317 @@ impl Postgres {
         }
         Ok(())
     }
-
-    /// Validate the provided raw token in the database.
-    ///
-    /// If the token is valid, returns the authenticated token. If the token is
-    /// invalid, returns `None`; errors are only returned if there is an error
-    /// communicating with the database.
-    #[tracing::instrument(name = "Postgres::validate", skip(token))]
-    pub async fn validate(
-        &self,
-        org_id: OrgId,
-        token: RawToken,
-    ) -> Result<Option<AuthenticatedToken>> {
-        sqlx::query!(
-            "select account.id
-            from account
-            join api_key on account.id = api_key.account_id
-            where account.organization_id = $1
-            and api_key.content = $2",
-            org_id.as_i64(),
-            token.as_str(),
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .context("fetch account id for token")
-        .map(|query| {
-            query.map(|row| AuthenticatedToken {
-                account_id: AccountId::from_i64(row.id),
-                org_id,
-                token,
-            })
-        })
-    }
-
-    /// Check if the given account has access to the given CAS key.
-    #[tracing::instrument(name = "Postgres::account_has_cas_key")]
-    pub async fn account_has_cas_key(&self, account_id: AccountId, key: &Key) -> Result<bool> {
-        sqlx::query!(
-            "select exists(
-            select 1 from cas_access
-            join account on cas_access.org_id = account.organization_id
-            where account.id = $1
-            and cas_access.cas_key_id = (select id from cas_key where content = $2))",
-            account_id.as_i64(),
-            key.as_bytes(),
-        )
-        .fetch_one(&self.pool)
-        .await
-        .context("fetch account has cas key")
-        .map(|query| query.exists.unwrap_or(false))
-    }
-
-    /// Get the allowed CAS keys for the given account.
-    ///
-    /// Returns the top N most frequently accessed keys for the account based on
-    /// access patterns over the last 7 days.
-    #[tracing::instrument(name = "Postgres::account_allowed_cas_keys")]
-    pub async fn account_allowed_cas_keys(
-        &self,
-        account_id: AccountId,
-        limit: u64,
-    ) -> Result<HashSet<Key>> {
-        let mut rows = sqlx::query!(
-            "select cas_key.content, count(*) as freq
-            from frequency_account_cas_key
-            join cas_key on frequency_account_cas_key.cas_key_id = cas_key.id
-            where frequency_account_cas_key.account_id = $1
-            and frequency_account_cas_key.accessed > now() - interval '7 days'
-            group by cas_key.id, cas_key.content
-            order by freq desc
-            limit $2",
-            account_id.as_i64(),
-            limit as i64,
-        )
-        .fetch(&self.pool);
-
-        let mut keys = HashSet::new();
-        while let Some(row) = rows.next().await {
-            let row = row.context("read row")?;
-            let key = Key::from(row.content);
-            keys.insert(key);
-        }
-        Ok(keys)
-    }
-
-    /// Grant an organization access to a CAS key.
-    ///
-    /// This is idempotent: if the org already has access, this is a no-op.
-    /// The key is automatically inserted into `cas_keys` if it doesn't exist.
-    #[tracing::instrument(name = "Postgres::grant_org_cas_key")]
-    pub async fn grant_org_cas_key(&self, org_id: OrgId, key: &Key) -> Result<()> {
-        // We use a two-CTE approach to handle the "insert or get existing"
-        // pattern in a single round trip without creating dead tuples:
-        //
-        // 1. `inserted` CTE: tries to insert the key, returns ID if successful
-        // 2. `key_id` CTE: unions the insert result with a fallback SELECT that only
-        //    runs if the insert returned nothing (due to conflict)
-        // 3. Final INSERT: grants access using the key ID from step 2
-        //
-        // We avoid using `ON CONFLICT DO UPDATE` because that creates dead
-        // tuples even when doing a no-op update, which increases vacuum
-        // overhead.
-        sqlx::query!(
-            "with inserted as (
-                insert into cas_key (content)
-                values ($2)
-                on conflict (content) do nothing
-                returning id
-            ),
-            key_id as (
-                select id from inserted
-                union all
-                select id from cas_key where content = $2
-                limit 1
-            )
-            insert into cas_access (org_id, cas_key_id)
-            select $1, id from key_id
-            on conflict (org_id, cas_key_id) do nothing",
-            org_id.as_i64(),
-            key.as_bytes(),
-        )
-        .execute(&self.pool)
-        .await
-        .context("grant org access to cas key")?;
-
-        Ok(())
-    }
-
-    /// Record that an account accessed a CAS key.
-    ///
-    /// This is used for frequency tracking to preload hot keys into memory.
-    #[tracing::instrument(name = "Postgres::record_cas_key_access")]
-    pub async fn record_cas_key_access(&self, account_id: AccountId, key: &Key) -> Result<()> {
-        sqlx::query!(
-            "insert into frequency_account_cas_key (account_id, cas_key_id)
-            select $1, id from cas_key where content = $2",
-            account_id.as_i64(),
-            key.as_bytes(),
-        )
-        .execute(&self.pool)
-        .await
-        .context("record cas key access")?;
-
-        Ok(())
-    }
 }
 
 impl AsRef<PgPool> for Postgres {
     fn as_ref(&self) -> &PgPool {
         &self.pool
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Builder)]
+#[builder(on(String, into))]
+pub struct CargoSaveCacheRequest {
+    pub package_name: String,
+    pub package_version: String,
+    pub target: String,
+    pub library_crate_compilation_unit_hash: String,
+    pub build_script_compilation_unit_hash: Option<String>,
+    pub build_script_execution_unit_hash: Option<String>,
+    pub content_hash: String,
+
+    #[debug("{:?}", self.artifacts.len())]
+    #[builder(with = |a: impl IntoIterator<Item = impl Into<CargoArtifact>>| a.into_iter().map(|a| a.into()).collect())]
+    pub artifacts: Vec<CargoArtifact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Builder)]
+#[builder(on(String, into))]
+pub struct CargoArtifact {
+    pub object_key: String,
+    pub path: String,
+    pub mtime_nanos: u128,
+    pub executable: bool,
+}
+
+impl From<&CargoArtifact> for CargoArtifact {
+    fn from(a: &CargoArtifact) -> Self {
+        a.clone()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Builder)]
+#[builder(on(String, into))]
+pub struct CargoRestoreCacheRequest {
+    pub package_name: String,
+    pub package_version: String,
+    pub target: String,
+    pub library_crate_compilation_unit_hash: String,
+    pub build_script_compilation_unit_hash: Option<String>,
+    pub build_script_execution_unit_hash: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CargoLibraryUnitBuildRow {
+    id: i64,
+    content_hash: String,
+}
+
+impl Postgres {
+    #[tracing::instrument(name = "Postgres::save_cargo_cache")]
+    pub async fn cargo_cache_save(&self, request: CargoSaveCacheRequest) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        let package_id = sqlx::query!(
+            r#"
+            WITH inserted AS (
+                INSERT INTO cargo_package (name, version)
+                VALUES ($1, $2)
+                ON CONFLICT (name, version) DO NOTHING
+                RETURNING id
+            )
+            SELECT id FROM inserted
+            UNION ALL
+            SELECT id FROM cargo_package WHERE name = $1 AND version = $2
+            LIMIT 1
+            "#,
+            request.package_name,
+            request.package_version
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .context("upsert package")?
+        .id;
+
+        // Library unit builds are intended to be immutable: we only insert a
+        // new one if it doesn't already exist. If it does exist and the content
+        // hash is different, this indicates an error in how the cache is being
+        // used; we don't want to edit the build to upsert the new data.
+        let existing_build = sqlx::query_as!(
+            CargoLibraryUnitBuildRow,
+            r#"
+            SELECT id, content_hash
+            FROM cargo_library_unit_build
+            WHERE package_id = $1
+            AND target = $2
+            AND library_crate_compilation_unit_hash = $3
+            AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($4, '')
+            AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($5, '')
+            "#,
+            package_id,
+            request.target,
+            request.library_crate_compilation_unit_hash,
+            request.build_script_compilation_unit_hash,
+            request.build_script_execution_unit_hash
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .context("check for existing library unit build")?;
+
+        // If it does exist, and the content hash is the same, there is nothing
+        // more to do. If it exists but the content hash is different, something
+        // has gone wrong with our cache key and we should abort.
+        match existing_build {
+            Some(existing) if existing.content_hash == request.content_hash => {
+                debug!(
+                    library_unit_build_id = existing.id,
+                    library_unit_build_content_hash = existing.content_hash,
+                    "cache.save.already_exists"
+                );
+                return tx.commit().await.context("commit transaction");
+            }
+            Some(existing) => {
+                bail!(
+                    "content hash mismatch for library unit build {}: expected {:?}, actual {:?}",
+                    existing.id,
+                    existing.content_hash,
+                    request.content_hash
+                );
+            }
+            None => {}
+        }
+
+        let library_unit_build_id = sqlx::query!(
+            r#"
+            INSERT INTO cargo_library_unit_build (
+                package_id,
+                target,
+                library_crate_compilation_unit_hash,
+                build_script_compilation_unit_hash,
+                build_script_execution_unit_hash,
+                content_hash
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id
+            "#,
+            package_id,
+            request.target,
+            request.library_crate_compilation_unit_hash,
+            request.build_script_compilation_unit_hash,
+            request.build_script_execution_unit_hash,
+            request.content_hash
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .context("insert library unit build")?
+        .id;
+
+        debug!(library_unit_build_id, "cache.save.inserted");
+
+        // TODO: Bulk insert.
+        for artifact in request.artifacts {
+            let object_id = sqlx::query!(
+                r#"
+                WITH inserted AS (
+                    INSERT INTO cargo_object (key)
+                    VALUES ($1)
+                    ON CONFLICT (key) DO NOTHING
+                    RETURNING id
+                )
+                SELECT id FROM inserted
+                UNION ALL
+                SELECT id FROM cargo_object WHERE key = $1
+                LIMIT 1
+                "#,
+                artifact.object_key
+            )
+            .fetch_one(&mut *tx)
+            .await?
+            .id;
+
+            let mtime = bigdecimal::BigDecimal::from(artifact.mtime_nanos);
+            sqlx::query!(
+                r#"
+                INSERT INTO cargo_library_unit_build_artifact (
+                    library_unit_build_id,
+                    object_id,
+                    path,
+                    mtime,
+                    executable
+                ) VALUES ($1, $2, $3, $4, $5)
+                "#,
+                library_unit_build_id,
+                object_id,
+                artifact.path,
+                mtime,
+                artifact.executable
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await.context("commit transaction")
+    }
+
+    #[tracing::instrument(name = "Postgres::cargo_cache_restore")]
+    pub async fn cargo_cache_restore(
+        &self,
+        request: CargoRestoreCacheRequest,
+    ) -> Result<Vec<CargoArtifact>, Report> {
+        let mut tx = self.pool.begin().await?;
+
+        let unit_to_restore = {
+            // We would normally use a `split_first` approach here, but this
+            // streaming approach allows us to get the same result without
+            // buffering the entire collection.
+            let mut unit_build = Option::<CargoLibraryUnitBuildRow>::None;
+            let mut rows = sqlx::query_as!(
+                CargoLibraryUnitBuildRow,
+                r#"
+                SELECT
+                    cargo_library_unit_build.id,
+                    cargo_library_unit_build.content_hash
+                FROM cargo_package
+                JOIN cargo_library_unit_build ON cargo_package.id = cargo_library_unit_build.package_id
+                WHERE
+                    cargo_package.name = $1
+                    AND cargo_package.version = $2
+                    AND target = $3
+                    AND library_crate_compilation_unit_hash = $4
+                    AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($5, '')
+                    AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($6, '')
+                "#,
+                request.package_name,
+                request.package_version,
+                request.target,
+                request.library_crate_compilation_unit_hash,
+                request.build_script_compilation_unit_hash,
+                request.build_script_execution_unit_hash
+            )
+            .fetch(&mut *tx);
+            while let Some(row) = rows.next().await {
+                let row = row
+                    .context("query library unit build")
+                    .with_section(|| format!("{request:#?}").header("Request:"))?;
+                match unit_build.as_ref() {
+                    None => unit_build = Some(row),
+
+                    // Multiple builds with same unit hashes but different
+                    // content_hash: the cache key is insufficient to uniquely
+                    // identify builds. We log the warning for our
+                    // logs/debugging and otherwise present this to the client
+                    // as a cache miss.
+                    Some(existing) if existing.content_hash != row.content_hash => {
+                        warn!(
+                            existing_content_hash = ?existing.content_hash,
+                            new_content_hash = ?row.content_hash,
+                            package_name = %request.package_name,
+                            package_version = %request.package_version,
+                            "cache.restore.content_hash_mismatch"
+                        );
+                        return Ok(vec![]);
+                    }
+
+                    // Multiple builds with same unit hashes AND same
+                    // content_hash are perfectly fine; in that case we could
+                    // restore any of them without issue so we just restore the
+                    // first one.
+                    Some(_) => {}
+                }
+            }
+            match unit_build {
+                Some(unit_build) => unit_build,
+                None => {
+                    debug!("cache.restore.miss");
+                    return Ok(vec![]);
+                }
+            }
+        };
+
+        let mut artifacts = Vec::<CargoArtifact>::new();
+        let mut rows = sqlx::query!(
+            r#"
+            SELECT
+                cargo_object.key,
+                cargo_library_unit_build_artifact.path,
+                cargo_library_unit_build_artifact.mtime,
+                cargo_library_unit_build_artifact.executable
+            FROM cargo_library_unit_build_artifact
+            JOIN cargo_object ON cargo_library_unit_build_artifact.object_id = cargo_object.id
+            WHERE
+                cargo_library_unit_build_artifact.library_unit_build_id = $1
+            "#,
+            unit_to_restore.id
+        )
+        .fetch(&mut *tx);
+        while let Some(row) = rows.next().await {
+            let row = row
+                .context("query artifacts")
+                .with_section(|| format!("{unit_to_restore:#?}").header("Library unit build:"))?;
+            artifacts.push(CargoArtifact {
+                object_key: row.key,
+                path: row.path,
+                mtime_nanos: row.mtime.to_u128().unwrap_or_default(),
+                executable: row.executable,
+            });
+        }
+
+        debug!(
+            library_unit_build_id = unit_to_restore.id,
+            "cache.restore.hit"
+        );
+
+        Ok(artifacts)
     }
 }
 

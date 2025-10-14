@@ -193,14 +193,16 @@ impl Disk {
     ///   do so and in that world we may no longer be able to trust "exists"
     ///   checks, but that's not the world we're in today.
     ///
-    /// This method might incorrectly return that the key doesn't exist due to
-    /// an issue checking the file system. This isn't ideal, but it's _okay_,
-    /// because having the client write the blob again at worst won't change the
-    /// existing data.
+    /// Returns `Ok(true)` if the key exists, `Ok(false)` if it does not exist,
+    /// and `Err` if there was an error checking (e.g., permission denied).
     #[tracing::instrument(name = "Disk::exists")]
-    pub async fn exists(&self, key: &Key) -> bool {
+    pub async fn exists(&self, key: &Key) -> Result<bool> {
         let path = self.key_path(key);
-        metadata(&path).await.is_ok()
+        match metadata(&path).await {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err).context(format!("check if blob exists at {path:?}")),
+        }
     }
 
     /// Read the content from storage for the provided key.
@@ -222,7 +224,7 @@ impl Disk {
     #[tracing::instrument(name = "Disk::write", skip(content))]
     pub async fn write(&self, key: &Key, content: impl AsyncRead + Unpin) -> Result<()> {
         let path = self.key_path(key);
-        if self.exists(key).await {
+        if self.exists(key).await? {
             return Ok(());
         }
 
@@ -419,7 +421,7 @@ mod tests {
 
         let key = key_for(&content);
         storage.write_buffered(&key, &content).await?;
-        pretty_assert_eq!(storage.exists(&key).await, true);
+        pretty_assert_eq!(storage.exists(&key).await?, true);
 
         let read_content = storage.read_buffered(&key).await?;
         pretty_assert_eq!(read_content, content);
@@ -469,7 +471,7 @@ mod tests {
 
         let key = key_for(b"nonexistent");
 
-        assert!(!storage.exists(&key).await);
+        assert!(!storage.exists(&key).await?);
         assert!(storage.read_buffered(&key).await.is_err());
 
         Ok(())
@@ -545,8 +547,14 @@ mod tests {
         let (storage, _temp) = Disk::new_temp().await.expect("temp dir");
 
         let key = key_for(&content);
-        prop_assert!(!storage.exists(&key).await, "doesn't exist before write");
+        prop_assert!(
+            !storage.exists(&key).await.expect("exists check"),
+            "doesn't exist before write"
+        );
         storage.write_buffered(&key, &content).await.expect("write");
-        prop_assert!(storage.exists(&key).await, "exists after write");
+        prop_assert!(
+            storage.exists(&key).await.expect("exists check"),
+            "exists after write"
+        );
     }
 }
