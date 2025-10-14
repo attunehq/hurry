@@ -66,7 +66,7 @@ impl FsCas {
     #[instrument(name = "FsCas::store", skip(content))]
     pub async fn store(&self, content: &[u8]) -> Result<Blake3> {
         let key = Blake3::from_buffer(content);
-        let dst = self.root.try_join_file(key.as_string())?;
+        let dst = self.root.try_join_file(key.as_str())?;
         fs::write(&dst, content).await?;
         debug!(?key, bytes = ?content.len(), "stored content");
         Ok(key)
@@ -75,7 +75,7 @@ impl FsCas {
     /// Get the entry out of the CAS.
     #[instrument(name = "FsCas::get")]
     pub async fn get(&self, key: &Blake3) -> Result<Option<Vec<u8>>> {
-        let src = self.root.try_join_file(key.as_string())?;
+        let src = self.root.try_join_file(key.as_str())?;
         fs::read_buffered(&src).await
     }
 
@@ -83,7 +83,7 @@ impl FsCas {
     /// Errors if the entry is not available.
     #[instrument(name = "FsCas::get")]
     pub async fn must_get(&self, key: &Blake3) -> Result<Vec<u8>> {
-        let src = self.root.try_join_file(key.as_string())?;
+        let src = self.root.try_join_file(key.as_str())?;
         fs::must_read_buffered(&src).await
     }
 }

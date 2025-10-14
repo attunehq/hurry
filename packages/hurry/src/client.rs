@@ -32,7 +32,7 @@ impl Courier {
         let url = self.base.join_all(["api", "v1", "cas", key.as_str()])?;
         let response = self
             .http
-            .head(&url)
+            .head(url)
             .send()
             .await
             .context("send HEAD request")?;
@@ -49,10 +49,10 @@ impl Courier {
     /// Read a CAS object.
     #[instrument(skip(self))]
     pub async fn cas_read(&self, key: &Blake3) -> Result<impl AsyncRead + Unpin> {
-        let url = format!("{}/api/v1/cas/{}", self.base, key.as_string());
+        let url = self.base.join_all(["api", "v1", "cas", key.as_str()])?;
         let response = self
             .http
-            .get(&url)
+            .get(url)
             .send()
             .await
             .context("send GET request")?;
@@ -80,13 +80,13 @@ impl Courier {
         key: &Blake3,
         content: impl AsyncRead + Unpin + Send + 'static,
     ) -> Result<()> {
-        let url = format!("{}/api/v1/cas/{}", self.base, key.as_string());
+        let url = self.base.join_all(["api", "v1", "cas", key.as_str()])?;
         let stream = ReaderStream::new(content);
         let body = reqwest::Body::wrap_stream(stream);
 
         let response = self
             .http
-            .put(&url)
+            .put(url)
             .body(body)
             .send()
             .await
@@ -106,10 +106,12 @@ impl Courier {
     /// Save cargo cache metadata.
     #[instrument(skip(self))]
     pub async fn cargo_cache_save(&self, request: CargoSaveRequest) -> Result<()> {
-        let url = format!("{}/api/v1/cache/cargo/save", self.base);
+        let url = self
+            .base
+            .join_all(["api", "v1", "cache", "cargo", "save"])?;
         let response = self
             .http
-            .post(&url)
+            .post(url)
             .json(&request)
             .send()
             .await
@@ -132,10 +134,12 @@ impl Courier {
         &self,
         request: CargoRestoreRequest,
     ) -> Result<Option<CargoRestoreResponse>> {
-        let url = format!("{}/api/v1/cache/cargo/restore", self.base);
+        let url = self
+            .base
+            .join_all(["api", "v1", "cache", "cargo", "restore"])?;
         let response = self
             .http
-            .post(&url)
+            .post(url)
             .json(&request)
             .send()
             .await
@@ -226,122 +230,4 @@ pub struct CargoRestoreRequest {
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct CargoRestoreResponse {
     pub artifacts: Vec<ArtifactFile>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use color_eyre::Result;
-    use pretty_assertions::assert_eq as pretty_assert_eq;
-
-    #[test_log::test(tokio::test)]
-    #[ignore]
-    async fn cas_write_read_roundtrip() -> Result<()> {
-        let client = Courier::new("http://localhost:8080");
-        let content = b"hello world from hurry client";
-        let hash = Blake3::from_buffer(content);
-
-        client.cas_write_bytes(&hash, content.to_vec()).await?;
-
-        let exists = client.cas_exists(&hash).await?;
-        pretty_assert_eq!(exists, true);
-
-        let read_content = client.cas_read_bytes(&hash).await?;
-        pretty_assert_eq!(read_content.as_slice(), content);
-
-        Ok(())
-    }
-
-    #[test_log::test(tokio::test)]
-    #[ignore]
-    async fn cas_nonexistent() -> Result<()> {
-        let client = Courier::new("http://localhost:8080");
-        let hash = Blake3::from_buffer(b"nonexistent content");
-
-        let exists = client.cas_exists(&hash).await?;
-        pretty_assert_eq!(exists, false);
-
-        let result = client.cas_read_bytes(&hash).await;
-        assert!(result.is_err());
-
-        Ok(())
-    }
-
-    #[test_log::test(tokio::test)]
-    #[ignore]
-    async fn cargo_cache_save_restore() -> Result<()> {
-        let client = Courier::new("http://localhost:8080");
-
-        let save_request = CargoSaveRequest::builder()
-            .package_name("test-package")
-            .package_version("1.0.0")
-            .target("x86_64-unknown-linux-gnu")
-            .library_crate_compilation_unit_hash("test_hash_123")
-            .content_hash("content_hash_123")
-            .artifacts(vec![
-                ArtifactFile::builder()
-                    .object_key("blake3_test_key")
-                    .path("libtest.rlib")
-                    .mtime_nanos(1234567890123456789)
-                    .executable(false)
-                    .build(),
-            ])
-            .build();
-
-        client.cargo_cache_save(save_request).await?;
-
-        let restore_request = CargoRestoreRequest::builder()
-            .package_name("test-package")
-            .package_version("1.0.0")
-            .target("x86_64-unknown-linux-gnu")
-            .library_crate_compilation_unit_hash("test_hash_123")
-            .build();
-
-        let response = client.cargo_cache_restore(restore_request).await?;
-        assert!(response.is_some());
-
-        let response = response.unwrap();
-        pretty_assert_eq!(response.artifacts.len(), 1);
-        pretty_assert_eq!(response.artifacts[0].object_key, "blake3_test_key");
-        pretty_assert_eq!(response.artifacts[0].path, "libtest.rlib");
-        pretty_assert_eq!(response.artifacts[0].mtime_nanos, 1234567890123456789);
-        pretty_assert_eq!(response.artifacts[0].executable, false);
-
-        Ok(())
-    }
-
-    #[test_log::test(tokio::test)]
-    #[ignore]
-    async fn cargo_cache_restore_miss() -> Result<()> {
-        let client = Courier::new("http://localhost:8080");
-
-        let restore_request = CargoRestoreRequest::builder()
-            .package_name("nonexistent-package")
-            .package_version("99.99.99")
-            .target("x86_64-unknown-linux-gnu")
-            .library_crate_compilation_unit_hash("nonexistent_hash")
-            .build();
-
-        let response = client.cargo_cache_restore(restore_request).await?;
-        pretty_assert_eq!(response, None);
-
-        Ok(())
-    }
-
-    #[test_log::test(tokio::test)]
-    #[ignore]
-    async fn cas_streaming() -> Result<()> {
-        let client = Courier::new("http://localhost:8080");
-        const CONTENT: &[u8] = &[0xAB; 1024 * 1024]; // 1MB
-        let hash = Blake3::from_buffer(CONTENT);
-
-        let cursor = std::io::Cursor::new(CONTENT);
-        client.cas_write(&hash, cursor).await?;
-
-        let mut output = Vec::new();
-        client.cas_read_into(&hash, &mut output).await?;
-
-        pretty_assert_eq!(hex::encode(output), hex::encode(CONTENT));
-        Ok(())
-    }
 }

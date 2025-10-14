@@ -400,7 +400,7 @@ impl BuildScriptOutputLine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cargo::{Profile, Workspace};
+    use crate::cargo::{CargoBuildArguments, Profile, Workspace};
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use simple_test_case::test_case;
 
