@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT content_hash\n        FROM cargo_library_unit_build\n        WHERE\n            package_id = $1\n            AND target = $2\n            AND library_crate_compilation_unit_hash = $3\n            AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($4, '')\n            AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($5, '')\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content_hash",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "18e422c3e7dc3980e6d737c230fe358702d1f6d88cb4dadb9b319f56de90fd1d"
+}
