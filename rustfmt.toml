@@ -1,0 +1,5 @@
+# This benchmark is currently mostly commented out as it's broken;
+# skip it for that reason.
+ignore = ["**/benches/cargo_cache.rs"]
+
+wrap_comments = true

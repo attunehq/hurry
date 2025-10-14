@@ -219,17 +219,17 @@ pub enum BuildScriptOutputLine {
 
     /// All other lines that are not cargo directives.
     ///
-    /// Build scripts can output arbitrary text to stdout for diagnostic purposes.
-    /// Cargo only interprets lines starting with `cargo:` as directives and ignores
-    /// everything else. Common examples include:
+    /// Build scripts can output arbitrary text to stdout for diagnostic
+    /// purposes. Cargo only interprets lines starting with `cargo:` as
+    /// directives and ignores everything else. Common examples include:
     /// - Debug/diagnostic output (e.g., "Compiling native library...")
     /// - Empty lines
     /// - Rust debug output (e.g., "OUT_DIR = Some(...)")
     /// - Unknown cargo directives (e.g., "cargo:unknown-directive=value")
     /// - Malformed directives (e.g., "cargo:rustc-env=INVALID")
     ///
-    /// These lines are preserved as-is during backup and restoration to maintain
-    /// the complete output file.
+    /// These lines are preserved as-is during backup and restoration to
+    /// maintain the complete output file.
     Other(String),
 }
 

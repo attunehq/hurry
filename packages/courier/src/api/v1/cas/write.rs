@@ -9,9 +9,9 @@ use crate::storage::{Disk, Key};
 
 /// Write the content to the CAS for the given key.
 ///
-/// This handler implements the PUT endpoint for storing blob content. It streams the
-/// request body to disk (compressing with zstd) and validates the hash matches the
-/// provided key.
+/// This handler implements the PUT endpoint for storing blob content. It
+/// streams the request body to disk (compressing with zstd) and validates the
+/// hash matches the provided key.
 ///
 /// ## Idempotency
 ///

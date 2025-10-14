@@ -14,9 +14,10 @@
 //!
 //! ## Response types
 //!
-//! Most handlers return a response type that implements [`IntoResponse`](axum::response::IntoResponse)[^2].
-//! This is a trait that allows handlers to return a response without having to
-//! manually implement the response type.
+//! Most handlers return a response type that implements
+//! [`IntoResponse`](axum::response::IntoResponse)[^2]. This is a trait that
+//! allows handlers to return a response without having to manually implement
+//! the response type.
 //!
 //! We do it this way instead of just returning a more generic response type
 //! because it supports better documentation and makes it easier to realize if

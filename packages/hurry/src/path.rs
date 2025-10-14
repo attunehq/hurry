@@ -14,15 +14,14 @@
 //! - We used `Utf8Path` and friends because it was convenient.
 //!
 //! We also had some needs that no path-like type provided:
-//! - We want all FS operations to go through the `fs` module,
-//!   so operations like `PathBuf::exists` were not allowed,
-//!   but we had no real way to actually enforce this.
-//! - We want convenient creation of relative paths, and convenient
-//!   conversion of relative paths to absolute paths,
-//!   ideally cheaply.
-//! - At the same time, we don't want relative paths to bend over backwards
-//!   to create a "relative path" that is _so relative_ that it isn't
-//!   cross platform/machine anymore (`relative_path`, I'm looking at you).
+//! - We want all FS operations to go through the `fs` module, so operations
+//!   like `PathBuf::exists` were not allowed, but we had no real way to
+//!   actually enforce this.
+//! - We want convenient creation of relative paths, and convenient conversion
+//!   of relative paths to absolute paths, ideally cheaply.
+//! - At the same time, we don't want relative paths to bend over backwards to
+//!   create a "relative path" that is _so relative_ that it isn't cross
+//!   platform/machine anymore (`relative_path`, I'm looking at you).
 //!
 //! Juggling all these different path types has turned into a nightmare
 //! almost immediately, so we've created this module for our own path types

@@ -7,8 +7,8 @@ use crate::storage::{Disk, Key};
 
 /// Check whether the given key exists in the CAS.
 ///
-/// This handler implements the HEAD endpoint for checking blob existence without
-/// downloading the full content.
+/// This handler implements the HEAD endpoint for checking blob existence
+/// without downloading the full content.
 ///
 /// ## TOCTOU (Time of Check Time of Use)
 ///

@@ -115,8 +115,8 @@ impl Disk {
     /// We use a relatively large buffer size because:
     /// - We assume we're typically reading/writing relatively large blobs (in
     ///   the megabytes) mostly backed by network transfers.
-    /// - The `Blake3` hash implementation benefits from SIMD instructions if
-    ///   we feed it larger chunks.
+    /// - The `Blake3` hash implementation benefits from SIMD instructions if we
+    ///   feed it larger chunks.
     ///
     /// At the same time we don't want to go overboard: copying the buffer can't
     /// be so large that it blocks the event loop for too long, and we're
@@ -240,10 +240,10 @@ impl Disk {
         let mut content = BufReader::with_capacity(Self::DEFAULT_BUF_SIZE, content);
 
         // We need to write the content to a temporary file first:
-        // - Once the file exists in its final destination it's assumed that
-        //   it'll never change, so we can't partially write the content.
-        // - Other instances could be trying to write the same file at the same
-        //   time; a rename is atomic but a partial write is not.
+        // - Once the file exists in its final destination it's assumed that it'll never
+        //   change, so we can't partially write the content.
+        // - Other instances could be trying to write the same file at the same time; a
+        //   rename is atomic but a partial write is not.
         let temp = temp_path(&path);
         let file = File::create(&temp).await.context("create temporary file")?;
 
@@ -522,8 +522,8 @@ mod tests {
     }
 
     /// The test helper `write_buffered` and `read_buffered` use the streaming
-    /// API internally so this test is mainly just to double check that they work
-    /// as expected.
+    /// API internally so this test is mainly just to double check that they
+    /// work as expected.
     #[proptest(async = "tokio")]
     async fn streaming_roundtrip(#[any] content: Vec<u8>) {
         let (storage, _temp) = Disk::new_temp().await.expect("temp dir");

@@ -128,14 +128,13 @@ pub async fn exec(options: Options) -> Result<()> {
         // user messages that are emitted on STDERR.
         //
         // We don't use this integration point for two reasons:
-        // 1. These messages don't actually give us anything that we don't
-        //    already get from the build plan and build script output.
-        // 2. Enabling this flag actually _changes_ the interactive user
-        //    messages on STDERR. In particular, certain warnings and progress
-        //    messages are different (because they are now emitted on STDOUT as
-        //    JSON messages e.g. compiler errors and warnings), and we now need
-        //    to add logic to manually repaint the progress bar when messages
-        //    are emitted.
+        // 1. These messages don't actually give us anything that we don't already get
+        //    from the build plan and build script output.
+        // 2. Enabling this flag actually _changes_ the interactive user messages on
+        //    STDERR. In particular, certain warnings and progress messages are
+        //    different (because they are now emitted on STDOUT as JSON messages e.g.
+        //    compiler errors and warnings), and we now need to add logic to manually
+        //    repaint the progress bar when messages are emitted.
         //
         // It's just a whole lot of effort for no incremental value. Instead, we
         // reconstruct information from these messages using the build plan and
