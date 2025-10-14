@@ -1,7 +1,7 @@
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
-use derive_more::From;
+use derive_more::{Debug, From};
 use serde::{Deserialize, Serialize};
 use tap::Pipe;
 use tracing::{error, info};
@@ -22,6 +22,7 @@ pub struct RestoreRequest {
 
 #[derive(Debug, Clone, Serialize, From)]
 pub struct RestoreResponse {
+    #[debug("{:?}", self.artifacts.len())]
     pub artifacts: Vec<ArtifactFile>,
 }
 
@@ -646,6 +647,190 @@ mod tests {
         });
 
         pretty_assert_eq!(restore_response, expected);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn restore_wrong_package_name(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let save_request = json!({
+            "package_name": "test-crate",
+            "package_version": "1.0.0",
+            "target": "x86_64-unknown-linux-gnu",
+            "library_crate_compilation_unit_hash": "test_hash",
+            "build_script_compilation_unit_hash": null,
+            "build_script_execution_unit_hash": null,
+            "content_hash": "test_content",
+            "artifacts": [{
+                "object_key": "test_key",
+                "path": "libtest.rlib",
+                "mtime_nanos": 1000000000000000000u128,
+                "executable": false
+            }]
+        });
+
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .json(&save_request)
+            .await;
+        response.assert_status(StatusCode::CREATED);
+
+        let restore_request = json!({
+            "package_name": "wrong-name",
+            "package_version": "1.0.0",
+            "target": "x86_64-unknown-linux-gnu",
+            "library_crate_compilation_unit_hash": "test_hash",
+            "build_script_compilation_unit_hash": null,
+            "build_script_execution_unit_hash": null
+        });
+
+        let response = server
+            .post("/api/v1/cache/cargo/restore")
+            .json(&restore_request)
+            .await;
+        response.assert_status(StatusCode::NOT_FOUND);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn restore_wrong_package_version(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let save_request = json!({
+            "package_name": "test-crate",
+            "package_version": "1.0.0",
+            "target": "x86_64-unknown-linux-gnu",
+            "library_crate_compilation_unit_hash": "test_hash",
+            "build_script_compilation_unit_hash": null,
+            "build_script_execution_unit_hash": null,
+            "content_hash": "test_content",
+            "artifacts": [{
+                "object_key": "test_key",
+                "path": "libtest.rlib",
+                "mtime_nanos": 1000000000000000000u128,
+                "executable": false
+            }]
+        });
+
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .json(&save_request)
+            .await;
+        response.assert_status(StatusCode::CREATED);
+
+        let restore_request = json!({
+            "package_name": "test-crate",
+            "package_version": "2.0.0",
+            "target": "x86_64-unknown-linux-gnu",
+            "library_crate_compilation_unit_hash": "test_hash",
+            "build_script_compilation_unit_hash": null,
+            "build_script_execution_unit_hash": null
+        });
+
+        let response = server
+            .post("/api/v1/cache/cargo/restore")
+            .json(&restore_request)
+            .await;
+        response.assert_status(StatusCode::NOT_FOUND);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn restore_wrong_target(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let save_request = json!({
+            "package_name": "test-crate",
+            "package_version": "1.0.0",
+            "target": "x86_64-unknown-linux-gnu",
+            "library_crate_compilation_unit_hash": "test_hash",
+            "build_script_compilation_unit_hash": null,
+            "build_script_execution_unit_hash": null,
+            "content_hash": "test_content",
+            "artifacts": [{
+                "object_key": "test_key",
+                "path": "libtest.rlib",
+                "mtime_nanos": 1000000000000000000u128,
+                "executable": false
+            }]
+        });
+
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .json(&save_request)
+            .await;
+        response.assert_status(StatusCode::CREATED);
+
+        let restore_request = json!({
+            "package_name": "test-crate",
+            "package_version": "1.0.0",
+            "target": "aarch64-apple-darwin",
+            "library_crate_compilation_unit_hash": "test_hash",
+            "build_script_compilation_unit_hash": null,
+            "build_script_execution_unit_hash": null
+        });
+
+        let response = server
+            .post("/api/v1/cache/cargo/restore")
+            .json(&restore_request)
+            .await;
+        response.assert_status(StatusCode::NOT_FOUND);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn restore_wrong_library_crate_hash(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let save_request = json!({
+            "package_name": "test-crate",
+            "package_version": "1.0.0",
+            "target": "x86_64-unknown-linux-gnu",
+            "library_crate_compilation_unit_hash": "correct_hash",
+            "build_script_compilation_unit_hash": null,
+            "build_script_execution_unit_hash": null,
+            "content_hash": "test_content",
+            "artifacts": [{
+                "object_key": "test_key",
+                "path": "libtest.rlib",
+                "mtime_nanos": 1000000000000000000u128,
+                "executable": false
+            }]
+        });
+
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .json(&save_request)
+            .await;
+        response.assert_status(StatusCode::CREATED);
+
+        let restore_request = json!({
+            "package_name": "test-crate",
+            "package_version": "1.0.0",
+            "target": "x86_64-unknown-linux-gnu",
+            "library_crate_compilation_unit_hash": "wrong_hash",
+            "build_script_compilation_unit_hash": null,
+            "build_script_execution_unit_hash": null
+        });
+
+        let response = server
+            .post("/api/v1/cache/cargo/restore")
+            .json(&restore_request)
+            .await;
+        response.assert_status(StatusCode::NOT_FOUND);
 
         Ok(())
     }

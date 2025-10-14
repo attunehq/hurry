@@ -56,7 +56,7 @@ impl AsRef<PgPool> for Postgres {
     }
 }
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Builder)]
 #[builder(on(String, into))]
 pub struct CargoSaveCacheRequest {
     pub package_name: String,
@@ -66,11 +66,13 @@ pub struct CargoSaveCacheRequest {
     pub build_script_compilation_unit_hash: Option<String>,
     pub build_script_execution_unit_hash: Option<String>,
     pub content_hash: String,
+
+    #[debug("{:?}", self.artifacts.len())]
     #[builder(with = |a: impl IntoIterator<Item = impl Into<CargoArtifact>>| a.into_iter().map(|a| a.into()).collect())]
     pub artifacts: Vec<CargoArtifact>,
 }
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Builder)]
 #[builder(on(String, into))]
 pub struct CargoArtifact {
     pub object_key: String,
@@ -85,7 +87,7 @@ impl From<&CargoArtifact> for CargoArtifact {
     }
 }
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Builder)]
 #[builder(on(String, into))]
 pub struct CargoRestoreCacheRequest {
     pub package_name: String,
@@ -161,8 +163,6 @@ impl Postgres {
                 debug!(
                     library_unit_build_id = existing.id,
                     library_unit_build_content_hash = existing.content_hash,
-                    package_name = %request.package_name,
-                    package_version = %request.package_version,
                     "cache.save.already_exists"
                 );
                 return tx.commit().await.context("commit transaction");
@@ -203,14 +203,7 @@ impl Postgres {
         .context("insert library unit build")?
         .id;
 
-        debug!(
-            library_unit_build_id = library_unit_build_id,
-            library_unit_build_content_hash = request.content_hash,
-            package_name = %request.package_name,
-            package_version = %request.package_version,
-            artifact_count = request.artifacts.len(),
-            "cache.save.inserted"
-        );
+        debug!(library_unit_build_id, "cache.save.inserted");
 
         // TODO: Bulk insert.
         for artifact in request.artifacts {
@@ -326,12 +319,7 @@ impl Postgres {
             match unit_build {
                 Some(unit_build) => unit_build,
                 None => {
-                    debug!(
-                        package_name = %request.package_name,
-                        package_version = %request.package_version,
-                        target = %request.target,
-                        "cache.restore.miss"
-                    );
+                    debug!("cache.restore.miss");
                     return Ok(vec![]);
                 }
             }
@@ -367,9 +355,6 @@ impl Postgres {
 
         debug!(
             library_unit_build_id = unit_to_restore.id,
-            package_name = %request.package_name,
-            package_version = %request.package_version,
-            artifact_count = artifacts.len(),
             "cache.restore.hit"
         );
 
