@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                    INSERT INTO library_unit_build (\n                        package_id,\n                        target,\n                        library_crate_compilation_unit_hash,\n                        build_script_compilation_unit_hash,\n                        build_script_execution_unit_hash,\n                        content_hash\n                    ) VALUES ($1, $2, $3, $4, $5, $6)\n                    RETURNING id AS \"id!: i64\"\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "2abda784f3c2ad254cacaf0e572e520942772303f6674932cedeaa9692a6fee0"
+}
