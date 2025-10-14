@@ -545,7 +545,7 @@ impl CargoCache {
 
                 // Insert each file.
                 for (file, key) in library_unit_files {
-                    let key = key.as_str();
+                    let key = key.as_string();
                     // Find or create CAS object.
                     let object_id = match sqlx::query!(
                         "SELECT id AS \"id!: i64\" FROM object WHERE key = $1",
