@@ -27,7 +27,8 @@ CREATE TABLE cargo_library_unit_build (
   library_crate_compilation_unit_hash TEXT NOT NULL,
   build_script_compilation_unit_hash TEXT,
   build_script_execution_unit_hash TEXT,
-  content_hash TEXT NOT NULL
+  content_hash TEXT NOT NULL,
+  UNIQUE NULLS NOT DISTINCT (package_id, target, library_crate_compilation_unit_hash, build_script_compilation_unit_hash, build_script_execution_unit_hash)
 );
 
 CREATE TABLE cargo_library_unit_build_artifact (

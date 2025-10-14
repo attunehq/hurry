@@ -4,7 +4,7 @@ use color_eyre::eyre::Report;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
-use crate::db::Postgres;
+use crate::db::{CargoSaveCacheRequest, Postgres};
 
 use super::ArtifactFile;
 
@@ -22,9 +22,20 @@ pub struct SaveRequest {
 
 #[tracing::instrument]
 pub async fn handle(Dep(db): Dep<Postgres>, Json(request): Json<SaveRequest>) -> CacheSaveResponse {
-    match save_to_database(&db, request).await {
+    let request = CargoSaveCacheRequest::builder()
+        .package_name(request.package_name)
+        .package_version(request.package_version)
+        .target(request.target)
+        .library_crate_compilation_unit_hash(request.library_crate_compilation_unit_hash)
+        .maybe_build_script_compilation_unit_hash(request.build_script_compilation_unit_hash)
+        .maybe_build_script_execution_unit_hash(request.build_script_execution_unit_hash)
+        .content_hash(request.content_hash)
+        .artifacts(request.artifacts)
+        .build();
+
+    match db.cargo_cache_save(request).await {
         Ok(()) => {
-            info!("cache.save.success");
+            info!("cache.save.created");
             CacheSaveResponse::Created
         }
         Err(err) => {
@@ -32,128 +43,6 @@ pub async fn handle(Dep(db): Dep<Postgres>, Json(request): Json<SaveRequest>) ->
             CacheSaveResponse::Error(err)
         }
     }
-}
-
-async fn save_to_database(db: &Postgres, request: SaveRequest) -> Result<(), Report> {
-    let mut tx = db.pool.begin().await?;
-
-    let package_id = match sqlx::query!(
-        "SELECT id FROM cargo_package WHERE name = $1 AND version = $2",
-        request.package_name,
-        request.package_version
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    {
-        Some(row) => row.id,
-        None => {
-            sqlx::query!(
-                "INSERT INTO cargo_package (name, version) VALUES ($1, $2) RETURNING id",
-                request.package_name,
-                request.package_version
-            )
-            .fetch_one(&mut *tx)
-            .await?
-            .id
-        }
-    };
-
-    match sqlx::query!(
-        r#"
-        SELECT content_hash
-        FROM cargo_library_unit_build
-        WHERE
-            package_id = $1
-            AND target = $2
-            AND library_crate_compilation_unit_hash = $3
-            AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($4, '')
-            AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($5, '')
-        "#,
-        package_id,
-        request.target,
-        request.library_crate_compilation_unit_hash,
-        request.build_script_compilation_unit_hash,
-        request.build_script_execution_unit_hash
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    {
-        Some(row) => {
-            if row.content_hash != request.content_hash {
-                error!(expected = ?row.content_hash, actual = ?request.content_hash, "content hash mismatch");
-            }
-        }
-        None => {
-            let library_unit_build_id = sqlx::query!(
-                r#"
-                INSERT INTO cargo_library_unit_build (
-                    package_id,
-                    target,
-                    library_crate_compilation_unit_hash,
-                    build_script_compilation_unit_hash,
-                    build_script_execution_unit_hash,
-                    content_hash
-                ) VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING id
-                "#,
-                package_id,
-                request.target,
-                request.library_crate_compilation_unit_hash,
-                request.build_script_compilation_unit_hash,
-                request.build_script_execution_unit_hash,
-                request.content_hash
-            )
-            .fetch_one(&mut *tx)
-            .await?
-            .id;
-
-            for artifact in request.artifacts {
-                let object_id = match sqlx::query!(
-                    "SELECT id FROM cargo_object WHERE key = $1",
-                    artifact.object_key
-                )
-                .fetch_optional(&mut *tx)
-                .await?
-                {
-                    Some(row) => row.id,
-                    None => {
-                        sqlx::query!(
-                            "INSERT INTO cargo_object (key) VALUES ($1) RETURNING id",
-                            artifact.object_key
-                        )
-                        .fetch_one(&mut *tx)
-                        .await?
-                        .id
-                    }
-                };
-
-                let mtime_numeric = bigdecimal::BigDecimal::from(artifact.mtime_nanos);
-
-                sqlx::query!(
-                    r#"
-                    INSERT INTO cargo_library_unit_build_artifact (
-                        library_unit_build_id,
-                        object_id,
-                        path,
-                        mtime,
-                        executable
-                    ) VALUES ($1, $2, $3, $4, $5)
-                    "#,
-                    library_unit_build_id,
-                    object_id,
-                    artifact.path,
-                    mtime_numeric,
-                    artifact.executable
-                )
-                .execute(&mut *tx)
-                .await?;
-            }
-        }
-    };
-
-    tx.commit().await?;
-
-    Ok(())
 }
 
 #[derive(Debug)]

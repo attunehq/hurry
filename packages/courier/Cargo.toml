@@ -33,6 +33,7 @@ rusty_paseto = { workspace = true }
 rand = { workspace = true }
 num-traits = "0.2.19"
 bigdecimal = "0.4.8"
+bon.workspace = true
 
 [dev-dependencies]
 async-tempfile = { workspace = true }
