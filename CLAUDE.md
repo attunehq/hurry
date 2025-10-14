@@ -23,6 +23,12 @@ This is a monorepo containing two main projects:
 - **Install hurry locally**: `cargo install --path ./packages/hurry --locked`
 - **Run tests for a package**: `cargo nextest run -p {PACKAGE_NAME}`
 - **Run benchmarks**: `cargo bench --package hurry`
+- **Makefile shortcuts**: Common development commands are available via `make`:
+  - `make format`: Format code with cargo +nightly fmt
+  - `make check`: Run clippy linter
+  - `make check-fix`: Run clippy with automatic fixes
+  - `make precommit`: Run format, check-fix, and sqlx-prepare before committing
+  - `make sqlx-prepare`: Prepare sqlx metadata for both courier and hurry packages
 
 ### Hurry-specific Commands
 
@@ -51,9 +57,10 @@ These scripts are essential for cache correctness validation and performance ana
   - Via sqlx-cli: `cargo sqlx migrate run --source packages/courier/schema/migrations/ --database-url "$COURIER_DATABASE_URL"` (recommended for dev, faster)
   - Via courier binary: `docker compose run --build migrate` (for testing production-like deployments)
 - **Generate new migration**: `sql-schema migration --name {migration_name}` (after editing `schema/schema.sql`)
-- **Run tests with fixtures**: Tests use `#[sqlx::test]` macro with automatic fixture loading
+- **Prepare sqlx metadata**: `make sqlx-prepare` or manually run `cd packages/courier && cargo sqlx prepare --database-url "$COURIER_DATABASE_URL"`
 - **Note**: Migrations are not auto-applied on server startup to prevent accidental production migrations
 - **Note**: When using sqlx-cli commands, you must manually specify `--database-url "$COURIER_DATABASE_URL"` since sqlx doesn't support per-package database URLs
+- **Note**: sqlx metadata files are now stored per-package in `packages/{package}/.sqlx/` rather than at the workspace root
 
 #### Testing
 - **Run API tests**: `RUST_BACKTRACE=1 cargo test --package courier` or `cargo nextest run -p courier`
@@ -75,12 +82,19 @@ These scripts are essential for cache correctness validation and performance ana
 ### Courier Components
 - API routes (`packages/courier/src/api/`): Versioned HTTP handlers using Axum
   - `/api/v1/cas`: Content-addressed storage read/write/check operations
+  - `/api/v1/cache/cargo`: Distributed cargo build cache save/restore endpoints
   - `/api/v1/health`: Health check endpoint
-- Database (`packages/courier/src/db.rs`): PostgreSQL integration via sqlx with migrations (currently empty schema, reserved for future distributed caching)
+- Database (`packages/courier/src/db.rs`): PostgreSQL integration via sqlx with migrations for distributed caching
 - Storage (`packages/courier/src/storage.rs`): Disk-based CAS with zstd compression, blake3 hashing, atomic writes
 - Schema (`packages/courier/schema/`): SQL schema definitions and migration files
   - `schema.sql`: Canonical database state (hand-maintained)
   - `migrations/`: Generated up/down migrations via `sql-schema`
+
+### Courier Data Model (Distributed Caching)
+- `cargo_object`: Content-addressed storage keys (blake3 hashes)
+- `cargo_package`: Package name and version pairs
+- `cargo_library_unit_build`: Represents a specific build configuration with compilation unit hashes
+- `cargo_library_unit_build_artifact`: Individual build artifacts with paths, mtimes, and executable flags
 
 ## Development Workflow
 
