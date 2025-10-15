@@ -148,7 +148,7 @@ impl DepInfoLine {
         } else if let Some(comment) = line.strip_prefix('#') {
             Self::Comment(comment.to_string())
         } else if let Some(output) = line.strip_suffix(':') {
-            let output = QualifiedPath::parse(profile, output)
+            let output = QualifiedPath::parse_string(profile, output)
                 .then_with_context(move || format!("parse output path: {output:?}"))
                 .await?;
             Self::Build(output, Vec::new())
@@ -157,11 +157,11 @@ impl DepInfoLine {
                 bail!("no output/input separator");
             };
 
-            let output = QualifiedPath::parse(profile, output)
+            let output = QualifiedPath::parse_string(profile, output)
                 .then_with_context(move || format!("parse output path: {output:?}"));
             let inputs = stream::iter(inputs.split_whitespace())
                 .map(|input| {
-                    QualifiedPath::parse(profile, input)
+                    QualifiedPath::parse_string(profile, input)
                         .then_with_context(move || format!("parse input path: {input:?}"))
                 })
                 .buffer_unordered(DEFAULT_CONCURRENCY)
@@ -176,10 +176,10 @@ impl DepInfoLine {
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
         match self {
             Self::Build(output, inputs) => {
-                let output = output.reconstruct(profile);
+                let output = output.reconstruct_string(profile);
                 let inputs = inputs
                     .iter()
-                    .map(|input| input.reconstruct(profile))
+                    .map(|input| input.reconstruct_string(profile))
                     .join(" ");
                 format!("{output}: {inputs}")
             }

@@ -18,7 +18,8 @@ use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     cargo::{
-        self, BuildPlan, CargoBuildArguments, CargoCompileMode, Profile, RustcMetadata, Workspace,
+        self, BuildPlan, BuildScriptOutput, CargoBuildArguments, CargoCompileMode, DepInfo,
+        Profile, QualifiedPath, RootOutput, RustcMetadata, Workspace,
     },
     cas::CourierCas,
     client::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest, Courier},
@@ -400,6 +401,8 @@ impl CargoCache {
         for path in files_to_save {
             match fs::read_buffered(&path).await? {
                 Some(content) => {
+                    let content = Self::rewrite_for_storage(&profile_dir, &path, &content).await?;
+
                     let key = self.cas.store(&content).await?;
                     debug!(?path, ?key, "stored object");
 
@@ -408,13 +411,16 @@ impl CargoCache {
                         .await?
                         .ok_or_eyre("could not stat file metadata")?;
                     let mtime_nanos = metadata.mtime.duration_since(UNIX_EPOCH)?.as_nanos();
+                    let portable = QualifiedPath::parse(&profile_dir, path.as_std_path()).await?;
 
-                    artifact_files.push(ArtifactFile {
-                        object_key: key.to_string(),
-                        path: path.to_string(),
-                        mtime_nanos,
-                        executable: metadata.executable,
-                    });
+                    artifact_files.push(
+                        ArtifactFile::builder()
+                            .object_key(key.to_string())
+                            .path(portable)
+                            .mtime_nanos(mtime_nanos)
+                            .executable(metadata.executable)
+                            .build(),
+                    );
 
                     library_unit_files.push((path, key));
                 }
@@ -473,25 +479,140 @@ impl CargoCache {
             return Ok(());
         };
 
+        let profile_dir = self.ws.open_profile_locked(&artifact.profile).await?;
+
         // Restore each artifact file.
         for artifact_file in response.artifacts {
             let key = Blake3::from_hex_string(&artifact_file.object_key)?;
             // TODO: Instead of reading and then writing, maybe we should change
             // the API shape to directly do a copy on supported filesystems?
             let data = self.cas.must_get(&key).await?;
-            // TODO: These are currently all absolute paths. We need to
-            // implement relative path rewrites for portability.
-            let path = AbsFilePath::try_from(artifact_file.path)?;
+
+            // Reconstruct the portable path to an absolute path for this machine.
+            let path = artifact_file.path.reconstruct(&profile_dir);
+            let path = AbsFilePath::try_from(path)?;
+
+            // Reconstruct file contents if needed.
+            let reconstructed_data =
+                Self::reconstruct_from_storage(&profile_dir, &path, &data).await?;
+
             let mtime = UNIX_EPOCH + Duration::from_nanos(artifact_file.mtime_nanos as u64);
             let metadata = fs::Metadata {
                 mtime,
                 executable: artifact_file.executable,
             };
-            fs::write(&path, &data).await?;
+            fs::write(&path, &reconstructed_data).await?;
             metadata.set_file(&path).await?;
         }
 
         Ok(())
+    }
+
+    /// Rewrite file contents before storing in CAS to normalize paths.
+    #[instrument(name = "CargoCache::rewrite_for_storage", skip(content))]
+    async fn rewrite_for_storage(
+        profile_dir: &crate::cargo::workspace::ProfileDir<'_, crate::Locked>,
+        path: &AbsFilePath,
+        content: &[u8],
+    ) -> Result<Vec<u8>> {
+        use itertools::Itertools as _;
+
+        // Determine what kind of file this is based on path structure.
+        let components = path.component_strs_lossy().collect::<Vec<_>>();
+
+        // Look at the last few components to determine file type.
+        // We use .rev() to start from the filename and work backwards.
+        let file_type = components
+            .iter()
+            .rev()
+            .tuple_windows::<(_, _, _)>()
+            .find_map(|(name, parent, gparent)| {
+                let ext = name.as_ref().rsplit_once('.').map(|(_, ext)| ext);
+                match (gparent.as_ref(), parent.as_ref(), name.as_ref(), ext) {
+                    ("build", _, "output", _) => Some("build-script-output"),
+                    ("build", _, "root-output", _) => Some("root-output"),
+                    (_, _, _, Some("d")) => Some("dep-info"),
+                    _ => None,
+                }
+            });
+
+        match file_type {
+            Some("root-output") => {
+                trace!(?path, "rewriting root-output file");
+                let parsed = RootOutput::from_file(profile_dir, path).await?;
+                serde_json::to_vec(&parsed).context("serialize RootOutput")
+            }
+            Some("build-script-output") => {
+                trace!(?path, "rewriting build-script-output file");
+                let parsed = BuildScriptOutput::from_file(profile_dir, path).await?;
+                serde_json::to_vec(&parsed).context("serialize BuildScriptOutput")
+            }
+            Some("dep-info") => {
+                trace!(?path, "rewriting dep-info file");
+                let parsed = DepInfo::from_file(profile_dir, path).await?;
+                serde_json::to_vec(&parsed).context("serialize DepInfo")
+            }
+            None => {
+                // No rewriting needed, store as-is.
+                Ok(content.to_vec())
+            }
+            Some(unknown) => {
+                bail!("unknown file type for rewriting: {unknown}")
+            }
+        }
+    }
+
+    /// Reconstruct file contents after retrieving from CAS.
+    #[instrument(name = "CargoCache::reconstruct_from_storage", skip(content))]
+    async fn reconstruct_from_storage(
+        profile_dir: &crate::cargo::workspace::ProfileDir<'_, crate::Locked>,
+        path: &AbsFilePath,
+        content: &[u8],
+    ) -> Result<Vec<u8>> {
+        use itertools::Itertools as _;
+
+        // Determine what kind of file this is based on path structure.
+        let components = path.component_strs_lossy().collect::<Vec<_>>();
+
+        // Look at the last few components to determine file type.
+        let file_type = components
+            .iter()
+            .rev()
+            .tuple_windows::<(_, _, _)>()
+            .find_map(|(name, parent, gparent)| {
+                let ext = name.as_ref().rsplit_once('.').map(|(_, ext)| ext);
+                match (gparent.as_ref(), parent.as_ref(), name.as_ref(), ext) {
+                    ("build", _, "output", _) => Some("build-script-output"),
+                    ("build", _, "root-output", _) => Some("root-output"),
+                    (_, _, _, Some("d")) => Some("dep-info"),
+                    _ => None,
+                }
+            });
+
+        match file_type {
+            Some("root-output") => {
+                trace!(?path, "reconstructing root-output file");
+                let parsed = serde_json::from_slice::<RootOutput>(content)?;
+                Ok(parsed.reconstruct(profile_dir).into_bytes())
+            }
+            Some("build-script-output") => {
+                trace!(?path, "reconstructing build-script-output file");
+                let parsed = serde_json::from_slice::<BuildScriptOutput>(content)?;
+                Ok(parsed.reconstruct(profile_dir).into_bytes())
+            }
+            Some("dep-info") => {
+                trace!(?path, "reconstructing dep-info file");
+                let parsed = serde_json::from_slice::<DepInfo>(content)?;
+                Ok(parsed.reconstruct(profile_dir).into_bytes())
+            }
+            None => {
+                // No reconstruction needed, use as-is.
+                Ok(content.to_vec())
+            }
+            Some(unknown) => {
+                bail!("unknown file type for reconstruction: {unknown}")
+            }
+        }
     }
 }
 

@@ -43,7 +43,7 @@ impl RootOutput {
             .lines()
             .exactly_one()
             .map_err(|_| eyre!("RootOutput file has more than one line: {content:?}"))?;
-        QualifiedPath::parse(profile, line)
+        QualifiedPath::parse_string(profile, line)
             .await
             .context("parse file")
             .map(Self)
@@ -53,7 +53,7 @@ impl RootOutput {
     /// Reconstruct the file in the context of the profile directory.
     #[instrument(name = "RootOutput::reconstruct")]
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
-        format!("{}", self.0.reconstruct(profile))
+        format!("{}", self.0.reconstruct_string(profile))
     }
 }
 
@@ -268,7 +268,7 @@ impl BuildScriptOutputLine {
 
         match key {
             Self::RERUN_IF_CHANGED => {
-                let path = QualifiedPath::parse(profile, value).await?;
+                let path = QualifiedPath::parse_string(profile, value).await?;
                 Ok(Self::RerunIfChanged(style, path))
             }
             Self::RERUN_IF_ENV_CHANGED => Ok(Self::RerunIfEnvChanged(style, String::from(value))),
@@ -279,13 +279,13 @@ impl BuildScriptOutputLine {
                     Ok(Self::RustcLinkSearch {
                         style,
                         kind: Some(String::from(kind)),
-                        path: QualifiedPath::parse(profile, path).await?,
+                        path: QualifiedPath::parse_string(profile, path).await?,
                     })
                 } else {
                     Ok(Self::RustcLinkSearch {
                         style,
                         kind: None,
-                        path: QualifiedPath::parse(profile, value).await?,
+                        path: QualifiedPath::parse_string(profile, value).await?,
                     })
                 }
             }
@@ -343,7 +343,7 @@ impl BuildScriptOutputLine {
                     "{}{}={}",
                     style.as_str(),
                     Self::RERUN_IF_CHANGED,
-                    path.reconstruct(profile)
+                    path.reconstruct_string(profile)
                 )
             }
             Self::RerunIfEnvChanged(style, var) => {
@@ -361,13 +361,13 @@ impl BuildScriptOutputLine {
                     style.as_str(),
                     Self::RUSTC_LINK_SEARCH,
                     kind,
-                    path.reconstruct(profile)
+                    path.reconstruct_string(profile)
                 ),
                 None => format!(
                     "{}{}={}",
                     style.as_str(),
                     Self::RUSTC_LINK_SEARCH,
-                    path.reconstruct(profile)
+                    path.reconstruct_string(profile)
                 ),
             },
             Self::RustcFlags(style, flags) => {
@@ -431,7 +431,7 @@ mod tests {
 
         match BuildScriptOutputLine::parse(&profile, &line).await {
             BuildScriptOutputLine::RerunIfChanged(style, path) => {
-                pretty_assert_eq!(path.reconstruct(&profile), expected_path);
+                pretty_assert_eq!(path.reconstruct_string(&profile), expected_path);
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RerunIfChanged variant"),
@@ -534,7 +534,7 @@ mod tests {
         match BuildScriptOutputLine::parse(&profile, &line).await {
             BuildScriptOutputLine::RustcLinkSearch { style, kind, path } => {
                 pretty_assert_eq!(kind, None);
-                pretty_assert_eq!(path.reconstruct(&profile), expected_path);
+                pretty_assert_eq!(path.reconstruct_string(&profile), expected_path);
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkSearch variant"),
@@ -563,7 +563,7 @@ mod tests {
         match BuildScriptOutputLine::parse(&profile, &line).await {
             BuildScriptOutputLine::RustcLinkSearch { style, kind, path } => {
                 pretty_assert_eq!(kind, Some(String::from(expected_kind)));
-                pretty_assert_eq!(path.reconstruct(&profile), expected_path);
+                pretty_assert_eq!(path.reconstruct_string(&profile), expected_path);
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkSearch variant"),
