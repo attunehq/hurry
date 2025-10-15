@@ -12,6 +12,7 @@ use color_eyre::{
     eyre::{Context as _, OptionExt, bail},
 };
 use futures::TryStreamExt as _;
+use itertools::Itertools;
 use serde::Serialize;
 use tap::Pipe as _;
 use tracing::{debug, instrument, trace, warn};
@@ -493,15 +494,14 @@ impl CargoCache {
             let path = AbsFilePath::try_from(path)?;
 
             // Reconstruct file contents if needed.
-            let reconstructed_data =
-                Self::reconstruct_from_storage(&profile_dir, &path, &data).await?;
+            let data = Self::reconstruct_from_storage(&profile_dir, &path, &data).await?;
 
             let mtime = UNIX_EPOCH + Duration::from_nanos(artifact_file.mtime_nanos as u64);
             let metadata = fs::Metadata {
                 mtime,
                 executable: artifact_file.executable,
             };
-            fs::write(&path, &reconstructed_data).await?;
+            fs::write(&path, &data).await?;
             metadata.set_file(&path).await?;
         }
 
@@ -515,8 +515,6 @@ impl CargoCache {
         path: &AbsFilePath,
         content: &[u8],
     ) -> Result<Vec<u8>> {
-        use itertools::Itertools as _;
-
         // Determine what kind of file this is based on path structure.
         let components = path.component_strs_lossy().collect::<Vec<_>>();
 
