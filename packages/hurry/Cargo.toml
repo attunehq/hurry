@@ -10,9 +10,6 @@ default = []
 name = "cargo_copy_target"
 harness = false
 [[bench]]
-name = "cargo_cache"
-harness = false
-[[bench]]
 name = "walkdir"
 harness = false
 
@@ -57,7 +54,6 @@ jiff = { workspace = true }
 const-str = { workspace = true, features = ["std", "all"] }
 duplicate = { workspace = true }
 paste = { workspace = true }
-sqlx = { workspace = true, features = ["runtime-tokio", "sqlite"] }
 parse-display = { workspace = true }
 lazy-regex = { workspace = true, features = ["regex", "std"] }
 reqwest = { version = "0.12.24", features = ["json", "stream"] }
