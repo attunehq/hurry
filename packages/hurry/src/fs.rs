@@ -30,6 +30,7 @@ use std::{
 };
 
 use async_walkdir::WalkDir;
+use bon::Builder;
 use color_eyre::{
     Result,
     eyre::{Context, OptionExt, eyre},
@@ -388,7 +389,7 @@ pub async fn read_dir(path: &AbsDirPath) -> Result<ReadDir> {
 /// We will probably need to add more fields as we find things that cargo/rustc
 /// care about that we overlooked; don't treat this as gospel if you think
 /// something is missing.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize, Builder)]
 pub struct Metadata {
     /// The last time the file was modified.
     ///

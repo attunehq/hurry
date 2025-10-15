@@ -16,7 +16,7 @@ use crate::{
     Locked,
     cargo::{QualifiedPath, workspace::ProfileDir},
     fs,
-    path::AbsFilePath,
+    path::{AbsDirPath, AbsFilePath},
 };
 
 /// Represents a "root output" file, used for build scripts.
@@ -58,11 +58,7 @@ impl RootOutput {
 
     /// Reconstruct the file using owned path data.
     #[instrument(name = "RootOutput::reconstruct_raw")]
-    pub fn reconstruct_raw(
-        &self,
-        profile_root: &crate::path::AbsDirPath,
-        cargo_home: &crate::path::AbsDirPath,
-    ) -> String {
+    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
         format!(
             "{}",
             self.0.reconstruct_raw(profile_root, cargo_home).display()
@@ -119,11 +115,7 @@ impl BuildScriptOutput {
 
     /// Reconstruct the file using owned path data.
     #[instrument(name = "BuildScriptOutput::reconstruct_raw")]
-    pub fn reconstruct_raw(
-        &self,
-        profile_root: &crate::path::AbsDirPath,
-        cargo_home: &crate::path::AbsDirPath,
-    ) -> String {
+    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
         self.0
             .iter()
             .map(|line| line.reconstruct_raw(profile_root, cargo_home))
@@ -423,11 +415,7 @@ impl BuildScriptOutputLine {
     }
 
     #[instrument(name = "BuildScriptOutputLine::reconstruct_raw")]
-    pub fn reconstruct_raw(
-        &self,
-        profile_root: &crate::path::AbsDirPath,
-        cargo_home: &crate::path::AbsDirPath,
-    ) -> String {
+    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
         match self {
             Self::RerunIfChanged(style, path) => {
                 format!(

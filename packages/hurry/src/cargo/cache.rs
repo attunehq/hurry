@@ -19,9 +19,10 @@ use tokio::task::JoinSet;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::{
+    Locked,
     cargo::{
         self, BuildPlan, BuildScriptOutput, CargoBuildArguments, CargoCompileMode, DepInfo,
-        Profile, QualifiedPath, RootOutput, RustcMetadata, Workspace,
+        Profile, ProfileDir, QualifiedPath, RootOutput, RustcMetadata, Workspace,
     },
     cas::CourierCas,
     client::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest, Courier},
@@ -407,7 +408,7 @@ impl CargoCache {
         for path in files_to_save {
             match fs::read_buffered(&path).await? {
                 Some(content) => {
-                    let content = Self::rewrite_for_storage(&profile_dir, &path, &content).await?;
+                    let content = Self::rewrite(&profile_dir, &path, &content).await?;
 
                     let key = self.cas.store(&content).await?;
                     debug!(?path, ?key, "stored object");
@@ -494,35 +495,33 @@ impl CargoCache {
             let profile_root = profile_root.clone();
             let cargo_home = cargo_home.clone();
             cas_restore_workers.spawn(async move {
-                let restore = async move |artifact: ArtifactFile| -> Result<()> {
+                let restore = async move |artifact: &ArtifactFile| -> Result<()> {
                     let key = Blake3::from_hex_string(&artifact.object_key)?;
 
                     // Reconstruct the portable path to an absolute path for this machine.
-                    let path = artifact.path.reconstruct_raw(&profile_root, &cargo_home);
-                    let path = AbsFilePath::try_from(path)?;
+                    let path = artifact
+                        .path
+                        .reconstruct_raw(&profile_root, &cargo_home)
+                        .pipe(AbsFilePath::try_from)?;
 
-                    // Download from CAS.
+                    // Get the data from the CAS and reconstruct it according to the local machine.
                     let data = cas.must_get(&key).await?;
-
-                    // Reconstruct file contents if needed.
-                    let data =
-                        Self::reconstruct_from_storage(&profile_root, &cargo_home, &path, &data)
-                            .await?;
+                    let data = Self::reconstruct(&profile_root, &cargo_home, &path, &data).await?;
 
                     // Write the file.
                     let mtime = UNIX_EPOCH + Duration::from_nanos(artifact.mtime_nanos as u64);
-                    let metadata = fs::Metadata {
-                        mtime,
-                        executable: artifact.executable,
-                    };
+                    let metadata = fs::Metadata::builder()
+                        .mtime(mtime)
+                        .executable(artifact.executable)
+                        .build();
                     fs::write(&path, &data).await?;
                     metadata.set_file(&path).await?;
                     Result::<()>::Ok(())
                 };
 
                 while let Ok(artifact) = rx.recv_async().await {
-                    if let Err(error) = restore(artifact).await {
-                        warn!(?error, "failed to restore file");
+                    if let Err(error) = restore(&artifact).await {
+                        warn!(?error, ?artifact, "failed to restore file");
                     }
                 }
             });
@@ -569,8 +568,8 @@ impl CargoCache {
 
     /// Rewrite file contents before storing in CAS to normalize paths.
     #[instrument(name = "CargoCache::rewrite_for_storage", skip(content))]
-    async fn rewrite_for_storage(
-        profile_dir: &crate::cargo::workspace::ProfileDir<'_, crate::Locked>,
+    async fn rewrite(
+        profile_dir: &ProfileDir<'_, Locked>,
         path: &AbsFilePath,
         content: &[u8],
     ) -> Result<Vec<u8>> {
@@ -621,7 +620,7 @@ impl CargoCache {
 
     /// Reconstruct file contents after retrieving from CAS.
     #[instrument(name = "CargoCache::reconstruct_from_storage", skip(content))]
-    async fn reconstruct_from_storage(
+    async fn reconstruct(
         profile_root: &AbsDirPath,
         cargo_home: &AbsDirPath,
         path: &AbsFilePath,

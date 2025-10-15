@@ -15,7 +15,7 @@ use crate::{
     cargo::QualifiedPath,
     ext::{then_context, then_with_context},
     fs::{self, DEFAULT_CONCURRENCY},
-    path::AbsFilePath,
+    path::{AbsDirPath, AbsFilePath},
 };
 
 /// A parsed "dep-info" file.
@@ -89,11 +89,7 @@ impl DepInfo {
 
     /// Reconstruct the "dep-info" file using owned path data.
     #[instrument(name = "DepInfo::reconstruct_raw")]
-    pub fn reconstruct_raw(
-        &self,
-        profile_root: &crate::path::AbsDirPath,
-        cargo_home: &crate::path::AbsDirPath,
-    ) -> String {
+    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
         self.0
             .iter()
             .map(|line| line.reconstruct_raw(profile_root, cargo_home))
@@ -202,11 +198,7 @@ impl DepInfoLine {
     }
 
     #[instrument(name = "DepInfoLine::reconstruct_raw")]
-    pub fn reconstruct_raw(
-        &self,
-        profile_root: &crate::path::AbsDirPath,
-        cargo_home: &crate::path::AbsDirPath,
-    ) -> String {
+    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
         match self {
             Self::Build(output, inputs) => {
                 let output = output.reconstruct_raw(profile_root, cargo_home);
