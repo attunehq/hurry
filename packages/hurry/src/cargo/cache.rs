@@ -9,7 +9,7 @@ use std::{
 use cargo_metadata::TargetKind;
 use color_eyre::{
     Result,
-    eyre::{Context as _, OptionExt, Report, bail},
+    eyre::{Context as _, OptionExt, bail},
 };
 use futures::TryStreamExt as _;
 use serde::Serialize;
@@ -461,70 +461,81 @@ impl CargoCache {
     #[instrument(name = "CargoCache::restore")]
     pub async fn restore(&self, artifact_plan: &ArtifactPlan) -> Result<()> {
         debug!("start restoring");
-        let mut artifact_tasks = JoinSet::new();
-        for artifact in &artifact_plan.artifacts {
-            let courier = self.courier.clone();
-            let artifact = artifact.clone();
-            let artifact_plan = artifact_plan.clone();
-            artifact_tasks.spawn(async move {
-                let request = CargoRestoreRequest::builder()
-                    .package_name(&artifact.package_name)
-                    .package_version(&artifact.package_version)
-                    .target(&artifact_plan.target)
-                    .library_crate_compilation_unit_hash(&artifact.library_crate_compilation_unit_hash)
-                    .maybe_build_script_compilation_unit_hash(
-                        artifact.build_script_compilation_unit_hash.as_ref(),
-                    )
-                    .maybe_build_script_execution_unit_hash(
-                        artifact.build_script_execution_unit_hash.as_ref(),
-                    )
-                    .build();
 
-                let Some(response) = courier.cargo_cache_restore(request).await? else {
-                    debug!(?artifact, "no matching library unit build found");
-                    return Ok(Vec::new());
-                };
+        // TODO: We should probably make this concurrent on something else since this is
+        // likely going to be primarily blocked on network transfer.
+        let worker_count = num_cpus::get();
 
-                // Collect all artifact files into a vec to return for parallel processing.
-                Ok::<Vec<_>, Report>(response.artifacts)
-            });
-        }
-
-        // Wait for all API calls to complete.
-        let results = artifact_tasks.join_all().await;
-        let mut all_files = Vec::new();
-        for result in results {
-            all_files.extend(result?);
-        }
-
-        // Now restore all files in parallel.
-        let mut copy_tasks = JoinSet::new();
-        for artifact_file in all_files {
+        // Normally I don't like buffered channels, but here we let it buffer so that we
+        // can potentially start working on the next artifact_plan while the prior is
+        // still being worked on. We want to avoid uneccesary memory overhead but each
+        // individual artifact file is relatively small so we'd rather trade some space
+        // for latency mitigation here.
+        let (tx, rx) = flume::bounded::<ArtifactFile>(worker_count * 10);
+        let mut cas_restore_workers = JoinSet::new();
+        for _ in 0..worker_count {
             let cas = self.cas.clone();
-            let key = Blake3::from_hex_string(&artifact_file.object_key)?;
-            // TODO: These are currently all absolute paths. We need to
-            // implement relative path rewrites for portability.
-            let path = AbsFilePath::try_from(artifact_file.path)?;
-            let mtime = UNIX_EPOCH + Duration::from_nanos(artifact_file.mtime_nanos as u64);
-            let executable = artifact_file.executable;
+            let rx = rx.clone();
+            cas_restore_workers.spawn(async move {
+                let restore = async move |artifact: ArtifactFile| -> Result<()> {
+                    // TODO: These are currently all absolute paths. We need to
+                    // implement relative path rewrites for portability.
+                    let key = Blake3::from_hex_string(&artifact.object_key)?;
+                    let path = AbsFilePath::try_from(artifact.path)?;
+                    let mtime = UNIX_EPOCH + Duration::from_nanos(artifact.mtime_nanos as u64);
+                    let executable = artifact.executable;
 
-            copy_tasks.spawn(async move {
-                // TODO: Instead of reading and then writing, maybe we
-                // should change the API shape to directly do a copy on
-                // supported filesystems?
-                let data = cas.must_get(&key).await?;
-                let metadata = fs::Metadata {
-                    mtime,
-                    executable,
+                    // TODO: Instead of reading and then writing, maybe we
+                    // should change the API shape to directly do a copy on
+                    // supported filesystems?
+                    let data = cas.must_get(&key).await?;
+                    let metadata = fs::Metadata { mtime, executable };
+                    fs::write(&path, &data).await?;
+                    metadata.set_file(&path).await?;
+                    Result::<()>::Ok(())
                 };
-                fs::write(&path, &data).await?;
-                metadata.set_file(&path).await?;
-                Ok::<(), Report>(())
+
+                while let Ok(artifact) = rx.recv_async().await {
+                    if let Err(error) = restore(artifact).await {
+                        warn!(?error, "failed to restore file");
+                    };
+                }
             });
         }
-        let results = copy_tasks.join_all().await;
-        for result in results {
-            result?;
+
+        for artifact in &artifact_plan.artifacts {
+            let request = CargoRestoreRequest::builder()
+                .package_name(&artifact.package_name)
+                .package_version(&artifact.package_version)
+                .target(&artifact_plan.target)
+                .library_crate_compilation_unit_hash(&artifact.library_crate_compilation_unit_hash)
+                .maybe_build_script_compilation_unit_hash(
+                    artifact.build_script_compilation_unit_hash.as_ref(),
+                )
+                .maybe_build_script_execution_unit_hash(
+                    artifact.build_script_execution_unit_hash.as_ref(),
+                )
+                .build();
+
+            let Some(response) = self.courier.cargo_cache_restore(request).await? else {
+                debug!(?artifact, "no matching library unit build found");
+                continue;
+            };
+
+            for artifact in response.artifacts {
+                if let Err(error) = tx.send_async(artifact).await {
+                    panic!("invariant violated: no restore workers are alive: {error:?}");
+                }
+            }
+        }
+
+        // The channels are done being used here, so we drop them; the workers may still
+        // be using their clones if they're in process downloading and saving files but
+        // they'll keep rx alive until they're all done.
+        drop(rx);
+        drop(tx);
+        while let Some(worker) = cas_restore_workers.join_next().await {
+            worker.context("cas restore worker")?;
         }
 
         debug!("done restoring");
