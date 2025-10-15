@@ -10,7 +10,7 @@ use tracing::instrument;
 use super::workspace::ProfileDir;
 use crate::{
     Locked, fs,
-    path::{AbsFilePath, JoinWith as _, RelFilePath, RelativeTo as _},
+    path::{AbsDirPath, AbsFilePath, JoinWith as _, RelFilePath, RelativeTo as _},
 };
 
 /// A "qualified" path inside a Cargo project.
@@ -105,6 +105,15 @@ impl QualifiedPath {
             QualifiedPath::Rootless(rel) => rel.into(),
             QualifiedPath::RelativeTargetProfile(rel) => profile.root().join(rel).into(),
             QualifiedPath::RelativeCargoHome(rel) => profile.workspace.cargo_home.join(rel).into(),
+        }
+    }
+
+    #[instrument(name = "QualifiedPath::reconstruct_raw")]
+    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> PathBuf {
+        match self {
+            QualifiedPath::Rootless(rel) => rel.into(),
+            QualifiedPath::RelativeTargetProfile(rel) => profile_root.join(rel).into(),
+            QualifiedPath::RelativeCargoHome(rel) => cargo_home.join(rel).into(),
         }
     }
 }

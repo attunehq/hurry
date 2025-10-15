@@ -55,6 +55,19 @@ impl RootOutput {
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
         format!("{}", self.0.reconstruct_string(profile))
     }
+
+    /// Reconstruct the file using owned path data.
+    #[instrument(name = "RootOutput::reconstruct_raw")]
+    pub fn reconstruct_raw(
+        &self,
+        profile_root: &crate::path::AbsDirPath,
+        cargo_home: &crate::path::AbsDirPath,
+    ) -> String {
+        format!(
+            "{}",
+            self.0.reconstruct_raw(profile_root, cargo_home).display()
+        )
+    }
 }
 
 /// Parsed representation of the output of a build script when it was executed.
@@ -101,6 +114,19 @@ impl BuildScriptOutput {
         self.0
             .iter()
             .map(|line| line.reconstruct(profile))
+            .join("\n")
+    }
+
+    /// Reconstruct the file using owned path data.
+    #[instrument(name = "BuildScriptOutput::reconstruct_raw")]
+    pub fn reconstruct_raw(
+        &self,
+        profile_root: &crate::path::AbsDirPath,
+        cargo_home: &crate::path::AbsDirPath,
+    ) -> String {
+        self.0
+            .iter()
+            .map(|line| line.reconstruct_raw(profile_root, cargo_home))
             .join("\n")
     }
 }
@@ -368,6 +394,71 @@ impl BuildScriptOutputLine {
                     style.as_str(),
                     Self::RUSTC_LINK_SEARCH,
                     path.reconstruct_string(profile)
+                ),
+            },
+            Self::RustcFlags(style, flags) => {
+                format!("{}{}={}", style.as_str(), Self::RUSTC_FLAGS, flags)
+            }
+            Self::RustcCfg { style, key, value } => match value {
+                None => {
+                    format!("{}{}={}", style.as_str(), Self::RUSTC_CFG, key)
+                }
+                Some(value) => {
+                    format!("{}{}={}={}", style.as_str(), Self::RUSTC_CFG, key, value)
+                }
+            },
+            Self::RustcCheckCfg(style, check_cfg) => {
+                format!("{}{}={}", style.as_str(), Self::RUSTC_CHECK_CFG, check_cfg)
+            }
+            Self::RustcEnv { style, var, value } => {
+                format!("{}{}={}={}", style.as_str(), Self::RUSTC_ENV, var, value)
+            }
+            Self::Error(style, msg) => format!("{}{}={}", style.as_str(), Self::ERROR, msg),
+            Self::Warning(style, msg) => format!("{}{}={}", style.as_str(), Self::WARNING, msg),
+            Self::Metadata { style, key, value } => {
+                format!("{}{}={}={}", style.as_str(), Self::METADATA, key, value)
+            }
+            Self::Other(s) => s.to_string(),
+        }
+    }
+
+    #[instrument(name = "BuildScriptOutputLine::reconstruct_raw")]
+    pub fn reconstruct_raw(
+        &self,
+        profile_root: &crate::path::AbsDirPath,
+        cargo_home: &crate::path::AbsDirPath,
+    ) -> String {
+        match self {
+            Self::RerunIfChanged(style, path) => {
+                format!(
+                    "{}{}={}",
+                    style.as_str(),
+                    Self::RERUN_IF_CHANGED,
+                    path.reconstruct_raw(profile_root, cargo_home).display()
+                )
+            }
+            Self::RerunIfEnvChanged(style, var) => {
+                format!("{}{}={}", style.as_str(), Self::RERUN_IF_ENV_CHANGED, var)
+            }
+            Self::RustcLinkArg(style, flag) => {
+                format!("{}{}={}", style.as_str(), Self::RUSTC_LINK_ARG, flag)
+            }
+            Self::RustcLinkLib(style, lib) => {
+                format!("{}{}={}", style.as_str(), Self::RUSTC_LINK_LIB, lib)
+            }
+            Self::RustcLinkSearch { style, kind, path } => match kind {
+                Some(kind) => format!(
+                    "{}{}={}={}",
+                    style.as_str(),
+                    Self::RUSTC_LINK_SEARCH,
+                    kind,
+                    path.reconstruct_raw(profile_root, cargo_home).display()
+                ),
+                None => format!(
+                    "{}{}={}",
+                    style.as_str(),
+                    Self::RUSTC_LINK_SEARCH,
+                    path.reconstruct_raw(profile_root, cargo_home).display()
                 ),
             },
             Self::RustcFlags(style, flags) => {

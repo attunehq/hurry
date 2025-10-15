@@ -87,6 +87,19 @@ impl DepInfo {
             .join("\n")
     }
 
+    /// Reconstruct the "dep-info" file using owned path data.
+    #[instrument(name = "DepInfo::reconstruct_raw")]
+    pub fn reconstruct_raw(
+        &self,
+        profile_root: &crate::path::AbsDirPath,
+        cargo_home: &crate::path::AbsDirPath,
+    ) -> String {
+        self.0
+            .iter()
+            .map(|line| line.reconstruct_raw(profile_root, cargo_home))
+            .join("\n")
+    }
+
     /// Iterate over the lines in the file.
     #[instrument(name = "DepInfo::lines")]
     pub fn lines(&self) -> impl Iterator<Item = &DepInfoLine> {
@@ -182,6 +195,31 @@ impl DepInfoLine {
                     .map(|input| input.reconstruct_string(profile))
                     .join(" ");
                 format!("{output}: {inputs}")
+            }
+            DepInfoLine::Space => String::new(),
+            DepInfoLine::Comment(comment) => format!("#{comment}"),
+        }
+    }
+
+    #[instrument(name = "DepInfoLine::reconstruct_raw")]
+    pub fn reconstruct_raw(
+        &self,
+        profile_root: &crate::path::AbsDirPath,
+        cargo_home: &crate::path::AbsDirPath,
+    ) -> String {
+        match self {
+            Self::Build(output, inputs) => {
+                let output = output.reconstruct_raw(profile_root, cargo_home);
+                let inputs = inputs
+                    .iter()
+                    .map(|input| {
+                        input
+                            .reconstruct_raw(profile_root, cargo_home)
+                            .display()
+                            .to_string()
+                    })
+                    .join(" ");
+                format!("{}: {}", output.display(), inputs)
             }
             DepInfoLine::Space => String::new(),
             DepInfoLine::Comment(comment) => format!("#{comment}"),
