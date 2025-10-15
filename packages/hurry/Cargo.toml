@@ -40,7 +40,7 @@ tap = { workspace = true }
 tracing = { workspace = true }
 tracing-error = { workspace = true }
 tracing-flame = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "registry", "std"] }
 tracing-tree = { workspace = true, features = ["time"] }
 tokio = { workspace = true, features = ["full"] }
 extfn = { workspace = true }
@@ -60,6 +60,10 @@ paste = { workspace = true }
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite"] }
 parse-display = { workspace = true }
 lazy-regex = { workspace = true, features = ["regex", "std"] }
+opentelemetry = "0.31.0"
+tracing-opentelemetry = "0.32.0"
+opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
+opentelemetry_sdk = "0.31.0"
 
 [dev-dependencies]
 async-walkdir.workspace = true

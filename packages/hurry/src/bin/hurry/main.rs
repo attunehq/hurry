@@ -10,11 +10,13 @@ use cargo_metadata::camino::Utf8PathBuf;
 use clap::{Parser, Subcommand, ValueEnum, crate_version};
 use color_eyre::{Result, eyre::Context};
 use git_version::git_version;
+use opentelemetry::trace::TracerProvider as _;
 use tap::Pipe;
-use tracing::{instrument, level_filters::LevelFilter};
+use tracing::instrument;
 use tracing_error::ErrorLayer;
 use tracing_flame::FlameLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_opentelemetry::OpenTelemetryLayer;
+use tracing_subscriber::{Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_tree::time::FormatTime;
 
 // Since this is a binary crate, we need to ensure these modules aren't pub
@@ -84,6 +86,20 @@ async fn main() -> Result<()> {
         (None, None)
     };
 
+    // Create an OTLP pipeline exporter for a `trace_demo` service.
+    let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .build()
+        .unwrap();
+
+    let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_batch_exporter(otlp_exporter)
+        .build()
+        .tracer("trace_demo");
+
+    // Create a layer with the configured tracer
+    let otel_layer = OpenTelemetryLayer::new(tracer);
+
     tracing_subscriber::registry()
         .with(ErrorLayer::default())
         .with({
@@ -104,13 +120,14 @@ async fn main() -> Result<()> {
                 WhenColor::Never => layer.with_ansi(false),
                 WhenColor::Auto => layer,
             }
+            .with_filter(
+                tracing_subscriber::EnvFilter::builder()
+                    .with_env_var("HURRY_LOG")
+                    .from_env_lossy(),
+            )
         })
-        .with(
-            tracing_subscriber::EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy(),
-        )
         .with(flame_layer)
+        .with(otel_layer)
         .init();
 
     let result = match cli.command {
