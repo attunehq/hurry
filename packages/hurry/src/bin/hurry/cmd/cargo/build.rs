@@ -69,18 +69,14 @@ pub async fn exec(options: Options) -> Result<()> {
     // Compute artifact plan, which provides expected artifacts. Note that
     // because we are not actually running build scripts, these "expected
     // artifacts" do not contain fully unambiguous cache key information.
-    let artifacts = cache
+    let artifact_plan = cache
         .artifact_plan(&profile, &args)
         .await
         .context("calculating expected artifacts")?;
 
     // Restore artifacts.
     if !options.skip_restore {
-        info!("Restoring artifacts");
-
-        for artifact in &artifacts {
-            cache.restore(artifact).await?;
-        }
+        cache.restore(&artifact_plan).await?;
     }
 
     // Run the build.
@@ -163,9 +159,14 @@ pub async fn exec(options: Options) -> Result<()> {
     // Cache the built artifacts.
     if !options.skip_backup {
         info!("Caching built artifacts");
-        for artifact_plan in artifacts {
+        for artifact in artifact_plan.artifacts {
             // Construct the full artifact key.
-            let artifact = BuiltArtifact::from_plan(artifact_plan).await?;
+            let artifact = BuiltArtifact::from_key(
+                artifact,
+                artifact_plan.target.clone(),
+                artifact_plan.profile.clone(),
+            )
+            .await?;
             debug!(?artifact, "caching artifact");
 
             // Cache the artifact.

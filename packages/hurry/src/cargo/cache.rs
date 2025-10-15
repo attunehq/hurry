@@ -10,7 +10,7 @@ use std::{
 use cargo_metadata::TargetKind;
 use color_eyre::{
     Result,
-    eyre::{Context as _, OptionExt, bail},
+    eyre::{Context as _, OptionExt, Report, bail},
 };
 use futures::TryStreamExt as _;
 use serde::Serialize;
@@ -20,6 +20,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use tap::Pipe as _;
+use tokio::task::JoinSet;
 use tracing::{debug, error, instrument, trace, warn};
 
 use crate::{
@@ -85,7 +86,7 @@ impl CargoCache {
         &self,
         profile: &Profile,
         args: impl AsRef<CargoBuildArguments> + Debug,
-    ) -> Result<Vec<ArtifactPlan>> {
+    ) -> Result<ArtifactPlan> {
         let rustc = RustcMetadata::from_argv(&self.ws.root, &args)
             .await
             .context("parsing rustc metadata")?;
@@ -216,11 +217,11 @@ impl CargoCache {
                 let mut build_script_execution_index = None;
                 for dep_index in &invocation.deps {
                     let dep = &build_plan.invocations[*dep_index];
-                    // This should be sufficient to deermine which dependency is
-                    // the execution of the build script of the current library.
-                    // There might be other build scripts for the same name and
-                    // version (but different features), but they won't be
-                    // listed as a `dep`.
+                    // This should be sufficient to determine which dependency
+                    // is the execution of the build script of the current
+                    // library. There might be other build scripts for the same
+                    // name and version (but different features), but they won't
+                    // be listed as a `dep`.
                     if dep.target_kind == [TargetKind::CustomBuild]
                         && dep.compile_mode == CargoCompileMode::RunCustomBuild
                         && dep.package_name == invocation.package_name
@@ -332,14 +333,9 @@ impl CargoCache {
                     deps = ?invocation.deps,
                     "artifacts to save"
                 );
-                artifacts.push(ArtifactPlan {
+                artifacts.push(ArtifactKey {
                     package_name: invocation.package_name,
                     package_version: invocation.package_version,
-                    // TODO: We assume it's the same target as the host, but we
-                    // really should be parsing this from the `rustc`
-                    // invocation.
-                    target: rustc.host_target.clone(),
-                    profile: profile.clone(),
                     lib_files,
                     build_script_files,
                     library_crate_compilation_unit_hash,
@@ -356,7 +352,16 @@ impl CargoCache {
             }
         }
 
-        Ok(artifacts)
+        Ok(ArtifactPlan {
+            artifacts,
+            // TODO: We assume it's the same target as the host, but we really
+            // should be parsing this from the `rustc` invocation.
+            //
+            // TODO: Is it possible for different artifacts in the same build to
+            // have different targets?
+            target: rustc.host_target.clone(),
+            profile: profile.clone(),
+        })
     }
 
     #[instrument(name = "CargoCache::save")]
@@ -608,121 +613,160 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::restore")]
-    pub async fn restore(&self, artifact: &ArtifactPlan) -> Result<()> {
-        // See if there are any saved artifacts that match.
-        let mut tx = self.db.begin().await?;
-        let unit_builds = sqlx::query!(
-            r#"
-            SELECT
-                library_unit_build.id AS "id!: i64",
-                library_unit_build.content_hash
-            FROM package
-            JOIN library_unit_build ON package.id = library_unit_build.package_id
-            WHERE
-                package.name = $1
-                AND package.version = $2
-                AND target = $3
-                AND library_crate_compilation_unit_hash = $4
-                AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($5, '')
-                AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($6, '')
-        "#,
-            artifact.package_name,
-            artifact.package_version,
-            artifact.target,
-            artifact.library_crate_compilation_unit_hash,
-            artifact.build_script_compilation_unit_hash,
-            artifact.build_script_execution_unit_hash
-        )
-        .fetch_all(&mut *tx)
-        .await?;
+    pub async fn restore(&self, artifact_plan: &ArtifactPlan) -> Result<()> {
+        debug!("start restoring");
+        let mut artifact_tasks = JoinSet::new();
+        for artifact in &artifact_plan.artifacts {
+            let self_ = self.clone();
+            let artifact_ = artifact.clone();
+            let artifact_plan_ = artifact_plan.clone();
+            artifact_tasks.spawn(async move {
+                // See if there are any saved artifacts that match.
+                let mut tx = self_.db.begin().await?;
+                let unit_builds = sqlx::query!(
+                    r#"
+                    SELECT
+                        library_unit_build.id AS "id!: i64",
+                        library_unit_build.content_hash
+                    FROM package
+                    JOIN library_unit_build ON package.id = library_unit_build.package_id
+                    WHERE
+                        package.name = $1
+                        AND package.version = $2
+                        AND target = $3
+                        AND library_crate_compilation_unit_hash = $4
+                        AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($5, '')
+                        AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($6, '')
+                    "#,
+                    artifact_.package_name,
+                    artifact_.package_version,
+                    artifact_plan_.target,
+                    artifact_.library_crate_compilation_unit_hash,
+                    artifact_.build_script_compilation_unit_hash,
+                    artifact_.build_script_execution_unit_hash
+                )
+                .fetch_all(&mut *tx)
+                .await?;
 
-        let unit_to_restore = match unit_builds.split_first() {
-            // If there is one matching unit, just restore that one.
-            Some((first, [])) => first.id,
-            // If there are multiple matching library units, choose the
-            // canonical unit to restore.
-            //
-            // TODO: We only do this today because our keys are
-            // insufficiently precise (in particular, we aren't able to
-            // key on predicted dynamic fields from build script
-            // execution). We can probably do a lot better.
-            Some((first, rest)) => {
-                if rest
-                    .iter()
-                    .all(|unit| unit.content_hash == first.content_hash)
-                {
-                    // If all the units have the same content hash, then we
-                    // can restore any of them. This should generally not
-                    // happen, but can occur sometimes due to cache database
-                    // corruption.
-                    first.id
-                } else {
-                    // If there are any units with different content hash,
-                    // then we should emit a warning and choose not to
-                    // restore any of them.
-                    warn!(
-                        ?artifact,
-                        ?unit_builds,
-                        "multiple matching library unit builds found"
-                    );
-                    return Ok(());
+                let unit_to_restore = match unit_builds.split_first() {
+                    // If there is one matching unit, just restore that one.
+                    Some((first, [])) => first.id,
+                    // If there are multiple matching library units, choose the
+                    // canonical unit to restore.
+                    //
+                    // TODO: We only do this today because our keys are
+                    // insufficiently precise (in particular, we aren't able to
+                    // key on predicted dynamic fields from build script
+                    // execution). We can probably do a lot better.
+                    Some((first, rest)) => {
+                        if rest
+                            .iter()
+                            .all(|unit| unit.content_hash == first.content_hash)
+                        {
+                            // If all the units have the same content hash, then
+                            // we can restore any of them. This should generally
+                            // not happen, but can occur sometimes due to cache
+                            // database corruption.
+                            first.id
+                        } else {
+                            // If there are any units with different content
+                            // hash, then we should emit a warning and choose
+                            // not to restore any of them.
+                            warn!(
+                                artifact = ?artifact_,
+                                ?unit_builds,
+                                "multiple matching library unit builds found"
+                            );
+                            return Ok(());
+                        }
+                    }
+                    // If there are no matching library units, there's nothing
+                    // to restore.
+                    None => {
+                        debug!(artifact = ?artifact_, "no matching library unit build found");
+                        return Ok(());
+                    }
+                };
+
+                // Restore the unit.
+                let objects = sqlx::query!(
+                    r#"
+                    SELECT
+                        object.key,
+                        library_unit_build_artifact.path,
+                        library_unit_build_artifact.mtime,
+                        library_unit_build_artifact.executable
+                    FROM library_unit_build_artifact
+                    JOIN object ON library_unit_build_artifact.object_id = object.id
+                    WHERE
+                        library_unit_build_artifact.library_unit_build_id = $1
+                    "#,
+                    unit_to_restore
+                )
+                .fetch_all(&mut *tx)
+                .await?;
+
+                let mut copy_tasks = JoinSet::new();
+                for object in objects {
+                    let self__ = self_.clone();
+                    copy_tasks.spawn(async move {
+                        // TODO: Why is this backed by a String? Why don't we
+                        // store this as a BLOB?
+                        let key = Blake3::from_hex_string(&object.key)?;
+                        // TODO: Instead of reading and then writing, maybe we
+                        // should change the API shape to directly do a copy on
+                        // supported filesystems?
+                        let data = self__.cas.must_get(&key).await?;
+                        // TODO: These are currently all absolute paths. We need
+                        // to implement relative path rewrites for portability.
+                        let path = AbsFilePath::try_from(object.path)?;
+                        let mtime = {
+                            let mtime_bytes: Result<[u8; 16], _> = object.mtime.try_into();
+                            let mtime_nanos = u128::from_be_bytes(
+                                mtime_bytes.or_else(|_| bail!("could not read mtime"))?,
+                            );
+                            // TODO: Is this conversion safe? It will truncate,
+                            // but probably not outside the range we care about.
+                            // Maybe we really should serialize to TEXT just to
+                            // get rid of this headache.
+                            UNIX_EPOCH + Duration::from_nanos(mtime_nanos as u64)
+                        };
+                        let metadata = fs::Metadata {
+                            mtime,
+                            executable: object.executable,
+                        };
+                        fs::write(&path, &data).await?;
+                        metadata.set_file(&path).await?;
+                        Ok::<(), Report>(())
+                    });
                 }
-            }
-            // If there are no matching library units, there's nothing to restore.
-            None => {
-                debug!(?artifact, "no matching library unit build found");
-                return Ok(());
-            }
-        };
-
-        // Restore the unit.
-        let objects = sqlx::query!(
-            r#"
-            SELECT
-                object.key,
-                library_unit_build_artifact.path,
-                library_unit_build_artifact.mtime,
-                library_unit_build_artifact.executable
-            FROM library_unit_build_artifact
-            JOIN object ON library_unit_build_artifact.object_id = object.id
-            WHERE
-                library_unit_build_artifact.library_unit_build_id = $1
-        "#,
-            unit_to_restore
-        )
-        .fetch_all(&mut *tx)
-        .await?;
-        for object in objects {
-            // TODO: Why is this backed by a String? Why don't we store this as
-            // a BLOB?
-            let key = Blake3::from_hex_string(&object.key)?;
-            // TODO: Instead of reading and then writing, maybe we should change
-            // the API shape to directly do a copy on supported filesystems?
-            let data = self.cas.must_get(&key).await?;
-            // TODO: These are currently all absolute paths. We need to
-            // implement relative path rewrites for portability.
-            let path = AbsFilePath::try_from(object.path)?;
-            let mtime = {
-                let mtime_bytes: Result<[u8; 16], _> = object.mtime.try_into();
-                let mtime_nanos =
-                    u128::from_be_bytes(mtime_bytes.or_else(|_| bail!("could not read mtime"))?);
-                // TODO: Is this conversion safe? It will truncate, but probably
-                // not outside the range we care about. Maybe we really should
-                // serialize to TEXT just to get rid of this headache.
-                UNIX_EPOCH + Duration::from_nanos(mtime_nanos as u64)
-            };
-            let metadata = fs::Metadata {
-                mtime,
-                executable: object.executable,
-            };
-            fs::write(&path, &data).await?;
-            metadata.set_file(&path).await?;
+                let results = copy_tasks.join_all().await;
+                for result in results {
+                    result?;
+                }
+                Ok::<(), Report>(())
+            });
         }
+        let results = artifact_tasks.join_all().await;
+        for result in results {
+            result?;
+        }
+        debug!("done restoring");
         Ok(())
     }
 }
 
-/// An ArtifactPlan represents the information known about a library unit (i.e.
+/// An ArtifactPlan represents the collection of information known about the
+/// artifacts for a build statically at compile-time.
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub struct ArtifactPlan {
+    pub profile: Profile,
+    pub target: String,
+
+    pub artifacts: Vec<ArtifactKey>,
+}
+
+/// An ArtifactKey represents the information known about a library unit (i.e.
 /// a library crate, its build script, and its build script outputs) statically
 /// at plan-time.
 ///
@@ -730,7 +774,7 @@ impl CargoCache {
 /// compiling and running the build script, such as `rustc` flags from build
 /// script output directives.
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
-pub struct ArtifactPlan {
+pub struct ArtifactKey {
     // Partial artifact key information. Note that this is only derived from the
     // build plan, and therefore is missing essential information (e.g. `rustc`
     // flags from build script output directives) that can only be determined
@@ -740,8 +784,6 @@ pub struct ArtifactPlan {
     // that need to be added (e.g. features).
     package_name: String,
     package_version: String,
-    target: String,
-    profile: Profile,
 
     // Artifact folders to save and restore.
     lib_files: Vec<AbsFilePath>,
@@ -778,10 +820,10 @@ pub struct BuiltArtifact {
 }
 
 impl BuiltArtifact {
-    /// Given an `ArtifactPlan`, read the build script output directories on
+    /// Given an `ArtifactKey`, read the build script output directories on
     /// disk and construct a `BuiltArtifact`.
-    #[instrument(name = "BuiltArtifact::from_plan")]
-    pub async fn from_plan(plan: ArtifactPlan) -> Result<Self> {
+    #[instrument(name = "BuiltArtifact::from_key")]
+    pub async fn from_key(key: ArtifactKey, target: String, profile: Profile) -> Result<Self> {
         // TODO: Read the build script output from the build folders, and parse
         // the output for directives. Use this to construct the rustc
         // invocation, and use all of this information to fully construct the
@@ -792,17 +834,17 @@ impl BuiltArtifact {
         // behavior is incorrect! We are only ignoring this for now so we can
         // get something simple working end-to-end.
         Ok(BuiltArtifact {
-            package_name: plan.package_name,
-            package_version: plan.package_version,
-            target: plan.target,
-            profile: plan.profile,
+            package_name: key.package_name,
+            package_version: key.package_version,
+            target,
+            profile,
 
-            lib_files: plan.lib_files,
-            build_script_files: plan.build_script_files,
+            lib_files: key.lib_files,
+            build_script_files: key.build_script_files,
 
-            library_crate_compilation_unit_hash: plan.library_crate_compilation_unit_hash,
-            build_script_compilation_unit_hash: plan.build_script_compilation_unit_hash,
-            build_script_execution_unit_hash: plan.build_script_execution_unit_hash,
+            library_crate_compilation_unit_hash: key.library_crate_compilation_unit_hash,
+            build_script_compilation_unit_hash: key.build_script_compilation_unit_hash,
+            build_script_execution_unit_hash: key.build_script_execution_unit_hash,
         })
     }
 }

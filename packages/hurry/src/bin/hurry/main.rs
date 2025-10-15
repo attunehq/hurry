@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand, ValueEnum, crate_version};
 use color_eyre::{Result, eyre::Context};
 use git_version::git_version;
 use tap::Pipe;
-use tracing::{instrument, level_filters::LevelFilter};
+use tracing::instrument;
 use tracing_error::ErrorLayer;
 use tracing_flame::FlameLayer;
 use tracing_subscriber::{Layer as _, layer::SubscriberExt, util::SubscriberInitExt};

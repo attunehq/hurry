@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "select 1 as pong",
+  "describe": {
+    "columns": [
+      {
+        "name": "pong",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1dac147d18c3a1161c5709655519391cf007f169407b91d9f0ea311b8f40bcf2"
+}
