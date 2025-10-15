@@ -1,75 +1,102 @@
+use std::sync::Arc;
+
 use bon::Builder;
-use color_eyre::{Result, eyre::Context};
+use color_eyre::{
+    Result, Section, SectionExt,
+    eyre::{Context, eyre},
+};
+use derive_more::{Debug, Display};
 use futures::TryStreamExt;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
+use tap::Pipe;
+use tokio::io::AsyncRead;
 use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::instrument;
 use url::Url;
 
-use crate::{ext::join_all, hash::Blake3};
+use crate::hash::Blake3;
 
 /// Client for the Courier API.
-#[derive(Clone, Debug)]
+///
+/// ## Cloning
+///
+/// This type is cheaply cloneable, and clones share the underlying HTTP
+/// connection pool.
+#[derive(Clone, Debug, Display)]
+#[display("{base}")]
 pub struct Courier {
-    base: Url,
+    #[debug("{:?}", base.as_str())]
+    base: Arc<Url>,
+
+    #[debug(skip)]
     http: reqwest::Client,
 }
 
 impl Courier {
     /// Create a new client with the given base URL.
-    pub fn new(base: impl Into<Url>) -> Self {
+    pub fn new(base: Url) -> Self {
         Self {
-            base: base.into(),
+            base: Arc::new(base),
             http: reqwest::Client::new(),
+        }
+    }
+
+    /// Check that the service is reachable.
+    #[instrument(skip(self))]
+    pub async fn ping(&self) -> Result<()> {
+        let url = self.base.join("api/v1/health")?;
+        let response = self.http.get(url).send().await.context("request")?;
+        match response.status() {
+            StatusCode::OK => Ok(()),
+            status => {
+                let url = response.url().to_string();
+                let body = response.text().await.unwrap_or_default();
+                return Err(eyre!("unexpected status code: {status}"))
+                    .with_section(|| url.header("Url:"))
+                    .with_section(|| body.header("Body:"));
+            }
         }
     }
 
     /// Check if a CAS object exists.
     #[instrument(skip(self))]
     pub async fn cas_exists(&self, key: &Blake3) -> Result<bool> {
-        let url = self.base.join_all(["api", "v1", "cas", key.as_str()])?;
-        let response = self
-            .http
-            .head(url)
-            .send()
-            .await
-            .context("send HEAD request")?;
-
+        let url = self.base.join(&format!("api/v1/cas/{key}"))?;
+        let response = self.http.head(url).send().await.context("send")?;
         match response.status() {
             StatusCode::OK => Ok(true),
             StatusCode::NOT_FOUND => Ok(false),
-            status => Err(color_eyre::eyre::eyre!(
-                "unexpected status code from cas_exists: {status}"
-            )),
+            status => {
+                let url = response.url().to_string();
+                let body = response.text().await.unwrap_or_default();
+                return Err(eyre!("unexpected status code: {status}"))
+                    .with_section(|| url.header("Url:"))
+                    .with_section(|| body.header("Body:"));
+            }
         }
     }
 
     /// Read a CAS object.
     #[instrument(skip(self))]
-    pub async fn cas_read(&self, key: &Blake3) -> Result<impl AsyncRead + Unpin> {
-        let url = self.base.join_all(["api", "v1", "cas", key.as_str()])?;
-        let response = self
-            .http
-            .get(url)
-            .send()
-            .await
-            .context("send GET request")?;
-
+    pub async fn cas_read(&self, key: &Blake3) -> Result<Option<impl AsyncRead + Unpin>> {
+        let url = self.base.join(&format!("api/v1/cas/{key}"))?;
+        let response = self.http.get(url).send().await.context("send")?;
         match response.status() {
-            StatusCode::OK => {
-                let stream = response.bytes_stream().map_err(std::io::Error::other);
-                Ok(StreamReader::new(stream))
+            StatusCode::OK => response
+                .bytes_stream()
+                .map_err(std::io::Error::other)
+                .pipe(StreamReader::new)
+                .pipe(Some)
+                .pipe(Ok),
+            StatusCode::NOT_FOUND => Ok(None),
+            status => {
+                let url = response.url().to_string();
+                let body = response.text().await.unwrap_or_default();
+                return Err(eyre!("unexpected status code: {status}"))
+                    .with_section(|| url.header("Url:"))
+                    .with_section(|| body.header("Body:"));
             }
-            StatusCode::NOT_FOUND => Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "CAS object not found",
-            ))
-            .context("cas_read"),
-            status => Err(color_eyre::eyre::eyre!(
-                "unexpected status code from cas_read: {status}"
-            )),
         }
     }
 
@@ -80,50 +107,43 @@ impl Courier {
         key: &Blake3,
         content: impl AsyncRead + Unpin + Send + 'static,
     ) -> Result<()> {
-        let url = self.base.join_all(["api", "v1", "cas", key.as_str()])?;
-        let stream = ReaderStream::new(content);
+        let url = self.base.join(&format!("api/v1/cas/{key}"))?;
+        let stream = ReaderStream::with_capacity(content, 64 * 1024);
         let body = reqwest::Body::wrap_stream(stream);
 
-        let response = self
-            .http
-            .put(url)
-            .body(body)
-            .send()
-            .await
-            .context("send PUT request")?;
-
+        let response = self.http.put(url).body(body).send().await.context("send")?;
         match response.status() {
             StatusCode::CREATED => Ok(()),
             status => {
-                let error_body = response.text().await.unwrap_or_default();
-                Err(color_eyre::eyre::eyre!(
-                    "unexpected status code from cas_write: {status}\n{error_body}"
-                ))
+                let url = response.url().to_string();
+                let body = response.text().await.unwrap_or_default();
+                return Err(eyre!("unexpected status code: {status}"))
+                    .with_section(|| url.header("Url:"))
+                    .with_section(|| body.header("Body:"));
             }
         }
     }
 
     /// Save cargo cache metadata.
     #[instrument(skip(self))]
-    pub async fn cargo_cache_save(&self, request: CargoSaveRequest) -> Result<()> {
-        let url = self
-            .base
-            .join_all(["api", "v1", "cache", "cargo", "save"])?;
+    pub async fn cargo_cache_save(&self, body: CargoSaveRequest) -> Result<()> {
+        let url = self.base.join("api/v1/cache/cargo/save")?;
         let response = self
             .http
             .post(url)
-            .json(&request)
+            .json(&body)
             .send()
             .await
-            .context("send POST request")?;
+            .context("send")?;
 
         match response.status() {
             StatusCode::CREATED => Ok(()),
             status => {
-                let error_body = response.text().await.unwrap_or_default();
-                Err(color_eyre::eyre::eyre!(
-                    "unexpected status code from cargo_cache_save: {status}\n{error_body}"
-                ))
+                let url = response.url().to_string();
+                let body = response.text().await.unwrap_or_default();
+                return Err(eyre!("unexpected status code: {status}"))
+                    .with_section(|| url.header("Url:"))
+                    .with_section(|| body.header("Body:"));
             }
         }
     }
@@ -132,18 +152,16 @@ impl Courier {
     #[instrument(skip(self))]
     pub async fn cargo_cache_restore(
         &self,
-        request: CargoRestoreRequest,
+        body: CargoRestoreRequest,
     ) -> Result<Option<CargoRestoreResponse>> {
-        let url = self
-            .base
-            .join_all(["api", "v1", "cache", "cargo", "restore"])?;
+        let url = self.base.join("api/v1/cache/cargo/restore")?;
         let response = self
             .http
             .post(url)
-            .json(&request)
+            .json(&body)
             .send()
             .await
-            .context("send POST request")?;
+            .context("send")?;
 
         match response.status() {
             StatusCode::OK => {
@@ -155,42 +173,52 @@ impl Courier {
             }
             StatusCode::NOT_FOUND => Ok(None),
             status => {
-                let error_body = response.text().await.unwrap_or_default();
-                Err(color_eyre::eyre::eyre!(
-                    "unexpected status code from cargo_cache_restore: {status}\n{error_body}"
-                ))
+                let url = response.url().to_string();
+                let body = response.text().await.unwrap_or_default();
+                return Err(eyre!("unexpected status code: {status}"))
+                    .with_section(|| url.header("Url:"))
+                    .with_section(|| body.header("Body:"));
             }
         }
     }
 
-    /// Read a CAS object into a writer.
-    pub async fn cas_read_into(
-        &self,
-        key: &Blake3,
-        mut writer: impl AsyncWrite + Unpin,
-    ) -> Result<()> {
-        let mut reader = self.cas_read(key).await?;
-        tokio::io::copy(&mut reader, &mut writer)
-            .await
-            .context("copy CAS content to writer")?;
-        Ok(())
-    }
-
     /// Write a CAS object from bytes.
-    pub async fn cas_write_bytes(&self, key: &Blake3, content: Vec<u8>) -> Result<()> {
-        let cursor = std::io::Cursor::new(content);
-        self.cas_write(key, cursor).await
+    #[instrument(name = "Courier::cas_write_bytes", skip(body), fields(body = body.len()))]
+    pub async fn cas_write_bytes(&self, key: &Blake3, body: Vec<u8>) -> Result<()> {
+        let url = self.base.join(&format!("api/v1/cas/{key}"))?;
+        let response = self.http.put(url).body(body).send().await.context("send")?;
+        match response.status() {
+            StatusCode::CREATED => Ok(()),
+            status => {
+                let url = response.url().to_string();
+                let body = response.text().await.unwrap_or_default();
+                return Err(eyre!("unexpected status code: {status}"))
+                    .with_section(|| url.header("Url:"))
+                    .with_section(|| body.header("Body:"));
+            }
+        }
     }
 
     /// Read a CAS object into a byte vector.
-    pub async fn cas_read_bytes(&self, key: &Blake3) -> Result<Vec<u8>> {
-        let mut reader = self.cas_read(key).await?;
-        let mut buffer = Vec::new();
-        reader
-            .read_to_end(&mut buffer)
-            .await
-            .context("read CAS content to bytes")?;
-        Ok(buffer)
+    pub async fn cas_read_bytes(&self, key: &Blake3) -> Result<Option<Vec<u8>>> {
+        let url = self.base.join(&format!("api/v1/cas/{key}"))?;
+        let response = self.http.get(url).send().await.context("send")?;
+        match response.status() {
+            StatusCode::OK => response
+                .bytes()
+                .await
+                .context("read body")
+                .map(|body| body.to_vec())
+                .map(Some),
+            StatusCode::NOT_FOUND => Ok(None),
+            status => {
+                let url = response.url().to_string();
+                let body = response.text().await.unwrap_or_default();
+                return Err(eyre!("unexpected status code: {status}"))
+                    .with_section(|| url.header("Url:"))
+                    .with_section(|| body.header("Body:"));
+            }
+        }
     }
 }
 

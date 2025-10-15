@@ -10,13 +10,22 @@ use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use tracing::{debug, info, instrument, warn};
 
-use hurry::cargo::{self, BuiltArtifact, CargoBuildArguments, CargoCache, Profile, Workspace};
+use hurry::{
+    cargo::{self, BuiltArtifact, CargoBuildArguments, CargoCache, Profile, Workspace},
+    cas::CourierCas,
+    client::Courier,
+};
+use url::Url;
 
 /// Options for `cargo build`.
 //
 // Hurry options are prefixed with `hurry-` to disambiguate from `cargo` args.
 #[derive(Clone, Args, Debug)]
 pub struct Options {
+    /// Base URL for the Courier instance.
+    #[arg(long = "hurry-courier-url", env = "HURRY_COURIER_URL")]
+    courier_url: Url,
+
     /// Skip backing up the cache.
     #[arg(long = "hurry-skip-backup", default_value_t = false)]
     skip_backup: bool,
@@ -61,8 +70,12 @@ pub async fn exec(options: Options) -> Result<()> {
         .context("opening workspace")?;
     let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
 
+    let courier = Courier::new(options.courier_url);
+    courier.ping().await.context("ping courier service")?;
+
     // Open cache.
-    let cache = CargoCache::open_default(workspace)
+    let cas = CourierCas::new(courier);
+    let cache = CargoCache::open_default(cas, workspace)
         .await
         .context("opening cache")?;
 

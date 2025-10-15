@@ -7,7 +7,7 @@ atomic-time = "0.1.5"
 blake3 = "1.8.2"
 bon = "3.7.1"
 cargo_metadata = "0.19.2"
-clap = { version = "4.5", features = ["cargo", "derive", "string"] }
+clap = { version = "4.5", features = ["cargo", "derive", "string", "env"] }
 color-eyre = "0.6.5"
 colored = "3.0.0"
 derive_more = { version = "2.0.1", features = ["full"] }

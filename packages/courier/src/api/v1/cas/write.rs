@@ -3,7 +3,7 @@ use axum::{body::Body, extract::Path, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
 use futures::TryStreamExt;
 use tokio_util::io::StreamReader;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::storage::{Disk, Key};
 
@@ -40,6 +40,35 @@ use crate::storage::{Disk, Key};
 ///    move to multiple mounted disks for subsets of the CAS.
 #[tracing::instrument(skip(body))]
 pub async fn handle(Dep(cas): Dep<Disk>, Path(key): Path<Key>, body: Body) -> CasWriteResponse {
+    // Check if the key already exists before consuming the body
+    // If it exists, we still need to consume the entire body; if we return early
+    // instead then clients see a "connection reset by peer" error.
+    let exists = match cas.exists(&key).await {
+        Ok(exists) => exists,
+        Err(err) => {
+            error!(error = ?err, "cas.write.exists.error");
+            return CasWriteResponse::Error(err);
+        }
+    };
+
+    if exists {
+        // Consume and discard the body to avoid client connection errors. But even if
+        // we for some reason fail to drain, report it as a success anyway.
+        let stream = body.into_data_stream();
+        let stream = stream.map_err(std::io::Error::other);
+        let mut reader = StreamReader::new(stream);
+        match tokio::io::copy(&mut reader, &mut tokio::io::sink()).await {
+            Ok(_) => {
+                info!("cas.write.exists");
+                return CasWriteResponse::Created;
+            }
+            Err(error) => {
+                warn!(?error, "cas.write.error.drain_body");
+                return CasWriteResponse::Created;
+            }
+        }
+    }
+
     let stream = body.into_data_stream();
     let stream = stream.map_err(std::io::Error::other);
     let reader = StreamReader::new(stream);
@@ -132,6 +161,41 @@ mod tests {
         read_response.assert_status_ok();
         let body = read_response.as_bytes();
         pretty_assert_eq!(body.as_ref(), CONTENT);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn idempotent_write_large_blob(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let content = vec![0xCD; 2 * 1024 * 1024]; // 2MB blob
+        let (_, key) = test_blob(&content);
+
+        // First write
+        let response1 = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .bytes(Bytes::copy_from_slice(&content))
+            .await;
+        response1.assert_status(StatusCode::CREATED);
+
+        // Second write with the same content
+        // This tests that the server fully consumes the body even when the file
+        // already exists, avoiding "connection reset by peer" errors
+        let response2 = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .bytes(Bytes::copy_from_slice(&content))
+            .await;
+        response2.assert_status(StatusCode::CREATED);
+
+        // Verify content is still readable and correct
+        let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
+        read_response.assert_status_ok();
+        let body = read_response.as_bytes();
+        pretty_assert_eq!(body.len(), content.len());
+        pretty_assert_eq!(body.as_ref(), content.as_slice());
 
         Ok(())
     }

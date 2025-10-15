@@ -26,7 +26,7 @@ use crate::{
     cargo::{
         self, BuildPlan, CargoBuildArguments, CargoCompileMode, Profile, RustcMetadata, Workspace,
     },
-    cas::FsCas,
+    cas::CourierCas,
     fs,
     hash::Blake3,
     mk_rel_dir, mk_rel_file,
@@ -35,7 +35,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct CargoCache {
-    cas: FsCas,
+    cas: CourierCas,
     db: SqlitePool,
     ws: Workspace,
 }
@@ -45,7 +45,7 @@ impl CargoCache {
     pub const MIGRATOR: Migrator = sqlx::migrate!("./schema/migrations");
 
     #[instrument(name = "CargoCache::open")]
-    async fn open(cas: FsCas, conn: &str, ws: Workspace) -> Result<Self> {
+    async fn open(cas: CourierCas, conn: &str, ws: Workspace) -> Result<Self> {
         let options = SqliteConnectOptions::from_str(conn)
             .context("parse sqlite connection string")?
             .create_if_missing(true);
@@ -61,7 +61,7 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::open_dir")]
-    pub async fn open_dir(cas: FsCas, cache_dir: &AbsDirPath, ws: Workspace) -> Result<Self> {
+    pub async fn open_dir(cas: CourierCas, cache_dir: &AbsDirPath, ws: Workspace) -> Result<Self> {
         let dbfile = cache_dir.join(mk_rel_file!("cache.db"));
         fs::create_dir_all(cache_dir)
             .await
@@ -71,8 +71,7 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::open_default")]
-    pub async fn open_default(ws: Workspace) -> Result<Self> {
-        let cas = FsCas::open_default().await.context("opening CAS")?;
+    pub async fn open_default(cas: CourierCas, ws: Workspace) -> Result<Self> {
         let cache = fs::user_global_cache_path()
             .await
             .context("finding user cache path")?
