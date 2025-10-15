@@ -59,10 +59,7 @@ impl RootOutput {
     /// Reconstruct the file using owned path data.
     #[instrument(name = "RootOutput::reconstruct_raw")]
     pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
-        format!(
-            "{}",
-            self.0.reconstruct_raw(profile_root, cargo_home).display()
-        )
+        self.0.reconstruct_raw_string(profile_root, cargo_home)
     }
 }
 
@@ -366,7 +363,7 @@ impl BuildScriptOutputLine {
                     "{}{}={}",
                     style.as_str(),
                     Self::RERUN_IF_CHANGED,
-                    path.reconstruct_raw(profile_root, cargo_home).display()
+                    path.reconstruct_raw_string(profile_root, cargo_home)
                 )
             }
             Self::RerunIfEnvChanged(style, var) => {
@@ -384,13 +381,13 @@ impl BuildScriptOutputLine {
                     style.as_str(),
                     Self::RUSTC_LINK_SEARCH,
                     kind,
-                    path.reconstruct_raw(profile_root, cargo_home).display()
+                    path.reconstruct_raw_string(profile_root, cargo_home)
                 ),
                 None => format!(
                     "{}{}={}",
                     style.as_str(),
                     Self::RUSTC_LINK_SEARCH,
-                    path.reconstruct_raw(profile_root, cargo_home).display()
+                    path.reconstruct_raw_string(profile_root, cargo_home)
                 ),
             },
             Self::RustcFlags(style, flags) => {

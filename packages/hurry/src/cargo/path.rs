@@ -116,4 +116,17 @@ impl QualifiedPath {
             QualifiedPath::RelativeCargoHome(rel) => cargo_home.join(rel).into(),
         }
     }
+
+    #[instrument(name = "QualifiedPath::reconstruct_raw_string")]
+    pub fn reconstruct_raw_string(
+        &self,
+        profile_root: &AbsDirPath,
+        cargo_home: &AbsDirPath,
+    ) -> String {
+        match self {
+            QualifiedPath::Rootless(rel) => rel.to_string(),
+            QualifiedPath::RelativeTargetProfile(rel) => profile_root.join(rel).to_string(),
+            QualifiedPath::RelativeCargoHome(rel) => cargo_home.join(rel).to_string(),
+        }
+    }
 }

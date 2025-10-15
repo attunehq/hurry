@@ -187,17 +187,12 @@ impl DepInfoLine {
     pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
         match self {
             Self::Build(output, inputs) => {
-                let output = output.reconstruct_raw(profile_root, cargo_home);
+                let output = output.reconstruct_raw_string(profile_root, cargo_home);
                 let inputs = inputs
                     .iter()
-                    .map(|input| {
-                        input
-                            .reconstruct_raw(profile_root, cargo_home)
-                            .display()
-                            .to_string()
-                    })
+                    .map(|input| input.reconstruct_raw_string(profile_root, cargo_home))
                     .join(" ");
-                format!("{}: {}", output.display(), inputs)
+                format!("{output}: {inputs}")
             }
             DepInfoLine::Space => String::new(),
             DepInfoLine::Comment(comment) => format!("#{comment}"),
