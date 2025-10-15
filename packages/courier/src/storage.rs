@@ -223,9 +223,9 @@ impl Disk {
     /// Write the content to storage for the provided key.
     ///
     /// Note: This method does NOT check if the key already exists. Callers
-    /// should check via `exists()` first if they want to avoid unnecessary work.
-    /// The method will handle the AlreadyExists case gracefully during the
-    /// final rename operation.
+    /// should check via `exists()` first if they want to avoid unnecessary
+    /// work. The method will handle the AlreadyExists case gracefully
+    /// during the final rename operation.
     #[tracing::instrument(name = "Disk::write", skip(content))]
     pub async fn write(&self, key: &Key, content: impl AsyncRead + Unpin) -> Result<()> {
         let path = self.key_path(key);

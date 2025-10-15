@@ -214,9 +214,9 @@ impl Courier {
             status => {
                 let url = response.url().to_string();
                 let body = response.text().await.unwrap_or_default();
-                return Err(eyre!("unexpected status code: {status}"))
+                Err(eyre!("unexpected status code: {status}"))
                     .with_section(|| url.header("Url:"))
-                    .with_section(|| body.header("Body:"));
+                    .with_section(|| body.header("Body:"))
             }
         }
     }
