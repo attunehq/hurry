@@ -9,11 +9,12 @@ use std::{
 use cargo_metadata::TargetKind;
 use color_eyre::{
     Result,
-    eyre::{Context as _, OptionExt, bail},
+    eyre::{Context as _, OptionExt, Report, bail},
 };
 use futures::TryStreamExt as _;
 use serde::Serialize;
 use tap::Pipe as _;
+use tokio::task::JoinSet;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::{
@@ -46,7 +47,7 @@ impl CargoCache {
         &self,
         profile: &Profile,
         args: impl AsRef<CargoBuildArguments> + Debug,
-    ) -> Result<Vec<ArtifactPlan>> {
+    ) -> Result<ArtifactPlan> {
         let rustc = RustcMetadata::from_argv(&self.ws.root, &args)
             .await
             .context("parsing rustc metadata")?;
@@ -177,11 +178,11 @@ impl CargoCache {
                 let mut build_script_execution_index = None;
                 for dep_index in &invocation.deps {
                     let dep = &build_plan.invocations[*dep_index];
-                    // This should be sufficient to deermine which dependency is
-                    // the execution of the build script of the current library.
-                    // There might be other build scripts for the same name and
-                    // version (but different features), but they won't be
-                    // listed as a `dep`.
+                    // This should be sufficient to determine which dependency
+                    // is the execution of the build script of the current
+                    // library. There might be other build scripts for the same
+                    // name and version (but different features), but they won't
+                    // be listed as a `dep`.
                     if dep.target_kind == [TargetKind::CustomBuild]
                         && dep.compile_mode == CargoCompileMode::RunCustomBuild
                         && dep.package_name == invocation.package_name
@@ -293,14 +294,9 @@ impl CargoCache {
                     deps = ?invocation.deps,
                     "artifacts to save"
                 );
-                artifacts.push(ArtifactPlan {
+                artifacts.push(ArtifactKey {
                     package_name: invocation.package_name,
                     package_version: invocation.package_version,
-                    // TODO: We assume it's the same target as the host, but we
-                    // really should be parsing this from the `rustc`
-                    // invocation.
-                    target: rustc.host_target.clone(),
-                    profile: profile.clone(),
                     lib_files,
                     build_script_files,
                     library_crate_compilation_unit_hash,
@@ -317,7 +313,16 @@ impl CargoCache {
             }
         }
 
-        Ok(artifacts)
+        Ok(ArtifactPlan {
+            artifacts,
+            // TODO: We assume it's the same target as the host, but we really
+            // should be parsing this from the `rustc` invocation.
+            //
+            // TODO: Is it possible for different artifacts in the same build to
+            // have different targets?
+            target: rustc.host_target.clone(),
+            profile: profile.clone(),
+        })
     }
 
     #[instrument(name = "CargoCache::save")]
@@ -454,48 +459,90 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::restore")]
-    pub async fn restore(&self, artifact: &ArtifactPlan) -> Result<()> {
-        let request = CargoRestoreRequest::builder()
-            .package_name(&artifact.package_name)
-            .package_version(&artifact.package_version)
-            .target(&artifact.target)
-            .library_crate_compilation_unit_hash(&artifact.library_crate_compilation_unit_hash)
-            .maybe_build_script_compilation_unit_hash(
-                artifact.build_script_compilation_unit_hash.as_ref(),
-            )
-            .maybe_build_script_execution_unit_hash(
-                artifact.build_script_execution_unit_hash.as_ref(),
-            )
-            .build();
+    pub async fn restore(&self, artifact_plan: &ArtifactPlan) -> Result<()> {
+        debug!("start restoring");
+        let mut artifact_tasks = JoinSet::new();
+        for artifact in &artifact_plan.artifacts {
+            let courier = self.courier.clone();
+            let artifact = artifact.clone();
+            let artifact_plan = artifact_plan.clone();
+            artifact_tasks.spawn(async move {
+                let request = CargoRestoreRequest::builder()
+                    .package_name(&artifact.package_name)
+                    .package_version(&artifact.package_version)
+                    .target(&artifact_plan.target)
+                    .library_crate_compilation_unit_hash(&artifact.library_crate_compilation_unit_hash)
+                    .maybe_build_script_compilation_unit_hash(
+                        artifact.build_script_compilation_unit_hash.as_ref(),
+                    )
+                    .maybe_build_script_execution_unit_hash(
+                        artifact.build_script_execution_unit_hash.as_ref(),
+                    )
+                    .build();
 
-        let Some(response) = self.courier.cargo_cache_restore(request).await? else {
-            debug!(?artifact, "no matching library unit build found");
-            return Ok(());
-        };
+                let Some(response) = courier.cargo_cache_restore(request).await? else {
+                    debug!(?artifact, "no matching library unit build found");
+                    return Ok(Vec::new());
+                };
 
-        // Restore each artifact file.
-        for artifact_file in response.artifacts {
+                // Collect all artifact files into a vec to return for parallel processing.
+                Ok::<Vec<_>, Report>(response.artifacts)
+            });
+        }
+
+        // Wait for all API calls to complete.
+        let results = artifact_tasks.join_all().await;
+        let mut all_files = Vec::new();
+        for result in results {
+            all_files.extend(result?);
+        }
+
+        // Now restore all files in parallel.
+        let mut copy_tasks = JoinSet::new();
+        for artifact_file in all_files {
+            let cas = self.cas.clone();
             let key = Blake3::from_hex_string(&artifact_file.object_key)?;
-            // TODO: Instead of reading and then writing, maybe we should change
-            // the API shape to directly do a copy on supported filesystems?
-            let data = self.cas.must_get(&key).await?;
             // TODO: These are currently all absolute paths. We need to
             // implement relative path rewrites for portability.
             let path = AbsFilePath::try_from(artifact_file.path)?;
             let mtime = UNIX_EPOCH + Duration::from_nanos(artifact_file.mtime_nanos as u64);
-            let metadata = fs::Metadata {
-                mtime,
-                executable: artifact_file.executable,
-            };
-            fs::write(&path, &data).await?;
-            metadata.set_file(&path).await?;
+            let executable = artifact_file.executable;
+
+            copy_tasks.spawn(async move {
+                // TODO: Instead of reading and then writing, maybe we
+                // should change the API shape to directly do a copy on
+                // supported filesystems?
+                let data = cas.must_get(&key).await?;
+                let metadata = fs::Metadata {
+                    mtime,
+                    executable,
+                };
+                fs::write(&path, &data).await?;
+                metadata.set_file(&path).await?;
+                Ok::<(), Report>(())
+            });
+        }
+        let results = copy_tasks.join_all().await;
+        for result in results {
+            result?;
         }
 
+        debug!("done restoring");
         Ok(())
     }
 }
 
-/// An ArtifactPlan represents the information known about a library unit (i.e.
+/// An ArtifactPlan represents the collection of information known about the
+/// artifacts for a build statically at compile-time.
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub struct ArtifactPlan {
+    pub profile: Profile,
+    pub target: String,
+
+    pub artifacts: Vec<ArtifactKey>,
+}
+
+/// An ArtifactKey represents the information known about a library unit (i.e.
 /// a library crate, its build script, and its build script outputs) statically
 /// at plan-time.
 ///
@@ -503,7 +550,7 @@ impl CargoCache {
 /// compiling and running the build script, such as `rustc` flags from build
 /// script output directives.
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
-pub struct ArtifactPlan {
+pub struct ArtifactKey {
     // Partial artifact key information. Note that this is only derived from the
     // build plan, and therefore is missing essential information (e.g. `rustc`
     // flags from build script output directives) that can only be determined
@@ -513,8 +560,6 @@ pub struct ArtifactPlan {
     // that need to be added (e.g. features).
     package_name: String,
     package_version: String,
-    target: String,
-    profile: Profile,
 
     // Artifact folders to save and restore.
     lib_files: Vec<AbsFilePath>,
@@ -551,10 +596,10 @@ pub struct BuiltArtifact {
 }
 
 impl BuiltArtifact {
-    /// Given an `ArtifactPlan`, read the build script output directories on
+    /// Given an `ArtifactKey`, read the build script output directories on
     /// disk and construct a `BuiltArtifact`.
-    #[instrument(name = "BuiltArtifact::from_plan")]
-    pub async fn from_plan(plan: ArtifactPlan) -> Result<Self> {
+    #[instrument(name = "BuiltArtifact::from_key")]
+    pub async fn from_key(key: ArtifactKey, target: String, profile: Profile) -> Result<Self> {
         // TODO: Read the build script output from the build folders, and parse
         // the output for directives. Use this to construct the rustc
         // invocation, and use all of this information to fully construct the
@@ -565,17 +610,17 @@ impl BuiltArtifact {
         // behavior is incorrect! We are only ignoring this for now so we can
         // get something simple working end-to-end.
         Ok(BuiltArtifact {
-            package_name: plan.package_name,
-            package_version: plan.package_version,
-            target: plan.target,
-            profile: plan.profile,
+            package_name: key.package_name,
+            package_version: key.package_version,
+            target,
+            profile,
 
-            lib_files: plan.lib_files,
-            build_script_files: plan.build_script_files,
+            lib_files: key.lib_files,
+            build_script_files: key.build_script_files,
 
-            library_crate_compilation_unit_hash: plan.library_crate_compilation_unit_hash,
-            build_script_compilation_unit_hash: plan.build_script_compilation_unit_hash,
-            build_script_execution_unit_hash: plan.build_script_execution_unit_hash,
+            library_crate_compilation_unit_hash: key.library_crate_compilation_unit_hash,
+            build_script_compilation_unit_hash: key.build_script_compilation_unit_hash,
+            build_script_execution_unit_hash: key.build_script_execution_unit_hash,
         })
     }
 }
