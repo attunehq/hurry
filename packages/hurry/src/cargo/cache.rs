@@ -365,250 +365,280 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::save")]
-    pub async fn save(&self, artifact: BuiltArtifact) -> Result<()> {
-        // TODO: We should probably not be re-locking and unlocking on a per-artifact
-        // basis. Maybe this method should instead take a Vec?
-        let profile_dir = self.ws.open_profile_locked(&artifact.profile).await?;
+    pub async fn save(&self, artifact_plan: ArtifactPlan) -> Result<()> {
+        debug!("start saving");
+        let target_dir = self.ws.open_profile_locked(&artifact_plan.profile).await?;
+        let target_path = target_dir.root();
 
-        // Determine which files will be saved.
-        let lib_files = {
-            let lib_fingerprint_dir = profile_dir.root().try_join_dirs(&[
-                String::from(".fingerprint"),
-                format!(
-                    "{}-{}",
-                    artifact.package_name, artifact.library_crate_compilation_unit_hash
-                ),
-            ])?;
-            let lib_fingerprint_files = fs::walk_files(&lib_fingerprint_dir)
-                .try_collect::<Vec<_>>()
+        let mut artifact_tasks = JoinSet::new();
+        for artifact in &artifact_plan.artifacts {
+            let artifact = artifact.clone();
+            let target_triple = artifact_plan.target.clone();
+            let target_path = target_path.clone();
+            let db = self.db.clone();
+            let cas = self.cas.clone();
+
+            artifact_tasks.spawn(async move {
+                // Construct the full artifact key.
+                let artifact = BuiltArtifact::from_key(
+                    artifact
+                )
                 .await?;
-            artifact
-                .lib_files
-                .into_iter()
-                .chain(lib_fingerprint_files)
-                .collect::<Vec<_>>()
-        };
-        let build_script_files = match artifact.build_script_files {
-            Some(build_script_files) => {
-                let compiled_files = fs::walk_files(&build_script_files.compiled_dir)
-                    .try_collect::<Vec<_>>()
-                    .await?;
-                let compiled_fingerprint_dir = profile_dir.root().try_join_dirs(&[
-                    String::from(".fingerprint"),
-                    format!(
-                        "{}-{}",
-                        artifact.package_name,
-                        artifact
-                            .build_script_compilation_unit_hash
-                            .as_ref()
-                            .expect("build script files have compilation unit hash")
-                    ),
-                ])?;
-                let compiled_fingerprint_files = fs::walk_files(&compiled_fingerprint_dir)
-                    .try_collect::<Vec<_>>()
-                    .await?;
-                let output_files = fs::walk_files(&build_script_files.output_dir)
-                    .try_collect::<Vec<_>>()
-                    .await?;
-                let output_fingerprint_dir = profile_dir.root().try_join_dirs(&[
-                    String::from(".fingerprint"),
-                    format!(
-                        "{}-{}",
-                        artifact.package_name,
-                        artifact
-                            .build_script_execution_unit_hash
-                            .as_ref()
-                            .expect("build script files have execution unit hash")
-                    ),
-                ])?;
-                let output_fingerprint_files = fs::walk_files(&output_fingerprint_dir)
-                    .try_collect::<Vec<_>>()
-                    .await?;
-                compiled_files
-                    .into_iter()
-                    .chain(compiled_fingerprint_files)
-                    .chain(output_files)
-                    .chain(output_fingerprint_files)
-                    .collect()
-            }
-            None => vec![],
-        };
-        let files_to_save = lib_files.into_iter().chain(build_script_files);
+                debug!(?artifact, "caching artifact");
 
-        // For each file, save it into the CAS and calculate its key.
-        //
-        // TODO: Fuse this operation with the loop above where we discover the
-        // needed files? Would that give better performance?
-        let mut library_unit_files = vec![];
-        for path in files_to_save {
-            match fs::read_buffered(&path).await? {
-                Some(content) => {
-                    let key = self.cas.store(&content).await?;
-                    debug!(?path, ?key, "stored object");
-                    library_unit_files.push((path, key));
+                // Determine which files will be saved.
+                let lib_files = {
+                    let lib_fingerprint_dir = target_path.try_join_dirs(&[
+                        String::from(".fingerprint"),
+                        format!(
+                            "{}-{}",
+                            artifact.package_name, artifact.library_crate_compilation_unit_hash
+                        ),
+                    ])?;
+                    let lib_fingerprint_files = fs::walk_files(&lib_fingerprint_dir)
+                        .try_collect::<Vec<_>>()
+                        .await?;
+                    artifact
+                        .lib_files
+                        .into_iter()
+                        .chain(lib_fingerprint_files)
+                        .collect::<Vec<_>>()
+                };
+                let build_script_files = match artifact.build_script_files {
+                    Some(build_script_files) => {
+                        let compiled_files = fs::walk_files(&build_script_files.compiled_dir)
+                            .try_collect::<Vec<_>>()
+                            .await?;
+                        let compiled_fingerprint_dir = target_path.try_join_dirs(&[
+                            String::from(".fingerprint"),
+                            format!(
+                                "{}-{}",
+                                artifact.package_name,
+                                artifact
+                                    .build_script_compilation_unit_hash
+                                    .as_ref()
+                                    .expect("build script files have compilation unit hash")
+                            ),
+                        ])?;
+                        let compiled_fingerprint_files = fs::walk_files(&compiled_fingerprint_dir)
+                            .try_collect::<Vec<_>>()
+                            .await?;
+                        let output_files = fs::walk_files(&build_script_files.output_dir)
+                            .try_collect::<Vec<_>>()
+                            .await?;
+                        let output_fingerprint_dir = target_path.try_join_dirs(&[
+                            String::from(".fingerprint"),
+                            format!(
+                                "{}-{}",
+                                artifact.package_name,
+                                artifact
+                                    .build_script_execution_unit_hash
+                                    .as_ref()
+                                    .expect("build script files have execution unit hash")
+                            ),
+                        ])?;
+                        let output_fingerprint_files = fs::walk_files(&output_fingerprint_dir)
+                            .try_collect::<Vec<_>>()
+                            .await?;
+                        compiled_files
+                            .into_iter()
+                            .chain(compiled_fingerprint_files)
+                            .chain(output_files)
+                            .chain(output_fingerprint_files)
+                            .collect()
+                    }
+                    None => vec![],
+                };
+                let files_to_save = lib_files.into_iter().chain(build_script_files);
+
+                // For each file, save it into the CAS and calculate its key.
+                //
+                // TODO: Fuse this operation with the loop above where we discover the
+                // needed files? Would that give better performance?
+                //
+                // TODO: For performance reasons, we should probably only save
+                // objects that have not been seen before.
+                let mut library_unit_files = vec![];
+                for path in files_to_save {
+                    match fs::read_buffered(&path).await? {
+                        Some(content) => {
+                            let key = cas.store(&content).await?;
+                            debug!(?path, ?key, "stored object");
+                            library_unit_files.push((path, key));
+                        }
+                        None => {
+                            // Note that this is not necessarily incorrect! For example,
+                            // Cargo seems to claim to emit `.dwp` files for its `.so`s,
+                            // but those don't seem to be there by the time the process
+                            // actually finishes. I'm not sure if they're deleted or
+                            // just never written.
+                            warn!("failed to read file: {}", path);
+                        }
+                    }
                 }
-                None => {
-                    // Note that this is not necessarily incorrect! For example,
-                    // Cargo seems to claim to emit `.dwp` files for its `.so`s,
-                    // but those don't seem to be there by the time the process
-                    // actually finishes. I'm not sure if they're deleted or
-                    // just never written.
-                    warn!("failed to read file: {}", path);
-                }
-            }
-        }
 
-        // Calculate the content hash.
-        let content_hash = {
-            let mut hasher = blake3::Hasher::new();
-            let bytes = serde_json::to_vec(&LibraryUnitHash::new(library_unit_files.clone()))?;
-            hasher.write_all(&bytes)?;
-            hasher.finalize().to_hex().to_string()
-        };
-        debug!(?content_hash, "calculated content hash");
+                // Calculate the content hash.
+                let content_hash = {
+                    let mut hasher = blake3::Hasher::new();
+                    let bytes = serde_json::to_vec(&LibraryUnitHash::new(library_unit_files.clone()))?;
+                    hasher.write_all(&bytes)?;
+                    hasher.finalize().to_hex().to_string()
+                };
+                debug!(?content_hash, "calculated content hash");
 
-        // Save the library unit into the database.
-        let mut tx = self.db.begin().await?;
+                // Save the library unit into the database.
+                let mut tx = db.begin().await?;
 
-        // Find or create the package.
-        let package_id = match sqlx::query!(
-            // TODO: Why does this require a type override? Shouldn't sqlx infer
-            // the non-nullability from the INTEGER PRIMARY KEY column type?
-            "SELECT id AS \"id!: i64\" FROM package WHERE name = $1 AND version = $2",
-            artifact.package_name,
-            artifact.package_version
-        )
-        .fetch_optional(&mut *tx)
-        .await?
-        {
-            Some(row) => row.id,
-            None => {
-                sqlx::query!(
-                    "INSERT INTO package (name, version) VALUES ($1, $2) RETURNING id",
+                // Find or create the package.
+                let package_id = match sqlx::query!(
+                    // TODO: Why does this require a type override? Shouldn't sqlx infer
+                    // the non-nullability from the INTEGER PRIMARY KEY column type?
+                    "SELECT id AS \"id!: i64\" FROM package WHERE name = $1 AND version = $2",
                     artifact.package_name,
                     artifact.package_version
                 )
-                .fetch_one(&mut *tx)
+                .fetch_optional(&mut *tx)
                 .await?
-                .id
-            }
-        };
-        // Check whether a library unit build exists.
-        match sqlx::query!(
-            r#"
-            SELECT content_hash
-            FROM library_unit_build
-            WHERE
-                package_id = $1
-                AND target = $2
-                AND library_crate_compilation_unit_hash = $3
-                AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($4, '')
-                AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($5, '')
-            "#,
-            package_id,
-            artifact.target,
-            artifact.library_crate_compilation_unit_hash,
-            artifact.build_script_compilation_unit_hash,
-            artifact.build_script_execution_unit_hash
-        )
-        .fetch_optional(&mut *tx)
-        .await?
-        {
-            Some(row) => {
-                // If it does exist, and the content hash is the same, there is
-                // nothing more to do. If it exists but the content hash is
-                // different, then something has gone wrong with our cache key,
-                // and we should log an error message.
-                if row.content_hash != content_hash {
-                    error!(expected = ?row.content_hash, actual = ?content_hash, "content hash mismatch");
-                }
-            }
-            None => {
-                // Insert the library unit build.
-                let library_unit_build_id = sqlx::query!(
+                {
+                    Some(row) => row.id,
+                    None => {
+                        sqlx::query!(
+                            "INSERT INTO package (name, version) VALUES ($1, $2) RETURNING id",
+                            artifact.package_name,
+                            artifact.package_version
+                        )
+                        .fetch_one(&mut *tx)
+                        .await?
+                        .id
+                    }
+                };
+                // Check whether a library unit build exists.
+                match sqlx::query!(
                     r#"
-                    INSERT INTO library_unit_build (
-                        package_id,
-                        target,
-                        library_crate_compilation_unit_hash,
-                        build_script_compilation_unit_hash,
-                        build_script_execution_unit_hash,
-                        content_hash
-                    ) VALUES ($1, $2, $3, $4, $5, $6)
-                    RETURNING id AS "id!: i64"
+                    SELECT content_hash
+                    FROM library_unit_build
+                    WHERE
+                        package_id = $1
+                        AND target = $2
+                        AND library_crate_compilation_unit_hash = $3
+                        AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($4, '')
+                        AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($5, '')
                     "#,
                     package_id,
-                    artifact.target,
+                    target_triple,
                     artifact.library_crate_compilation_unit_hash,
                     artifact.build_script_compilation_unit_hash,
-                    artifact.build_script_execution_unit_hash,
-                    content_hash
+                    artifact.build_script_execution_unit_hash
                 )
-                .fetch_one(&mut *tx)
+                .fetch_optional(&mut *tx)
                 .await?
-                .id;
-
-                // Insert each file.
-                for (file, key) in library_unit_files {
-                    let key = key.as_str();
-                    // Find or create CAS object.
-                    let object_id = match sqlx::query!(
-                        "SELECT id AS \"id!: i64\" FROM object WHERE key = $1",
-                        key
-                    )
-                    .fetch_optional(&mut *tx)
-                    .await?
-                    {
-                        Some(row) => row.id,
-                        None => {
-                            sqlx::query!("INSERT INTO object (key) VALUES ($1) RETURNING id", key)
-                                .fetch_one(&mut *tx)
-                                .await?
-                                .id
+                {
+                    Some(row) => {
+                        // If it does exist, and the content hash is the same, there is
+                        // nothing more to do. If it exists but the content hash is
+                        // different, then something has gone wrong with our cache key,
+                        // and we should log an error message.
+                        if row.content_hash != content_hash {
+                            error!(expected = ?row.content_hash, actual = ?content_hash, "content hash mismatch");
                         }
-                    };
-
-                    // TODO: Would it be faster to gather this during the
-                    // walking?
-                    let metadata = fs::Metadata::from_file(&file)
+                    }
+                    None => {
+                        // Insert the library unit build.
+                        let library_unit_build_id = sqlx::query!(
+                            r#"
+                            INSERT INTO library_unit_build (
+                                package_id,
+                                target,
+                                library_crate_compilation_unit_hash,
+                                build_script_compilation_unit_hash,
+                                build_script_execution_unit_hash,
+                                content_hash
+                            ) VALUES ($1, $2, $3, $4, $5, $6)
+                            RETURNING id AS "id!: i64"
+                            "#,
+                            package_id,
+                            target_triple,
+                            artifact.library_crate_compilation_unit_hash,
+                            artifact.build_script_compilation_unit_hash,
+                            artifact.build_script_execution_unit_hash,
+                            content_hash
+                        )
+                        .fetch_one(&mut *tx)
                         .await?
-                        .ok_or_eyre("could not stat file metadata")?;
+                        .id;
 
-                    // We need to do this because SQLite does not support
-                    // 128-bit integers.
-                    let mtime_bytes = metadata
-                        .mtime
-                        .duration_since(UNIX_EPOCH)?
-                        .as_nanos()
-                        .to_be_bytes();
-                    let mtime_slice = mtime_bytes.as_slice();
+                        // Insert each file.
+                        for (file, key) in library_unit_files {
+                            let key = key.as_str();
+                            // Find or create CAS object.
+                            let object_id = match sqlx::query!(
+                                "SELECT id AS \"id!: i64\" FROM object WHERE key = $1",
+                                key
+                            )
+                            .fetch_optional(&mut *tx)
+                            .await?
+                            {
+                                Some(row) => row.id,
+                                None => {
+                                    sqlx::query!(
+                                        "INSERT INTO object (key) VALUES ($1) RETURNING id",
+                                        key
+                                    )
+                                    .fetch_one(&mut *tx)
+                                    .await?
+                                    .id
+                                }
+                            };
 
-                    let filepath = file.to_string();
+                            // TODO: Would it be faster to gather this during the
+                            // walking?
+                            let metadata = fs::Metadata::from_file(&file)
+                                .await?
+                                .ok_or_eyre("could not stat file metadata")?;
 
-                    sqlx::query!(
-                        r#"
-                        INSERT INTO library_unit_build_artifact (
-                            library_unit_build_id,
-                            object_id,
-                            path,
-                            mtime,
-                            executable
-                        ) VALUES ($1, $2, $3, $4, $5)
-                         "#,
-                        library_unit_build_id,
-                        object_id,
-                        filepath,
-                        mtime_slice,
-                        metadata.executable
-                    )
-                    .execute(&mut *tx)
-                    .await?;
-                }
-            }
-        };
+                            // We need to do this because SQLite does not support
+                            // 128-bit integers.
+                            let mtime_bytes = metadata
+                                .mtime
+                                .duration_since(UNIX_EPOCH)?
+                                .as_nanos()
+                                .to_be_bytes();
+                            let mtime_slice = mtime_bytes.as_slice();
 
-        tx.commit().await?;
+                            let filepath = file.to_string();
 
+                            sqlx::query!(
+                                r#"
+                                INSERT INTO library_unit_build_artifact (
+                                    library_unit_build_id,
+                                    object_id,
+                                    path,
+                                    mtime,
+                                    executable
+                                ) VALUES ($1, $2, $3, $4, $5)
+                                "#,
+                                library_unit_build_id,
+                                object_id,
+                                filepath,
+                                mtime_slice,
+                                metadata.executable
+                            )
+                            .execute(&mut *tx)
+                            .await?;
+                        }
+                    }
+                };
+
+                tx.commit().await?;
+
+                Ok::<(), Report>(())
+            });
+        }
+        let results = artifact_tasks.join_all().await;
+        for result in results {
+            result?;
+        }
+        debug!("done saving");
         Ok(())
     }
 
@@ -809,8 +839,6 @@ pub struct BuildScriptDirs {
 pub struct BuiltArtifact {
     package_name: String,
     package_version: String,
-    target: String,
-    profile: Profile,
 
     lib_files: Vec<AbsFilePath>,
     build_script_files: Option<BuildScriptDirs>,
@@ -824,7 +852,7 @@ impl BuiltArtifact {
     /// Given an `ArtifactKey`, read the build script output directories on
     /// disk and construct a `BuiltArtifact`.
     #[instrument(name = "BuiltArtifact::from_key")]
-    pub async fn from_key(key: ArtifactKey, target: String, profile: Profile) -> Result<Self> {
+    pub async fn from_key(key: ArtifactKey) -> Result<Self> {
         // TODO: Read the build script output from the build folders, and parse
         // the output for directives. Use this to construct the rustc
         // invocation, and use all of this information to fully construct the
@@ -837,8 +865,6 @@ impl BuiltArtifact {
         Ok(BuiltArtifact {
             package_name: key.package_name,
             package_version: key.package_version,
-            target,
-            profile,
 
             lib_files: key.lib_files,
             build_script_files: key.build_script_files,

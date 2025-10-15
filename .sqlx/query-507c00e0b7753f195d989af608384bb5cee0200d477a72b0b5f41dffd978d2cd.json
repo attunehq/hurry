@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                                INSERT INTO library_unit_build_artifact (\n                                    library_unit_build_id,\n                                    object_id,\n                                    path,\n                                    mtime,\n                                    executable\n                                ) VALUES ($1, $2, $3, $4, $5)\n                                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "507c00e0b7753f195d989af608384bb5cee0200d477a72b0b5f41dffd978d2cd"
+}
