@@ -5,17 +5,17 @@ use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context, eyre},
 };
-use derive_more::{Debug, Display};
+use derive_more::{Debug, Deref, Display, From};
 use futures::TryStreamExt;
 use reqwest::StatusCode;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
 use tap::Pipe;
 use tokio::io::AsyncRead;
 use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::instrument;
 use url::Url;
 
-use crate::hash::Blake3;
+use crate::{cargo::QualifiedPath, hash::Blake3};
 
 /// Client for the Courier API.
 ///
@@ -226,9 +226,37 @@ impl Courier {
 #[builder(on(String, into))]
 pub struct ArtifactFile {
     pub object_key: String,
-    pub path: String,
     pub mtime_nanos: u128,
     pub executable: bool,
+
+    #[builder(into)]
+    pub path: SerializeString<QualifiedPath>,
+}
+
+/// Serializes and deserializes the inner type to a JSON-encoded string.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, From, Deref)]
+pub struct SerializeString<T>(T);
+
+impl<T: Serialize> Serialize for SerializeString<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let inner = serde_json::to_string(&self.0).map_err(serde::ser::Error::custom)?;
+        serializer.serialize_str(&inner)
+    }
+}
+
+impl<'de, T: DeserializeOwned> Deserialize<'de> for SerializeString<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let inner = String::deserialize(deserializer)?;
+        serde_json::from_str(&inner)
+            .map(Self)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]

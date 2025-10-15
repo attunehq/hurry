@@ -12,14 +12,17 @@ use color_eyre::{
     eyre::{Context as _, OptionExt, bail},
 };
 use futures::TryStreamExt as _;
+use itertools::Itertools;
 use serde::Serialize;
 use tap::Pipe as _;
 use tokio::task::JoinSet;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::{
+    Locked,
     cargo::{
-        self, BuildPlan, CargoBuildArguments, CargoCompileMode, Profile, RustcMetadata, Workspace,
+        self, BuildPlan, BuildScriptOutput, CargoBuildArguments, CargoCompileMode, DepInfo,
+        Profile, ProfileDir, QualifiedPath, RootOutput, RustcMetadata, Workspace,
     },
     cas::CourierCas,
     client::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest, Courier},
@@ -405,6 +408,8 @@ impl CargoCache {
         for path in files_to_save {
             match fs::read_buffered(&path).await? {
                 Some(content) => {
+                    let content = Self::rewrite(&profile_dir, &path, &content).await?;
+
                     let key = self.cas.store(&content).await?;
                     debug!(?path, ?key, "stored object");
 
@@ -413,13 +418,16 @@ impl CargoCache {
                         .await?
                         .ok_or_eyre("could not stat file metadata")?;
                     let mtime_nanos = metadata.mtime.duration_since(UNIX_EPOCH)?.as_nanos();
+                    let portable = QualifiedPath::parse(&profile_dir, path.as_std_path()).await?;
 
-                    artifact_files.push(ArtifactFile {
-                        object_key: key.to_string(),
-                        path: path.to_string(),
-                        mtime_nanos,
-                        executable: metadata.executable,
-                    });
+                    artifact_files.push(
+                        ArtifactFile::builder()
+                            .object_key(key.to_string())
+                            .path(portable)
+                            .mtime_nanos(mtime_nanos)
+                            .executable(metadata.executable)
+                            .build(),
+                    );
 
                     library_unit_files.push((path, key));
                 }
@@ -462,6 +470,14 @@ impl CargoCache {
     pub async fn restore(&self, artifact_plan: &ArtifactPlan) -> Result<()> {
         debug!("start restoring");
 
+        // Open the profile dir once to extract owned paths upfront.
+        // We do this because `ProfileDir` has a lifetime for the lock, so we can't send
+        // it to worker tasks; this is valid so long as we actually hold `ProfileDir`
+        // for the entire time the task workers live (which we do).
+        let profile_dir = self.ws.open_profile_locked(&artifact_plan.profile).await?;
+        let profile_root = profile_dir.root().to_owned();
+        let cargo_home = profile_dir.workspace.cargo_home.clone();
+
         // TODO: We should probably make this concurrent on something else since this is
         // likely going to be primarily blocked on network transfer.
         let worker_count = num_cpus::get();
@@ -474,31 +490,39 @@ impl CargoCache {
         let (tx, rx) = flume::bounded::<ArtifactFile>(worker_count * 10);
         let mut cas_restore_workers = JoinSet::new();
         for _ in 0..worker_count {
-            let cas = self.cas.clone();
             let rx = rx.clone();
+            let cas = self.cas.clone();
+            let profile_root = profile_root.clone();
+            let cargo_home = cargo_home.clone();
             cas_restore_workers.spawn(async move {
-                let restore = async move |artifact: ArtifactFile| -> Result<()> {
-                    // TODO: These are currently all absolute paths. We need to
-                    // implement relative path rewrites for portability.
+                let restore = async move |artifact: &ArtifactFile| -> Result<()> {
                     let key = Blake3::from_hex_string(&artifact.object_key)?;
-                    let path = AbsFilePath::try_from(artifact.path)?;
-                    let mtime = UNIX_EPOCH + Duration::from_nanos(artifact.mtime_nanos as u64);
-                    let executable = artifact.executable;
 
-                    // TODO: Instead of reading and then writing, maybe we
-                    // should change the API shape to directly do a copy on
-                    // supported filesystems?
+                    // Reconstruct the portable path to an absolute path for this machine.
+                    let path = artifact
+                        .path
+                        .reconstruct_raw(&profile_root, &cargo_home)
+                        .pipe(AbsFilePath::try_from)?;
+
+                    // Get the data from the CAS and reconstruct it according to the local machine.
                     let data = cas.must_get(&key).await?;
-                    let metadata = fs::Metadata { mtime, executable };
+                    let data = Self::reconstruct(&profile_root, &cargo_home, &path, &data).await?;
+
+                    // Write the file.
+                    let mtime = UNIX_EPOCH + Duration::from_nanos(artifact.mtime_nanos as u64);
+                    let metadata = fs::Metadata::builder()
+                        .mtime(mtime)
+                        .executable(artifact.executable)
+                        .build();
                     fs::write(&path, &data).await?;
                     metadata.set_file(&path).await?;
                     Result::<()>::Ok(())
                 };
 
                 while let Ok(artifact) = rx.recv_async().await {
-                    if let Err(error) = restore(artifact).await {
-                        warn!(?error, "failed to restore file");
-                    };
+                    if let Err(error) = restore(&artifact).await {
+                        warn!(?error, ?artifact, "failed to restore file");
+                    }
                 }
             });
         }
@@ -522,16 +546,16 @@ impl CargoCache {
                 continue;
             };
 
-            for artifact in response.artifacts {
-                if let Err(error) = tx.send_async(artifact).await {
+            for artifact_file in response.artifacts {
+                if let Err(error) = tx.send_async(artifact_file).await {
                     panic!("invariant violated: no restore workers are alive: {error:?}");
                 }
             }
         }
 
         // The channels are done being used here, so we drop them; the workers may still
-        // be using their clones if they're in process downloading and saving files but
-        // they'll keep rx alive until they're all done.
+        // be using their clones if they're in process writing files but they'll keep
+        // rx alive until they're all done.
         drop(rx);
         drop(tx);
         while let Some(worker) = cas_restore_workers.join_next().await {
@@ -540,6 +564,118 @@ impl CargoCache {
 
         debug!("done restoring");
         Ok(())
+    }
+
+    /// Rewrite file contents before storing in CAS to normalize paths.
+    #[instrument(name = "CargoCache::rewrite_for_storage", skip(content))]
+    async fn rewrite(
+        profile_dir: &ProfileDir<'_, Locked>,
+        path: &AbsFilePath,
+        content: &[u8],
+    ) -> Result<Vec<u8>> {
+        // Determine what kind of file this is based on path structure.
+        let components = path.component_strs_lossy().collect::<Vec<_>>();
+
+        // Look at the last few components to determine file type.
+        // We use .rev() to start from the filename and work backwards.
+        let file_type = components
+            .iter()
+            .rev()
+            .tuple_windows::<(_, _, _)>()
+            .find_map(|(name, parent, gparent)| {
+                let ext = name.as_ref().rsplit_once('.').map(|(_, ext)| ext);
+                match (gparent.as_ref(), parent.as_ref(), name.as_ref(), ext) {
+                    ("build", _, "output", _) => Some("build-script-output"),
+                    ("build", _, "root-output", _) => Some("root-output"),
+                    (_, _, _, Some("d")) => Some("dep-info"),
+                    _ => None,
+                }
+            });
+
+        match file_type {
+            Some("root-output") => {
+                trace!(?path, "rewriting root-output file");
+                let parsed = RootOutput::from_file(profile_dir, path).await?;
+                serde_json::to_vec(&parsed).context("serialize RootOutput")
+            }
+            Some("build-script-output") => {
+                trace!(?path, "rewriting build-script-output file");
+                let parsed = BuildScriptOutput::from_file(profile_dir, path).await?;
+                serde_json::to_vec(&parsed).context("serialize BuildScriptOutput")
+            }
+            Some("dep-info") => {
+                trace!(?path, "rewriting dep-info file");
+                let parsed = DepInfo::from_file(profile_dir, path).await?;
+                serde_json::to_vec(&parsed).context("serialize DepInfo")
+            }
+            None => {
+                // No rewriting needed, store as-is.
+                Ok(content.to_vec())
+            }
+            Some(unknown) => {
+                bail!("unknown file type for rewriting: {unknown}")
+            }
+        }
+    }
+
+    /// Reconstruct file contents after retrieving from CAS.
+    #[instrument(name = "CargoCache::reconstruct_from_storage", skip(content))]
+    async fn reconstruct(
+        profile_root: &AbsDirPath,
+        cargo_home: &AbsDirPath,
+        path: &AbsFilePath,
+        content: &[u8],
+    ) -> Result<Vec<u8>> {
+        use itertools::Itertools as _;
+
+        // Determine what kind of file this is based on path structure.
+        let components = path.component_strs_lossy().collect::<Vec<_>>();
+
+        // Look at the last few components to determine file type.
+        let file_type = components
+            .iter()
+            .rev()
+            .tuple_windows::<(_, _, _)>()
+            .find_map(|(name, parent, gparent)| {
+                let ext = name.as_ref().rsplit_once('.').map(|(_, ext)| ext);
+                match (gparent.as_ref(), parent.as_ref(), name.as_ref(), ext) {
+                    ("build", _, "output", _) => Some("build-script-output"),
+                    ("build", _, "root-output", _) => Some("root-output"),
+                    (_, _, _, Some("d")) => Some("dep-info"),
+                    _ => None,
+                }
+            });
+
+        match file_type {
+            Some("root-output") => {
+                trace!(?path, "reconstructing root-output file");
+                let parsed = serde_json::from_slice::<RootOutput>(content)?;
+                Ok(parsed
+                    .reconstruct_raw(profile_root, cargo_home)
+                    .into_bytes())
+            }
+            Some("build-script-output") => {
+                trace!(?path, "reconstructing build-script-output file");
+                let parsed = serde_json::from_slice::<BuildScriptOutput>(content)?;
+                Ok(parsed
+                    .reconstruct_raw(profile_root, cargo_home)
+                    .into_bytes())
+            }
+            Some("dep-info") => {
+                trace!(?path, "reconstructing dep-info file");
+                let parsed = serde_json::from_slice::<DepInfo>(content)?;
+                Ok(parsed
+                    .reconstruct_raw(profile_root, cargo_home)
+                    .into_bytes())
+            }
+            None => {
+                // No reconstruction needed, use as-is.
+                Ok(content.to_vec())
+            }
+            Some(unknown) => {
+                bail!("unknown file type for reconstruction: {unknown}")
+            }
+        }
     }
 }
 

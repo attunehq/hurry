@@ -15,7 +15,7 @@ use crate::{
     cargo::QualifiedPath,
     ext::{then_context, then_with_context},
     fs::{self, DEFAULT_CONCURRENCY},
-    path::AbsFilePath,
+    path::{AbsDirPath, AbsFilePath},
 };
 
 /// A parsed "dep-info" file.
@@ -81,9 +81,15 @@ impl DepInfo {
     /// Reconstruct the "dep-info" file in the context of the profile directory.
     #[instrument(name = "DepInfo::reconstruct")]
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
+        self.reconstruct_raw(profile.root(), &profile.workspace.cargo_home)
+    }
+
+    /// Reconstruct the "dep-info" file using owned path data.
+    #[instrument(name = "DepInfo::reconstruct_raw")]
+    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
         self.0
             .iter()
-            .map(|line| line.reconstruct(profile))
+            .map(|line| line.reconstruct_raw(profile_root, cargo_home))
             .join("\n")
     }
 
@@ -148,7 +154,7 @@ impl DepInfoLine {
         } else if let Some(comment) = line.strip_prefix('#') {
             Self::Comment(comment.to_string())
         } else if let Some(output) = line.strip_suffix(':') {
-            let output = QualifiedPath::parse(profile, output)
+            let output = QualifiedPath::parse_string(profile, output)
                 .then_with_context(move || format!("parse output path: {output:?}"))
                 .await?;
             Self::Build(output, Vec::new())
@@ -157,11 +163,11 @@ impl DepInfoLine {
                 bail!("no output/input separator");
             };
 
-            let output = QualifiedPath::parse(profile, output)
+            let output = QualifiedPath::parse_string(profile, output)
                 .then_with_context(move || format!("parse output path: {output:?}"));
             let inputs = stream::iter(inputs.split_whitespace())
                 .map(|input| {
-                    QualifiedPath::parse(profile, input)
+                    QualifiedPath::parse_string(profile, input)
                         .then_with_context(move || format!("parse input path: {input:?}"))
                 })
                 .buffer_unordered(DEFAULT_CONCURRENCY)
@@ -174,12 +180,17 @@ impl DepInfoLine {
 
     #[instrument(name = "DepInfoLine::reconstruct")]
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
+        self.reconstruct_raw(profile.root(), &profile.workspace.cargo_home)
+    }
+
+    #[instrument(name = "DepInfoLine::reconstruct_raw")]
+    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
         match self {
             Self::Build(output, inputs) => {
-                let output = output.reconstruct(profile);
+                let output = output.reconstruct_raw_string(profile_root, cargo_home);
                 let inputs = inputs
                     .iter()
-                    .map(|input| input.reconstruct(profile))
+                    .map(|input| input.reconstruct_raw_string(profile_root, cargo_home))
                     .join(" ");
                 format!("{output}: {inputs}")
             }

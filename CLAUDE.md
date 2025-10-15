@@ -15,8 +15,7 @@ This is a monorepo containing two main projects:
 ### Setup
 - Copy environment file: `cp example.env .env` and customize as needed
   - `COURIER_DATABASE_URL`: PostgreSQL connection string for courier
-  - `HURRY_DATABASE_URL`: SQLite path for hurry
-  - Note: We use separate env vars to avoid conflicts between packages
+  - `CAS_ROOT`: Directory path for content-addressed storage
 
 ### Building and Testing
 - **Build the project**: `hurry cargo build` (use instead of `cargo build`)
@@ -28,7 +27,7 @@ This is a monorepo containing two main projects:
   - `make check`: Run clippy linter
   - `make check-fix`: Run clippy with automatic fixes
   - `make precommit`: Run format, check-fix, and sqlx-prepare before committing
-  - `make sqlx-prepare`: Prepare sqlx metadata for both courier and hurry packages
+  - `make sqlx-prepare`: Prepare sqlx metadata for courier package
 
 ### Hurry-specific Commands
 
@@ -78,6 +77,7 @@ These scripts are essential for cache correctness validation and performance ana
 - Cache system (`packages/hurry/src/cache/`): Manages build artifact caching across different git states
 - Cargo integration (`packages/hurry/src/cargo/`): Handles workspace metadata, dependencies, and build profiles
 - File operations (`packages/hurry/src/fs.rs`): Optimized filesystem operations with mtime preservation
+- CAS client (`packages/hurry/src/cas.rs`): Content-addressed storage client backed by Courier
 
 ### Courier Components
 - API routes (`packages/courier/src/api/`): Versioned HTTP handlers using Axum
@@ -145,7 +145,7 @@ hurry's core value proposition depends on cache correctness. When making changes
 - No Windows support (Unix-only scripts and workflows)
 - Heavy use of async/await patterns with tokio runtime
 - Extensive use of workspace dependencies for consistency
-- Uses `build.rs` workarounds to support multiple databases (`COURIER_DATABASE_URL`, `HURRY_DATABASE_URL`)
+- Courier uses `build.rs` to set `DATABASE_URL` from `COURIER_DATABASE_URL` for sqlx compatibility
 
 ## Rust Naming Conventions
 

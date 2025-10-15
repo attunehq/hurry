@@ -16,7 +16,7 @@ use crate::{
     Locked,
     cargo::{QualifiedPath, workspace::ProfileDir},
     fs,
-    path::AbsFilePath,
+    path::{AbsDirPath, AbsFilePath},
 };
 
 /// Represents a "root output" file, used for build scripts.
@@ -43,7 +43,7 @@ impl RootOutput {
             .lines()
             .exactly_one()
             .map_err(|_| eyre!("RootOutput file has more than one line: {content:?}"))?;
-        QualifiedPath::parse(profile, line)
+        QualifiedPath::parse_string(profile, line)
             .await
             .context("parse file")
             .map(Self)
@@ -53,7 +53,13 @@ impl RootOutput {
     /// Reconstruct the file in the context of the profile directory.
     #[instrument(name = "RootOutput::reconstruct")]
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
-        format!("{}", self.0.reconstruct(profile))
+        self.reconstruct_raw(profile.root(), &profile.workspace.cargo_home)
+    }
+
+    /// Reconstruct the file using owned path data.
+    #[instrument(name = "RootOutput::reconstruct_raw")]
+    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
+        self.0.reconstruct_raw_string(profile_root, cargo_home)
     }
 }
 
@@ -101,6 +107,15 @@ impl BuildScriptOutput {
         self.0
             .iter()
             .map(|line| line.reconstruct(profile))
+            .join("\n")
+    }
+
+    /// Reconstruct the file using owned path data.
+    #[instrument(name = "BuildScriptOutput::reconstruct_raw")]
+    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
+        self.0
+            .iter()
+            .map(|line| line.reconstruct_raw(profile_root, cargo_home))
             .join("\n")
     }
 }
@@ -268,7 +283,7 @@ impl BuildScriptOutputLine {
 
         match key {
             Self::RERUN_IF_CHANGED => {
-                let path = QualifiedPath::parse(profile, value).await?;
+                let path = QualifiedPath::parse_string(profile, value).await?;
                 Ok(Self::RerunIfChanged(style, path))
             }
             Self::RERUN_IF_ENV_CHANGED => Ok(Self::RerunIfEnvChanged(style, String::from(value))),
@@ -279,13 +294,13 @@ impl BuildScriptOutputLine {
                     Ok(Self::RustcLinkSearch {
                         style,
                         kind: Some(String::from(kind)),
-                        path: QualifiedPath::parse(profile, path).await?,
+                        path: QualifiedPath::parse_string(profile, path).await?,
                     })
                 } else {
                     Ok(Self::RustcLinkSearch {
                         style,
                         kind: None,
-                        path: QualifiedPath::parse(profile, value).await?,
+                        path: QualifiedPath::parse_string(profile, value).await?,
                     })
                 }
             }
@@ -337,13 +352,18 @@ impl BuildScriptOutputLine {
     /// Reconstruct the line in the current context.
     #[instrument(name = "BuildScriptOutputLine::reconstruct")]
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
+        self.reconstruct_raw(profile.root(), &profile.workspace.cargo_home)
+    }
+
+    #[instrument(name = "BuildScriptOutputLine::reconstruct_raw")]
+    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
         match self {
             Self::RerunIfChanged(style, path) => {
                 format!(
                     "{}{}={}",
                     style.as_str(),
                     Self::RERUN_IF_CHANGED,
-                    path.reconstruct(profile)
+                    path.reconstruct_raw_string(profile_root, cargo_home)
                 )
             }
             Self::RerunIfEnvChanged(style, var) => {
@@ -361,13 +381,13 @@ impl BuildScriptOutputLine {
                     style.as_str(),
                     Self::RUSTC_LINK_SEARCH,
                     kind,
-                    path.reconstruct(profile)
+                    path.reconstruct_raw_string(profile_root, cargo_home)
                 ),
                 None => format!(
                     "{}{}={}",
                     style.as_str(),
                     Self::RUSTC_LINK_SEARCH,
-                    path.reconstruct(profile)
+                    path.reconstruct_raw_string(profile_root, cargo_home)
                 ),
             },
             Self::RustcFlags(style, flags) => {
@@ -431,7 +451,7 @@ mod tests {
 
         match BuildScriptOutputLine::parse(&profile, &line).await {
             BuildScriptOutputLine::RerunIfChanged(style, path) => {
-                pretty_assert_eq!(path.reconstruct(&profile), expected_path);
+                pretty_assert_eq!(path.reconstruct_string(&profile), expected_path);
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RerunIfChanged variant"),
@@ -534,7 +554,7 @@ mod tests {
         match BuildScriptOutputLine::parse(&profile, &line).await {
             BuildScriptOutputLine::RustcLinkSearch { style, kind, path } => {
                 pretty_assert_eq!(kind, None);
-                pretty_assert_eq!(path.reconstruct(&profile), expected_path);
+                pretty_assert_eq!(path.reconstruct_string(&profile), expected_path);
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkSearch variant"),
@@ -563,7 +583,7 @@ mod tests {
         match BuildScriptOutputLine::parse(&profile, &line).await {
             BuildScriptOutputLine::RustcLinkSearch { style, kind, path } => {
                 pretty_assert_eq!(kind, Some(String::from(expected_kind)));
-                pretty_assert_eq!(path.reconstruct(&profile), expected_path);
+                pretty_assert_eq!(path.reconstruct_string(&profile), expected_path);
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkSearch variant"),
