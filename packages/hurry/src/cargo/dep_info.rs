@@ -81,10 +81,7 @@ impl DepInfo {
     /// Reconstruct the "dep-info" file in the context of the profile directory.
     #[instrument(name = "DepInfo::reconstruct")]
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
-        self.0
-            .iter()
-            .map(|line| line.reconstruct(profile))
-            .join("\n")
+        self.reconstruct_raw(profile.root(), &profile.workspace.cargo_home)
     }
 
     /// Reconstruct the "dep-info" file using owned path data.
@@ -183,18 +180,7 @@ impl DepInfoLine {
 
     #[instrument(name = "DepInfoLine::reconstruct")]
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
-        match self {
-            Self::Build(output, inputs) => {
-                let output = output.reconstruct_string(profile);
-                let inputs = inputs
-                    .iter()
-                    .map(|input| input.reconstruct_string(profile))
-                    .join(" ");
-                format!("{output}: {inputs}")
-            }
-            DepInfoLine::Space => String::new(),
-            DepInfoLine::Comment(comment) => format!("#{comment}"),
-        }
+        self.reconstruct_raw(profile.root(), &profile.workspace.cargo_home)
     }
 
     #[instrument(name = "DepInfoLine::reconstruct_raw")]
