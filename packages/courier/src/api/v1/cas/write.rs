@@ -3,7 +3,7 @@ use axum::{body::Body, extract::Path, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
 use futures::{StreamExt, TryStreamExt};
 use tokio_util::io::StreamReader;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::storage::{Disk, Key};
 
