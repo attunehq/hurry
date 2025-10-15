@@ -1,7 +1,7 @@
 use aerosol::axum::Dep;
 use axum::{body::Body, extract::Path, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use tokio_util::io::StreamReader;
 use tracing::{error, info, warn};
 
@@ -54,19 +54,9 @@ pub async fn handle(Dep(cas): Dep<Disk>, Path(key): Path<Key>, body: Body) -> Ca
     if exists {
         // Consume and discard the body to avoid client connection errors. But even if
         // we for some reason fail to drain, report it as a success anyway.
-        let stream = body.into_data_stream();
-        let stream = stream.map_err(std::io::Error::other);
-        let mut reader = StreamReader::new(stream);
-        match tokio::io::copy(&mut reader, &mut tokio::io::sink()).await {
-            Ok(_) => {
-                info!("cas.write.exists");
-                return CasWriteResponse::Created;
-            }
-            Err(error) => {
-                warn!(?error, "cas.write.error.drain_body");
-                return CasWriteResponse::Created;
-            }
-        }
+        body.into_data_stream().for_each(|_| async {}).await;
+        info!("cas.write.exists");
+        return CasWriteResponse::Created;
     }
 
     let stream = body.into_data_stream();
