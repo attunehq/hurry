@@ -617,12 +617,13 @@ impl CargoCache {
         debug!("start restoring");
         let mut artifact_tasks = JoinSet::new();
         for artifact in &artifact_plan.artifacts {
-            let self_ = self.clone();
-            let artifact_ = artifact.clone();
-            let artifact_plan_ = artifact_plan.clone();
+            let db = self.db.clone();
+            let cas = self.cas.clone();
+            let artifact = artifact.clone();
+            let artifact_plan = artifact_plan.clone();
             artifact_tasks.spawn(async move {
                 // See if there are any saved artifacts that match.
-                let mut tx = self_.db.begin().await?;
+                let mut tx = db.begin().await?;
                 let unit_builds = sqlx::query!(
                     r#"
                     SELECT
@@ -638,12 +639,12 @@ impl CargoCache {
                         AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($5, '')
                         AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($6, '')
                     "#,
-                    artifact_.package_name,
-                    artifact_.package_version,
-                    artifact_plan_.target,
-                    artifact_.library_crate_compilation_unit_hash,
-                    artifact_.build_script_compilation_unit_hash,
-                    artifact_.build_script_execution_unit_hash
+                    artifact.package_name,
+                    artifact.package_version,
+                    artifact_plan.target,
+                    artifact.library_crate_compilation_unit_hash,
+                    artifact.build_script_compilation_unit_hash,
+                    artifact.build_script_execution_unit_hash
                 )
                 .fetch_all(&mut *tx)
                 .await?;
@@ -673,7 +674,7 @@ impl CargoCache {
                             // hash, then we should emit a warning and choose
                             // not to restore any of them.
                             warn!(
-                                artifact = ?artifact_,
+                                ?artifact,
                                 ?unit_builds,
                                 "multiple matching library unit builds found"
                             );
@@ -683,7 +684,7 @@ impl CargoCache {
                     // If there are no matching library units, there's nothing
                     // to restore.
                     None => {
-                        debug!(artifact = ?artifact_, "no matching library unit build found");
+                        debug!(?artifact, "no matching library unit build found");
                         return Ok(());
                     }
                 };
@@ -708,7 +709,7 @@ impl CargoCache {
 
                 let mut copy_tasks = JoinSet::new();
                 for object in objects {
-                    let self__ = self_.clone();
+                    let cas = cas.clone();
                     copy_tasks.spawn(async move {
                         // TODO: Why is this backed by a String? Why don't we
                         // store this as a BLOB?
@@ -716,7 +717,7 @@ impl CargoCache {
                         // TODO: Instead of reading and then writing, maybe we
                         // should change the API shape to directly do a copy on
                         // supported filesystems?
-                        let data = self__.cas.must_get(&key).await?;
+                        let data = cas.must_get(&key).await?;
                         // TODO: These are currently all absolute paths. We need
                         // to implement relative path rewrites for portability.
                         let path = AbsFilePath::try_from(object.path)?;
