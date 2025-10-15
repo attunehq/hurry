@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                    SELECT\n                        library_unit_build.id AS \"id!: i64\",\n                        library_unit_build.content_hash\n                    FROM package\n                    JOIN library_unit_build ON package.id = library_unit_build.package_id\n                    WHERE\n                        package.name = $1\n                        AND package.version = $2\n                        AND target = $3\n                        AND library_crate_compilation_unit_hash = $4\n                        AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($5, '')\n                        AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($6, '')\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "content_hash",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "181e133aee3786640b6c35e6d7ee8731d284a16ea49aee0cc3fee5b4d4318856"
+}
