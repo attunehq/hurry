@@ -107,7 +107,10 @@ impl BuildScriptOutput {
     /// Reconstruct the file in the context of the profile directory.
     #[instrument(name = "BuildScriptOutput::reconstruct")]
     pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
-        self.reconstruct_raw(profile.root(), &profile.workspace.cargo_home)
+        self.0
+            .iter()
+            .map(|line| line.reconstruct(profile))
+            .join("\n")
     }
 
     /// Reconstruct the file using owned path data.
