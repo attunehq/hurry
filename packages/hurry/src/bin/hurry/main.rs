@@ -14,7 +14,7 @@ use tap::Pipe;
 use tracing::{instrument, level_filters::LevelFilter};
 use tracing_error::ErrorLayer;
 use tracing_flame::FlameLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_tree::time::FormatTime;
 
 // Since this is a binary crate, we need to ensure these modules aren't pub
@@ -104,12 +104,12 @@ async fn main() -> Result<()> {
                 WhenColor::Never => layer.with_ansi(false),
                 WhenColor::Auto => layer,
             }
+            .with_filter(
+                tracing_subscriber::EnvFilter::builder()
+                    .with_env_var("HURRY_LOG")
+                    .from_env_lossy(),
+            )
         })
-        .with(
-            tracing_subscriber::EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy(),
-        )
         .with(flame_layer)
         .init();
 
