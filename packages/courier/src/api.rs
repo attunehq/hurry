@@ -43,8 +43,11 @@ use uuid::Uuid;
 
 pub mod v1;
 
+/// Not chosen for a specific reason, just seems reasonable.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_BODY_SIZE: usize = 100 * 1024 * 1024;
+
+/// This was defaulted to 100MB but `libaws_sdk_s3` produces 125MB rlibs.
+const MAX_BODY_SIZE: usize = 500 * 1024 * 1024;
 
 pub type State = Aero![crate::db::Postgres, crate::storage::Disk,];
 

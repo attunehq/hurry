@@ -12,7 +12,6 @@ use tracing::{debug, info, instrument, warn};
 
 use hurry::{
     cargo::{self, BuiltArtifact, CargoBuildArguments, CargoCache, Profile, Workspace},
-    cas::CourierCas,
     client::Courier,
 };
 use url::Url;
@@ -74,8 +73,7 @@ pub async fn exec(options: Options) -> Result<()> {
     courier.ping().await.context("ping courier service")?;
 
     // Open cache.
-    let cas = CourierCas::new(courier);
-    let cache = CargoCache::open_default(cas, workspace)
+    let cache = CargoCache::open(courier, workspace)
         .await
         .context("opening cache")?;
 
