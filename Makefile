@@ -21,7 +21,10 @@ check:
 check-fix:
 	cargo clippy --fix --allow-dirty --allow-staged
 
-precommit: format check-fix sqlx-prepare
+autoinherit:
+    cargo autoinherit
+
+precommit: autoinherit check-fix format sqlx-prepare
 
 dev:
 	cargo build
