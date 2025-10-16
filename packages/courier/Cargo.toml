@@ -27,10 +27,6 @@ derive_more = { workspace = true, features = ["full"] }
 uuid = { workspace = true, features = ["v4"] }
 aerosol = { workspace = true, features = ["async", "axum", "axum-extra", "tracing"] }
 futures = { workspace = true }
-const-str = { workspace = true, features = ["all"] }
-hashlru = { workspace = true }
-rusty_paseto = { workspace = true }
-rand = { workspace = true }
 num-traits = { workspace = true }
 bigdecimal = { workspace = true }
 bon.workspace = true
