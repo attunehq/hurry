@@ -32,7 +32,7 @@ use std::{
 use bon::Builder;
 use color_eyre::{
     Result,
-    eyre::{Context, OptionExt, eyre},
+    eyre::{Context, OptionExt},
 };
 use derive_more::{Debug, Display};
 use filetime::FileTime;

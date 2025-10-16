@@ -1,7 +1,7 @@
 use clap::Args;
 use color_eyre::{
     Result,
-    eyre::{Context, OptionExt, eyre},
+    eyre::{Context, eyre},
 };
 use colored::Colorize;
 use futures::TryStreamExt;
