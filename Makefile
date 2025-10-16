@@ -31,4 +31,3 @@ release:
 
 sqlx-prepare:
 	cd packages/courier && cargo sqlx prepare --database-url $(COURIER_DATABASE_URL)
-	cd packages/hurry && cargo sqlx prepare --database-url $(HURRY_DATABASE_URL)
