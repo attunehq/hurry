@@ -4,10 +4,9 @@
 //! - `docs/DESIGN.md`
 //! - `docs/development/cargo.md`
 
-use std::fmt::Debug;
-
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
+use derive_more::Debug;
 use tracing::{debug, info, instrument, warn};
 
 use hurry::{
@@ -23,6 +22,7 @@ use url::Url;
 pub struct Options {
     /// Base URL for the Courier instance.
     #[arg(long = "hurry-courier-url", env = "HURRY_COURIER_URL")]
+    #[debug("{courier_url}")]
     courier_url: Url,
 
     /// Skip backing up the cache.

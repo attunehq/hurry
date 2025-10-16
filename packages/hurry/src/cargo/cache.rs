@@ -9,7 +9,7 @@ use std::{
 use cargo_metadata::TargetKind;
 use color_eyre::{
     Result,
-    eyre::{Context as _, OptionExt, bail},
+    eyre::{Context as _, OptionExt, bail, eyre},
 };
 use futures::TryStreamExt as _;
 use itertools::Itertools;
@@ -98,11 +98,25 @@ impl CargoCache {
         let mut artifacts = Vec::new();
         for (i, invocation) in build_plan.invocations.iter().cloned().enumerate() {
             trace!(?invocation, "build plan invocation");
+
+            // We only cache third-party dependencies. `CARGO_PRIMARY_PACKAGE` is set if the
+            // user specifically requested for the item to be built; while it's possible for
+            // them to request to build a specific third-party dependency this seems like a
+            // reasonable proxy to use for now.
+            //
+            // Note: we used to only filter on "is the target_kind a binary" (refer to the
+            // code below). The issue is that this doesn't work for first-party projects
+            // that build libraries.
+            let primary = invocation.env.get("CARGO_PRIMARY_PACKAGE");
+            if primary.map(|v| v.as_str()) == Some("1") {
+                trace!(?invocation, "skipping: first party workspace member");
+                continue;
+            }
+
             // For each invocation, figure out what kind it is:
             // 1. Compiling a build script.
             // 2. Running a build script.
             // 3. Compiling a dependency.
-            // 4. Compiling first-party code.
             if invocation.target_kind == [TargetKind::CustomBuild] {
                 match invocation.compile_mode {
                     CargoCompileMode::Build => {
@@ -163,7 +177,8 @@ impl CargoCache {
                     ),
                 }
             } else if invocation.target_kind == [TargetKind::Bin] {
-                // Binaries are _always_ first-party code. Do nothing for now.
+                // Binaries are _always_ first-party code. Do nothing for now. First-party
+                // builds are already filtered, but we filter them again here just in case.
                 continue;
             } else if invocation.target_kind.contains(&TargetKind::Lib)
                 || invocation.target_kind.contains(&TargetKind::RLib)
@@ -202,7 +217,25 @@ impl CargoCache {
                     .map(|f| AbsFilePath::try_from(f).context("parsing build plan output file"))
                     .collect::<Result<Vec<_>>>()?;
                 let library_crate_compilation_unit_hash = {
-                    let compiled_file = lib_files.first().ok_or_eyre("no compiled files")?;
+                    // For CDylibs and dylibs, cargo produces multiple files. We need to find
+                    // one with a hash suffix (typically an rlib or intermediate artifact).
+                    let compiled_file = lib_files
+                        .iter()
+                        .find(|f| {
+                            let Some(filename) = f.file_name() else {
+                                return false;
+                            };
+                            let filename = filename.to_string_lossy();
+                            let Some(filename) = filename.split_once('.').map(|x| x.0) else {
+                                return false;
+                            };
+                            filename.contains('-')
+                        })
+                        .or_else(|| lib_files.first())
+                        .ok_or_else(|| {
+                            eyre!("no compiled files for library: {}", invocation.package_name)
+                        })?;
+
                     let filename = compiled_file
                         .file_name()
                         .ok_or_eyre("no filename")?
@@ -211,7 +244,11 @@ impl CargoCache {
 
                     filename
                         .rsplit_once('-')
-                        .ok_or_eyre("no unit hash suffix")?
+                        .ok_or_else(|| {
+                            eyre!(
+                                "no unit hash suffix in filename: {filename} (all files: {lib_files:?})"
+                            )
+                        })?
                         .1
                         .to_string()
                 };
