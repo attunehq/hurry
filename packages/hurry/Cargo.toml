@@ -61,6 +61,7 @@ tokio-util = { workspace = true, features = ["io"] }
 url = "2.5.7"
 flume = "0.11.1"
 num_cpus = "1.17.0"
+jwalk.workspace = true
 
 [dev-dependencies]
 async-walkdir.workspace = true
