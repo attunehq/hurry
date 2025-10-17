@@ -7,6 +7,7 @@ use color_eyre::{
 use futures::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use tap::Pipe;
 use tracing::{instrument, trace};
 
 use super::workspace::ProfileDir;
@@ -66,10 +67,13 @@ impl DepInfo {
             .await
             .context("read file")?
             .ok_or_eyre("file does not exist")?;
-        let lines = stream::iter(content.lines())
-            .then(|line| {
-                DepInfoLine::parse(profile, line)
-                    .then_with_context(move || format!("parse line: {line:?}"))
+
+        let lines = escaped_lines(&content)
+            .pipe(stream::iter)
+            .then(|line| async move {
+                DepInfoLine::parse(profile, &line)
+                    .await
+                    .with_context(|| format!("parse line: {line:?}"))
             })
             .try_collect::<Vec<_>>()
             .await?;
@@ -197,5 +201,72 @@ impl DepInfoLine {
             DepInfoLine::Space => String::new(),
             DepInfoLine::Comment(comment) => format!("#{comment}"),
         }
+    }
+}
+
+/// Split the content into lines, except that backslashes escape line breaks.
+fn escaped_lines(content: &str) -> Vec<String> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+
+    let mut result = Vec::new();
+    let mut current = String::new();
+    for line in content.lines() {
+        match line.strip_suffix('\\') {
+            Some(stripped) => {
+                current.push_str(stripped);
+            }
+            None => {
+                current.push_str(line);
+                result.push(current);
+                current = String::new();
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        result.push(current);
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq as pretty_assert_eq;
+    use simple_test_case::test_case;
+
+    use super::*;
+
+    #[test_case(
+        "line1 \\\nline2 \\\nline3\nline4",
+        vec![String::from("line1 line2 line3"), String::from("line4")];
+        "continuation_lines"
+    )]
+    #[test_case(
+        "line1\nline2\nline3",
+        vec![String::from("line1"), String::from("line2"), String::from("line3")];
+        "no_continuations"
+    )]
+    #[test_case(
+        "",
+        vec![];
+        "empty_input"
+    )]
+    #[test_case(
+        "line1 \\\nline2 \\",
+        vec![String::from("line1 line2 ")];
+        "trailing_backslash"
+    )]
+    #[test_case(
+        "  line1  \\\n  line2  \\\n  line3  ",
+        vec![String::from("  line1    line2    line3  ")];
+        "preserves_whitespace"
+    )]
+    #[test]
+    fn parses_escaped_lines(input: &str, expected: Vec<String>) {
+        let result = escaped_lines(input);
+        pretty_assert_eq!(result, expected);
     }
 }

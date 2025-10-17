@@ -7,7 +7,7 @@ use color_eyre::{
 };
 use derive_more::{Debug, Deref, Display, From};
 use futures::TryStreamExt;
-use reqwest::StatusCode;
+use reqwest::{Response, StatusCode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
 use tap::Pipe;
 use tokio::io::AsyncRead;
@@ -51,10 +51,12 @@ impl Courier {
             StatusCode::OK => Ok(()),
             status => {
                 let url = response.url().to_string();
+                let request_id = request_id(&response);
                 let body = response.text().await.unwrap_or_default();
                 return Err(eyre!("unexpected status code: {status}"))
                     .with_section(|| url.header("Url:"))
-                    .with_section(|| body.header("Body:"));
+                    .with_section(|| body.header("Body:"))
+                    .with_section(|| request_id.header("Request ID:"));
             }
         }
     }
@@ -69,10 +71,12 @@ impl Courier {
             StatusCode::NOT_FOUND => Ok(false),
             status => {
                 let url = response.url().to_string();
+                let request_id = request_id(&response);
                 let body = response.text().await.unwrap_or_default();
                 return Err(eyre!("unexpected status code: {status}"))
                     .with_section(|| url.header("Url:"))
-                    .with_section(|| body.header("Body:"));
+                    .with_section(|| body.header("Body:"))
+                    .with_section(|| request_id.header("Request ID:"));
             }
         }
     }
@@ -92,10 +96,12 @@ impl Courier {
             StatusCode::NOT_FOUND => Ok(None),
             status => {
                 let url = response.url().to_string();
+                let request_id = request_id(&response);
                 let body = response.text().await.unwrap_or_default();
                 return Err(eyre!("unexpected status code: {status}"))
                     .with_section(|| url.header("Url:"))
-                    .with_section(|| body.header("Body:"));
+                    .with_section(|| body.header("Body:"))
+                    .with_section(|| request_id.header("Request ID:"));
             }
         }
     }
@@ -116,10 +122,12 @@ impl Courier {
             StatusCode::CREATED => Ok(()),
             status => {
                 let url = response.url().to_string();
+                let request_id = request_id(&response);
                 let body = response.text().await.unwrap_or_default();
                 return Err(eyre!("unexpected status code: {status}"))
                     .with_section(|| url.header("Url:"))
-                    .with_section(|| body.header("Body:"));
+                    .with_section(|| body.header("Body:"))
+                    .with_section(|| request_id.header("Request ID:"));
             }
         }
     }
@@ -140,10 +148,12 @@ impl Courier {
             StatusCode::CREATED => Ok(()),
             status => {
                 let url = response.url().to_string();
+                let request_id = request_id(&response);
                 let body = response.text().await.unwrap_or_default();
                 return Err(eyre!("unexpected status code: {status}"))
                     .with_section(|| url.header("Url:"))
-                    .with_section(|| body.header("Body:"));
+                    .with_section(|| body.header("Body:"))
+                    .with_section(|| request_id.header("Request ID:"));
             }
         }
     }
@@ -174,10 +184,12 @@ impl Courier {
             StatusCode::NOT_FOUND => Ok(None),
             status => {
                 let url = response.url().to_string();
+                let request_id = request_id(&response);
                 let body = response.text().await.unwrap_or_default();
                 return Err(eyre!("unexpected status code: {status}"))
                     .with_section(|| url.header("Url:"))
-                    .with_section(|| body.header("Body:"));
+                    .with_section(|| body.header("Body:"))
+                    .with_section(|| request_id.header("Request ID:"));
             }
         }
     }
@@ -191,10 +203,12 @@ impl Courier {
             StatusCode::CREATED => Ok(()),
             status => {
                 let url = response.url().to_string();
+                let request_id = request_id(&response);
                 let body = response.text().await.unwrap_or_default();
                 return Err(eyre!("unexpected status code: {status}"))
                     .with_section(|| url.header("Url:"))
-                    .with_section(|| body.header("Body:"));
+                    .with_section(|| body.header("Body:"))
+                    .with_section(|| request_id.header("Request ID:"));
             }
         }
     }
@@ -213,10 +227,12 @@ impl Courier {
             StatusCode::NOT_FOUND => Ok(None),
             status => {
                 let url = response.url().to_string();
+                let request_id = request_id(&response);
                 let body = response.text().await.unwrap_or_default();
                 Err(eyre!("unexpected status code: {status}"))
                     .with_section(|| url.header("Url:"))
                     .with_section(|| body.header("Body:"))
+                    .with_section(|| request_id.header("Request ID:"))
             }
         }
     }
@@ -286,4 +302,14 @@ pub struct CargoRestoreRequest {
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct CargoRestoreResponse {
     pub artifacts: Vec<ArtifactFile>,
+}
+
+/// Extract the request ID from a response header.
+fn request_id(response: &Response) -> String {
+    response
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from)
+        .unwrap_or_else(|| String::from("<not set>"))
 }
