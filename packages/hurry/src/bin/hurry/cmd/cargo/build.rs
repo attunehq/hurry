@@ -9,6 +9,7 @@ use color_eyre::{Result, eyre::Context};
 use derive_more::Debug;
 use humansize::{DECIMAL, format_size};
 use indicatif::{ProgressBar, ProgressStyle};
+use tap::Tap;
 use tracing::{debug, info, instrument, warn};
 
 use hurry::{
@@ -94,18 +95,21 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Restore artifacts.
     let restored = if !options.skip_restore {
-        let package_count = artifact_plan.artifacts.len() as u64;
-        let restore_pb = ProgressBar::new(package_count);
-        restore_pb.set_style(progress_style.clone());
-        restore_pb.set_message("Restoring cache");
+        let count = artifact_plan.artifacts.len() as u64;
+        let progress = ProgressBar::new(count);
+        progress.set_style(progress_style.clone());
+        progress.set_message("Restoring cache");
 
-        let restored = cache.restore(&artifact_plan, &restore_pb).await?;
-        restore_pb.finish_with_message(format!(
-            "Cache restored ({} files, {} transferred)",
-            restored.stats.files,
-            format_size(restored.stats.bytes, DECIMAL)
-        ));
-        restored
+        cache
+            .restore(&artifact_plan, &progress)
+            .await?
+            .tap(|restored| {
+                progress.finish_with_message(format!(
+                    "Cache restored ({} files, {} transferred)",
+                    restored.stats.files,
+                    format_size(restored.stats.bytes, DECIMAL)
+                ))
+            })
     } else {
         Default::default()
     };
@@ -189,13 +193,13 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Cache the built artifacts.
     if !options.skip_backup {
-        let package_count = artifact_plan.artifacts.len() as u64;
-        let backup_pb = ProgressBar::new(package_count);
-        backup_pb.set_style(progress_style);
-        backup_pb.set_message("Backing up cache");
+        let count = artifact_plan.artifacts.len() as u64;
+        let progress = ProgressBar::new(count);
+        progress.set_style(progress_style);
+        progress.set_message("Backing up cache");
 
-        let stats = cache.save(artifact_plan, &backup_pb, &restored).await?;
-        backup_pb.finish_with_message(format!(
+        let stats = cache.save(artifact_plan, &progress, &restored).await?;
+        progress.finish_with_message(format!(
             "Cache backed up ({} files, {} transferred)",
             stats.files,
             format_size(stats.bytes, DECIMAL)

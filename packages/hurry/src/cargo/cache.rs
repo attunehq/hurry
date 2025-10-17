@@ -434,8 +434,8 @@ impl CargoCache {
         let target_dir = self.ws.open_profile_locked(&artifact_plan.profile).await?;
         let target_path = target_dir.root();
 
-        let mut total_files = 0u64;
-        let mut total_bytes = 0u64;
+        let mut transferred_files = 0u64;
+        let mut transferred_bytes = 0u64;
 
         for artifact in artifact_plan.artifacts {
             // TODO: The fact that this takes a `ProfileDir` is an expedient
@@ -517,12 +517,12 @@ impl CargoCache {
                     ?artifact_key,
                     "skipping backup: artifact was restored from cache"
                 );
-                total_files += files_to_save.count() as u64;
+                transferred_files += files_to_save.count() as u64;
                 progress.inc(1);
                 progress.set_message(format!(
                     "Backing up cache ({} files, {} transferred)",
-                    total_files,
-                    format_size(total_bytes, DECIMAL)
+                    transferred_files,
+                    format_size(transferred_bytes, DECIMAL)
                 ));
                 continue;
             }
@@ -548,9 +548,9 @@ impl CargoCache {
                         };
 
                         if uploaded {
-                            total_bytes += content.len() as u64;
+                            transferred_bytes += content.len() as u64;
                         }
-                        total_files += 1;
+                        transferred_files += 1;
                         debug!(?path, ?key, uploaded, "stored object");
 
                         // Gather metadata for the artifact file.
@@ -609,14 +609,14 @@ impl CargoCache {
             progress.inc(1);
             progress.set_message(format!(
                 "Backing up cache ({} files, {} transferred)",
-                total_files,
-                format_size(total_bytes, DECIMAL)
+                transferred_files,
+                format_size(transferred_bytes, DECIMAL)
             ));
         }
 
         Ok(CacheStats {
-            files: total_files,
-            bytes: total_bytes,
+            files: transferred_files,
+            bytes: transferred_bytes,
         })
     }
 
@@ -749,7 +749,6 @@ impl CargoCache {
         drop(rx);
         drop(tx);
 
-        // Collect actual stats from workers to get accurate byte count.
         while let Some(worker) = cas_restore_workers.join_next().await {
             worker.context("cas restore worker")?;
         }
