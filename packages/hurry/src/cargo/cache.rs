@@ -214,25 +214,7 @@ impl CargoCache {
                     .map(|f| AbsFilePath::try_from(f).context("parsing build plan output file"))
                     .collect::<Result<Vec<_>>>()?;
                 let library_crate_compilation_unit_hash = {
-                    // For CDylibs and dylibs, cargo produces multiple files. We need to find
-                    // one with a hash suffix (typically an rlib or intermediate artifact).
-                    let compiled_file = lib_files
-                        .iter()
-                        .find(|f| {
-                            let Some(filename) = f.file_name() else {
-                                return false;
-                            };
-                            let filename = filename.to_string_lossy();
-                            let Some(filename) = filename.split_once('.').map(|x| x.0) else {
-                                return false;
-                            };
-                            filename.contains('-')
-                        })
-                        .or_else(|| lib_files.first())
-                        .ok_or_else(|| {
-                            eyre!("no compiled files for library: {}", invocation.package_name)
-                        })?;
-
+                    let compiled_file = lib_files.first().ok_or_eyre("no compiled files")?;
                     let filename = compiled_file
                         .file_name()
                         .ok_or_eyre("no filename")?
