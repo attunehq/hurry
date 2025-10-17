@@ -415,9 +415,12 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::save", skip(progress))]
-    pub async fn save(&self, artifact_plan: ArtifactPlan, progress: &ProgressBar) -> Result<()> {
+    pub async fn save(&self, artifact_plan: ArtifactPlan, progress: &ProgressBar) -> Result<CacheStats> {
         let target_dir = self.ws.open_profile_locked(&artifact_plan.profile).await?;
         let target_path = target_dir.root();
+
+        let mut total_files = 0u64;
+        let mut total_bytes = 0u64;
 
         for artifact in artifact_plan.artifacts {
             // TODO: The fact that this takes a `ProfileDir` is an expedient
@@ -503,8 +506,13 @@ impl CargoCache {
                     Some(content) => {
                         let content = Self::rewrite(&target_dir, &path, &content).await?;
 
-                        let (key, _uploaded) = self.cas.store(&content).await?;
-                        debug!(?path, ?key, "stored object");
+                        let (key, uploaded) = self.cas.store(&content).await?;
+                        debug!(?path, ?key, uploaded, "stored object");
+
+                        if uploaded {
+                            total_bytes += content.len() as u64;
+                        }
+                        total_files += 1;
 
                         // Gather metadata for the artifact file.
                         let metadata = fs::Metadata::from_file(&path)
@@ -562,7 +570,10 @@ impl CargoCache {
             progress.inc(1);
         }
 
-        Ok(())
+        Ok(CacheStats {
+            files: total_files,
+            bytes: total_bytes,
+        })
     }
 
     #[instrument(name = "CargoCache::restore", skip(progress))]

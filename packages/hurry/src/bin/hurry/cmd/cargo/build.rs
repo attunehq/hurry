@@ -191,8 +191,12 @@ pub async fn exec(options: Options) -> Result<()> {
         backup_pb.set_style(progress_style);
         backup_pb.set_message("Backing up cache");
 
-        cache.save(artifact_plan, &backup_pb).await?;
-        backup_pb.finish_with_message("Cache backed up");
+        let stats = cache.save(artifact_plan, &backup_pb).await?;
+        backup_pb.finish_with_message(format!(
+            "Cache backed up ({} files, {} transferred)",
+            stats.files,
+            format_size(stats.bytes, DECIMAL)
+        ));
     }
 
     Ok(())
