@@ -520,6 +520,15 @@ impl CargoCache {
                         .reconstruct_raw(&profile_root, &cargo_home)
                         .pipe(AbsFilePath::try_from)?;
 
+                    // Check if file already exists with correct content.
+                    if fs::exists(path.as_std_path()).await {
+                        let existing_hash = Blake3::from_file(&path).await?;
+                        if existing_hash == key {
+                            trace!(?path, "file already exists with correct hash, skipping");
+                            return Ok(());
+                        }
+                    }
+
                     // Get the data from the CAS and reconstruct it according to the local machine.
                     let data = cas.must_get(&key).await?;
                     let data = Self::reconstruct(&profile_root, &cargo_home, &path, &data).await?;
