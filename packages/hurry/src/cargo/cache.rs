@@ -568,6 +568,11 @@ impl CargoCache {
 
             self.courier.cargo_cache_save(request).await?;
             progress.inc(1);
+            progress.set_message(format!(
+                "Backing up cache ({} files, {} transferred)",
+                total_files,
+                format_size(total_bytes, DECIMAL)
+            ));
         }
 
         Ok(CacheStats {
