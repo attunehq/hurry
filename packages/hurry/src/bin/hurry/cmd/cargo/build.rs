@@ -169,20 +169,7 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Cache the built artifacts.
     if !options.skip_backup {
-        info!("Caching built artifacts");
-        for artifact in artifact_plan.artifacts {
-            // Construct the full artifact key.
-            let artifact = BuiltArtifact::from_key(
-                artifact,
-                artifact_plan.target.clone(),
-                artifact_plan.profile.clone(),
-            )
-            .await?;
-            debug!(?artifact, "caching artifact");
-
-            // Cache the artifact.
-            cache.save(artifact).await?;
-        }
+        cache.save(artifact_plan).await?;
     }
 
     Ok(())
