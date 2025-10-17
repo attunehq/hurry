@@ -22,7 +22,6 @@ pub async fn handle(Dep(db): Dep<Postgres>, Dep(storage): Dep<Disk>) -> StatusCo
 /// Reset all cache data: delete all database records and CAS blobs.
 #[instrument]
 async fn reset_all(db: &Postgres, storage: &Disk) -> Result<()> {
-    // Delete all database records in order to maintain referential integrity
     sqlx::query!("DELETE FROM cargo_library_unit_build_artifact")
         .execute(&db.pool)
         .await?;
@@ -36,19 +35,15 @@ async fn reset_all(db: &Postgres, storage: &Disk) -> Result<()> {
         .execute(&db.pool)
         .await?;
 
-    // Delete the entire CAS directory
     tokio::fs::remove_dir_all(storage.root())
         .await
         .or_else(|err| {
-            // If the directory doesn't exist, that's fine
             if err.kind() == std::io::ErrorKind::NotFound {
                 Ok(())
             } else {
                 Err(err)
             }
         })?;
-
-    // Recreate the root directory
     tokio::fs::create_dir_all(storage.root()).await?;
 
     Ok(())
