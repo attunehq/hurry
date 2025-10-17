@@ -186,7 +186,13 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Cache the built artifacts.
     if !options.skip_backup {
-        cache.save(artifact_plan).await?;
+        let package_count = artifact_plan.artifacts.len() as u64;
+        let backup_pb = ProgressBar::new(package_count);
+        backup_pb.set_style(progress_style);
+        backup_pb.set_message("Backing up cache");
+
+        cache.save(artifact_plan, &backup_pb).await?;
+        backup_pb.finish_with_message("Cache backed up");
     }
 
     Ok(())

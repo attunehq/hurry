@@ -414,8 +414,8 @@ impl CargoCache {
         })
     }
 
-    #[instrument(name = "CargoCache::save")]
-    pub async fn save(&self, artifact_plan: ArtifactPlan) -> Result<()> {
+    #[instrument(name = "CargoCache::save", skip(progress))]
+    pub async fn save(&self, artifact_plan: ArtifactPlan, progress: &ProgressBar) -> Result<()> {
         let target_dir = self.ws.open_profile_locked(&artifact_plan.profile).await?;
         let target_path = target_dir.root();
 
@@ -559,6 +559,7 @@ impl CargoCache {
                 .build();
 
             self.courier.cargo_cache_save(request).await?;
+            progress.inc(1);
         }
 
         Ok(())
