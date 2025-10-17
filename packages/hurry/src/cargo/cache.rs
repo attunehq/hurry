@@ -67,6 +67,16 @@ impl RestoreState {
         self.objects.insert(key.clone());
     }
 
+    /// Checks if an artifact was restored from cache.
+    fn check_artifact(&self, artifact: &ArtifactKey) -> bool {
+        self.artifacts.contains(artifact)
+    }
+
+    /// Checks if an object was restored from cache.
+    fn check_object(&self, key: &Blake3) -> bool {
+        self.objects.contains(key)
+    }
+
     fn with_stats(self, stats: CacheStats) -> Self {
         Self {
             artifacts: self.artifacts,
@@ -415,7 +425,7 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::save", skip(progress))]
-    pub async fn save(&self, artifact_plan: ArtifactPlan, progress: &ProgressBar) -> Result<CacheStats> {
+    pub async fn save(&self, artifact_plan: ArtifactPlan, progress: &ProgressBar, restored: &RestoreState) -> Result<CacheStats> {
         let target_dir = self.ws.open_profile_locked(&artifact_plan.profile).await?;
         let target_path = target_dir.root();
 
@@ -429,6 +439,8 @@ impl CargoCache {
             // upstream consumers (e.g. `BuildScriptOutput::from_file`).
             let artifact = BuiltArtifact::from_key(&target_dir, artifact).await?;
             debug!(?artifact, "caching artifact");
+
+            let artifact_key = artifact.reconstruct_key();
 
             // Determine which files will be saved.
             let lib_files = {
@@ -495,6 +507,20 @@ impl CargoCache {
             };
             let files_to_save = lib_files.into_iter().chain(build_script_files);
 
+            if restored.check_artifact(&artifact_key) {
+                trace!(
+                    ?artifact_key,
+                    "skipping backup: artifact was restored from cache"
+                );
+                progress.inc(1);
+                progress.set_message(format!(
+                    "Backing up cache ({} files, {} transferred)",
+                    total_files,
+                    format_size(total_bytes, DECIMAL)
+                ));
+                continue;
+            }
+
             // For each file, save it into the CAS and calculate its key.
             //
             // TODO: Fuse this operation with the loop above where we discover the
@@ -505,14 +531,21 @@ impl CargoCache {
                 match fs::read_buffered(&path).await? {
                     Some(content) => {
                         let content = Self::rewrite(&target_dir, &path, &content).await?;
+                        let key = Blake3::from_buffer(&content);
 
-                        let (key, uploaded) = self.cas.store(&content).await?;
-                        debug!(?path, ?key, uploaded, "stored object");
+                        // Don't even check if it already exists in the CAS if we restored it.
+                        let (key, uploaded) = if restored.check_object(&key) {
+                            trace!(?path, ?key, "skipping backup: file was restored from cache");
+                            (key, false)
+                        } else {
+                            self.cas.store(&content).await?
+                        };
 
                         if uploaded {
                             total_bytes += content.len() as u64;
                         }
                         total_files += 1;
+                        debug!(?path, ?key, uploaded, "stored object");
 
                         // Gather metadata for the artifact file.
                         let metadata = fs::Metadata::from_file(&path)

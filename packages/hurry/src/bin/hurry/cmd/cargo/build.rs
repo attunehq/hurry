@@ -93,7 +93,7 @@ pub async fn exec(options: Options) -> Result<()> {
         .progress_chars("=> ");
 
     // Restore artifacts.
-    if !options.skip_restore {
+    let restored = if !options.skip_restore {
         let package_count = artifact_plan.artifacts.len() as u64;
         let restore_pb = ProgressBar::new(package_count);
         restore_pb.set_style(progress_style.clone());
@@ -105,7 +105,10 @@ pub async fn exec(options: Options) -> Result<()> {
             restored.stats.files,
             format_size(restored.stats.bytes, DECIMAL)
         ));
-    }
+        restored
+    } else {
+        Default::default()
+    };
 
     // Run the build.
     if !options.skip_build {
@@ -191,7 +194,7 @@ pub async fn exec(options: Options) -> Result<()> {
         backup_pb.set_style(progress_style);
         backup_pb.set_message("Backing up cache");
 
-        let stats = cache.save(artifact_plan, &backup_pb).await?;
+        let stats = cache.save(artifact_plan, &backup_pb, &restored).await?;
         backup_pb.finish_with_message(format!(
             "Cache backed up ({} files, {} transferred)",
             stats.files,
