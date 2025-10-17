@@ -93,19 +93,22 @@ pub async fn exec(options: Options) -> Result<()> {
         .progress_chars("=> ");
 
     // Restore artifacts.
-    if !options.skip_restore {
+    let restored = if !options.skip_restore {
         let package_count = artifact_plan.artifacts.len() as u64;
         let restore_pb = ProgressBar::new(package_count);
         restore_pb.set_style(progress_style.clone());
         restore_pb.set_message("Restoring cache");
 
-        let stats = cache.restore(&artifact_plan, &restore_pb).await?;
+        let restored = cache.restore(&artifact_plan, &restore_pb).await?;
         restore_pb.finish_with_message(format!(
             "Cache restored ({} files, {} transferred)",
-            stats.files,
-            format_size(stats.bytes, DECIMAL)
+            restored.stats.files,
+            format_size(restored.stats.bytes, DECIMAL)
         ));
-    }
+        restored
+    } else {
+        Default::default()
+    };
 
     // Run the build.
     if !options.skip_build {
@@ -202,8 +205,8 @@ pub async fn exec(options: Options) -> Result<()> {
             .await?;
             debug!(?artifact, "caching artifact");
 
-            // Cache the artifact.
-            let stats = cache.save(artifact).await?;
+            // Cache the artifact, skipping files that were restored from cache.
+            let stats = cache.save(artifact, &restored).await?;
             total_stats.files += stats.files;
             total_stats.bytes += stats.bytes;
 
