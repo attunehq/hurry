@@ -15,6 +15,7 @@ use color_eyre::{
     Result,
     eyre::{Context as _, OptionExt, bail, eyre},
 };
+use dashmap::DashSet;
 use futures::TryStreamExt as _;
 use humansize::{DECIMAL, format_size};
 use indicatif::ProgressBar;
@@ -44,6 +45,44 @@ use crate::{
 pub struct CacheStats {
     pub files: u64,
     pub bytes: u64,
+}
+
+/// Tracks items that were restored from the cache.
+#[derive(Debug, Clone, Default)]
+pub struct RestoreState {
+    pub artifacts: DashSet<ArtifactKey>,
+    pub objects: DashSet<Blake3>,
+    pub stats: CacheStats,
+}
+
+impl RestoreState {
+    /// Records that an artifact was restored from cache.
+    fn record_artifact(&self, artifact: &ArtifactKey) {
+        self.artifacts.insert(artifact.clone());
+    }
+
+    /// Records that an object was restored from cache.
+    fn record_object(&self, key: &Blake3) {
+        self.objects.insert(key.clone());
+    }
+
+    /// Checks if an artifact was restored from cache.
+    fn check_artifact(&self, artifact: &ArtifactKey) -> bool {
+        self.artifacts.contains(artifact)
+    }
+
+    /// Checks if an object was restored from cache.
+    fn check_object(&self, key: &Blake3) -> bool {
+        self.objects.contains(key)
+    }
+
+    fn with_stats(self, stats: CacheStats) -> Self {
+        Self {
+            artifacts: self.artifacts,
+            objects: self.objects,
+            stats,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -386,10 +425,15 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::save")]
-    pub async fn save(&self, artifact: BuiltArtifact) -> Result<CacheStats> {
+    pub async fn save(
+        &self,
+        artifact: BuiltArtifact,
+        restored: &RestoreState,
+    ) -> Result<CacheStats> {
         // TODO: We should probably not be re-locking and unlocking on a per-artifact
         // basis. Maybe this method should instead take a Vec?
         let profile_dir = self.ws.open_profile_locked(&artifact.profile).await?;
+        let artifact_key = artifact.reconstruct_key();
 
         // Determine which files will be saved.
         let lib_files = {
@@ -456,6 +500,17 @@ impl CargoCache {
         };
         let files_to_save = lib_files.into_iter().chain(build_script_files);
 
+        if restored.check_artifact(&artifact_key) {
+            trace!(
+                ?artifact_key,
+                "skipping backup: artifact was restored from cache"
+            );
+            return Ok(CacheStats {
+                files: files_to_save.count() as u64,
+                bytes: 0,
+            });
+        }
+
         // For each file, save it into the CAS and calculate its key.
         //
         // TODO: Fuse this operation with the loop above where we discover the
@@ -468,8 +523,16 @@ impl CargoCache {
             match fs::read_buffered(&path).await? {
                 Some(content) => {
                     let content = Self::rewrite(&profile_dir, &path, &content).await?;
+                    let key = Blake3::from_buffer(&content);
 
-                    let (key, uploaded) = self.cas.store(&content).await?;
+                    // Don't even check if it already exists in the CAS if we restored it.
+                    let (key, uploaded) = if restored.check_object(&key) {
+                        trace!(?path, ?key, "skipping backup: file was restored from cache");
+                        (key, false)
+                    } else {
+                        self.cas.store(&content).await?
+                    };
+
                     if uploaded {
                         bytes_saved += content.len() as u64;
                     }
@@ -538,7 +601,7 @@ impl CargoCache {
         &self,
         artifact_plan: &ArtifactPlan,
         progress: &ProgressBar,
-    ) -> Result<CacheStats> {
+    ) -> Result<RestoreState> {
         debug!("start restoring");
 
         // Open the profile dir once to extract owned paths upfront.
@@ -558,6 +621,7 @@ impl CargoCache {
         // still being worked on. We want to avoid uneccesary memory overhead but each
         // individual artifact file is relatively small so we'd rather trade some space
         // for latency mitigation here.
+        let restored = RestoreState::default();
         let transferred_files = Arc::new(AtomicU64::new(0));
         let transferred_bytes = Arc::new(AtomicU64::new(0));
         let (tx, rx) = flume::bounded::<ArtifactFile>(worker_count * 10);
@@ -569,6 +633,7 @@ impl CargoCache {
             let cargo_home = cargo_home.clone();
             let transferred_files = transferred_files.clone();
             let transferred_bytes = transferred_bytes.clone();
+            let restored = restored.clone();
             cas_restore_workers.spawn(async move {
                 let restore = async move |file: &ArtifactFile| -> Result<u64> {
                     let key = Blake3::from_hex_string(&file.object_key)?;
@@ -600,6 +665,7 @@ impl CargoCache {
                         .build();
                     fs::write(&path, &data).await?;
                     metadata.set_file(&path).await?;
+                    restored.record_object(&key);
                     Result::<u64>::Ok(data.len() as u64)
                 };
 
@@ -644,6 +710,7 @@ impl CargoCache {
                 }
             }
 
+            restored.record_artifact(artifact);
             progress.inc(1);
             progress.set_message(format!(
                 "Restoring cache ({} files, {} transferred)",
@@ -664,10 +731,10 @@ impl CargoCache {
         }
 
         debug!("done restoring");
-        Ok(CacheStats {
+        Ok(restored.with_stats(CacheStats {
             files: transferred_files.load(Ordering::Relaxed),
             bytes: transferred_bytes.load(Ordering::Relaxed),
-        })
+        }))
     }
 
     /// Rewrite file contents before storing in CAS to normalize paths.
@@ -873,6 +940,19 @@ impl BuiltArtifact {
             build_script_compilation_unit_hash: key.build_script_compilation_unit_hash,
             build_script_execution_unit_hash: key.build_script_execution_unit_hash,
         })
+    }
+
+    /// Reconstruct a representative `ArtifactKey`.
+    pub fn reconstruct_key(&self) -> ArtifactKey {
+        ArtifactKey {
+            package_name: self.package_name.clone(),
+            package_version: self.package_version.clone(),
+            lib_files: self.lib_files.clone(),
+            build_script_files: self.build_script_files.clone(),
+            library_crate_compilation_unit_hash: self.library_crate_compilation_unit_hash.clone(),
+            build_script_compilation_unit_hash: self.build_script_compilation_unit_hash.clone(),
+            build_script_execution_unit_hash: self.build_script_execution_unit_hash.clone(),
+        }
     }
 }
 
