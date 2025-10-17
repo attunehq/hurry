@@ -104,10 +104,9 @@ impl CargoCache {
         profile: &Profile,
         args: impl AsRef<CargoBuildArguments> + Debug,
     ) -> Result<ArtifactPlan> {
-        let context = RustcMetadata::from_argv(&self.ws.root, &args)
+        let rustc = RustcMetadata::from_argv(&self.ws.root, &args)
             .await
             .context("parsing rustc metadata")?;
-        let rustc = context;
         trace!(?rustc, "rustc metadata");
 
         // Note that build plans as a feature are _deprecated_, although their
