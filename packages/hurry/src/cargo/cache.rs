@@ -19,6 +19,7 @@ use futures::TryStreamExt as _;
 use humansize::{DECIMAL, format_size};
 use indicatif::ProgressBar;
 use itertools::Itertools;
+use scopeguard::defer;
 use serde::Serialize;
 use tap::Pipe as _;
 use tokio::task::JoinSet;
@@ -59,7 +60,32 @@ impl CargoCache {
         Ok(Self { cas, courier, ws })
     }
 
+    /// Get the build plan by running `cargo build --build-plan` with the
+    /// provided arguments.
     async fn build_plan(&self, args: impl AsRef<CargoBuildArguments> + Debug) -> Result<BuildPlan> {
+        // Running `cargo build --build-plan` deletes a bunch of items in the `target`
+        // directory. To work around this we temporarily move `target` -> run
+        // the build plan -> move it back. If the rename fails (e.g., permissions,
+        // cross-device), we proceed without it; this will then have the original issue
+        // but at least won't break the build.
+        let temp = self
+            .ws
+            .root
+            .as_std_path()
+            .join(format!("target.backup.{}", Uuid::new_v4()));
+
+        let renamed = tokio::fs::rename(self.ws.target.as_std_path(), &temp)
+            .await
+            .is_ok();
+
+        defer! {
+            if renamed {
+                let target = self.ws.target.as_std_path();
+                let _ = std::fs::remove_dir_all(&target);
+                let _ = std::fs::rename(&temp, &target);
+            }
+        }
+
         let mut build_args = args.as_ref().to_argv();
         build_args.extend([
             String::from("--build-plan"),
@@ -104,28 +130,7 @@ impl CargoCache {
         // pass the flags but we pass the user flags first just in case as that
         // seems like it'd follow the principle of least surprise if ordering
         // ever does matter.
-        //
-        // FIXME: Why does running this clear all the compiled artifacts from
-        // the target folder?
-        // Running Cargo to get the build plan seriously messes with the artifacts
-        // already in the `target` folder; for this reason we temporarily move `target`
-        // -> run the build plan -> move it back.
-        let build_plan = {
-            let target_temp = self
-                .ws
-                .root
-                .as_std_path()
-                .join(format!("target.backup.{}", Uuid::new_v4()));
-            tokio::fs::rename(self.ws.target.as_std_path(), &target_temp)
-                .await
-                .context("rename target")?;
-            let build_plan = self.build_plan(&args).await;
-            let _ = fs::remove_dir_all(&self.ws.target).await;
-            tokio::fs::rename(target_temp, self.ws.target.as_std_path())
-                .await
-                .context("rename target back")?;
-            build_plan?
-        };
+        let build_plan = self.build_plan(&args).await?;
         trace!(?build_plan, "build plan");
 
         let mut build_script_index_to_dir = HashMap::new();

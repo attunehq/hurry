@@ -65,6 +65,7 @@ jwalk.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 indicatif = { workspace = true }
 humansize = { workspace = true }
+scopeguard = { workspace = true }
 
 [dev-dependencies]
 async-walkdir.workspace = true

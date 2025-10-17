@@ -2082,6 +2082,7 @@ dependencies = [
  "pretty_assertions",
  "rayon",
  "reqwest",
+ "scopeguard",
  "serde",
  "serde_json",
  "simple_test_case",
