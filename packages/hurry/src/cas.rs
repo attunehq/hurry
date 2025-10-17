@@ -29,16 +29,18 @@ impl CourierCas {
     }
 
     /// Store the entry in the CAS.
+    /// Returns the key and whether the content was actually uploaded (true) or
+    /// already existed (false).
     #[instrument(name = "CourierCas::store", skip(content))]
-    pub async fn store(&self, content: &[u8]) -> Result<Blake3> {
+    pub async fn store(&self, content: &[u8]) -> Result<(Blake3, bool)> {
         let key = Blake3::from_buffer(content);
         if self.client.cas_exists(&key).await.is_ok_and(identity) {
-            return Ok(key);
+            return Ok((key, false));
         }
 
         self.client.cas_write_bytes(&key, content.to_vec()).await?;
         debug!(?key, bytes = ?content.len(), "stored content");
-        Ok(key)
+        Ok((key, true))
     }
 
     /// Get the entry out of the CAS.

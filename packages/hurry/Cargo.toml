@@ -63,6 +63,8 @@ flume = { workspace = true }
 num_cpus = { workspace = true }
 jwalk.workspace = true
 uuid = { workspace = true, features = ["v4"] }
+indicatif = { workspace = true }
+humansize = { workspace = true }
 
 [dev-dependencies]
 async-walkdir.workspace = true

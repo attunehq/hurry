@@ -3,6 +3,10 @@ use std::{
     fmt::Debug,
     io::Write,
     path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, UNIX_EPOCH},
 };
 
@@ -12,6 +16,8 @@ use color_eyre::{
     eyre::{Context as _, OptionExt, bail, eyre},
 };
 use futures::TryStreamExt as _;
+use humansize::{DECIMAL, format_size};
+use indicatif::ProgressBar;
 use itertools::Itertools;
 use serde::Serialize;
 use tap::Pipe as _;
@@ -31,6 +37,13 @@ use crate::{
     hash::Blake3,
     path::{AbsDirPath, AbsFilePath, TryJoinWith as _},
 };
+
+/// Statistics about cache operations.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CacheStats {
+    pub files: u64,
+    pub bytes: u64,
+}
 
 #[derive(Debug, Clone)]
 pub struct CargoCache {
@@ -368,7 +381,7 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::save")]
-    pub async fn save(&self, artifact: BuiltArtifact) -> Result<()> {
+    pub async fn save(&self, artifact: BuiltArtifact) -> Result<CacheStats> {
         // TODO: We should probably not be re-locking and unlocking on a per-artifact
         // basis. Maybe this method should instead take a Vec?
         let profile_dir = self.ws.open_profile_locked(&artifact.profile).await?;
@@ -444,13 +457,18 @@ impl CargoCache {
         // needed files? Would that give better performance?
         let mut library_unit_files = vec![];
         let mut artifact_files = vec![];
+        let mut file_count = 0u64;
+        let mut bytes_saved = 0u64;
         for path in files_to_save {
             match fs::read_buffered(&path).await? {
                 Some(content) => {
                     let content = Self::rewrite(&profile_dir, &path, &content).await?;
 
-                    let key = self.cas.store(&content).await?;
-                    debug!(?path, ?key, "stored object");
+                    let (key, uploaded) = self.cas.store(&content).await?;
+                    if uploaded {
+                        bytes_saved += content.len() as u64;
+                    }
+                    debug!(?path, ?key, uploaded, "stored object");
 
                     // Gather metadata for the artifact file.
                     let metadata = fs::Metadata::from_file(&path)
@@ -469,6 +487,7 @@ impl CargoCache {
                     );
 
                     library_unit_files.push((portable, key));
+                    file_count += 1;
                 }
                 None => {
                     // Note that this is not necessarily incorrect! For example,
@@ -502,11 +521,19 @@ impl CargoCache {
             .artifacts(artifact_files)
             .build();
 
-        self.courier.cargo_cache_save(request).await
+        self.courier.cargo_cache_save(request).await?;
+        Ok(CacheStats {
+            files: file_count,
+            bytes: bytes_saved,
+        })
     }
 
-    #[instrument(name = "CargoCache::restore")]
-    pub async fn restore(&self, artifact_plan: &ArtifactPlan) -> Result<()> {
+    #[instrument(name = "CargoCache::restore", skip(progress))]
+    pub async fn restore(
+        &self,
+        artifact_plan: &ArtifactPlan,
+        progress: &ProgressBar,
+    ) -> Result<CacheStats> {
         debug!("start restoring");
 
         // Open the profile dir once to extract owned paths upfront.
@@ -526,6 +553,8 @@ impl CargoCache {
         // still being worked on. We want to avoid uneccesary memory overhead but each
         // individual artifact file is relatively small so we'd rather trade some space
         // for latency mitigation here.
+        let transferred_files = Arc::new(AtomicU64::new(0));
+        let transferred_bytes = Arc::new(AtomicU64::new(0));
         let (tx, rx) = flume::bounded::<ArtifactFile>(worker_count * 10);
         let mut cas_restore_workers = JoinSet::new();
         for _ in 0..worker_count {
@@ -533,12 +562,14 @@ impl CargoCache {
             let cas = self.cas.clone();
             let profile_root = profile_root.clone();
             let cargo_home = cargo_home.clone();
+            let transferred_files = transferred_files.clone();
+            let transferred_bytes = transferred_bytes.clone();
             cas_restore_workers.spawn(async move {
-                let restore = async move |artifact: &ArtifactFile| -> Result<()> {
-                    let key = Blake3::from_hex_string(&artifact.object_key)?;
+                let restore = async move |file: &ArtifactFile| -> Result<u64> {
+                    let key = Blake3::from_hex_string(&file.object_key)?;
 
                     // Reconstruct the portable path to an absolute path for this machine.
-                    let path = artifact
+                    let path = file
                         .path
                         .reconstruct_raw(&profile_root, &cargo_home)
                         .pipe(AbsFilePath::try_from)?;
@@ -548,7 +579,7 @@ impl CargoCache {
                         let existing_hash = Blake3::from_file(&path).await?;
                         if existing_hash == key {
                             trace!(?path, "file already exists with correct hash, skipping");
-                            return Ok(());
+                            return Ok(0);
                         }
                     }
 
@@ -557,19 +588,25 @@ impl CargoCache {
                     let data = Self::reconstruct(&profile_root, &cargo_home, &path, &data).await?;
 
                     // Write the file.
-                    let mtime = UNIX_EPOCH + Duration::from_nanos(artifact.mtime_nanos as u64);
+                    let mtime = UNIX_EPOCH + Duration::from_nanos(file.mtime_nanos as u64);
                     let metadata = fs::Metadata::builder()
                         .mtime(mtime)
-                        .executable(artifact.executable)
+                        .executable(file.executable)
                         .build();
                     fs::write(&path, &data).await?;
                     metadata.set_file(&path).await?;
-                    Result::<()>::Ok(())
+                    Result::<u64>::Ok(data.len() as u64)
                 };
 
-                while let Ok(artifact) = rx.recv_async().await {
-                    if let Err(error) = restore(&artifact).await {
-                        warn!(?error, ?artifact, "failed to restore file");
+                while let Ok(file) = rx.recv_async().await {
+                    match restore(&file).await {
+                        Ok(transferred) => {
+                            transferred_files.fetch_add(1, Ordering::Relaxed);
+                            transferred_bytes.fetch_add(transferred, Ordering::Relaxed);
+                        }
+                        Err(error) => {
+                            warn!(?error, ?file, "failed to restore file");
+                        }
                     }
                 }
             });
@@ -591,14 +628,23 @@ impl CargoCache {
 
             let Some(response) = self.courier.cargo_cache_restore(request).await? else {
                 debug!(?artifact, "no matching library unit build found");
+                progress.inc(1);
                 continue;
             };
 
+            // Send all files for this package to workers.
             for artifact_file in response.artifacts {
                 if let Err(error) = tx.send_async(artifact_file).await {
                     panic!("invariant violated: no restore workers are alive: {error:?}");
                 }
             }
+
+            progress.inc(1);
+            progress.set_message(format!(
+                "Restoring cache ({} files, {} transferred)",
+                transferred_files.load(Ordering::Relaxed),
+                format_size(transferred_bytes.load(Ordering::Relaxed), DECIMAL)
+            ));
         }
 
         // The channels are done being used here, so we drop them; the workers may still
@@ -606,12 +652,17 @@ impl CargoCache {
         // rx alive until they're all done.
         drop(rx);
         drop(tx);
+
+        // Collect actual stats from workers to get accurate byte count.
         while let Some(worker) = cas_restore_workers.join_next().await {
             worker.context("cas restore worker")?;
         }
 
         debug!("done restoring");
-        Ok(())
+        Ok(CacheStats {
+            files: transferred_files.load(Ordering::Relaxed),
+            bytes: transferred_bytes.load(Ordering::Relaxed),
+        })
     }
 
     /// Rewrite file contents before storing in CAS to normalize paths.
