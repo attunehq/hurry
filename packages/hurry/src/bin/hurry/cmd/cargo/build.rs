@@ -12,7 +12,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use tracing::{debug, info, instrument, warn};
 
 use hurry::{
-    cargo::{self, BuiltArtifact, CacheStats, CargoBuildArguments, CargoCache, Profile, Workspace},
+    cargo::{self, CargoBuildArguments, CargoCache, Profile, Workspace},
     client::Courier,
 };
 use url::Url;
@@ -93,7 +93,7 @@ pub async fn exec(options: Options) -> Result<()> {
         .progress_chars("=> ");
 
     // Restore artifacts.
-    let restored = if !options.skip_restore {
+    if !options.skip_restore {
         let package_count = artifact_plan.artifacts.len() as u64;
         let restore_pb = ProgressBar::new(package_count);
         restore_pb.set_style(progress_style.clone());
@@ -105,10 +105,7 @@ pub async fn exec(options: Options) -> Result<()> {
             restored.stats.files,
             format_size(restored.stats.bytes, DECIMAL)
         ));
-        restored
-    } else {
-        Default::default()
-    };
+    }
 
     // Run the build.
     if !options.skip_build {
@@ -189,40 +186,7 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Cache the built artifacts.
     if !options.skip_backup {
-        let package_count = artifact_plan.artifacts.len() as u64;
-        let backup_pb = ProgressBar::new(package_count);
-        backup_pb.set_style(progress_style);
-        backup_pb.set_message("Backing up cache");
-
-        let mut total_stats = CacheStats::default();
-        for artifact in artifact_plan.artifacts {
-            // Construct the full artifact key.
-            let artifact = BuiltArtifact::from_key(
-                artifact,
-                artifact_plan.target.clone(),
-                artifact_plan.profile.clone(),
-            )
-            .await?;
-            debug!(?artifact, "caching artifact");
-
-            // Cache the artifact, skipping files that were restored from cache.
-            let stats = cache.save(artifact, &restored).await?;
-            total_stats.files += stats.files;
-            total_stats.bytes += stats.bytes;
-
-            backup_pb.inc(1);
-            backup_pb.set_message(format!(
-                "Backing up cache ({} files, {} transferred)",
-                total_stats.files,
-                format_size(total_stats.bytes, DECIMAL)
-            ));
-        }
-
-        backup_pb.finish_with_message(format!(
-            "Cache backed up ({} files, {} transferred)",
-            total_stats.files,
-            format_size(total_stats.bytes, DECIMAL)
-        ));
+        cache.save(artifact_plan).await?;
     }
 
     Ok(())
