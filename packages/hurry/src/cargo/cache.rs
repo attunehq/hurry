@@ -99,24 +99,11 @@ impl CargoCache {
         for (i, invocation) in build_plan.invocations.iter().cloned().enumerate() {
             trace!(?invocation, "build plan invocation");
 
-            // We only cache third-party dependencies. `CARGO_PRIMARY_PACKAGE` is set if the
-            // user specifically requested for the item to be built; while it's possible for
-            // them to request to build a specific third-party dependency this seems like a
-            // reasonable proxy to use for now.
-            //
-            // Note: we used to only filter on "is the target_kind a binary" (refer to the
-            // code below). The issue is that this doesn't work for first-party projects
-            // that build libraries.
-            let primary = invocation.env.get("CARGO_PRIMARY_PACKAGE");
-            if primary.map(|v| v.as_str()) == Some("1") {
-                trace!(?invocation, "skipping: first party workspace member");
-                continue;
-            }
-
             // For each invocation, figure out what kind it is:
             // 1. Compiling a build script.
             // 2. Running a build script.
             // 3. Compiling a dependency.
+            // 4. Compiling first-party code (which we skip for caching).
             if invocation.target_kind == [TargetKind::CustomBuild] {
                 match invocation.compile_mode {
                     CargoCompileMode::Build => {
@@ -177,14 +164,24 @@ impl CargoCache {
                     ),
                 }
             } else if invocation.target_kind == [TargetKind::Bin] {
-                // Binaries are _always_ first-party code. Do nothing for now. First-party
-                // builds are already filtered, but we filter them again here just in case.
+                // Binaries are _always_ first-party code. Do nothing for now.
                 continue;
             } else if invocation.target_kind.contains(&TargetKind::Lib)
                 || invocation.target_kind.contains(&TargetKind::RLib)
                 || invocation.target_kind.contains(&TargetKind::CDyLib)
                 || invocation.target_kind.contains(&TargetKind::ProcMacro)
             {
+                // Skip first-party workspace members. We only cache third-party dependencies.
+                // `CARGO_PRIMARY_PACKAGE` is set if the user specifically requested the item
+                // to be built; while it's technically possible for the user to do so for a
+                // third-party dependency that's relatively rare (and arguably if they're asking
+                // to compile it specifically, it _should_ probably be exempt from cache).
+                let primary = invocation.env.get("CARGO_PRIMARY_PACKAGE");
+                if primary.map(|v| v.as_str()) == Some("1") {
+                    trace!(?invocation, "skipping: first party workspace member");
+                    continue;
+                }
+
                 // Sanity check: everything here should be a dependency being compiled.
                 if invocation.compile_mode != CargoCompileMode::Build {
                     bail!(
