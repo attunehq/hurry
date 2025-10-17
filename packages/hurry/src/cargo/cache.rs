@@ -439,13 +439,13 @@ impl CargoCache {
                     artifact_files.push(
                         ArtifactFile::builder()
                             .object_key(key.to_string())
-                            .path(portable)
+                            .path(portable.clone())
                             .mtime_nanos(mtime_nanos)
                             .executable(metadata.executable)
                             .build(),
                     );
 
-                    library_unit_files.push((path, key));
+                    library_unit_files.push((portable, key));
                 }
                 None => {
                     // Note that this is not necessarily incorrect! For example,
@@ -791,7 +791,7 @@ impl BuiltArtifact {
 /// A content hash of a library unit's artifacts.
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize)]
 struct LibraryUnitHash {
-    files: Vec<(AbsFilePath, Blake3)>,
+    files: Vec<(QualifiedPath, Blake3)>,
 }
 
 impl LibraryUnitHash {
@@ -800,7 +800,7 @@ impl LibraryUnitHash {
     /// This constructor always ensures that the files are sorted, so any two
     /// sets of files with the same paths and contents will produce the same
     /// hash.
-    fn new(mut files: Vec<(AbsFilePath, Blake3)>) -> Self {
+    fn new(mut files: Vec<(QualifiedPath, Blake3)>) -> Self {
         files.sort();
         Self { files }
     }
