@@ -355,7 +355,7 @@ impl CargoCache {
             // hack for now. We should really unroll this annoying abstraction
             // and just take a path or something once we also update all
             // upstream consumers (e.g. `BuildScriptOutput::from_file`).
-            let artifact = BuiltArtifact::from_key(target_dir.clone(), artifact).await?;
+            let artifact = BuiltArtifact::from_key(&target_dir, artifact).await?;
             debug!(?artifact, "caching artifact");
 
             // Determine which files will be saved.
@@ -469,7 +469,7 @@ impl CargoCache {
             // Calculate the content hash.
             let content_hash = {
                 let mut hasher = blake3::Hasher::new();
-                let bytes = serde_json::to_vec(&LibraryUnitHash::new(library_unit_files.clone()))?;
+                let bytes = serde_json::to_vec(&LibraryUnitHash::new(library_unit_files))?;
                 hasher.write_all(&bytes)?;
                 hasher.finalize().to_hex().to_string()
             };
@@ -787,7 +787,7 @@ impl BuiltArtifact {
     /// Given an `ArtifactKey`, read the build script output directories on
     /// disk and construct a `BuiltArtifact`.
     #[instrument(name = "BuiltArtifact::from_key")]
-    pub async fn from_key(profile: ProfileDir<'_, Locked>, key: ArtifactKey) -> Result<Self> {
+    pub async fn from_key(profile: &ProfileDir<'_, Locked>, key: ArtifactKey) -> Result<Self> {
         // Read the build script output from the build folders, and parse
         // the output for directives.
         let build_script_output = match &key.build_script_files {
