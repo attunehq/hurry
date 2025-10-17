@@ -425,7 +425,12 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::save", skip(progress))]
-    pub async fn save(&self, artifact_plan: ArtifactPlan, progress: &ProgressBar, restored: &RestoreState) -> Result<CacheStats> {
+    pub async fn save(
+        &self,
+        artifact_plan: ArtifactPlan,
+        progress: &ProgressBar,
+        restored: &RestoreState,
+    ) -> Result<CacheStats> {
         let target_dir = self.ws.open_profile_locked(&artifact_plan.profile).await?;
         let target_path = target_dir.root();
 
@@ -505,13 +510,14 @@ impl CargoCache {
                 }
                 None => vec![],
             };
-            let files_to_save = lib_files.into_iter().chain(build_script_files);
 
+            let files_to_save = lib_files.into_iter().chain(build_script_files);
             if restored.check_artifact(&artifact_key) {
                 trace!(
                     ?artifact_key,
                     "skipping backup: artifact was restored from cache"
                 );
+                total_files += files_to_save.count() as u64;
                 progress.inc(1);
                 progress.set_message(format!(
                     "Backing up cache ({} files, {} transferred)",
