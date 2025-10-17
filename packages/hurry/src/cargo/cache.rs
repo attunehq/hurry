@@ -81,8 +81,8 @@ impl CargoCache {
         defer! {
             if renamed {
                 let target = self.ws.target.as_std_path();
-                let _ = std::fs::remove_dir_all(&target);
-                let _ = std::fs::rename(&temp, &target);
+                let _ = std::fs::remove_dir_all(target);
+                let _ = std::fs::rename(&temp, target);
             }
         }
 
