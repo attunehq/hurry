@@ -169,8 +169,10 @@ impl Postgres {
             }
             Some(existing) => {
                 bail!(
-                    "content hash mismatch for library unit build {}: expected {:?}, actual {:?}",
-                    existing.id,
+                    "content hash mismatch for package {}, version {}, unit hash {}: expected {:?}, actual {:?}",
+                    request.package_name,
+                    request.package_version,
+                    request.library_crate_compilation_unit_hash,
                     existing.content_hash,
                     request.content_hash
                 );
