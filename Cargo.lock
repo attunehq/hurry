@@ -2068,6 +2068,7 @@ dependencies = [
  "tracing-subscriber",
  "tracing-tree",
  "url",
+ "uuid",
  "walkdir",
  "xshell",
 ]

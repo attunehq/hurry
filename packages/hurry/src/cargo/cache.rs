@@ -17,6 +17,7 @@ use serde::Serialize;
 use tap::Pipe as _;
 use tokio::task::JoinSet;
 use tracing::{debug, instrument, trace, warn};
+use uuid::Uuid;
 
 use crate::{
     Locked,
@@ -45,15 +46,29 @@ impl CargoCache {
         Ok(Self { cas, courier, ws })
     }
 
+    async fn build_plan(&self, args: impl AsRef<CargoBuildArguments> + Debug) -> Result<BuildPlan> {
+        let mut build_args = args.as_ref().to_argv();
+        build_args.extend([
+            String::from("--build-plan"),
+            String::from("-Z"),
+            String::from("unstable-options"),
+        ]);
+        cargo::invoke_output("build", build_args, [("RUSTC_BOOTSTRAP", "1")])
+            .await?
+            .pipe(|output| serde_json::from_slice::<BuildPlan>(&output.stdout))
+            .context("parse build plan")
+    }
+
     #[instrument(name = "CargoCache::artifacts")]
     pub async fn artifact_plan(
         &self,
         profile: &Profile,
         args: impl AsRef<CargoBuildArguments> + Debug,
     ) -> Result<ArtifactPlan> {
-        let rustc = RustcMetadata::from_argv(&self.ws.root, &args)
+        let context = RustcMetadata::from_argv(&self.ws.root, &args)
             .await
             .context("parsing rustc metadata")?;
+        let rustc = context;
         trace!(?rustc, "rustc metadata");
 
         // Note that build plans as a feature are _deprecated_, although their
@@ -79,17 +94,25 @@ impl CargoCache {
         //
         // FIXME: Why does running this clear all the compiled artifacts from
         // the target folder?
-        let mut build_args = args.as_ref().to_argv();
-        build_args.extend([
-            String::from("--build-plan"),
-            String::from("-Z"),
-            String::from("unstable-options"),
-        ]);
-
-        let build_plan = cargo::invoke_output("build", build_args, [("RUSTC_BOOTSTRAP", "1")])
-            .await?
-            .pipe(|output| serde_json::from_slice::<BuildPlan>(&output.stdout))
-            .context("parsing build plan")?;
+        // Running Cargo to get the build plan seriously messes with the artifacts
+        // already in the `target` folder; for this reason we temporarily move `target`
+        // -> run the build plan -> move it back.
+        let build_plan = {
+            let target_temp = self
+                .ws
+                .root
+                .as_std_path()
+                .join(format!("target.backup.{}", Uuid::new_v4()));
+            tokio::fs::rename(self.ws.target.as_std_path(), &target_temp)
+                .await
+                .context("rename target")?;
+            let build_plan = self.build_plan(&args).await;
+            let _ = fs::remove_dir_all(&self.ws.target).await;
+            tokio::fs::rename(target_temp, self.ws.target.as_std_path())
+                .await
+                .context("rename target back")?;
+            build_plan?
+        };
         trace!(?build_plan, "build plan");
 
         let mut build_script_index_to_dir = HashMap::new();
