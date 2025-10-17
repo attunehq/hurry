@@ -950,7 +950,7 @@ impl BuiltArtifact {
         let build_script_output = match &key.build_script_files {
             Some(build_script_files) => {
                 let bso = BuildScriptOutput::from_file(
-                    &profile,
+                    profile,
                     &build_script_files.output_dir.join(mk_rel_file!("output")),
                 )
                 .await?;
