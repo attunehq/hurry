@@ -85,7 +85,7 @@ async fn trace_request(request: Request, next: Next) -> Response {
         let mut response = next.run(request).await;
         let status = response.status();
         let duration = start.elapsed();
-        tracing::info!(%status, ?duration, "http.request.response");
+        tracing::info!(%id, %url, %method, %status, ?duration, "http.request.response");
 
         if let Ok(id) = HeaderValue::from_str(&id) {
             response.headers_mut().insert(REQUEST_ID_HEADER, id);
