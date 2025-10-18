@@ -118,7 +118,7 @@ impl Courier {
         content: impl AsyncRead + Unpin + Send + 'static,
     ) -> Result<()> {
         let url = self.base.join(&format!("api/v1/cas/{key}"))?;
-        let stream = ReaderStream::with_capacity(content, 64 * 1024);
+        let stream = ReaderStream::with_capacity(content, 1024 * 1024);
         let body = reqwest::Body::wrap_stream(stream);
 
         let response = self.http.put(url).body(body).send().await.context("send")?;
@@ -265,7 +265,7 @@ impl Courier {
             writer.close().await.context("close writer")
         });
 
-        let stream = ReaderStream::with_capacity(reader.compat(), 64 * 1024);
+        let stream = ReaderStream::with_capacity(reader.compat(), 1024 * 1024);
         let body = reqwest::Body::wrap_stream(stream);
         let response = self
             .http

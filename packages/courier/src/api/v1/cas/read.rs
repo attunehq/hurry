@@ -15,7 +15,7 @@ pub async fn handle(Dep(cas): Dep<Disk>, Path(key): Path<Key>) -> CasReadRespons
     match cas.read(&key).await {
         Ok(reader) => {
             info!("cas.read.success");
-            let stream = ReaderStream::new(reader);
+            let stream = ReaderStream::with_capacity(reader, 1024 * 1024);
             CasReadResponse::Found(Body::from_stream(stream))
         }
         Err(err) => {

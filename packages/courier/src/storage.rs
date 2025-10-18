@@ -8,7 +8,6 @@ use color_eyre::eyre::bail;
 use color_eyre::{Result, eyre::Context};
 use derive_more::{Debug, Display, From};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use tap::Pipe;
 use tokio::fs::{File, create_dir_all, metadata, remove_file, rename};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tracing::warn;

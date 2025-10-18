@@ -107,7 +107,7 @@ pub async fn handle(Dep(cas): Dep<Disk>, Json(req): Json<BulkReadRequest>) -> Bu
 
     // Convert the pipe into a stream; this is streamed out to the client as it
     // is written from the background task.
-    let stream = ReaderStream::new(reader.compat());
+    let stream = ReaderStream::with_capacity(reader.compat(), 1024 * 1024);
     let body = Body::from_stream(stream);
     BulkReadResponse::Success(body)
 }
