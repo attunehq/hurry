@@ -135,12 +135,10 @@ pub async fn handle(Dep(cas): Dep<Disk>, body: Body) -> BulkWriteResponse {
             }
         };
 
-        if let Ok(exists) = cas.exists(&key).await {
-            if exists {
-                info!(%key, "cas.bulk.write.skipped");
-                skipped.insert(key);
-                continue;
-            }
+        if let Ok(true) = cas.exists(&key).await {
+            info!(%key, "cas.bulk.write.skipped");
+            skipped.insert(key);
+            continue;
         }
 
         match cas.write(&key, entry.compat()).await {

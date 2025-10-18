@@ -31,9 +31,8 @@ num-traits = { workspace = true }
 bigdecimal = { workspace = true }
 bon.workspace = true
 async-tar = { workspace = true }
-tokio-stream = { workspace = true }
-piper = "0.2.4"
-maplit = "1.0.2"
+piper = { workspace = true }
+maplit = { workspace = true }
 
 [dev-dependencies]
 async-tempfile = { workspace = true }

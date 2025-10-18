@@ -34,8 +34,9 @@ pub struct BulkReadRequest {
 ///
 /// ## Response format
 ///
-/// The response is a tar archive where each entry is named `{key}.blob` and
-/// contains the uncompressed blob content. Missing keys are silently skipped.
+/// The response is a tar archive where each entry is named with the hex-encoded
+/// key and contains the uncompressed blob content. Missing keys are silently
+/// skipped.
 ///
 /// ## Streaming
 ///

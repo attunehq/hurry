@@ -1124,7 +1124,6 @@ dependencies = [
  "test-log",
  "test-strategy",
  "tokio",
- "tokio-stream",
  "tokio-util",
  "tower",
  "tower-http",

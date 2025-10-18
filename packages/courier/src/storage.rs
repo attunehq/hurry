@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 
 use async_compression::tokio::bufread::ZstdDecoder;
 use async_compression::tokio::write::ZstdEncoder;
-use color_eyre::eyre::{OptionExt, bail};
+use color_eyre::eyre::bail;
 use color_eyre::{Result, eyre::Context};
 use derive_more::{Debug, Display, From};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -346,7 +346,10 @@ impl Disk {
         // If the file already exists, we can just abort: file contents never
         // change and are always named by their content hash.
         match rename(&temp, &path).await {
-            Ok(()) => self.write_size(key, size).await.pipe(Ok),
+            Ok(()) => {
+                self.write_size(key, size).await;
+                Ok(())
+            }
             Err(err) => {
                 if let Err(err) = remove_file(&temp).await {
                     warn!("failed to remove temp file {temp:?}: {err}");
