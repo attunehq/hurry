@@ -53,7 +53,7 @@ pub struct BulkReadRequest {
 pub async fn handle(Dep(cas): Dep<Disk>, Json(req): Json<BulkReadRequest>) -> BulkReadResponse {
     info!(keys = req.keys.len(), "cas.bulk.read.start");
 
-    let (reader, writer) = piper::pipe(1024);
+    let (reader, writer) = piper::pipe(64 * 1024);
     tokio::spawn(async move {
         let mut builder = Builder::new(writer);
         for key in req.keys {
