@@ -43,14 +43,16 @@ use uuid::Uuid;
 
 pub mod v1;
 
-/// Not chosen for a specific reason, just seems reasonable.
-///
-/// 15 seconds was too short. Hopefully this basically never gets hit, but we
-/// need some kind of timeout.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+/// Request timeout is set to accommodate bulk operations transferring large
+/// amounts of data. 30 minutes allows for 10GB transfers over slower
+/// connections (~50 Mbps) while still protecting against indefinitely hanging
+/// connections.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(1800);
 
-/// This was defaulted to 100MB but `libaws_sdk_s3` produces 125MB rlibs.
-const MAX_BODY_SIZE: usize = 500 * 1024 * 1024;
+/// Body size limit is set to accommodate bulk CAS operations. Single artifacts
+/// can be large (e.g., libaws_sdk_s3 produces 125MB rlibs) and bulk operations
+/// may transfer many artifacts in one request.
+const MAX_BODY_SIZE: usize = 10 * 1024 * 1024 * 1024; // 10GB
 
 pub type State = Aero![crate::db::Postgres, crate::storage::Disk,];
 

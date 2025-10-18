@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 axum = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-tokio-util = { workspace = true, features = ["io"] }
+tokio-util = { workspace = true, features = ["compat", "io"] }
 tower = { workspace = true, features = ["buffer", "limit", "load-shed"] }
 tower-http = { workspace = true, features = ["trace", "limit", "timeout", "compression-full", "decompression-full"] }
 sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate", "bigdecimal"] }
@@ -30,6 +30,10 @@ futures = { workspace = true }
 num-traits = { workspace = true }
 bigdecimal = { workspace = true }
 bon.workspace = true
+async-tar = { workspace = true }
+tokio-stream = { workspace = true }
+piper = "0.2.4"
+maplit = "1.0.2"
 
 [dev-dependencies]
 async-tempfile = { workspace = true }

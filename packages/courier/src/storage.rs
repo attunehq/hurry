@@ -4,29 +4,30 @@ use std::sync::LazyLock;
 
 use async_compression::tokio::bufread::ZstdDecoder;
 use async_compression::tokio::write::ZstdEncoder;
-use color_eyre::eyre::bail;
+use color_eyre::eyre::{OptionExt, bail};
 use color_eyre::{Result, eyre::Context};
 use derive_more::{Debug, Display, From};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use tap::Pipe;
 use tokio::fs::{File, create_dir_all, metadata, remove_file, rename};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tracing::warn;
 use uuid::Uuid;
 
 /// The key to a content-addressed storage blob.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Display, From)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Display, From)]
 #[display("{}", self.to_hex())]
 pub struct Key(Vec<u8>);
 
 impl Key {
     /// View the key as a hex string.
-    fn to_hex(&self) -> String {
+    pub fn to_hex(&self) -> String {
         hex::encode(&self.0)
     }
 
     /// Attempt to parse the key from a hex string.
-    pub fn from_hex(hex: &str) -> Result<Self> {
-        hex::decode(hex).context("decode hex").map(Self)
+    pub fn from_hex(hex: impl AsRef<str>) -> Result<Self> {
+        hex::decode(hex.as_ref()).context("decode hex").map(Self)
     }
 
     /// View the key as bytes.
@@ -205,16 +206,84 @@ impl Disk {
         }
     }
 
+    /// Get the size of the content for the provided key.
+    #[tracing::instrument(name = "Disk::size")]
+    pub async fn size(&self, key: &Key) -> Result<Option<u64>> {
+        let path = self.key_path(key);
+        if let Some(size) = self.read_size(key).await {
+            return Ok(Some(size));
+        }
+
+        match self.read_inner(key).await {
+            Ok(mut content) => {
+                let size = tokio::io::copy(&mut content, &mut tokio::io::empty())
+                    .await
+                    .context("read content")?;
+                self.write_size(key, size).await;
+                Ok(Some(size))
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err).context(format!("read content of blob at {path:?}")),
+        }
+    }
+
+    /// Read the size of the content for the provided key.
+    ///
+    /// If this method fails, it's logged as a warning; all `size` methods are
+    /// best-effort.
+    #[tracing::instrument(name = "Disk::read_size")]
+    async fn read_size(&self, key: &Key) -> Option<u64> {
+        let path = self.key_path(key);
+        let size_path = path.with_extension("size");
+        match tokio::fs::read(&size_path).await {
+            Ok(bytes) => bytes.try_into().map(u64::from_be_bytes).ok(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                warn!(?error, ?size_path, "storage.disk.size.read");
+                None
+            }
+        }
+    }
+
+    /// Best-effort: write the size of the content for the provided key.
+    ///
+    /// Since we store the files compressed, later when we need their size, we
+    /// can't simply check the size- we have to read the `{key}.size` file.
+    /// This method creates that file.
+    ///
+    /// If this method fails, it's logged as a warning; all `size` methods are
+    /// best-effort.
+    #[tracing::instrument]
+    async fn write_size(&self, key: &Key, size: u64) {
+        let path = self.key_path(key);
+        let size_path = path.with_extension("size");
+        match File::create(&size_path).await {
+            Ok(mut file) => match file.write_all(&size.to_be_bytes()).await {
+                Ok(_) => {}
+                Err(error) => warn!(?error, ?size_path, "storage.disk.size.write"),
+            },
+            Err(error) => warn!(?error, ?size_path, "storage.disk.size.write.create"),
+        }
+    }
+
     /// Read the content from storage for the provided key.
     ///
     /// Note: the returned reader is buffered with the capacity of
     /// [`Disk::DEFAULT_BUF_SIZE`]; callers should probably not buffer further.
     #[tracing::instrument(name = "Disk::read")]
     pub async fn read(&self, key: &Key) -> Result<impl AsyncRead + Unpin + 'static> {
+        self.read_inner(key)
+            .await
+            .with_context(|| format!("open blob file {:?}", self.key_path(key)))
+    }
+
+    async fn read_inner(
+        &self,
+        key: &Key,
+    ) -> Result<impl AsyncRead + Unpin + 'static, std::io::Error> {
         let path = self.key_path(key);
         File::open(&path)
             .await
-            .with_context(|| format!("open blob file {path:?}"))
             .map(BufReader::new)
             .map(ZstdDecoder::new)
             .map(|reader| BufReader::with_capacity(Self::DEFAULT_BUF_SIZE, reader))
@@ -255,7 +324,7 @@ impl Disk {
 
         // While we're writing we also need to compute the hash of the content
         // to make sure that it actually matches the key we were provided.
-        let hash = hashed_copy(&mut content, &mut encoder)
+        let (hash, size) = hashed_copy(&mut content, &mut encoder)
             .await
             .with_context(|| format!("write content to {temp:?}"))?;
 
@@ -277,7 +346,7 @@ impl Disk {
         // If the file already exists, we can just abort: file contents never
         // change and are always named by their content hash.
         match rename(&temp, &path).await {
-            Ok(()) => Ok(()),
+            Ok(()) => self.write_size(key, size).await.pipe(Ok),
             Err(err) => {
                 if let Err(err) = remove_file(&temp).await {
                     warn!("failed to remove temp file {temp:?}: {err}");
@@ -336,7 +405,7 @@ fn temp_path(target: &Path) -> PathBuf {
 async fn hashed_copy(
     mut source: impl AsyncRead + Unpin,
     mut target: impl AsyncWrite + Unpin,
-) -> Result<blake3::Hash> {
+) -> Result<(blake3::Hash, u64)> {
     // We set the buffer size to this value because it's called out by the
     // `blake3` docs on the `update_reader` method:
     // https://docs.rs/blake3/1.8.2/blake3/struct.Hasher.html#method.update_reader
@@ -347,6 +416,7 @@ async fn hashed_copy(
     // buffer larger than 16KB.
     let mut buffer = vec![0; 16 * 1024];
     let mut hasher = blake3::Hasher::new();
+    let mut copied = 0;
     loop {
         let n = source.read(&mut buffer).await.context("read source")?;
         if n == 0 {
@@ -356,9 +426,10 @@ async fn hashed_copy(
         let chunk = &buffer[..n];
         hasher.update(chunk);
         target.write_all(chunk).await.context("write target")?;
+        copied += n as u64;
     }
 
-    Ok(hasher.finalize())
+    Ok((hasher.finalize(), copied))
 }
 
 #[cfg(test)]
@@ -384,7 +455,7 @@ mod tests {
         let _ = color_eyre::install();
 
         let mut output = Vec::new();
-        let hash = super::hashed_copy(Cursor::new(&input), &mut output).await?;
+        let (hash, _) = super::hashed_copy(Cursor::new(&input), &mut output).await?;
 
         pretty_assert_eq!(
             hex::encode(&input),
@@ -401,7 +472,7 @@ mod tests {
     #[proptest(async = "tokio")]
     async fn hashed_copy_arbitrary(#[any] input: Vec<u8>) {
         let mut output = Vec::new();
-        let hash = super::hashed_copy(Cursor::new(&input), &mut output)
+        let (hash, _) = super::hashed_copy(Cursor::new(&input), &mut output)
             .await
             .expect("hashed copy");
 

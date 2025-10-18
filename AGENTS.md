@@ -242,14 +242,42 @@ use pretty_assertions::{
 };
 ```
 
-Prefer constructing full expected values and using `pretty_assert_eq` over `matches!`:
+Always construct the ENTIRE expected value upfront and compare in ONE operation:
 ```rust
-// ❌ Avoid
+// ✅ Prefer: Declare expected value first, single assertion
+let expected = serde_json::json!({
+    "written": [key1, key2, key3],
+    "skipped": [],
+    "errors": [],
+});
+let body = response.json::<Value>();
+pretty_assert_eq!(body, expected);
+
+// ❌ Avoid: Property-by-property assertions
+let body = response.json::<Value>();
+pretty_assert_eq!(body["written"].len(), 3);
+pretty_assert_eq!(body["skipped"], serde_json::json!([]));
+assert!(body["written"].contains(&key1));
+
+// ❌ Avoid: Using matches! when you can construct the full value
 assert!(matches!(args.0[0], CargoBuildArgument::GenericFlag(ref flag) if flag == "--flag"));
 
-// ✅ Prefer
+// ✅ Prefer: Construct full expected value
 let expected = vec![CargoBuildArgument::GenericFlag(String::from("--flag"))];
 pretty_assert_eq!(args.0, expected);
+```
+
+For non-deterministic values (like error messages), keep property checks minimal and don't copy values from response bodies:
+```rust
+// ✅ Good: Check structure separately for unpredictable values
+pretty_assert_eq!(body["written"], serde_json::json!([]));
+pretty_assert_eq!(body["errors"].as_array().unwrap().len(), 1);
+assert!(body["errors"][0]["error"].as_str().unwrap().contains("expected substring"));
+
+// ❌ Bad: Copying from response body
+let expected = serde_json::json!({
+    "errors": [body["errors"][0].clone()],  // Don't do this!
+});
 ```
 
 ### Parameterized Tests
