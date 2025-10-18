@@ -759,7 +759,7 @@ impl CargoCache {
                             continue;
                         };
 
-                        match restore(&file, data).await {
+                        match restore(file, data).await {
                             Ok(transferred) => {
                                 transferred_files.fetch_add(1, Ordering::Relaxed);
                                 transferred_bytes.fetch_add(transferred, Ordering::Relaxed);

@@ -2222,7 +2222,6 @@ name = "hurry"
 version = "0.0.0"
 dependencies = [
  "async-tar",
- "async-tempfile",
  "async-walkdir",
  "atomic-time",
  "blake3",

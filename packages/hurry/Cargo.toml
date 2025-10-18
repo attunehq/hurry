@@ -68,7 +68,6 @@ humansize = { workspace = true }
 scopeguard = { workspace = true }
 dashmap = { workspace = true }
 async-tar = { workspace = true }
-async-tempfile.workspace = true
 piper.workspace = true
 
 [dev-dependencies]
