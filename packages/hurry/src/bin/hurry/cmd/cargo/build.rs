@@ -24,7 +24,11 @@ use url::Url;
 #[derive(Clone, Args, Debug)]
 pub struct Options {
     /// Base URL for the Courier instance.
-    #[arg(long = "hurry-courier-url", env = "HURRY_COURIER_URL")]
+    #[arg(
+        long = "hurry-courier-url",
+        env = "HURRY_COURIER_URL",
+        default_value = "https://courier.staging.corp.attunehq.com"
+    )]
     #[debug("{courier_url}")]
     courier_url: Url,
 
