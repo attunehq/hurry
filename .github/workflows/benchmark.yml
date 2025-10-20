@@ -60,8 +60,6 @@ jobs:
           chmod +x /tmp/hurry/hurry
           echo "/tmp/hurry" >> $GITHUB_PATH
       - id: build
-        env:
-          HURRY_COURIER_URL: https://staging.courier.attunehq.com
         run: |
           START=$(date +%s)
           hurry cargo build
