@@ -67,6 +67,7 @@ indicatif = { workspace = true }
 humansize = { workspace = true }
 scopeguard = { workspace = true }
 dashmap = { workspace = true }
+console = { workspace = true }
 
 [dev-dependencies]
 async-walkdir.workspace = true

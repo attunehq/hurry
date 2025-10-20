@@ -17,7 +17,6 @@ use color_eyre::{
 };
 use dashmap::DashSet;
 use futures::TryStreamExt as _;
-use humansize::{DECIMAL, format_size};
 use indicatif::ProgressBar;
 use itertools::Itertools;
 use scopeguard::defer;
@@ -39,6 +38,7 @@ use crate::{
     hash::Blake3,
     mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith, TryJoinWith as _},
+    progress::{format_size, format_transfer_rate},
 };
 
 /// Statistics about cache operations.
@@ -431,6 +431,7 @@ impl CargoCache {
         progress: &ProgressBar,
         restored: &RestoreState,
     ) -> Result<CacheStats> {
+        let start_time = std::time::Instant::now();
         let target_dir = self.ws.open_profile_locked(&artifact_plan.profile).await?;
         let target_path = target_dir.root();
 
@@ -520,9 +521,10 @@ impl CargoCache {
                 transferred_files += files_to_save.count() as u64;
                 progress.inc(1);
                 progress.set_message(format!(
-                    "Backing up cache ({} files, {} transferred)",
+                    "Backing up cache ({} files, {} at {})",
                     transferred_files,
-                    format_size(transferred_bytes, DECIMAL)
+                    format_size(transferred_bytes),
+                    format_transfer_rate(transferred_bytes, start_time)
                 ));
                 continue;
             }
@@ -608,9 +610,10 @@ impl CargoCache {
             self.courier.cargo_cache_save(request).await?;
             progress.inc(1);
             progress.set_message(format!(
-                "Backing up cache ({} files, {} transferred)",
+                "Backing up cache ({} files, {} at {})",
                 transferred_files,
-                format_size(transferred_bytes, DECIMAL)
+                format_size(transferred_bytes),
+                format_transfer_rate(transferred_bytes, start_time)
             ));
         }
 
@@ -627,6 +630,8 @@ impl CargoCache {
         progress: &ProgressBar,
     ) -> Result<RestoreState> {
         debug!("start restoring");
+
+        let start_time = std::time::Instant::now();
 
         // Open the profile dir once to extract owned paths upfront.
         // We do this because `ProfileDir` has a lifetime for the lock, so we can't send
@@ -736,10 +741,12 @@ impl CargoCache {
 
             restored.record_artifact(artifact);
             progress.inc(1);
+            let bytes = transferred_bytes.load(Ordering::Relaxed);
             progress.set_message(format!(
-                "Restoring cache ({} files, {} transferred)",
+                "Restoring cache ({} files, {} at {})",
                 transferred_files.load(Ordering::Relaxed),
-                format_size(transferred_bytes.load(Ordering::Relaxed), DECIMAL)
+                format_size(bytes),
+                format_transfer_rate(bytes, start_time)
             ));
         }
 
