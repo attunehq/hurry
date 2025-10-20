@@ -16,7 +16,7 @@ use indicatif::{HumanDuration, ProgressBar, ProgressStyle};
 pub struct TransferBar {
     #[deref]
     progress: ProgressBar,
-    start_time: Instant,
+    start: Instant,
     handle: Option<JoinHandle<()>>,
     signal: Option<Arc<StopSignal>>,
 }
@@ -32,12 +32,11 @@ impl TransferBar {
         progress.set_style(style);
         progress.set_message(message);
 
-        let start_time = Instant::now();
-
+        let start = Instant::now();
         if is_interactive() {
             Self {
                 progress,
-                start_time,
+                start,
                 handle: None,
                 signal: None,
             }
@@ -48,7 +47,7 @@ impl TransferBar {
                 let signal = signal.clone();
                 move || {
                     // Log immediately on start
-                    let elapsed = HumanDuration(start_time.elapsed());
+                    let elapsed = HumanDuration(start.elapsed());
                     let pos = progress.position();
                     let len = progress.length().unwrap_or(0);
                     let msg = progress.message();
@@ -67,7 +66,7 @@ impl TransferBar {
                             break;
                         }
 
-                        let elapsed = HumanDuration(start_time.elapsed());
+                        let elapsed = HumanDuration(start.elapsed());
                         let pos = progress.position();
                         let len = progress.length().unwrap_or(0);
                         let msg = progress.message();
@@ -79,7 +78,7 @@ impl TransferBar {
             });
             Self {
                 progress,
-                start_time,
+                start,
                 handle: Some(handle),
                 signal: Some(signal),
             }
@@ -90,8 +89,8 @@ impl TransferBar {
 impl Drop for TransferBar {
     fn drop(&mut self) {
         // Signal the logging thread to stop and wake it up
-        if let Some(stop_signal) = &self.signal {
-            stop_signal.stop();
+        if let Some(signal) = &self.signal {
+            signal.stop();
         }
 
         // Wait for the logging thread to complete if it exists
@@ -101,7 +100,7 @@ impl Drop for TransferBar {
 
         // In non-interactive mode, log the final state immediately
         if !is_interactive() {
-            let elapsed = HumanDuration(self.start_time.elapsed());
+            let elapsed = HumanDuration(self.start.elapsed());
             let pos = self.progress.position();
             let len = self.progress.length().unwrap_or(0);
             let msg = self.progress.message();
