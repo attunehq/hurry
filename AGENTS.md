@@ -59,8 +59,8 @@ This is a monorepo containing two main projects:
   - `make format`: Format code (uses nightly rustfmt)
   - `make check`: Run clippy linter
   - `make check-fix`: Run clippy with automatic fixes
-  - `make precommit`: Run format, check-fix, and sqlx-prepare before committing
   - `make sqlx-prepare`: Prepare sqlx metadata after making changes to SQL queries or database schemas
+  - `make precommit`: Run all pre-commit checks and tasks
 
 ### Hurry-specific Commands
 

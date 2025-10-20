@@ -27,12 +27,8 @@ derive_more = { workspace = true, features = ["full"] }
 uuid = { workspace = true, features = ["v4"] }
 aerosol = { workspace = true, features = ["async", "axum", "axum-extra", "tracing"] }
 futures = { workspace = true }
-const-str = { workspace = true, features = ["all"] }
-hashlru = { workspace = true }
-rusty_paseto = { workspace = true }
-rand = { workspace = true }
-num-traits = "0.2.19"
-bigdecimal = "0.4.8"
+num-traits = { workspace = true }
+bigdecimal = { workspace = true }
 bon.workspace = true
 
 [dev-dependencies]
@@ -46,4 +42,4 @@ test-log = { workspace = true, features = ["trace"] }
 test-strategy = { workspace = true }
 
 [build-dependencies]
-dotenvy = "0.15.7"
+dotenvy = { workspace = true }

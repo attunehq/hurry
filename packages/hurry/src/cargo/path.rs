@@ -39,6 +39,21 @@ pub enum QualifiedPath {
 
     /// The path is relative to `$CARGO_HOME` for the user.
     RelativeCargoHome(RelFilePath),
+
+    /// The path is an absolute path.
+    ///
+    /// In practice, we think this means it's SDK headers, system libraries,
+    /// etc; items that are _assumed_ to be available on any machine where the
+    /// build is restored.
+    ///
+    /// The reason we consider this safe is because we cache artifacts by Rust
+    /// target triple along with other values; these should make it such that
+    /// different operating systems don't end up having different system paths.
+    ///
+    /// As a future optimization we may want to enumerate and add various system
+    /// path roots (e.g. the macOS SDK root, etc) that go through more specific
+    /// handling before ultimately falling back to this option.
+    Absolute(AbsFilePath),
 }
 
 impl QualifiedPath {
@@ -58,7 +73,7 @@ impl QualifiedPath {
             } else if let Ok(rel) = abs.relative_to(&profile.workspace.cargo_home) {
                 Self::RelativeCargoHome(rel)
             } else {
-                bail!("unknown root for absolute path: {abs:?}");
+                Self::Absolute(abs)
             }
         } else {
             bail!("unknown kind of path: {path:?}")
@@ -81,7 +96,7 @@ impl QualifiedPath {
             } else if let Ok(rel) = abs.relative_to(&profile.workspace.cargo_home) {
                 Self::RelativeCargoHome(rel)
             } else {
-                bail!("unknown root for absolute path: {abs:?}");
+                Self::Absolute(abs)
             }
         } else {
             bail!("unknown kind of path: {path:?}")
@@ -96,6 +111,7 @@ impl QualifiedPath {
             QualifiedPath::RelativeCargoHome(rel) => {
                 profile.workspace.cargo_home.join(rel).to_string()
             }
+            QualifiedPath::Absolute(abs) => abs.to_string(),
         }
     }
 
@@ -105,6 +121,7 @@ impl QualifiedPath {
             QualifiedPath::Rootless(rel) => rel.into(),
             QualifiedPath::RelativeTargetProfile(rel) => profile.root().join(rel).into(),
             QualifiedPath::RelativeCargoHome(rel) => profile.workspace.cargo_home.join(rel).into(),
+            QualifiedPath::Absolute(abs) => abs.as_std_path().into(),
         }
     }
 
@@ -114,6 +131,7 @@ impl QualifiedPath {
             QualifiedPath::Rootless(rel) => rel.into(),
             QualifiedPath::RelativeTargetProfile(rel) => profile_root.join(rel).into(),
             QualifiedPath::RelativeCargoHome(rel) => cargo_home.join(rel).into(),
+            QualifiedPath::Absolute(abs) => abs.as_std_path().into(),
         }
     }
 
@@ -127,6 +145,7 @@ impl QualifiedPath {
             QualifiedPath::Rootless(rel) => rel.to_string(),
             QualifiedPath::RelativeTargetProfile(rel) => profile_root.join(rel).to_string(),
             QualifiedPath::RelativeCargoHome(rel) => cargo_home.join(rel).to_string(),
+            QualifiedPath::Absolute(abs) => abs.to_string(),
         }
     }
 }

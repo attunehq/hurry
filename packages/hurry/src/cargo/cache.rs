@@ -3,20 +3,29 @@ use std::{
     fmt::Debug,
     io::Write,
     path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, UNIX_EPOCH},
 };
 
 use cargo_metadata::TargetKind;
 use color_eyre::{
     Result,
-    eyre::{Context as _, OptionExt, bail},
+    eyre::{Context as _, OptionExt, bail, eyre},
 };
+use dashmap::DashSet;
 use futures::TryStreamExt as _;
+use humansize::{DECIMAL, format_size};
+use indicatif::ProgressBar;
 use itertools::Itertools;
+use scopeguard::defer;
 use serde::Serialize;
 use tap::Pipe as _;
 use tokio::task::JoinSet;
 use tracing::{debug, instrument, trace, warn};
+use uuid::Uuid;
 
 use crate::{
     Locked,
@@ -28,8 +37,54 @@ use crate::{
     client::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest, Courier},
     fs,
     hash::Blake3,
-    path::{AbsDirPath, AbsFilePath, TryJoinWith as _},
+    mk_rel_file,
+    path::{AbsDirPath, AbsFilePath, JoinWith, TryJoinWith as _},
 };
+
+/// Statistics about cache operations.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CacheStats {
+    pub files: u64,
+    pub bytes: u64,
+}
+
+/// Tracks items that were restored from the cache.
+#[derive(Debug, Clone, Default)]
+pub struct RestoreState {
+    pub artifacts: DashSet<ArtifactKey>,
+    pub objects: DashSet<Blake3>,
+    pub stats: CacheStats,
+}
+
+impl RestoreState {
+    /// Records that an artifact was restored from cache.
+    fn record_artifact(&self, artifact: &ArtifactKey) {
+        self.artifacts.insert(artifact.clone());
+    }
+
+    /// Records that an object was restored from cache.
+    fn record_object(&self, key: &Blake3) {
+        self.objects.insert(key.clone());
+    }
+
+    /// Checks if an artifact was restored from cache.
+    fn check_artifact(&self, artifact: &ArtifactKey) -> bool {
+        self.artifacts.contains(artifact)
+    }
+
+    /// Checks if an object was restored from cache.
+    fn check_object(&self, key: &Blake3) -> bool {
+        self.objects.contains(key)
+    }
+
+    fn with_stats(self, stats: CacheStats) -> Self {
+        Self {
+            artifacts: self.artifacts,
+            objects: self.objects,
+            stats,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CargoCache {
@@ -43,6 +98,44 @@ impl CargoCache {
     pub async fn open(courier: Courier, ws: Workspace) -> Result<Self> {
         let cas = CourierCas::new(courier.clone());
         Ok(Self { cas, courier, ws })
+    }
+
+    /// Get the build plan by running `cargo build --build-plan` with the
+    /// provided arguments.
+    async fn build_plan(&self, args: impl AsRef<CargoBuildArguments> + Debug) -> Result<BuildPlan> {
+        // Running `cargo build --build-plan` deletes a bunch of items in the `target`
+        // directory. To work around this we temporarily move `target` -> run
+        // the build plan -> move it back. If the rename fails (e.g., permissions,
+        // cross-device), we proceed without it; this will then have the original issue
+        // but at least won't break the build.
+        let temp = self
+            .ws
+            .root
+            .as_std_path()
+            .join(format!("target.backup.{}", Uuid::new_v4()));
+
+        let renamed = tokio::fs::rename(self.ws.target.as_std_path(), &temp)
+            .await
+            .is_ok();
+
+        defer! {
+            if renamed {
+                let target = self.ws.target.as_std_path();
+                let _ = std::fs::remove_dir_all(target);
+                let _ = std::fs::rename(&temp, target);
+            }
+        }
+
+        let mut build_args = args.as_ref().to_argv();
+        build_args.extend([
+            String::from("--build-plan"),
+            String::from("-Z"),
+            String::from("unstable-options"),
+        ]);
+        cargo::invoke_output("build", build_args, [("RUSTC_BOOTSTRAP", "1")])
+            .await?
+            .pipe(|output| serde_json::from_slice::<BuildPlan>(&output.stdout))
+            .context("parse build plan")
     }
 
     #[instrument(name = "CargoCache::artifacts")]
@@ -76,20 +169,7 @@ impl CargoCache {
         // pass the flags but we pass the user flags first just in case as that
         // seems like it'd follow the principle of least surprise if ordering
         // ever does matter.
-        //
-        // FIXME: Why does running this clear all the compiled artifacts from
-        // the target folder?
-        let mut build_args = args.as_ref().to_argv();
-        build_args.extend([
-            String::from("--build-plan"),
-            String::from("-Z"),
-            String::from("unstable-options"),
-        ]);
-
-        let build_plan = cargo::invoke_output("build", build_args, [("RUSTC_BOOTSTRAP", "1")])
-            .await?
-            .pipe(|output| serde_json::from_slice::<BuildPlan>(&output.stdout))
-            .context("parsing build plan")?;
+        let build_plan = self.build_plan(&args).await?;
         trace!(?build_plan, "build plan");
 
         let mut build_script_index_to_dir = HashMap::new();
@@ -98,11 +178,12 @@ impl CargoCache {
         let mut artifacts = Vec::new();
         for (i, invocation) in build_plan.invocations.iter().cloned().enumerate() {
             trace!(?invocation, "build plan invocation");
+
             // For each invocation, figure out what kind it is:
             // 1. Compiling a build script.
             // 2. Running a build script.
             // 3. Compiling a dependency.
-            // 4. Compiling first-party code.
+            // 4. Compiling first-party code (which we skip for caching).
             if invocation.target_kind == [TargetKind::CustomBuild] {
                 match invocation.compile_mode {
                     CargoCompileMode::Build => {
@@ -170,6 +251,17 @@ impl CargoCache {
                 || invocation.target_kind.contains(&TargetKind::CDyLib)
                 || invocation.target_kind.contains(&TargetKind::ProcMacro)
             {
+                // Skip first-party workspace members. We only cache third-party dependencies.
+                // `CARGO_PRIMARY_PACKAGE` is set if the user specifically requested the item
+                // to be built; while it's technically possible for the user to do so for a
+                // third-party dependency that's relatively rare (and arguably if they're asking
+                // to compile it specifically, it _should_ probably be exempt from cache).
+                let primary = invocation.env.get("CARGO_PRIMARY_PACKAGE");
+                if primary.map(|v| v.as_str()) == Some("1") {
+                    trace!(?invocation, "skipping: first party workspace member");
+                    continue;
+                }
+
                 // Sanity check: everything here should be a dependency being compiled.
                 if invocation.compile_mode != CargoCompileMode::Build {
                     bail!(
@@ -211,7 +303,11 @@ impl CargoCache {
 
                     filename
                         .rsplit_once('-')
-                        .ok_or_eyre("no unit hash suffix")?
+                        .ok_or_else(|| {
+                            eyre!(
+                                "no unit hash suffix in filename: {filename} (all files: {lib_files:?})"
+                            )
+                        })?
                         .1
                         .to_string()
                 };
@@ -328,146 +424,208 @@ impl CargoCache {
         })
     }
 
-    #[instrument(name = "CargoCache::save")]
-    pub async fn save(&self, artifact: BuiltArtifact) -> Result<()> {
-        // TODO: We should probably not be re-locking and unlocking on a per-artifact
-        // basis. Maybe this method should instead take a Vec?
-        let profile_dir = self.ws.open_profile_locked(&artifact.profile).await?;
+    #[instrument(name = "CargoCache::save", skip(progress))]
+    pub async fn save(
+        &self,
+        artifact_plan: ArtifactPlan,
+        progress: &ProgressBar,
+        restored: &RestoreState,
+    ) -> Result<CacheStats> {
+        let target_dir = self.ws.open_profile_locked(&artifact_plan.profile).await?;
+        let target_path = target_dir.root();
 
-        // Determine which files will be saved.
-        let lib_files = {
-            let lib_fingerprint_dir = profile_dir.root().try_join_dirs(&[
-                String::from(".fingerprint"),
-                format!(
-                    "{}-{}",
-                    artifact.package_name, artifact.library_crate_compilation_unit_hash
-                ),
-            ])?;
-            let lib_fingerprint_files = fs::walk_files(&lib_fingerprint_dir)
-                .try_collect::<Vec<_>>()
-                .await?;
-            artifact
-                .lib_files
-                .into_iter()
-                .chain(lib_fingerprint_files)
-                .collect::<Vec<_>>()
-        };
-        let build_script_files = match artifact.build_script_files {
-            Some(build_script_files) => {
-                let compiled_files = fs::walk_files(&build_script_files.compiled_dir)
-                    .try_collect::<Vec<_>>()
-                    .await?;
-                let compiled_fingerprint_dir = profile_dir.root().try_join_dirs(&[
+        let mut transferred_files = 0u64;
+        let mut transferred_bytes = 0u64;
+
+        for artifact in artifact_plan.artifacts {
+            // TODO: The fact that this takes a `ProfileDir` is an expedient
+            // hack for now. We should really unroll this annoying abstraction
+            // and just take a path or something once we also update all
+            // upstream consumers (e.g. `BuildScriptOutput::from_file`).
+            let artifact = BuiltArtifact::from_key(&target_dir, artifact).await?;
+            debug!(?artifact, "caching artifact");
+
+            let artifact_key = artifact.reconstruct_key();
+
+            // Determine which files will be saved.
+            let lib_files = {
+                let lib_fingerprint_dir = target_path.try_join_dirs(&[
                     String::from(".fingerprint"),
                     format!(
                         "{}-{}",
-                        artifact.package_name,
-                        artifact
-                            .build_script_compilation_unit_hash
-                            .as_ref()
-                            .expect("build script files have compilation unit hash")
+                        artifact.package_name, artifact.library_crate_compilation_unit_hash
                     ),
                 ])?;
-                let compiled_fingerprint_files = fs::walk_files(&compiled_fingerprint_dir)
+                let lib_fingerprint_files = fs::walk_files(&lib_fingerprint_dir)
                     .try_collect::<Vec<_>>()
                     .await?;
-                let output_files = fs::walk_files(&build_script_files.output_dir)
-                    .try_collect::<Vec<_>>()
-                    .await?;
-                let output_fingerprint_dir = profile_dir.root().try_join_dirs(&[
-                    String::from(".fingerprint"),
-                    format!(
-                        "{}-{}",
-                        artifact.package_name,
-                        artifact
-                            .build_script_execution_unit_hash
-                            .as_ref()
-                            .expect("build script files have execution unit hash")
-                    ),
-                ])?;
-                let output_fingerprint_files = fs::walk_files(&output_fingerprint_dir)
-                    .try_collect::<Vec<_>>()
-                    .await?;
-                compiled_files
+                artifact
+                    .lib_files
                     .into_iter()
-                    .chain(compiled_fingerprint_files)
-                    .chain(output_files)
-                    .chain(output_fingerprint_files)
-                    .collect()
-            }
-            None => vec![],
-        };
-        let files_to_save = lib_files.into_iter().chain(build_script_files);
-
-        // For each file, save it into the CAS and calculate its key.
-        //
-        // TODO: Fuse this operation with the loop above where we discover the
-        // needed files? Would that give better performance?
-        let mut library_unit_files = vec![];
-        let mut artifact_files = vec![];
-        for path in files_to_save {
-            match fs::read_buffered(&path).await? {
-                Some(content) => {
-                    let content = Self::rewrite(&profile_dir, &path, &content).await?;
-
-                    let key = self.cas.store(&content).await?;
-                    debug!(?path, ?key, "stored object");
-
-                    // Gather metadata for the artifact file.
-                    let metadata = fs::Metadata::from_file(&path)
-                        .await?
-                        .ok_or_eyre("could not stat file metadata")?;
-                    let mtime_nanos = metadata.mtime.duration_since(UNIX_EPOCH)?.as_nanos();
-                    let portable = QualifiedPath::parse(&profile_dir, path.as_std_path()).await?;
-
-                    artifact_files.push(
-                        ArtifactFile::builder()
-                            .object_key(key.to_string())
-                            .path(portable)
-                            .mtime_nanos(mtime_nanos)
-                            .executable(metadata.executable)
-                            .build(),
-                    );
-
-                    library_unit_files.push((path, key));
+                    .chain(lib_fingerprint_files)
+                    .collect::<Vec<_>>()
+            };
+            let build_script_files = match artifact.build_script_files {
+                Some(build_script_files) => {
+                    let compiled_files = fs::walk_files(&build_script_files.compiled_dir)
+                        .try_collect::<Vec<_>>()
+                        .await?;
+                    let compiled_fingerprint_dir = target_path.try_join_dirs(&[
+                        String::from(".fingerprint"),
+                        format!(
+                            "{}-{}",
+                            artifact.package_name,
+                            artifact
+                                .build_script_compilation_unit_hash
+                                .as_ref()
+                                .expect("build script files have compilation unit hash")
+                        ),
+                    ])?;
+                    let compiled_fingerprint_files = fs::walk_files(&compiled_fingerprint_dir)
+                        .try_collect::<Vec<_>>()
+                        .await?;
+                    let output_files = fs::walk_files(&build_script_files.output_dir)
+                        .try_collect::<Vec<_>>()
+                        .await?;
+                    let output_fingerprint_dir = target_path.try_join_dirs(&[
+                        String::from(".fingerprint"),
+                        format!(
+                            "{}-{}",
+                            artifact.package_name,
+                            artifact
+                                .build_script_execution_unit_hash
+                                .as_ref()
+                                .expect("build script files have execution unit hash")
+                        ),
+                    ])?;
+                    let output_fingerprint_files = fs::walk_files(&output_fingerprint_dir)
+                        .try_collect::<Vec<_>>()
+                        .await?;
+                    compiled_files
+                        .into_iter()
+                        .chain(compiled_fingerprint_files)
+                        .chain(output_files)
+                        .chain(output_fingerprint_files)
+                        .collect()
                 }
-                None => {
-                    // Note that this is not necessarily incorrect! For example,
-                    // Cargo seems to claim to emit `.dwp` files for its `.so`s,
-                    // but those don't seem to be there by the time the process
-                    // actually finishes. I'm not sure if they're deleted or
-                    // just never written.
-                    warn!("failed to read file: {}", path);
+                None => vec![],
+            };
+
+            let files_to_save = lib_files.into_iter().chain(build_script_files);
+            if restored.check_artifact(&artifact_key) {
+                trace!(
+                    ?artifact_key,
+                    "skipping backup: artifact was restored from cache"
+                );
+                transferred_files += files_to_save.count() as u64;
+                progress.inc(1);
+                progress.set_message(format!(
+                    "Backing up cache ({} files, {} transferred)",
+                    transferred_files,
+                    format_size(transferred_bytes, DECIMAL)
+                ));
+                continue;
+            }
+
+            // For each file, save it into the CAS and calculate its key.
+            //
+            // TODO: Fuse this operation with the loop above where we discover the
+            // needed files? Would that give better performance?
+            let mut library_unit_files = vec![];
+            let mut artifact_files = vec![];
+            for path in files_to_save {
+                match fs::read_buffered(&path).await? {
+                    Some(content) => {
+                        let content = Self::rewrite(&target_dir, &path, &content).await?;
+                        let key = Blake3::from_buffer(&content);
+
+                        // Don't even check if it already exists in the CAS if we restored it.
+                        let (key, uploaded) = if restored.check_object(&key) {
+                            trace!(?path, ?key, "skipping backup: file was restored from cache");
+                            (key, false)
+                        } else {
+                            self.cas.store(&content).await?
+                        };
+
+                        if uploaded {
+                            transferred_bytes += content.len() as u64;
+                        }
+                        transferred_files += 1;
+                        debug!(?path, ?key, uploaded, "stored object");
+
+                        // Gather metadata for the artifact file.
+                        let metadata = fs::Metadata::from_file(&path)
+                            .await?
+                            .ok_or_eyre("could not stat file metadata")?;
+                        let mtime_nanos = metadata.mtime.duration_since(UNIX_EPOCH)?.as_nanos();
+                        let path = QualifiedPath::parse(&target_dir, path.as_std_path()).await?;
+
+                        artifact_files.push(
+                            ArtifactFile::builder()
+                                .object_key(key.to_string())
+                                .path(path.clone())
+                                .mtime_nanos(mtime_nanos)
+                                .executable(metadata.executable)
+                                .build(),
+                        );
+
+                        library_unit_files.push((path, key));
+                    }
+                    None => {
+                        // Note that this is not necessarily incorrect! For example,
+                        // Cargo seems to claim to emit `.dwp` files for its `.so`s,
+                        // but those don't seem to be there by the time the process
+                        // actually finishes. I'm not sure if they're deleted or
+                        // just never written.
+                        warn!("failed to read file: {}", path);
+                    }
                 }
             }
+
+            // Calculate the content hash.
+            let content_hash = {
+                let mut hasher = blake3::Hasher::new();
+                let bytes = serde_json::to_vec(&LibraryUnitHash::new(library_unit_files))?;
+                hasher.write_all(&bytes)?;
+                hasher.finalize().to_hex().to_string()
+            };
+            debug!(?content_hash, "calculated content hash");
+
+            // Save the library unit via the Courier API.
+            let request = CargoSaveRequest::builder()
+                .package_name(artifact.package_name)
+                .package_version(artifact.package_version)
+                .target(&artifact_plan.target)
+                .library_crate_compilation_unit_hash(artifact.library_crate_compilation_unit_hash)
+                .maybe_build_script_compilation_unit_hash(
+                    artifact.build_script_compilation_unit_hash,
+                )
+                .maybe_build_script_execution_unit_hash(artifact.build_script_execution_unit_hash)
+                .content_hash(content_hash)
+                .artifacts(artifact_files)
+                .build();
+
+            self.courier.cargo_cache_save(request).await?;
+            progress.inc(1);
+            progress.set_message(format!(
+                "Backing up cache ({} files, {} transferred)",
+                transferred_files,
+                format_size(transferred_bytes, DECIMAL)
+            ));
         }
 
-        // Calculate the content hash.
-        let content_hash = {
-            let mut hasher = blake3::Hasher::new();
-            let bytes = serde_json::to_vec(&LibraryUnitHash::new(library_unit_files.clone()))?;
-            hasher.write_all(&bytes)?;
-            hasher.finalize().to_hex().to_string()
-        };
-        debug!(?content_hash, "calculated content hash");
-
-        // Save the library unit via the Courier API.
-        let request = CargoSaveRequest::builder()
-            .package_name(artifact.package_name)
-            .package_version(artifact.package_version)
-            .target(artifact.target)
-            .library_crate_compilation_unit_hash(artifact.library_crate_compilation_unit_hash)
-            .maybe_build_script_compilation_unit_hash(artifact.build_script_compilation_unit_hash)
-            .maybe_build_script_execution_unit_hash(artifact.build_script_execution_unit_hash)
-            .content_hash(content_hash)
-            .artifacts(artifact_files)
-            .build();
-
-        self.courier.cargo_cache_save(request).await
+        Ok(CacheStats {
+            files: transferred_files,
+            bytes: transferred_bytes,
+        })
     }
 
-    #[instrument(name = "CargoCache::restore")]
-    pub async fn restore(&self, artifact_plan: &ArtifactPlan) -> Result<()> {
+    #[instrument(name = "CargoCache::restore", skip(progress))]
+    pub async fn restore(
+        &self,
+        artifact_plan: &ArtifactPlan,
+        progress: &ProgressBar,
+    ) -> Result<RestoreState> {
         debug!("start restoring");
 
         // Open the profile dir once to extract owned paths upfront.
@@ -487,6 +645,9 @@ impl CargoCache {
         // still being worked on. We want to avoid uneccesary memory overhead but each
         // individual artifact file is relatively small so we'd rather trade some space
         // for latency mitigation here.
+        let restored = RestoreState::default();
+        let transferred_files = Arc::new(AtomicU64::new(0));
+        let transferred_bytes = Arc::new(AtomicU64::new(0));
         let (tx, rx) = flume::bounded::<ArtifactFile>(worker_count * 10);
         let mut cas_restore_workers = JoinSet::new();
         for _ in 0..worker_count {
@@ -494,34 +655,53 @@ impl CargoCache {
             let cas = self.cas.clone();
             let profile_root = profile_root.clone();
             let cargo_home = cargo_home.clone();
+            let transferred_files = transferred_files.clone();
+            let transferred_bytes = transferred_bytes.clone();
+            let restored = restored.clone();
             cas_restore_workers.spawn(async move {
-                let restore = async move |artifact: &ArtifactFile| -> Result<()> {
-                    let key = Blake3::from_hex_string(&artifact.object_key)?;
+                let restore = async move |file: &ArtifactFile| -> Result<u64> {
+                    let key = Blake3::from_hex_string(&file.object_key)?;
 
                     // Reconstruct the portable path to an absolute path for this machine.
-                    let path = artifact
+                    let path = file
                         .path
                         .reconstruct_raw(&profile_root, &cargo_home)
                         .pipe(AbsFilePath::try_from)?;
+
+                    // Check if file already exists with correct content.
+                    if fs::exists(path.as_std_path()).await {
+                        let existing_hash = Blake3::from_file(&path).await?;
+                        if existing_hash == key {
+                            trace!(?path, "file already exists with correct hash, skipping");
+                            return Ok(0);
+                        }
+                    }
 
                     // Get the data from the CAS and reconstruct it according to the local machine.
                     let data = cas.must_get(&key).await?;
                     let data = Self::reconstruct(&profile_root, &cargo_home, &path, &data).await?;
 
                     // Write the file.
-                    let mtime = UNIX_EPOCH + Duration::from_nanos(artifact.mtime_nanos as u64);
+                    let mtime = UNIX_EPOCH + Duration::from_nanos(file.mtime_nanos as u64);
                     let metadata = fs::Metadata::builder()
                         .mtime(mtime)
-                        .executable(artifact.executable)
+                        .executable(file.executable)
                         .build();
                     fs::write(&path, &data).await?;
                     metadata.set_file(&path).await?;
-                    Result::<()>::Ok(())
+                    restored.record_object(&key);
+                    Result::<u64>::Ok(data.len() as u64)
                 };
 
-                while let Ok(artifact) = rx.recv_async().await {
-                    if let Err(error) = restore(&artifact).await {
-                        warn!(?error, ?artifact, "failed to restore file");
+                while let Ok(file) = rx.recv_async().await {
+                    match restore(&file).await {
+                        Ok(transferred) => {
+                            transferred_files.fetch_add(1, Ordering::Relaxed);
+                            transferred_bytes.fetch_add(transferred, Ordering::Relaxed);
+                        }
+                        Err(error) => {
+                            warn!(?error, ?file, "failed to restore file");
+                        }
                     }
                 }
             });
@@ -543,14 +723,24 @@ impl CargoCache {
 
             let Some(response) = self.courier.cargo_cache_restore(request).await? else {
                 debug!(?artifact, "no matching library unit build found");
+                progress.inc(1);
                 continue;
             };
 
+            // Send all files for this package to workers.
             for artifact_file in response.artifacts {
                 if let Err(error) = tx.send_async(artifact_file).await {
                     panic!("invariant violated: no restore workers are alive: {error:?}");
                 }
             }
+
+            restored.record_artifact(artifact);
+            progress.inc(1);
+            progress.set_message(format!(
+                "Restoring cache ({} files, {} transferred)",
+                transferred_files.load(Ordering::Relaxed),
+                format_size(transferred_bytes.load(Ordering::Relaxed), DECIMAL)
+            ));
         }
 
         // The channels are done being used here, so we drop them; the workers may still
@@ -558,12 +748,16 @@ impl CargoCache {
         // rx alive until they're all done.
         drop(rx);
         drop(tx);
+
         while let Some(worker) = cas_restore_workers.join_next().await {
             worker.context("cas restore worker")?;
         }
 
         debug!("done restoring");
-        Ok(())
+        Ok(restored.with_stats(CacheStats {
+            files: transferred_files.load(Ordering::Relaxed),
+            bytes: transferred_bytes.load(Ordering::Relaxed),
+        }))
     }
 
     /// Rewrite file contents before storing in CAS to normalize paths.
@@ -731,8 +925,6 @@ pub struct BuildScriptDirs {
 pub struct BuiltArtifact {
     package_name: String,
     package_version: String,
-    target: String,
-    profile: Profile,
 
     lib_files: Vec<AbsFilePath>,
     build_script_files: Option<BuildScriptDirs>,
@@ -740,27 +932,37 @@ pub struct BuiltArtifact {
     library_crate_compilation_unit_hash: String,
     build_script_compilation_unit_hash: Option<String>,
     build_script_execution_unit_hash: Option<String>,
+
+    // TODO: Should these all be in a larger `BuildScript` struct that includes
+    // the files, unit hashes, and output? It's a little silly to all have them
+    // be separately optional, as if we could have some fields but not others.
+    build_script_output: Option<BuildScriptOutput>,
 }
 
 impl BuiltArtifact {
     /// Given an `ArtifactKey`, read the build script output directories on
     /// disk and construct a `BuiltArtifact`.
     #[instrument(name = "BuiltArtifact::from_key")]
-    pub async fn from_key(key: ArtifactKey, target: String, profile: Profile) -> Result<Self> {
-        // TODO: Read the build script output from the build folders, and parse
-        // the output for directives. Use this to construct the rustc
-        // invocation, and use all of this information to fully construct the
-        // cache key.
+    pub async fn from_key(profile: &ProfileDir<'_, Locked>, key: ArtifactKey) -> Result<Self> {
+        // Read the build script output from the build folders, and parse
+        // the output for directives.
+        let build_script_output = match &key.build_script_files {
+            Some(build_script_files) => {
+                let bso = BuildScriptOutput::from_file(
+                    profile,
+                    &build_script_files.output_dir.join(mk_rel_file!("output")),
+                )
+                .await?;
+                Some(bso)
+            }
+            None => None,
+        };
 
-        // FIXME: What we actually do right now is just copy fields and ignore
-        // that dynamic fields might not be captured by the unit hash. This
-        // behavior is incorrect! We are only ignoring this for now so we can
-        // get something simple working end-to-end.
+        // TODO: Use this later to reconstruct the rustc invocation, and use all
+        // of this information to fully construct the cache key.
         Ok(BuiltArtifact {
             package_name: key.package_name,
             package_version: key.package_version,
-            target,
-            profile,
 
             lib_files: key.lib_files,
             build_script_files: key.build_script_files,
@@ -768,14 +970,28 @@ impl BuiltArtifact {
             library_crate_compilation_unit_hash: key.library_crate_compilation_unit_hash,
             build_script_compilation_unit_hash: key.build_script_compilation_unit_hash,
             build_script_execution_unit_hash: key.build_script_execution_unit_hash,
+            build_script_output,
         })
+    }
+
+    /// Reconstruct a representative `ArtifactKey`.
+    pub fn reconstruct_key(&self) -> ArtifactKey {
+        ArtifactKey {
+            package_name: self.package_name.clone(),
+            package_version: self.package_version.clone(),
+            lib_files: self.lib_files.clone(),
+            build_script_files: self.build_script_files.clone(),
+            library_crate_compilation_unit_hash: self.library_crate_compilation_unit_hash.clone(),
+            build_script_compilation_unit_hash: self.build_script_compilation_unit_hash.clone(),
+            build_script_execution_unit_hash: self.build_script_execution_unit_hash.clone(),
+        }
     }
 }
 
 /// A content hash of a library unit's artifacts.
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize)]
 struct LibraryUnitHash {
-    files: Vec<(AbsFilePath, Blake3)>,
+    files: Vec<(QualifiedPath, Blake3)>,
 }
 
 impl LibraryUnitHash {
@@ -784,7 +1000,7 @@ impl LibraryUnitHash {
     /// This constructor always ensures that the files are sorted, so any two
     /// sets of files with the same paths and contents will produce the same
     /// hash.
-    fn new(mut files: Vec<(AbsFilePath, Blake3)>) -> Self {
+    fn new(mut files: Vec<(QualifiedPath, Blake3)>) -> Self {
         files.sort();
         Self { files }
     }

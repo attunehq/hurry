@@ -81,7 +81,7 @@ impl RootOutput {
 /// ```
 ///
 /// Reference: https://doc.rust-lang.org/cargo/reference/build-scripts.html
-#[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize)]
+#[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Hash)]
 pub struct BuildScriptOutput(Vec<BuildScriptOutputLine>);
 
 impl BuildScriptOutput {

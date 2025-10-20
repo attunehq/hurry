@@ -29,11 +29,10 @@ use std::{
     sync::Arc, time::SystemTime,
 };
 
-use async_walkdir::WalkDir;
 use bon::Builder;
 use color_eyre::{
     Result,
-    eyre::{Context, OptionExt, eyre},
+    eyre::{Context, OptionExt},
 };
 use derive_more::{Debug, Display};
 use filetime::FileTime;
@@ -43,7 +42,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tap::{Pipe, TapFallible};
 use tokio::{fs::ReadDir, sync::Mutex, task::spawn_blocking};
-use tracing::{debug, instrument, trace};
+use tracing::{debug, error, instrument, trace};
 
 use crate::{
     Locked, Unlocked,
@@ -228,22 +227,48 @@ pub async fn copy_dir(src: &AbsDirPath, dst: &AbsDirPath) -> Result<u64> {
 /// and directories are not emitted in the stream.
 #[instrument]
 pub fn walk_files(root: &AbsDirPath) -> impl Stream<Item = Result<AbsFilePath>> + Unpin {
-    WalkDir::new(root.as_std_path())
-        .map_err(move |err| eyre!(err).wrap_err(format!("walk files in {root:?}")))
-        .try_filter_map(|entry| async move {
-            let src_file = entry.path();
-            let ft = entry
-                .file_type()
-                .await
-                .with_context(|| format!("get type of: {src_file:?}"))?;
-            if ft.is_file() {
-                let path = entry.path();
-                AbsFilePath::try_from(path).map(Some)
-            } else {
-                Ok(None)
+    let (tx, rx) = flume::bounded::<Result<AbsFilePath>>(0);
+    let root = root.clone();
+
+    spawn_blocking(move || {
+        for entry in jwalk::WalkDir::new(root.as_std_path()) {
+            let entry = match entry.with_context(|| format!("walk files in {root:?}")) {
+                Ok(entry) => entry,
+                Err(err) => {
+                    if let Err(send) = tx.send(Err(err)) {
+                        let err = send.into_inner();
+                        error!(error = ?err, "unable to walk files");
+                        return;
+                    }
+                    continue;
+                }
+            };
+
+            if !entry.file_type().is_file() {
+                continue;
             }
-        })
-        .pipe(Box::pin)
+
+            let path = match AbsFilePath::try_from(entry.path()) {
+                Ok(path) => path,
+                Err(err) => {
+                    if let Err(send) = tx.send(Err(err)) {
+                        let err = send.into_inner();
+                        error!(error = ?err, "unable to walk files");
+                        return;
+                    }
+                    continue;
+                }
+            };
+
+            if let Err(send) = tx.send(Ok(path)) {
+                let err = send.into_inner();
+                error!(error = ?err, "unable to walk files");
+                return;
+            }
+        }
+    });
+
+    rx.into_stream().pipe(Box::pin)
 }
 
 /// Report whether the provided directory is empty.

@@ -56,11 +56,17 @@ duplicate = { workspace = true }
 paste = { workspace = true }
 parse-display = { workspace = true }
 lazy-regex = { workspace = true, features = ["regex", "std"] }
-reqwest = { version = "0.12.24", features = ["json", "stream", "rustls-tls"], default-features = false }
+reqwest = { workspace = true, features = ["json", "stream", "rustls-tls"] }
 tokio-util = { workspace = true, features = ["io"] }
-url = "2.5.7"
-flume = "0.11.1"
-num_cpus = "1.17.0"
+url = { workspace = true }
+flume = { workspace = true }
+num_cpus = { workspace = true }
+jwalk.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+indicatif = { workspace = true }
+humansize = { workspace = true }
+scopeguard = { workspace = true }
+dashmap = { workspace = true }
 
 [dev-dependencies]
 async-walkdir.workspace = true

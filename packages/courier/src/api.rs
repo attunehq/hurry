@@ -44,7 +44,10 @@ use uuid::Uuid;
 pub mod v1;
 
 /// Not chosen for a specific reason, just seems reasonable.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+///
+/// 15 seconds was too short. Hopefully this basically never gets hit, but we
+/// need some kind of timeout.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// This was defaulted to 100MB but `libaws_sdk_s3` produces 125MB rlibs.
 const MAX_BODY_SIZE: usize = 500 * 1024 * 1024;
@@ -82,7 +85,7 @@ async fn trace_request(request: Request, next: Next) -> Response {
         let mut response = next.run(request).await;
         let status = response.status();
         let duration = start.elapsed();
-        tracing::info!(%status, ?duration, "http.request.response");
+        tracing::info!(%id, %url, %method, %status, ?duration, "http.request.response");
 
         if let Ok(id) = HeaderValue::from_str(&id) {
             response.headers_mut().insert(REQUEST_ID_HEADER, id);

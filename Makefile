@@ -1,4 +1,4 @@
-.PHONY: help format check check-fix precommit dev release sqlx-prepare
+.PHONY: help format check check-fix autoinherit machete machete-fix precommit dev release sqlx-prepare
 
 .DEFAULT_GOAL := help
 
@@ -21,7 +21,16 @@ check:
 check-fix:
 	cargo clippy --fix --allow-dirty --allow-staged
 
-precommit: format check-fix sqlx-prepare
+autoinherit:
+	cargo autoinherit
+
+machete:
+	cargo machete
+
+machete-fix:
+	cargo machete --fix
+
+precommit: machete-fix autoinherit check-fix format sqlx-prepare
 
 dev:
 	cargo build
