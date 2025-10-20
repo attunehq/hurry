@@ -7,15 +7,13 @@
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use derive_more::Debug;
-use humansize::{DECIMAL, format_size};
 use tap::Tap;
 use tracing::{debug, info, instrument, warn};
 
 use hurry::{
     cargo::{self, CargoBuildArguments, CargoCache, Profile, Workspace},
     client::Courier,
-    format_transfer_rate,
-    progress::TransferBar,
+    progress::{TransferBar, format_size, format_transfer_rate},
 };
 use url::Url;
 
@@ -106,7 +104,7 @@ pub async fn exec(options: Options) -> Result<()> {
                 progress.finish_with_message(format!(
                     "Cache restored ({} files, {} at {})",
                     restored.stats.files,
-                    format_size(restored.stats.bytes, DECIMAL),
+                    format_size(restored.stats.bytes),
                     format_transfer_rate(restored.stats.bytes, start_time)
                 ))
             })
@@ -201,7 +199,7 @@ pub async fn exec(options: Options) -> Result<()> {
         progress.finish_with_message(format!(
             "Cache backed up ({} files, {} at {})",
             stats.files,
-            format_size(stats.bytes, DECIMAL),
+            format_size(stats.bytes),
             format_transfer_rate(stats.bytes, start_time),
         ));
     }

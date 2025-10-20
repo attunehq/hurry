@@ -17,7 +17,6 @@ use color_eyre::{
 };
 use dashmap::DashSet;
 use futures::TryStreamExt as _;
-use humansize::{DECIMAL, format_size};
 use indicatif::ProgressBar;
 use itertools::Itertools;
 use scopeguard::defer;
@@ -35,10 +34,11 @@ use crate::{
     },
     cas::CourierCas,
     client::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest, Courier},
-    format_transfer_rate, fs,
+    fs,
     hash::Blake3,
     mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith, TryJoinWith as _},
+    progress::{format_size, format_transfer_rate},
 };
 
 /// Statistics about cache operations.
@@ -523,7 +523,7 @@ impl CargoCache {
                 progress.set_message(format!(
                     "Backing up cache ({} files, {} at {})",
                     transferred_files,
-                    format_size(transferred_bytes, DECIMAL),
+                    format_size(transferred_bytes),
                     format_transfer_rate(transferred_bytes, start_time)
                 ));
                 continue;
@@ -612,7 +612,7 @@ impl CargoCache {
             progress.set_message(format!(
                 "Backing up cache ({} files, {} at {})",
                 transferred_files,
-                format_size(transferred_bytes, DECIMAL),
+                format_size(transferred_bytes),
                 format_transfer_rate(transferred_bytes, start_time)
             ));
         }
@@ -745,7 +745,7 @@ impl CargoCache {
             progress.set_message(format!(
                 "Restoring cache ({} files, {} at {})",
                 transferred_files.load(Ordering::Relaxed),
-                format_size(bytes, DECIMAL),
+                format_size(bytes),
                 format_transfer_rate(bytes, start_time)
             ));
         }

@@ -147,3 +147,23 @@ impl StopSignal {
 fn is_interactive() -> bool {
     console::Term::stderr().is_term()
 }
+
+/// Formats the transfer amount as a string like "10 MB".
+pub fn format_size(bytes: u64) -> String {
+    humansize::format_size(bytes, humansize::DECIMAL)
+}
+
+/// Formats the transfer rate as a string like "10 MB/s".
+///
+/// Returns "0 MB/s" if:
+/// - Elapsed time is zero.
+/// - Transferred bytes are zero.
+pub fn format_transfer_rate(bytes: u64, start_time: Instant) -> String {
+    let elapsed = start_time.elapsed().as_secs_f64();
+    let size = if elapsed > 0.0 && bytes > 0 {
+        format_size((bytes as f64 / elapsed) as u64)
+    } else {
+        String::from("0 MB")
+    };
+    format!("{size}/s")
+}
