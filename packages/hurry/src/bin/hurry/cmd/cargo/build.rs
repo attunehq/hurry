@@ -8,7 +8,6 @@ use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use derive_more::Debug;
 use humansize::{DECIMAL, format_size};
-use indicatif::{ProgressBar, ProgressStyle};
 use tap::Tap;
 use tracing::{debug, info, instrument, warn};
 
@@ -16,6 +15,7 @@ use hurry::{
     cargo::{self, CargoBuildArguments, CargoCache, Profile, Workspace},
     client::Courier,
     format_transfer_rate,
+    progress::TransferBar,
 };
 use url::Url;
 
@@ -93,18 +93,11 @@ pub async fn exec(options: Options) -> Result<()> {
         .await
         .context("calculating expected artifacts")?;
 
-    let progress_style = ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-        .context("configure progress bar")?
-        .progress_chars("=> ");
-
     // Restore artifacts.
     let restored = if !options.skip_restore {
         let start_time = std::time::Instant::now();
         let count = artifact_plan.artifacts.len() as u64;
-        let progress = ProgressBar::new(count);
-        progress.set_style(progress_style.clone());
-        progress.set_message("Restoring cache");
+        let progress = TransferBar::new(count, "Restoring cache");
 
         cache
             .restore(&artifact_plan, &progress)
@@ -202,9 +195,7 @@ pub async fn exec(options: Options) -> Result<()> {
     if !options.skip_backup {
         let start_time = std::time::Instant::now();
         let count = artifact_plan.artifacts.len() as u64;
-        let progress = ProgressBar::new(count);
-        progress.set_style(progress_style);
-        progress.set_message("Backing up cache");
+        let progress = TransferBar::new(count, "Backing up cache");
 
         let stats = cache.save(artifact_plan, &progress, &restored).await?;
         progress.finish_with_message(format!(

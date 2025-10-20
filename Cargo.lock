@@ -2073,6 +2073,7 @@ dependencies = [
  "clap",
  "color-eyre",
  "colored",
+ "console",
  "const-str",
  "dashmap",
  "derive_more",
