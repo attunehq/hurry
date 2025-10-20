@@ -15,6 +15,7 @@ use tracing::{debug, info, instrument, warn};
 use hurry::{
     cargo::{self, CargoBuildArguments, CargoCache, Profile, Workspace},
     client::Courier,
+    format_transfer_rate,
 };
 use url::Url;
 
@@ -99,6 +100,7 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Restore artifacts.
     let restored = if !options.skip_restore {
+        let start_time = std::time::Instant::now();
         let count = artifact_plan.artifacts.len() as u64;
         let progress = ProgressBar::new(count);
         progress.set_style(progress_style.clone());
@@ -109,9 +111,10 @@ pub async fn exec(options: Options) -> Result<()> {
             .await?
             .tap(|restored| {
                 progress.finish_with_message(format!(
-                    "Cache restored ({} files, {} transferred)",
+                    "Cache restored ({} files, {} at {})",
                     restored.stats.files,
-                    format_size(restored.stats.bytes, DECIMAL)
+                    format_size(restored.stats.bytes, DECIMAL),
+                    format_transfer_rate(restored.stats.bytes, start_time)
                 ))
             })
     } else {
@@ -197,6 +200,7 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Cache the built artifacts.
     if !options.skip_backup {
+        let start_time = std::time::Instant::now();
         let count = artifact_plan.artifacts.len() as u64;
         let progress = ProgressBar::new(count);
         progress.set_style(progress_style);
@@ -204,9 +208,10 @@ pub async fn exec(options: Options) -> Result<()> {
 
         let stats = cache.save(artifact_plan, &progress, &restored).await?;
         progress.finish_with_message(format!(
-            "Cache backed up ({} files, {} transferred)",
+            "Cache backed up ({} files, {} at {})",
             stats.files,
-            format_size(stats.bytes, DECIMAL)
+            format_size(stats.bytes, DECIMAL),
+            format_transfer_rate(stats.bytes, start_time),
         ));
     }
 

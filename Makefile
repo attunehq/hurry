@@ -1,4 +1,4 @@
-.PHONY: help format check check-fix autoinherit machete machete-fix precommit dev release sqlx-prepare
+.PHONY: help format check check-fix autoinherit machete machete-fix precommit dev release sqlx-prepare install
 
 .DEFAULT_GOAL := help
 
@@ -11,6 +11,7 @@ help:
 	@echo "  make dev          - Build in debug mode"
 	@echo "  make release      - Build in release mode"
 	@echo "  make sqlx-prepare - Prepare sqlx metadata for courier and hurry"
+	@echo "  make install      - Install hurry locally"
 
 format:
 	cargo +nightly fmt
@@ -40,3 +41,6 @@ release:
 
 sqlx-prepare:
 	cd packages/courier && cargo sqlx prepare --database-url $(COURIER_DATABASE_URL)
+
+install:
+	cargo install --path packages/hurry --locked
