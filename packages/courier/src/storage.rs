@@ -229,8 +229,7 @@ impl Disk {
 
     /// Read the size of the content for the provided key.
     ///
-    /// If this method fails, it's logged as a warning; all `size` methods are
-    /// best-effort.
+    /// If this method fails, it's logged as a warning and `None` is returned.
     #[tracing::instrument(name = "Disk::read_size")]
     async fn read_size(&self, key: &Key) -> Option<u64> {
         let path = self.key_path(key);
@@ -251,8 +250,7 @@ impl Disk {
     /// can't simply check the size- we have to read the `{key}.size` file.
     /// This method creates that file.
     ///
-    /// If this method fails, it's logged as a warning; all `size` methods are
-    /// best-effort.
+    /// If this method fails, it's logged as a warning.
     #[tracing::instrument]
     async fn write_size(&self, key: &Key, size: u64) {
         let path = self.key_path(key);
