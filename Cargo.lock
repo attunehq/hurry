@@ -2221,6 +2221,7 @@ dependencies = [
 name = "hurry"
 version = "0.0.0"
 dependencies = [
+ "async-tar",
  "async-walkdir",
  "atomic-time",
  "blake3",
@@ -2257,6 +2258,7 @@ dependencies = [
  "num_cpus",
  "parse-display",
  "paste",
+ "piper",
  "pretty_assertions",
  "rayon",
  "reqwest",
@@ -5047,7 +5049,10 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
+ "hashbrown 0.15.5",
  "pin-project-lite",
+ "slab",
  "tokio",
 ]
 

@@ -1,7 +1,8 @@
-use std::{convert::identity, fmt::Debug};
+use std::{collections::HashSet, convert::identity, fmt::Debug};
 
 use color_eyre::{Result, eyre::OptionExt};
 use derive_more::Display;
+use futures::Stream;
 use tracing::{debug, instrument};
 use url::Url;
 
@@ -58,4 +59,49 @@ impl CourierCas {
             .await?
             .ok_or_eyre("key does not exist")
     }
+
+    /// Store multiple entries in the CAS via bulk write.
+    #[instrument(name = "CourierCas::store_bulk", skip(entries))]
+    pub async fn store_bulk(
+        &self,
+        entries: impl Stream<Item = (Blake3, Vec<u8>)> + Unpin + Send + 'static,
+    ) -> Result<BulkStoreResult> {
+        self.client
+            .cas_write_bulk(entries)
+            .await
+            .map(|response| BulkStoreResult {
+                written: response.written,
+                skipped: response.skipped,
+                errors: response
+                    .errors
+                    .into_iter()
+                    .map(|item| BulkStoreError {
+                        key: item.key,
+                        error: item.error,
+                    })
+                    .collect(),
+            })
+    }
+
+    /// Get multiple entries from the CAS via bulk read.
+    #[instrument(name = "CourierCas::get_bulk", skip(keys))]
+    pub async fn get_bulk(
+        &self,
+        keys: impl IntoIterator<Item = impl Into<Blake3>>,
+    ) -> Result<impl Stream<Item = Result<(Blake3, Vec<u8>)>> + Unpin> {
+        self.client.cas_read_bulk(keys).await
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct BulkStoreResult {
+    pub written: HashSet<Blake3>,
+    pub skipped: HashSet<Blake3>,
+    pub errors: HashSet<BulkStoreError>,
+}
+
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub struct BulkStoreError {
+    pub key: Blake3,
+    pub error: String,
 }

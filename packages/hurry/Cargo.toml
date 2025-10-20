@@ -57,7 +57,7 @@ paste = { workspace = true }
 parse-display = { workspace = true }
 lazy-regex = { workspace = true, features = ["regex", "std"] }
 reqwest = { workspace = true, features = ["json", "stream", "rustls-tls"] }
-tokio-util = { workspace = true, features = ["io"] }
+tokio-util = { workspace = true, features = ["full"] }
 url = { workspace = true }
 flume = { workspace = true }
 num_cpus = { workspace = true }
@@ -67,6 +67,8 @@ indicatif = { workspace = true }
 humansize = { workspace = true }
 scopeguard = { workspace = true }
 dashmap = { workspace = true }
+async-tar = { workspace = true }
+piper.workspace = true
 console = { workspace = true }
 
 [dev-dependencies]

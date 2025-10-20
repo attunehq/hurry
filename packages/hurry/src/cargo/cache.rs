@@ -16,7 +16,7 @@ use color_eyre::{
     eyre::{Context as _, OptionExt, bail, eyre},
 };
 use dashmap::DashSet;
-use futures::TryStreamExt as _;
+use futures::{StreamExt, TryStreamExt as _, stream};
 use indicatif::ProgressBar;
 use itertools::Itertools;
 use scopeguard::defer;
@@ -535,43 +535,39 @@ impl CargoCache {
             // needed files? Would that give better performance?
             let mut library_unit_files = vec![];
             let mut artifact_files = vec![];
+            let mut bulk_entries = vec![];
+
+            // First pass: read files, calculate keys, and collect entries for bulk upload.
             for path in files_to_save {
                 match fs::read_buffered(&path).await? {
                     Some(content) => {
                         let content = Self::rewrite(&target_dir, &path, &content).await?;
                         let key = Blake3::from_buffer(&content);
 
-                        // Don't even check if it already exists in the CAS if we restored it.
-                        let (key, uploaded) = if restored.check_object(&key) {
-                            trace!(?path, ?key, "skipping backup: file was restored from cache");
-                            (key, false)
-                        } else {
-                            self.cas.store(&content).await?
-                        };
-
-                        if uploaded {
-                            transferred_bytes += content.len() as u64;
-                        }
-                        transferred_files += 1;
-                        debug!(?path, ?key, uploaded, "stored object");
-
                         // Gather metadata for the artifact file.
                         let metadata = fs::Metadata::from_file(&path)
                             .await?
                             .ok_or_eyre("could not stat file metadata")?;
                         let mtime_nanos = metadata.mtime.duration_since(UNIX_EPOCH)?.as_nanos();
-                        let path = QualifiedPath::parse(&target_dir, path.as_std_path()).await?;
+                        let qualified =
+                            QualifiedPath::parse(&target_dir, path.as_std_path()).await?;
 
+                        library_unit_files.push((qualified.clone(), key.clone()));
                         artifact_files.push(
                             ArtifactFile::builder()
                                 .object_key(key.to_string())
-                                .path(path.clone())
+                                .path(qualified)
                                 .mtime_nanos(mtime_nanos)
                                 .executable(metadata.executable)
                                 .build(),
                         );
 
-                        library_unit_files.push((path, key));
+                        if restored.check_object(&key) {
+                            trace!(?path, ?key, "skipping backup: file was restored from cache");
+                            transferred_files += 1;
+                        } else {
+                            bulk_entries.push((key, content, path));
+                        }
                     }
                     None => {
                         // Note that this is not necessarily incorrect! For example,
@@ -581,6 +577,41 @@ impl CargoCache {
                         // just never written.
                         warn!("failed to read file: {}", path);
                     }
+                }
+            }
+
+            // Second pass: upload files using bulk operations.
+            if !bulk_entries.is_empty() {
+                debug!(count = bulk_entries.len(), "uploading files");
+
+                // Store the actual entries.
+                let result = bulk_entries
+                    .iter()
+                    .map(|(key, content, _)| (key.clone(), content.clone()))
+                    .collect::<Vec<_>>()
+                    .pipe(stream::iter)
+                    .pipe(|stream| self.cas.store_bulk(stream))
+                    .await
+                    .context("upload batch")?;
+
+                // Update statistics based on bulk result.
+                for (key, content, path) in &bulk_entries {
+                    if result.written.contains(key) {
+                        transferred_bytes += content.len() as u64;
+                        debug!(?path, ?key, "uploaded via bulk");
+                    } else if result.skipped.contains(key) {
+                        debug!(?path, ?key, "skipped by server (already exists)");
+                    }
+                    transferred_files += 1;
+                }
+
+                // Log any errors but continue (partial success model).
+                for error in &result.errors {
+                    warn!(
+                        key = ?error.key,
+                        error = %error.error,
+                        "failed to upload file in bulk operation"
+                    );
                 }
             }
 
@@ -664,7 +695,10 @@ impl CargoCache {
             let transferred_bytes = transferred_bytes.clone();
             let restored = restored.clone();
             cas_restore_workers.spawn(async move {
-                let restore = async move |file: &ArtifactFile| -> Result<u64> {
+                const BATCH_SIZE: usize = 50;
+                let mut batch = Vec::new();
+
+                let restore = async |file: &ArtifactFile, data: &[u8]| -> Result<u64> {
                     let key = Blake3::from_hex_string(&file.object_key)?;
 
                     // Reconstruct the portable path to an absolute path for this machine.
@@ -682,9 +716,8 @@ impl CargoCache {
                         }
                     }
 
-                    // Get the data from the CAS and reconstruct it according to the local machine.
-                    let data = cas.must_get(&key).await?;
-                    let data = Self::reconstruct(&profile_root, &cargo_home, &path, &data).await?;
+                    // Reconstruct the data according to the local machine.
+                    let data = Self::reconstruct(&profile_root, &cargo_home, &path, data).await?;
 
                     // Write the file.
                     let mtime = UNIX_EPOCH + Duration::from_nanos(file.mtime_nanos as u64);
@@ -698,16 +731,67 @@ impl CargoCache {
                     Result::<u64>::Ok(data.len() as u64)
                 };
 
-                while let Ok(file) = rx.recv_async().await {
-                    match restore(&file).await {
-                        Ok(transferred) => {
-                            transferred_files.fetch_add(1, Ordering::Relaxed);
-                            transferred_bytes.fetch_add(transferred, Ordering::Relaxed);
-                        }
-                        Err(error) => {
-                            warn!(?error, ?file, "failed to restore file");
+                let process_batch = async |batch: &mut Vec<ArtifactFile>| -> Result<()> {
+                    if batch.is_empty() {
+                        return Ok(());
+                    }
+
+                    // Collect keys to fetch.
+                    let keys = batch
+                        .iter()
+                        .map(|f| Blake3::from_hex_string(&f.object_key))
+                        .collect::<Result<Vec<_>>>()?;
+
+                    // Bulk fetch from CAS as a stream.
+                    let mut contents_stream = cas.get_bulk(keys).await?;
+                    let mut contents = HashMap::new();
+                    while let Some(result) = contents_stream.next().await {
+                        match result {
+                            Ok((key, data)) => {
+                                contents.insert(key, data);
+                            }
+                            Err(error) => {
+                                warn!(?error, "failed to fetch blob from bulk stream");
+                            }
                         }
                     }
+
+                    // Process each file with its fetched content.
+                    for file in batch {
+                        let key = Blake3::from_hex_string(&file.object_key)?;
+                        let Some(data) = contents.get(&key) else {
+                            warn!(?file, "file not found in bulk response");
+                            continue;
+                        };
+
+                        match restore(file, data).await {
+                            Ok(transferred) => {
+                                transferred_files.fetch_add(1, Ordering::Relaxed);
+                                transferred_bytes.fetch_add(transferred, Ordering::Relaxed);
+                            }
+                            Err(error) => {
+                                warn!(?error, ?file, "failed to restore file");
+                            }
+                        }
+                    }
+
+                    Ok(())
+                };
+
+                while let Ok(file) = rx.recv_async().await {
+                    batch.push(file);
+
+                    if batch.len() >= BATCH_SIZE {
+                        if let Err(error) = process_batch(&mut batch).await {
+                            warn!(?error, "failed to process batch");
+                        }
+                        batch.clear();
+                    }
+                }
+
+                // Process remaining files in batch.
+                if let Err(error) = process_batch(&mut batch).await {
+                    warn!(?error, "failed to process final batch");
                 }
             });
         }
