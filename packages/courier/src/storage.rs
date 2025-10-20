@@ -209,38 +209,41 @@ impl Disk {
     #[tracing::instrument(name = "Disk::size")]
     pub async fn size(&self, key: &Key) -> Result<Option<u64>> {
         let path = self.key_path(key);
-        if let Some(size) = self.read_size(key).await {
-            return Ok(Some(size));
-        }
+        let size = self
+            .read_size(key)
+            .await
+            .with_context(|| format!("read size for {key:?}"))?;
 
-        match self.read_inner(key).await {
-            Ok(mut content) => {
-                let size = tokio::io::copy(&mut content, &mut tokio::io::empty())
-                    .await
-                    .context("read content")?;
-                self.write_size(key, size).await;
-                Ok(Some(size))
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err).context(format!("read content of blob at {path:?}")),
+        match size {
+            Some(size) => Ok(Some(size)),
+            None => match self.read_inner(key).await {
+                Ok(mut content) => {
+                    let size = tokio::io::copy(&mut content, &mut tokio::io::empty())
+                        .await
+                        .with_context(|| format!("read content for {key:?}"))?;
+                    self.write_size(key, size)
+                        .await
+                        .with_context(|| format!("write size for {key:?}"))?;
+                    Ok(Some(size))
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(err) => Err(err).context(format!("read content of blob at {path:?}")),
+            },
         }
     }
 
-    /// Read the size of the content for the provided key.
-    ///
-    /// If this method fails, it's logged as a warning; all `size` methods are
-    /// best-effort.
+    /// Read the size of the content for the provided key, if it exists.
     #[tracing::instrument(name = "Disk::read_size")]
-    async fn read_size(&self, key: &Key) -> Option<u64> {
+    async fn read_size(&self, key: &Key) -> Result<Option<u64>> {
         let path = self.key_path(key);
         let size_path = path.with_extension("size");
         match tokio::fs::read(&size_path).await {
-            Ok(bytes) => bytes.try_into().map(u64::from_be_bytes).ok(),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
-                warn!(?error, ?size_path, "storage.disk.size.read");
-                None
-            }
+            Ok(bytes) => match bytes.try_into().map(u64::from_be_bytes) {
+                Ok(size) => Ok(Some(size)),
+                Err(buf) => bail!("invalid big-endian u64: {buf:?}"),
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).context(format!("read size of blob at {path:?}")),
         }
     }
 
@@ -250,19 +253,14 @@ impl Disk {
     /// can't simply check the size- we have to read the `{key}.size` file.
     /// This method creates that file.
     ///
-    /// If this method fails, it's logged as a warning; all `size` methods are
-    /// best-effort.
+    /// If this method fails, it's logged as a warning.
     #[tracing::instrument]
-    async fn write_size(&self, key: &Key, size: u64) {
+    async fn write_size(&self, key: &Key, size: u64) -> Result<()> {
         let path = self.key_path(key);
         let size_path = path.with_extension("size");
-        match File::create(&size_path).await {
-            Ok(mut file) => match file.write_all(&size.to_be_bytes()).await {
-                Ok(_) => {}
-                Err(error) => warn!(?error, ?size_path, "storage.disk.size.write"),
-            },
-            Err(error) => warn!(?error, ?size_path, "storage.disk.size.write.create"),
-        }
+        tokio::fs::write(&size_path, &size.to_be_bytes())
+            .await
+            .with_context(|| format!("write size file at {size_path:?}"))
     }
 
     /// Read the content from storage for the provided key.
@@ -345,10 +343,10 @@ impl Disk {
         // If the file already exists, we can just abort: file contents never
         // change and are always named by their content hash.
         match rename(&temp, &path).await {
-            Ok(()) => {
-                self.write_size(key, size).await;
-                Ok(())
-            }
+            Ok(()) => self
+                .write_size(key, size)
+                .await
+                .with_context(|| format!("write size for {key:?}")),
             Err(err) => {
                 if let Err(err) = remove_file(&temp).await {
                     warn!("failed to remove temp file {temp:?}: {err}");

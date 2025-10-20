@@ -212,9 +212,7 @@ pub async fn create_dir_all(dir: &AbsDirPath) -> Result<()> {
 
 /// Recursively copy the contents of `src` to `dst`.
 ///
-/// Preserves metadata that cargo/rustc cares about during the copy.
 /// Returns the total number of bytes copied across all files.
-///
 /// Equivalent to [`copy_dir_with_concurrency`] with [`DEFAULT_CONCURRENCY`].
 #[instrument]
 pub async fn copy_dir(src: &AbsDirPath, dst: &AbsDirPath) -> Result<u64> {
@@ -284,7 +282,6 @@ pub async fn is_dir_empty(path: &AbsDirPath) -> Result<bool> {
 
 /// Recursively copy the contents of `src` to `dst` with specified concurrency.
 ///
-/// Preserves metadata that cargo/rustc cares about during the copy.
 /// Returns the total number of bytes copied across all files.
 #[instrument]
 pub async fn copy_dir_with_concurrency(
@@ -308,8 +305,7 @@ pub async fn copy_dir_with_concurrency(
 
 /// Copy the file from `src` to `dst`.
 ///
-/// Preserves metadata that cargo/rustc cares about during the copy.
-/// Returns the number of bytes copied.
+/// Returns the total number of bytes copied.
 #[instrument]
 pub async fn copy_file(src: &AbsFilePath, dst: &AbsFilePath) -> Result<u64> {
     if let Some(parent) = dst.parent() {

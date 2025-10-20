@@ -6,7 +6,8 @@
 .gitmodules
 .scratch
 .vscode
-docker/
+docker/courier/
+!docker/dev/entrypoint.sh
 docs/
 target/
 LICENSE

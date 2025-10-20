@@ -69,6 +69,7 @@ scopeguard = { workspace = true }
 dashmap = { workspace = true }
 async-tar = { workspace = true }
 piper.workspace = true
+console = { workspace = true }
 
 [dev-dependencies]
 async-walkdir.workspace = true

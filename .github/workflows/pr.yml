@@ -3,65 +3,62 @@
 name: PR
 
 on:
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - "**/*.md"
-  merge_group:
-    types: [checks_requested]
-  workflow_dispatch:
+    pull_request:
+        branches: [main]
+        paths-ignore:
+            - "**/*.md"
+    merge_group:
+        types: [checks_requested]
+    workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+    cancel-in-progress: true
 
 env:
-  CARGO_TERM_COLOR: always
-  SQLX_OFFLINE: 1
-  COURIER_DATABASE_URL: postgres://postgres:postgres@localhost:5432/courier_test
+    CARGO_TERM_COLOR: always
+    SQLX_OFFLINE: 1
+    COURIER_DATABASE_URL: postgres://postgres:postgres@localhost:5432/courier_test
 
 jobs:
-  rust:
-    name: Build, check, and test Rust
-    runs-on: ubuntu-latest
+    rust:
+        name: Build, check, and test Rust
+        runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: courier_test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
+        services:
+            postgres:
+                image: postgres:16
+                env:
+                    POSTGRES_PASSWORD: postgres
+                    POSTGRES_DB: courier_test
+                options: >-
+                    --health-cmd pg_isready
+                    --health-interval 10s
+                    --health-timeout 5s
+                    --health-retries 5
+                ports:
+                    - 5432:5432
 
-    steps:
-      - name: Install Rust
-        run: |
-          rustup toolchain install nightly
-          rustup component add --toolchain nightly rustfmt
-          rustup show
-      - uses: taiki-e/install-action@nextest
-      - uses: actions/checkout@v4
+        steps:
+            - name: Install Rust
+              run: |
+                  rustup toolchain install nightly
+                  rustup component add --toolchain nightly rustfmt
+                  rustup show
+            - uses: taiki-e/install-action@nextest
+            - uses: actions/checkout@v4
 
-      # TODO: Swap to `hurry`!
-      - uses: Swatinem/rust-cache@v2
+            # TODO: Swap to `hurry`!
+            - uses: Swatinem/rust-cache@v2
 
-      - name: Check format
-        run: cargo +nightly fmt --all --check
+            - name: Check format
+              run: cargo +nightly fmt --all --check
 
-      # TODO: Check hurry. Not done for now because it's broken.
-      - name: Check clippy
-        run: cargo clippy -p courier # -p hurry
+            - name: Check clippy
+              run: cargo clippy -p hurry -p courier
 
-      # TODO: Test hurry. Not done for now because it's broken.
-      - name: Run tests
-        run: cargo nextest run -p courier # -p hurry
+            - name: Run tests
+              run: cargo nextest run -p hurry -p courier
 
-      # TODO: Run the full build. This is commented for now because it's broken.
-      # - name: Run full build
-      #   run: cargo build --workspace --all-targets --all-features
+            - name: Run full build
+              run: cargo build -p hurry -p courier
