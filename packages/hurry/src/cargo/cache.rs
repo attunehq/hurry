@@ -781,10 +781,11 @@ impl CargoCache {
                 while let Ok(file) = rx.recv_async().await {
                     batch.push(file);
 
-                    if batch.len() >= BATCH_SIZE
-                        && let Err(error) = process_batch(&mut batch).await
-                    {
-                        warn!(?error, "failed to process batch");
+                    if batch.len() >= BATCH_SIZE {
+                        if let Err(error) = process_batch(&mut batch).await {
+                            warn!(?error, "failed to process batch");
+                        }
+                        batch.clear();
                     }
                 }
 
