@@ -1,5 +1,32 @@
 name: "courier"
 services:
+    dev:
+        build:
+            context: .
+            dockerfile: ./docker/dev/Dockerfile
+        volumes:
+            - .:/workspace
+            - ~/.claude:/root/.claude
+            - ~/.claude.json:/root/.claude.json
+            - cargo-cache:/root/.cargo/registry
+            - cargo-git:/root/.cargo/git
+            - target-cache:/workspace/target
+            - zsh-history:/root/.zsh_history_data
+        working_dir: /workspace
+        stdin_open: true
+        tty: true
+        env_file: ./.env
+        environment:
+            - SHELL=/bin/zsh
+            - COURIER_DATABASE_URL=postgres://courier:courier@postgres:5432/courier
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
+        depends_on:
+            postgres:
+                condition: service_healthy
+        networks:
+            - dev
+
     courier:
         build:
             context: .
@@ -58,6 +85,12 @@ services:
         networks:
             - dev
         restart: on-failure
+
+volumes:
+    cargo-cache:
+    cargo-git:
+    target-cache:
+    zsh-history:
 
 networks:
     dev:
