@@ -173,10 +173,7 @@ mod tests {
 
     use async_tar::{Builder, Header};
     use axum::http::StatusCode;
-    use client::courier::v1::{
-        Key,
-        cas::{BulkWriteKeyError, CasBulkWriteResponse},
-    };
+    use client::courier::v1::cas::CasBulkWriteResponse;
     use color_eyre::{Result, eyre::Context};
     use futures::io::Cursor;
     use maplit::btreeset;

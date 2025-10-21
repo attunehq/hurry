@@ -10,7 +10,6 @@ pub mod cargo;
 pub mod cas;
 pub mod ext;
 pub mod fs;
-pub mod hash;
 pub mod path;
 pub mod progress;
 

@@ -41,7 +41,7 @@ use crate::{
         Profile, ProfileDir, QualifiedPath, RootOutput, RustcMetadata, Workspace,
     },
     cas::CourierCas,
-    fs, hash, mk_rel_file,
+    fs, mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith, TryJoinWith as _},
     progress::{format_size, format_transfer_rate},
 };
@@ -715,7 +715,7 @@ impl CargoCache {
 
                     // Check if file already exists with correct content.
                     if fs::exists(path.as_std_path()).await {
-                        let existing_hash = hash::hash_file(&path).await?;
+                        let existing_hash = fs::hash_file(&path).await?;
                         if &existing_hash == key {
                             trace!(?path, "file already exists with correct hash, skipping");
                             return Ok(0);
