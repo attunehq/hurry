@@ -1,7 +1,7 @@
 //! Courier v1 API types and client.
 
-use derive_more::{Debug, Deref, Display, From};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
+use derive_more::{Debug, Display, From};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub mod cas;
 pub mod cache;
@@ -97,31 +97,5 @@ impl<'de> Deserialize<'de> for Key {
     {
         let hex = String::deserialize(deserializer)?;
         Self::from_hex(&hex).map_err(serde::de::Error::custom)
-    }
-}
-
-/// Serializes and deserializes the inner type to a JSON-encoded string.
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Display, From, Deref)]
-pub struct SerializeString<T>(T);
-
-impl<T: Serialize> Serialize for SerializeString<T> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let inner = serde_json::to_string(&self.0).map_err(serde::ser::Error::custom)?;
-        serializer.serialize_str(&inner)
-    }
-}
-
-impl<'de, T: DeserializeOwned> Deserialize<'de> for SerializeString<T> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let inner = String::deserialize(deserializer)?;
-        serde_json::from_str(&inner)
-            .map(Self)
-            .map_err(serde::de::Error::custom)
     }
 }

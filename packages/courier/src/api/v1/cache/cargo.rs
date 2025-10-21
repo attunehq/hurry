@@ -7,7 +7,7 @@ pub mod save;
 
 // Re-export shared types
 pub use client::courier::v1::cache::{
-    ArtifactFile, CargoRestoreRequest, CargoRestoreResponse, CargoSaveRequest,
+    ArtifactFile, ArtifactFilePath, CargoRestoreRequest, CargoRestoreResponse, CargoSaveRequest,
 };
 
 pub fn router() -> Router<State> {
@@ -21,7 +21,7 @@ impl From<crate::db::CargoArtifact> for ArtifactFile {
         Self {
             object_key: client::courier::v1::Key::from_hex(&artifact.object_key)
                 .expect("database contains valid hex keys"),
-            path: artifact.path,
+            path: ArtifactFilePath::from(artifact.path),
             mtime_nanos: artifact.mtime_nanos,
             executable: artifact.executable,
         }
@@ -32,7 +32,7 @@ impl From<ArtifactFile> for crate::db::CargoArtifact {
     fn from(artifact: ArtifactFile) -> Self {
         Self {
             object_key: artifact.object_key.to_hex(),
-            path: artifact.path,
+            path: String::from(artifact.path.as_str()),
             mtime_nanos: artifact.mtime_nanos,
             executable: artifact.executable,
         }

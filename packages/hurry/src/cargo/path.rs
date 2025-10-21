@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use client::courier::v1::cache::ArtifactFilePath;
 use color_eyre::{Result, eyre::bail};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -147,5 +148,23 @@ impl QualifiedPath {
             QualifiedPath::RelativeCargoHome(rel) => cargo_home.join(rel).to_string(),
             QualifiedPath::Absolute(abs) => abs.to_string(),
         }
+    }
+}
+
+impl TryFrom<&ArtifactFilePath> for QualifiedPath {
+    type Error = Report;
+
+    fn try_from(path: &ArtifactFilePath) -> Result<Self, Self::Error> {
+        serde_json::from_str(path.as_str())
+            .map_err(|e| color_eyre::eyre::eyre!("deserialize artifact file path: {e}"))
+    }
+}
+
+impl TryFrom<&QualifiedPath> for ArtifactFilePath {
+    type Error = Report;
+
+    fn try_from(path: &QualifiedPath) -> Result<Self, Self::Error> {
+        let json = serde_json::to_string(path)?;
+        Ok(Self::new(json))
     }
 }
