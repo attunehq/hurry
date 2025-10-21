@@ -118,7 +118,7 @@ pub struct Key(Vec<u8>);
 **`packages/client/src/courier/v1.rs`:**
 
 - `Key`: Blake3 hash stored as `Vec<u8>` (adopts semantics from `courier::storage::Key`)
-  - Methods: `from_hex()`, `to_hex()`, `as_bytes()`, `from_blake3_hash()`, `from_buffer()`, `from_fields()`
+  - Methods: `from_hex()`, `to_hex()`, `as_bytes()`, `from_blake3()`, `from_buffer()`, `from_fields()`
   - Serializes as hex string for JSON API (via serde)
   - Uses byte representation internally for efficiency
   - Validates hash length is 32 bytes in `from_hex()`
@@ -127,9 +127,11 @@ pub struct Key(Vec<u8>);
 
 CAS-specific API types:
 
-- `CasBulkWriteResponse { written: HashSet<Key>, skipped: HashSet<Key>, errors: HashSet<BulkWriteKeyError> }`
+- `CasBulkWriteResponse { written: BTreeSet<Key>, skipped: BTreeSet<Key>, errors: BTreeSet<BulkWriteKeyError> }`
 - `BulkWriteKeyError { key: Key, error: String }`
 - `CasBulkReadRequest { keys: Vec<Key> }`
+
+Note: Uses `BTreeSet` instead of `HashSet` for deterministic ordering in API responses.
 
 **`packages/client/src/courier/v1/cache.rs`:**
 
@@ -223,7 +225,7 @@ The shared `Key` type adopts the semantics from `courier::storage::Key`:
 
 - Internal representation: `Vec<u8>` (32 bytes for Blake3)
 - Serialization: Hex string for JSON API (automatically via serde)
-- Conversion: `from_hex()` and `to_hex()` methods, plus `from_blake3_hash()`, `from_buffer()`, `from_fields()`
+- Conversion: `from_hex()` and `to_hex()` methods, plus `from_blake3()`, `from_buffer()`, `from_fields()`
 
 This differs from the original `hurry::hash::Blake3` which stored the hex string directly. The byte representation was chosen because:
 
@@ -234,9 +236,10 @@ This differs from the original `hurry::hash::Blake3` which stored the hex string
 
 **Migration in hurry:**
 - Removed `hurry::hash::Blake3` type entirely
-- Updated `hurry::hash::hash_file()` to return `Key` directly
+- Removed `hurry::hash` module entirely (all hashing moved to `client::courier::v1::Key`)
+- Moved `hash_file()` to `hurry::fs` module, returning `Key` directly
 - Updated all internal usages to work with `Key`
-- Created type conversions at API boundaries (e.g., in `CourierCas` methods)
+- No type conversions needed at boundaries (uses `Key` throughout)
 
 ## Migration Plan
 
@@ -251,7 +254,7 @@ This differs from the original `hurry::hash::Blake3` which stored the hex string
 - Move `Key` from `courier::storage` to `client::courier::v1`
   - Keep `Vec<u8>` internal representation
   - Ensure hex serialization for JSON API
-  - Add conversion methods: `from_hex()`, `to_hex()`, `from_blake3_hash()`, `from_buffer()`, `from_fields()`
+  - Add conversion methods: `from_hex()`, `to_hex()`, `from_blake3()`, `from_buffer()`, `from_fields()`
 - Create `client::courier::v1::cas` module with CAS types
 - Create `client::courier::v1::cache` module with cache types
 - Deduplicate `ArtifactFile` and request/response types
@@ -277,11 +280,12 @@ This differs from the original `hurry::hash::Blake3` which stored the hex string
 
 - Add `client` dependency with `client` feature enabled
 - Replace `hurry::client::Courier` with `client::Courier` (or `client::courier::v1::Client`)
-- Update `hurry::cas` to use new client module
-- Keep `hurry::hash::Blake3` for hurry-specific functionality
-  - Add `impl From<hurry::hash::Blake3> for client::courier::v1::Key`
-  - Convert at API call boundaries
+- Update `hurry::cas` to use new client module and `Key` type
+- Remove `hurry::hash::Blake3` type entirely (replaced by `client::courier::v1::Key`)
+- Remove `hurry::hash` module entirely
+- Move `hash_file()` function to `hurry::fs` module, updating it to return `Key`
 - Remove old `hurry::client` module
+- Update all internal usages to work directly with `Key` (no conversions needed)
 
 ### Step 6: Testing
 
@@ -406,6 +410,18 @@ pub type GitHub = github::v1::Client;
 pub type Npm = npm::v1::Client;
 ```
 
+## Implementation Outcomes
+
+The implementation successfully achieved all goals outlined in this RFC. Key decisions made during implementation:
+
+1. **Complete removal of `hurry::hash::Blake3`**: Rather than keeping a parallel type system as the original migration plan suggested, the implementation went further and eliminated `Blake3` entirely, using `Key` throughout the codebase. This is superior to the RFC's conservative approach and achieves the "single source of truth" goal more completely.
+
+2. **Module consolidation**: The `hurry::hash` module was removed entirely, with `hash_file()` moved to `hurry::fs` where filesystem operations are centralized. This better aligns with the module's purpose and reduces module proliferation.
+
+3. **Direct type usage**: No conversion functions were needed at API boundaries since `hurry` uses `Key` directly everywhere. This eliminates conversion overhead and simplifies the code.
+
+4. **Test improvements**: All tests in both `hurry` and `courier` now use the shared types with builders, improving type safety and maintainability.
+
 ## Benefits
 
 1. API types defined once, used by both client and server
@@ -414,7 +430,8 @@ pub type Npm = npm::v1::Client;
 4. Library structure mirrors API versioning
 5. Easy to add new API versions and clients
 6. Type aliases provide convenient access patterns
-7. Eliminates several hundred lines of mostly duplicate type definitions
+7. Eliminates several hundred lines of duplicate type definitions
+8. Single canonical hash type used throughout the codebase (no parallel type systems)
 
 ## Alternatives Considered
 
