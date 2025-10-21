@@ -10,7 +10,6 @@ tokio-util = { workspace = true, features = ["compat", "io"] }
 tower = { workspace = true, features = ["buffer", "limit", "load-shed"] }
 tower-http = { workspace = true, features = ["trace", "limit", "timeout", "compression-full", "decompression-full"] }
 sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate", "bigdecimal"] }
-serde = { workspace = true, features = ["derive"] }
 async-compression = { workspace = true, features = ["tokio", "zstd"] }
 blake3 = { workspace = true }
 hex = { workspace = true }
@@ -29,11 +28,10 @@ aerosol = { workspace = true, features = ["async", "axum", "axum-extra", "tracin
 futures = { workspace = true }
 num-traits = { workspace = true }
 bigdecimal = { workspace = true }
-bon.workspace = true
 async-tar = { workspace = true }
 piper = { workspace = true }
 maplit = { workspace = true }
-client = { version = "0.0.0", path = "../client" }
+client = { workspace = true }
 
 [dev-dependencies]
 async-tempfile = { workspace = true }

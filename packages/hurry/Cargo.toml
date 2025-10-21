@@ -25,7 +25,6 @@ enum-assoc = { workspace = true }
 filetime = { workspace = true }
 fslock = { workspace = true }
 git-version = { workspace = true }
-hex = { workspace = true }
 homedir = { workspace = true }
 itertools = { workspace = true }
 lockfile = { workspace = true }
@@ -56,8 +55,6 @@ duplicate = { workspace = true }
 paste = { workspace = true }
 parse-display = { workspace = true }
 lazy-regex = { workspace = true, features = ["regex", "std"] }
-reqwest = { workspace = true, features = ["json", "stream", "rustls-tls", "gzip", "brotli"] }
-tokio-util = { workspace = true, features = ["full"] }
 url = { workspace = true }
 flume = { workspace = true }
 num_cpus = { workspace = true }
@@ -67,10 +64,8 @@ indicatif = { workspace = true }
 humansize = { workspace = true }
 scopeguard = { workspace = true }
 dashmap = { workspace = true }
-async-tar = { workspace = true }
-piper.workspace = true
 console = { workspace = true }
-client = { version = "0.0.0", path = "../client", features = ["client"] }
+client = { workspace = true, features = ["client"] }
 
 [dev-dependencies]
 async-walkdir.workspace = true

@@ -733,7 +733,7 @@ impl CargoCache {
                         .build();
                     fs::write(&path, &data).await?;
                     metadata.set_file(&path).await?;
-                    restored.record_object(&key);
+                    restored.record_object(key);
                     Result::<u64>::Ok(data.len() as u64)
                 };
 
