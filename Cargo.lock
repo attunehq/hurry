@@ -921,6 +921,7 @@ dependencies = [
  "futures",
  "hex",
  "piper",
+ "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",

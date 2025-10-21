@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use aerosol::axum::Dep;
 use async_tar::Archive;
 use axum::{Json, body::Body, http::StatusCode, response::IntoResponse};
+use client::courier::v1::cas::{BulkWriteKeyError, CasBulkWriteResponse};
 use color_eyre::{Report, eyre::Context};
 use futures::StreamExt;
 use tap::Pipe;
@@ -14,13 +15,10 @@ use tracing::{error, info};
 
 use crate::storage::{Disk, Key};
 
-// Use shared types from client crate
-use client::courier::v1::cas::{CasBulkWriteResponse as BulkWriteResponseBody, BulkWriteKeyError};
-
 /// Responses for bulk write operation.
 pub enum BulkWriteResponse {
-    Success(BulkWriteResponseBody),
-    PartialSuccess(BulkWriteResponseBody),
+    Success(CasBulkWriteResponse),
+    PartialSuccess(CasBulkWriteResponse),
     InvalidRequest(Report),
     Error(Report),
 }
@@ -122,10 +120,12 @@ pub async fn handle(Dep(cas): Dep<Disk>, body: Body) -> BulkWriteResponse {
             }
             Err(error) => {
                 error!(%key, ?error, "cas.bulk.write.error");
-                errors.insert(BulkWriteKeyError {
-                    key,
-                    error: format!("{error:?}"),
-                });
+                errors.insert(
+                    BulkWriteKeyError::builder()
+                        .key(key)
+                        .error(format!("{error:?}"))
+                        .build(),
+                );
             }
         }
     }
@@ -138,11 +138,11 @@ pub async fn handle(Dep(cas): Dep<Disk>, body: Body) -> BulkWriteResponse {
     );
 
     let partial = !errors.is_empty();
-    let body = BulkWriteResponseBody {
-        written,
-        skipped,
-        errors,
-    };
+    let body = CasBulkWriteResponse::builder()
+        .written(written)
+        .skipped(skipped)
+        .errors(errors)
+        .build();
     if partial {
         BulkWriteResponse::PartialSuccess(body)
     } else {

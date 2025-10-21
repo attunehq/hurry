@@ -125,14 +125,13 @@ pub(crate) mod test_helpers {
     use axum::body::Bytes;
     use axum::http::StatusCode;
     use axum_test::TestServer;
+    use client::courier::v1::Key;
     use color_eyre::Result;
-
-    use crate::storage::Key;
 
     /// Generate test content and compute its key.
     pub fn test_blob(content: &[u8]) -> (Vec<u8>, Key) {
         let hash = blake3::hash(content);
-        (content.to_vec(), Key::from(hash))
+        (content.to_vec(), Key::from_blake3(hash))
     }
 
     /// Write a blob to CAS and return the key.

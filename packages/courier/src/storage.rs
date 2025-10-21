@@ -12,7 +12,6 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tracing::warn;
 use uuid::Uuid;
 
-// Re-export the shared Key type
 pub use client::courier::v1::Key;
 
 /// Implements the CAS storage interface on disk.
@@ -86,7 +85,7 @@ impl Disk {
     /// Validate that the CAS is accessible and writable.
     #[tracing::instrument(name = "Disk::ping")]
     pub async fn ping(&self) -> Result<()> {
-        static PING_KEY: LazyLock<Key> = LazyLock::new(|| Key::from(blake3::hash(b"ping")));
+        static PING_KEY: LazyLock<Key> = LazyLock::new(|| Key::from_blake3(blake3::hash(b"ping")));
         const PING_CONTENT: &[u8] = b"ping";
 
         self.write_buffered(&PING_KEY, PING_CONTENT).await?;
@@ -388,7 +387,7 @@ mod tests {
     use zstd::bulk::decompress;
 
     fn key_for(input: &[u8]) -> Key {
-        Key::from(blake3::hash(input))
+        Key::from_blake3(blake3::hash(input))
     }
 
     #[test_case(Vec::from(b"hello world\n"); "short input")]

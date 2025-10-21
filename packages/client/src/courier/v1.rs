@@ -1,10 +1,10 @@
 //! Courier v1 API types and client.
 
-use derive_more::{Debug, Display, From};
+use derive_more::{Debug, Display};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-pub mod cas;
 pub mod cache;
+pub mod cas;
 
 #[cfg(feature = "client")]
 mod client;
@@ -13,7 +13,7 @@ mod client;
 pub use client::Client;
 
 /// The key to a content-addressed storage blob.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Display, From)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Display)]
 #[display("{}", self.to_hex())]
 pub struct Key(Vec<u8>);
 
@@ -39,7 +39,7 @@ impl Key {
     }
 
     /// Create a key from a blake3 hash.
-    pub fn from_blake3_hash(hash: blake3::Hash) -> Self {
+    pub fn from_blake3(hash: blake3::Hash) -> Self {
         Self(hash.as_bytes().to_vec())
     }
 
@@ -49,7 +49,7 @@ impl Key {
         let mut hasher = blake3::Hasher::new();
         hasher.update(buffer);
         let hash = hasher.finalize();
-        Self::from_blake3_hash(hash)
+        Self::from_blake3(hash)
     }
 
     /// Hash the contents of the iterator in order.
@@ -59,13 +59,13 @@ impl Key {
             hasher.update(field.as_ref());
         }
         let hash = hasher.finalize();
-        Self::from_blake3_hash(hash)
+        Self::from_blake3(hash)
     }
 }
 
-impl From<blake3::Hash> for Key {
-    fn from(hash: blake3::Hash) -> Self {
-        Self(hash.as_bytes().to_vec())
+impl From<&Key> for Key {
+    fn from(key: &Key) -> Self {
+        key.clone()
     }
 }
 

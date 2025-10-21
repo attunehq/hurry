@@ -1,22 +1,20 @@
 use aerosol::axum::Dep;
 use async_tar::{Builder, Header};
-use axum::{Json, body::Body, http::StatusCode, response::IntoResponse};
-use color_eyre::eyre::Report;
+use axum::{
+    Json,
+    body::Body,
+    http::{StatusCode, header},
+    response::IntoResponse,
+};
+use client::courier::v1::cas::CasBulkReadRequest;
 use futures::AsyncWriteExt;
-use serde::Deserialize;
 use tokio_util::{
     compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt},
     io::ReaderStream,
 };
 use tracing::{error, info};
 
-use crate::storage::{Disk, Key};
-
-/// Request body for bulk read operation.
-#[derive(Debug, Deserialize)]
-pub struct BulkReadRequest {
-    pub keys: Vec<Key>,
-}
+use crate::storage::Disk;
 
 /// Read multiple blobs from the CAS and return them as a tar archive.
 ///
@@ -50,7 +48,7 @@ pub struct BulkReadRequest {
 /// CompressionLayer middleware, so the tar archive itself contains
 /// uncompressed data.
 #[tracing::instrument(skip(req))]
-pub async fn handle(Dep(cas): Dep<Disk>, Json(req): Json<BulkReadRequest>) -> BulkReadResponse {
+pub async fn handle(Dep(cas): Dep<Disk>, Json(req): Json<CasBulkReadRequest>) -> BulkReadResponse {
     info!(keys = req.keys.len(), "cas.bulk.read.start");
 
     let (reader, writer) = piper::pipe(64 * 1024);
@@ -115,8 +113,6 @@ pub async fn handle(Dep(cas): Dep<Disk>, Json(req): Json<BulkReadRequest>) -> Bu
 #[derive(Debug)]
 pub enum BulkReadResponse {
     Success(Body),
-    #[allow(dead_code)]
-    Error(Report),
 }
 
 impl IntoResponse for BulkReadResponse {
@@ -124,13 +120,10 @@ impl IntoResponse for BulkReadResponse {
         match self {
             BulkReadResponse::Success(body) => (
                 StatusCode::OK,
-                [("content-type", "application/x-tar")],
+                [(header::CONTENT_TYPE, "application/x-tar")],
                 body,
             )
                 .into_response(),
-            BulkReadResponse::Error(error) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
-            }
         }
     }
 }

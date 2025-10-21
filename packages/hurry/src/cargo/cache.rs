@@ -30,7 +30,7 @@ use client::{
     Courier,
     courier::v1::{
         Key,
-        cache::{ArtifactFile, ArtifactFilePath, CargoRestoreRequest, CargoSaveRequest},
+        cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest},
     },
 };
 
@@ -558,11 +558,10 @@ impl CargoCache {
                             QualifiedPath::parse(&target_dir, path.as_std_path()).await?;
 
                         library_unit_files.push((qualified.clone(), key.clone()));
-                        let qualified = ArtifactFilePath::try_from(&qualified)?;
                         artifact_files.push(
                             ArtifactFile::builder()
                                 .object_key(key.clone())
-                                .path(qualified)
+                                .path(serde_json::to_string(&qualified)?)
                                 .mtime_nanos(mtime_nanos)
                                 .executable(metadata.executable)
                                 .build(),
@@ -709,8 +708,8 @@ impl CargoCache {
 
                     // Convert the artifact file path back to QualifiedPath and reconstruct it to an
                     // absolute path for this machine.
-                    let qualified_path = QualifiedPath::try_from(&file.path)?;
-                    let path = qualified_path
+                    let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
+                    let path = qualified
                         .reconstruct_raw(&profile_root, &cargo_home)
                         .pipe(AbsFilePath::try_from)?;
 

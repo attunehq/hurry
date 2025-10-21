@@ -19,7 +19,11 @@ use tokio_util::{
 use tracing::instrument;
 use url::Url;
 
-use super::{Key, cache::{CargoRestoreRequest, CargoRestoreResponse, CargoSaveRequest}, cas::{CasBulkReadRequest, CasBulkWriteResponse}};
+use super::{
+    Key,
+    cache::{CargoRestoreRequest, CargoRestoreResponse, CargoSaveRequest},
+    cas::{CasBulkReadRequest, CasBulkWriteResponse},
+};
 
 /// Client for the Courier API.
 ///
@@ -310,9 +314,7 @@ impl Client {
         keys: impl IntoIterator<Item = impl Into<Key>>,
     ) -> Result<impl Stream<Item = Result<(Key, Vec<u8>)>> + Unpin> {
         let url = self.base.join("api/v1/cas/bulk/read")?;
-        let request = CasBulkReadRequest {
-            keys: keys.into_iter().map(Into::into).collect(),
-        };
+        let request = CasBulkReadRequest::builder().keys(keys).build();
         let response = self
             .http
             .post(url)

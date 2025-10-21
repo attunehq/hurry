@@ -1,14 +1,16 @@
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
+use client::courier::v1::cache::CargoSaveRequest;
 use color_eyre::eyre::Report;
 use tracing::{error, info};
 
 use crate::db::{CargoSaveCacheRequest, Postgres};
 
-use super::CargoSaveRequest;
-
 #[tracing::instrument]
-pub async fn handle(Dep(db): Dep<Postgres>, Json(request): Json<CargoSaveRequest>) -> CacheSaveResponse {
+pub async fn handle(
+    Dep(db): Dep<Postgres>,
+    Json(request): Json<CargoSaveRequest>,
+) -> CacheSaveResponse {
     let request = CargoSaveCacheRequest::builder()
         .package_name(request.package_name)
         .package_version(request.package_version)
@@ -254,10 +256,13 @@ mod tests {
             .context("create test server")?;
 
         let packages = [("serde", "1.0.0"), ("tokio", "1.35.0"), ("axum", "0.7.0")];
-        let keyed_packages = packages
-            .iter()
-            .enumerate()
-            .map(|(i, (name, version))| (name, version, test_blob(format!("package_{i}").as_bytes()).1));
+        let keyed_packages = packages.iter().enumerate().map(|(i, (name, version))| {
+            (
+                name,
+                version,
+                test_blob(format!("package_{i}").as_bytes()).1,
+            )
+        });
 
         for (i, (name, version, key)) in keyed_packages.clone().enumerate() {
             let request = json!({

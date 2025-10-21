@@ -24,7 +24,7 @@ pub async fn hash_file(path: &AbsFilePath) -> Result<Key> {
         bytes += len;
     }
     let hash = hasher.finalize();
-    let key = Key::from_blake3_hash(hash);
+    let key = Key::from_blake3(hash);
     trace!(?path, hash = %key, ?bytes, "hash file");
     Ok(key)
 }

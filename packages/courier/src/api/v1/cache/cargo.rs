@@ -1,14 +1,10 @@
 use axum::{Router, routing::post};
+use client::courier::v1::{Key, cache::ArtifactFile};
 
 use crate::api::State;
 
 pub mod restore;
 pub mod save;
-
-// Re-export shared types
-pub use client::courier::v1::cache::{
-    ArtifactFile, ArtifactFilePath, CargoRestoreRequest, CargoRestoreResponse, CargoSaveRequest,
-};
 
 pub fn router() -> Router<State> {
     Router::new()
@@ -18,13 +14,14 @@ pub fn router() -> Router<State> {
 
 impl From<crate::db::CargoArtifact> for ArtifactFile {
     fn from(artifact: crate::db::CargoArtifact) -> Self {
-        Self {
-            object_key: client::courier::v1::Key::from_hex(&artifact.object_key)
-                .expect("database contains valid hex keys"),
-            path: ArtifactFilePath::from(artifact.path),
-            mtime_nanos: artifact.mtime_nanos,
-            executable: artifact.executable,
-        }
+        ArtifactFile::builder()
+            .object_key(
+                Key::from_hex(&artifact.object_key).expect("database contains valid hex keys"),
+            )
+            .executable(artifact.executable)
+            .mtime_nanos(artifact.mtime_nanos)
+            .path(artifact.path)
+            .build()
     }
 }
 

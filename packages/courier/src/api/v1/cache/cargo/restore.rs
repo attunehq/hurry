@@ -1,19 +1,16 @@
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
+use client::courier::v1::cache::{CargoRestoreRequest, CargoRestoreResponse};
 use color_eyre::eyre::Report;
 use tap::Pipe;
 use tracing::{error, info};
 
 use crate::db::{CargoRestoreCacheRequest, Postgres};
 
-use super::{
-    ArtifactFile, CargoRestoreRequest as RestoreRequest, CargoRestoreResponse as RestoreResponse,
-};
-
 #[tracing::instrument]
 pub async fn handle(
     Dep(db): Dep<Postgres>,
-    Json(request): Json<RestoreRequest>,
+    Json(request): Json<CargoRestoreRequest>,
 ) -> CacheRestoreResponse {
     let request = CargoRestoreCacheRequest::builder()
         .package_name(request.package_name)
@@ -31,11 +28,11 @@ pub async fn handle(
         }
         Ok(artifacts) => {
             info!("cache.restore.hit");
-            RestoreResponse {
-                artifacts: artifacts.into_iter().map(ArtifactFile::from).collect(),
-            }
-            .pipe(Json)
-            .pipe(CacheRestoreResponse::Ok)
+            CargoRestoreResponse::builder()
+                .artifacts(artifacts)
+                .build()
+                .pipe(Json)
+                .pipe(CacheRestoreResponse::Ok)
         }
         Err(err) => {
             error!(error = ?err, "cache.restore.error");
@@ -46,7 +43,7 @@ pub async fn handle(
 
 #[derive(Debug)]
 pub enum CacheRestoreResponse {
-    Ok(Json<RestoreResponse>),
+    Ok(Json<CargoRestoreResponse>),
     NotFound,
     Error(Report),
 }
@@ -370,10 +367,12 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let mut keys = vec![];
         let artifacts = (0..50)
             .map(|i| {
                 let (_, key) =
                     crate::api::test_helpers::test_blob(format!("artifact_{i}").as_bytes());
+                keys.push(key.clone());
                 json!({
                     "object_key": key,
                     "path": format!("artifact_{i}.o"),
@@ -525,11 +524,12 @@ mod tests {
 
         let versions = vec!["1.0.0", "1.0.1", "2.0.0"];
 
-        let keyed_versions = versions
-            .iter()
-            .map(|version| (version, test_blob(format!("version_{version}").as_bytes()).1));
+        let mut keys = vec![];
+        for (i, version) in versions.iter().enumerate() {
+            let (_, key) =
+                crate::api::test_helpers::test_blob(format!("version_{version}").as_bytes());
+            keys.push(key.clone());
 
-        for (i, (version, key)) in keyed_versions.clone().enumerate() {
             let save_request = json!({
                 "package_name": "versioned-crate",
                 "package_version": *version,
@@ -555,7 +555,7 @@ mod tests {
             response.assert_status(StatusCode::CREATED);
         }
 
-        for (i, (version, key)) in keyed_versions.enumerate() {
+        for (i, version) in versions.iter().enumerate() {
             let restore_request = json!({
                 "package_name": "versioned-crate",
                 "package_version": *version,
@@ -575,7 +575,7 @@ mod tests {
 
             let expected = json!({
                 "artifacts": [{
-                    "object_key": key,
+                    "object_key": keys[i],
                     "path": "libversioned_crate.rlib",
                     "mtime_nanos": 1000000000000000000u128 + i as u128,
                     "executable": false
