@@ -75,7 +75,7 @@ pub async fn exec(options: Options) -> Result<()> {
         .context("opening workspace")?;
     let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
 
-    let courier = Courier::new(options.courier_url);
+    let courier = Courier::new(options.courier_url).context("create courier client")?;
     courier.ping().await.context("ping courier service")?;
 
     // Open cache.

@@ -39,11 +39,17 @@ pub struct Courier {
 
 impl Courier {
     /// Create a new client with the given base URL.
-    pub fn new(base: Url) -> Self {
-        Self {
+    pub fn new(base: Url) -> Result<Self> {
+        let http = reqwest::Client::builder()
+            .gzip(true)
+            .brotli(true)
+            .build()
+            .context("build http client")?;
+
+        Ok(Self {
             base: Arc::new(base),
-            http: reqwest::Client::new(),
-        }
+            http,
+        })
     }
 
     /// Check that the service is reachable.

@@ -23,10 +23,9 @@ impl CourierCas {
 
     /// Create a new instance with the provided base url.
     /// Instantiates a new [`Courier`] instance.
-    pub fn new_client(base: Url) -> Self {
-        Self {
-            client: Courier::new(base),
-        }
+    pub fn new_client(base: Url) -> Result<Self> {
+        let client = Courier::new(base)?;
+        Ok(Self { client })
     }
 
     /// Store the entry in the CAS.

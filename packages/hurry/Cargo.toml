@@ -56,7 +56,7 @@ duplicate = { workspace = true }
 paste = { workspace = true }
 parse-display = { workspace = true }
 lazy-regex = { workspace = true, features = ["regex", "std"] }
-reqwest = { workspace = true, features = ["json", "stream", "rustls-tls"] }
+reqwest = { workspace = true, features = ["json", "stream", "rustls-tls", "gzip", "brotli"] }
 tokio-util = { workspace = true, features = ["full"] }
 url = { workspace = true }
 flume = { workspace = true }
