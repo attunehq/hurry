@@ -26,6 +26,13 @@ use std::env;
 use tokio::io::AsyncReadExt;
 use url::Url;
 
+const KB: usize = 1_024;
+const MB: usize = 1_048_576;
+
+const SIZES: &[usize] = &[KB, 10 * KB, 100 * KB, MB, 10 * MB, 50 * MB, 100 * MB];
+const BULK_SIZES: &[usize] = &[KB, 10 * KB, 100 * KB, MB, 10 * MB];
+const BULK_COUNTS: &[usize] = &[1, 10, 50, 100];
+
 fn main() {
     divan::main();
 }
@@ -56,9 +63,6 @@ mod helpers {
 
 mod upload {
     use super::*;
-
-    /// Benchmark sizes: 1KB, 10KB, 100KB, 1MB, 10MB
-    const SIZES: &[usize] = &[1_024, 10_240, 102_400, 1_048_576, 10_485_760];
 
     #[divan::bench(args = SIZES, sample_count = 5)]
     fn bytes(bencher: divan::Bencher, size: usize) {
@@ -94,10 +98,7 @@ mod upload {
             });
     }
 
-    /// Number of items to include in bulk operations
-    const ITEM_COUNTS: &[usize] = &[1, 10, 50, 100];
-
-    #[divan::bench(args = SIZES, consts = ITEM_COUNTS, sample_count = 5)]
+    #[divan::bench(args = BULK_SIZES, consts = BULK_COUNTS, sample_count = 5)]
     fn bulk<const COUNT: usize>(bencher: divan::Bencher, size: usize) {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
         let client = Client::new(courier_url()).expect("create client");
@@ -121,8 +122,6 @@ mod upload {
 
 mod download {
     use super::*;
-
-    const SIZES: &[usize] = &[1_024, 10_240, 102_400, 1_048_576, 10_485_760];
 
     #[divan::bench(args = SIZES, sample_count = 5)]
     fn bytes(bencher: divan::Bencher, size: usize) {
@@ -168,10 +167,7 @@ mod download {
             });
     }
 
-    /// Number of items to include in bulk operations
-    const ITEM_COUNTS: &[usize] = &[1, 10, 50, 100];
-
-    #[divan::bench(args = SIZES, consts = ITEM_COUNTS, sample_count = 5)]
+    #[divan::bench(args = BULK_SIZES, consts = BULK_COUNTS, sample_count = 5)]
     fn bulk<const COUNT: usize>(bencher: divan::Bencher, size: usize) {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
         let client = Client::new(courier_url()).expect("create client");
