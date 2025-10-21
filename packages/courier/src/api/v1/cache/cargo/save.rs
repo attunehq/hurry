@@ -57,6 +57,8 @@ mod tests {
     use serde_json::json;
     use sqlx::PgPool;
 
+    use crate::api::test_helpers::test_blob;
+
     #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     async fn basic_save_flow(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool.clone())
@@ -252,14 +254,15 @@ mod tests {
             .context("create test server")?;
 
         let packages = [("serde", "1.0.0"), ("tokio", "1.35.0"), ("axum", "0.7.0")];
-        let mut keys = vec![];
-        for (i, (name, version)) in packages.iter().enumerate() {
-            let (_, key) = crate::api::test_helpers::test_blob(format!("package_{i}").as_bytes());
-            keys.push(key.clone());
+        let keyed_packages = packages
+            .iter()
+            .enumerate()
+            .map(|(i, (name, version))| (name, version, test_blob(format!("package_{i}").as_bytes()).1));
 
+        for (i, (name, version, key)) in keyed_packages.clone().enumerate() {
             let request = json!({
-                "package_name": name,
-                "package_version": version,
+                "package_name": *name,
+                "package_version": *version,
                 "target": "x86_64-unknown-linux-gnu",
                 "library_crate_compilation_unit_hash": format!("hash_{i}"),
                 "build_script_compilation_unit_hash": null,
@@ -279,7 +282,7 @@ mod tests {
 
         // Verify all packages were saved correctly
         let db = crate::db::Postgres { pool };
-        for (i, (name, version)) in packages.iter().enumerate() {
+        for (i, (name, version, key)) in keyed_packages.enumerate() {
             let restore_request = crate::db::CargoRestoreCacheRequest::builder()
                 .package_name(*name)
                 .package_version(*version)
@@ -290,7 +293,7 @@ mod tests {
             let artifacts = db.cargo_cache_restore(restore_request).await?;
             let expected = vec![
                 crate::db::CargoArtifact::builder()
-                    .object_key(keys[i].to_hex())
+                    .object_key(key.to_hex())
                     .path(format!("lib{name}.rlib"))
                     .mtime_nanos(1000000000000000000u128 + i as u128)
                     .executable(false)
@@ -314,11 +317,11 @@ mod tests {
             "aarch64-apple-darwin",
         ];
 
-        let mut keys = vec![];
-        for (i, target) in targets.iter().enumerate() {
-            let (_, key) = crate::api::test_helpers::test_blob(format!("target_{target}").as_bytes());
-            keys.push(key.clone());
+        let keyed_targets = targets
+            .iter()
+            .map(|target| (target, test_blob(format!("target_{target}").as_bytes()).1));
 
+        for (i, (target, key)) in keyed_targets.clone().enumerate() {
             let request = json!({
                 "package_name": "serde",
                 "package_version": "1.0.0",
@@ -341,7 +344,7 @@ mod tests {
 
         // Verify all targets were saved correctly for the same package
         let db = crate::db::Postgres { pool };
-        for (i, target) in targets.iter().enumerate() {
+        for (i, (target, key)) in keyed_targets.enumerate() {
             let restore_request = crate::db::CargoRestoreCacheRequest::builder()
                 .package_name("serde")
                 .package_version("1.0.0")
@@ -352,7 +355,7 @@ mod tests {
             let artifacts = db.cargo_cache_restore(restore_request).await?;
             let expected = vec![
                 crate::db::CargoArtifact::builder()
-                    .object_key(keys[i].to_hex())
+                    .object_key(key.to_hex())
                     .path("libserde.rlib")
                     .mtime_nanos(1234567890000000000u128 + i as u128)
                     .executable(false)
@@ -464,11 +467,9 @@ mod tests {
             .await
             .context("create test server")?;
 
-        let mut keys = vec![];
         let artifacts = (0..20)
             .map(|i| {
-                let (_, key) = crate::api::test_helpers::test_blob(format!("artifact_{i}").as_bytes());
-                keys.push(key.clone());
+                let (_, key) = test_blob(format!("artifact_{i}").as_bytes());
                 json!({
                     "object_key": key,
                     "path": format!("artifact_{i}.o"),
@@ -502,10 +503,12 @@ mod tests {
             .build();
 
         let artifacts = db.cargo_cache_restore(restore_request).await?;
-        let expected = (0..20)
-            .map(|i| {
+        let expected = artifacts
+            .iter()
+            .enumerate()
+            .map(|(i, artifact)| {
                 crate::db::CargoArtifact::builder()
-                    .object_key(keys[i].to_hex())
+                    .object_key(artifact.object_key.clone())
                     .path(format!("artifact_{i}.o"))
                     .mtime_nanos(1000000000000000000u128 + i as u128)
                     .executable(i % 3 == 0)
@@ -524,11 +527,9 @@ mod tests {
             .await
             .context("create test server")?;
 
-        let mut keys = vec![];
         let requests = (0..10)
             .map(|i| {
-                let (_, key) = crate::api::test_helpers::test_blob(format!("concurrent_{i}").as_bytes());
-                keys.push(key.clone());
+                let (_, key) = test_blob(format!("concurrent_{i}").as_bytes());
                 json!({
                     "package_name": format!("crate-{i}"),
                     "package_version": "1.0.0",
@@ -575,14 +576,17 @@ mod tests {
                 .build();
 
             let artifacts = db.cargo_cache_restore(restore_request).await?;
-            let expected = vec![
-                crate::db::CargoArtifact::builder()
-                    .object_key(keys[i].to_hex())
-                    .path(format!("libcrate_{i}.rlib"))
-                    .mtime_nanos(1000000000000000000u128 + i as u128)
-                    .executable(false)
-                    .build(),
-            ];
+            let expected = artifacts
+                .iter()
+                .map(|artifact| {
+                    crate::db::CargoArtifact::builder()
+                        .object_key(artifact.object_key.clone())
+                        .path(format!("libcrate_{i}.rlib"))
+                        .mtime_nanos(1000000000000000000u128 + i as u128)
+                        .executable(false)
+                        .build()
+                })
+                .collect::<Vec<_>>();
             pretty_assert_eq!(artifacts, expected);
         }
 

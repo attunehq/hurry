@@ -6,7 +6,9 @@ use tracing::{error, info};
 
 use crate::db::{CargoRestoreCacheRequest, Postgres};
 
-use super::{ArtifactFile, CargoRestoreRequest as RestoreRequest, CargoRestoreResponse as RestoreResponse};
+use super::{
+    ArtifactFile, CargoRestoreRequest as RestoreRequest, CargoRestoreResponse as RestoreResponse,
+};
 
 #[tracing::instrument]
 pub async fn handle(
@@ -68,6 +70,8 @@ mod tests {
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use serde_json::json;
     use sqlx::PgPool;
+
+    use crate::api::test_helpers::test_blob;
 
     #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     async fn restore_after_save(pool: PgPool) -> Result<()> {
@@ -298,11 +302,10 @@ mod tests {
             "aarch64-apple-darwin",
         ];
 
-        let mut keys = vec![];
-        for (i, target) in targets.iter().enumerate() {
-            let (_, key) = crate::api::test_helpers::test_blob(format!("target_{target}").as_bytes());
-            keys.push(key.clone());
-
+        let keyed_targets = targets
+            .iter()
+            .map(|target| (target, test_blob(format!("target_{target}").as_bytes()).1));
+        for (i, (target, key)) in keyed_targets.clone().enumerate() {
             let save_request = json!({
                 "package_name": "cross-platform-crate",
                 "package_version": "1.0.0",
@@ -328,7 +331,7 @@ mod tests {
             response.assert_status(StatusCode::CREATED);
         }
 
-        for (i, target) in targets.iter().enumerate() {
+        for (i, (target, key)) in keyed_targets.enumerate() {
             let restore_request = json!({
                 "package_name": "cross-platform-crate",
                 "package_version": "1.0.0",
@@ -348,7 +351,7 @@ mod tests {
 
             let expected = json!({
                 "artifacts": [{
-                    "object_key": keys[i],
+                    "object_key": key,
                     "path": "libcross_platform_crate.rlib",
                     "mtime_nanos": 1000000000000000000u128 + i as u128,
                     "executable": false
@@ -367,11 +370,10 @@ mod tests {
             .await
             .context("create test server")?;
 
-        let mut keys = vec![];
         let artifacts = (0..50)
             .map(|i| {
-                let (_, key) = crate::api::test_helpers::test_blob(format!("artifact_{i}").as_bytes());
-                keys.push(key.clone());
+                let (_, key) =
+                    crate::api::test_helpers::test_blob(format!("artifact_{i}").as_bytes());
                 json!({
                     "object_key": key,
                     "path": format!("artifact_{i}.o"),
@@ -523,11 +525,11 @@ mod tests {
 
         let versions = vec!["1.0.0", "1.0.1", "2.0.0"];
 
-        let mut keys = vec![];
-        for (i, version) in versions.iter().enumerate() {
-            let (_, key) = crate::api::test_helpers::test_blob(format!("version_{version}").as_bytes());
-            keys.push(key.clone());
+        let keyed_versions = versions
+            .iter()
+            .map(|version| (version, test_blob(format!("version_{version}").as_bytes()).1));
 
+        for (i, (version, key)) in keyed_versions.clone().enumerate() {
             let save_request = json!({
                 "package_name": "versioned-crate",
                 "package_version": *version,
@@ -553,7 +555,7 @@ mod tests {
             response.assert_status(StatusCode::CREATED);
         }
 
-        for (i, version) in versions.iter().enumerate() {
+        for (i, (version, key)) in keyed_versions.enumerate() {
             let restore_request = json!({
                 "package_name": "versioned-crate",
                 "package_version": *version,
@@ -573,7 +575,7 @@ mod tests {
 
             let expected = json!({
                 "artifacts": [{
-                    "object_key": keys[i],
+                    "object_key": key,
                     "path": "libversioned_crate.rlib",
                     "mtime_nanos": 1000000000000000000u128 + i as u128,
                     "executable": false
