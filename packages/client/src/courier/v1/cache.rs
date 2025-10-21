@@ -51,7 +51,7 @@ pub struct CargoSaveRequest {
     #[builder(into)]
     pub content_hash: String,
 
-    #[builder(with = |i: impl IntoIterator<Item = impl Into<ArtifactFile>>| i.into_iter().map(Into::into).collect())]
+    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<ArtifactFile>>| i.into_iter().map(Into::into).collect())]
     pub artifacts: Vec<ArtifactFile>,
 }
 
@@ -94,7 +94,7 @@ impl From<&CargoRestoreRequest> for CargoRestoreRequest {
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct CargoRestoreResponse {
-    #[builder(with = |i: impl IntoIterator<Item = impl Into<ArtifactFile>>| i.into_iter().map(Into::into).collect())]
+    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<ArtifactFile>>| i.into_iter().map(Into::into).collect())]
     pub artifacts: Vec<ArtifactFile>,
 }
 

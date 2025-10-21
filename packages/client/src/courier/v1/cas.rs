@@ -8,16 +8,16 @@ use serde::{Deserialize, Serialize};
 use super::Key;
 
 /// Response from bulk CAS write operation.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default, Builder)]
 #[non_exhaustive]
 pub struct CasBulkWriteResponse {
-    #[builder(with = |i: impl IntoIterator<Item = impl Into<Key>>| i.into_iter().map(Into::into).collect())]
+    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<Key>>| i.into_iter().map(Into::into).collect())]
     pub written: BTreeSet<Key>,
 
-    #[builder(with = |i: impl IntoIterator<Item = impl Into<Key>>| i.into_iter().map(Into::into).collect())]
+    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<Key>>| i.into_iter().map(Into::into).collect())]
     pub skipped: BTreeSet<Key>,
 
-    #[builder(with = |i: impl IntoIterator<Item = impl Into<BulkWriteKeyError>>| i.into_iter().map(Into::into).collect())]
+    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<BulkWriteKeyError>>| i.into_iter().map(Into::into).collect())]
     pub errors: BTreeSet<BulkWriteKeyError>,
 }
 
@@ -45,10 +45,10 @@ impl From<&BulkWriteKeyError> for BulkWriteKeyError {
 }
 
 /// Request body for bulk CAS read operation.
-#[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Builder)]
+#[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Default, Builder)]
 #[non_exhaustive]
 pub struct CasBulkReadRequest {
-    #[builder(with = |i: impl IntoIterator<Item = impl Into<Key>>| i.into_iter().map(Into::into).collect())]
+    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<Key>>| i.into_iter().map(Into::into).collect())]
     pub keys: Vec<Key>,
 }
 

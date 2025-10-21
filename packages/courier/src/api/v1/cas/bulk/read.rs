@@ -130,13 +130,8 @@ impl IntoResponse for BulkReadResponse {
 
 #[cfg(test)]
 mod tests {
-    //! Note: These tests use json! for request construction to test the raw API
-    //! contract rather than typed request models. This ensures the API
-    //! accepts the expected JSON format correctly. The bulk read API
-    //! returns tar format (not JSON), so response validation uses tar
-    //! parsing rather than typed response models.
-
     use async_tar::Archive;
+    use client::courier::v1::{Key, cas::CasBulkReadRequest};
     use color_eyre::{Result, eyre::Context};
     use futures::{StreamExt, io::Cursor};
     use maplit::btreemap;
@@ -163,18 +158,11 @@ mod tests {
         let key2 = write_cas(&server, content2).await?;
         let key3 = write_cas(&server, content3).await?;
 
-        // Request bulk read
-        // Note: Using json! here to test the raw API contract rather than typed request
-        // models. This ensures the API accepts the expected JSON format
-        // correctly.
-        let request_body = serde_json::json!({
-            "keys": [key1.to_string(), key2.to_string(), key3.to_string()]
-        });
+        let request = CasBulkReadRequest::builder()
+            .keys([&key1, &key2, &key3])
+            .build();
 
-        let response = server
-            .post("/api/v1/cas/bulk/read")
-            .json(&request_body)
-            .await;
+        let response = server.post("/api/v1/cas/bulk/read").json(&request).await;
 
         response.assert_status_ok();
         let tar_data = response.as_bytes();
@@ -215,15 +203,13 @@ mod tests {
         let key = write_cas(&server, content).await?;
 
         // Request with one valid and one missing key
-        let missing_key = "0000000000000000000000000000000000000000000000000000000000000000";
-        let request_body = serde_json::json!({
-            "keys": [key.to_string(), missing_key]
-        });
+        let missing_key =
+            Key::from_hex("0000000000000000000000000000000000000000000000000000000000000000")?;
+        let request = CasBulkReadRequest::builder()
+            .keys([&key, &missing_key])
+            .build();
 
-        let response = server
-            .post("/api/v1/cas/bulk/read")
-            .json(&request_body)
-            .await;
+        let response = server.post("/api/v1/cas/bulk/read").json(&request).await;
 
         response.assert_status_ok();
         let tar_data = response.as_bytes();
@@ -257,14 +243,9 @@ mod tests {
             .await
             .context("create test server")?;
 
-        let request_body = serde_json::json!({
-            "keys": []
-        });
+        let request = CasBulkReadRequest::default();
 
-        let response = server
-            .post("/api/v1/cas/bulk/read")
-            .json(&request_body)
-            .await;
+        let response = server.post("/api/v1/cas/bulk/read").json(&request).await;
         response.assert_status_ok();
 
         let archive = response.as_bytes().pipe(Cursor::new).pipe(Archive::new);
@@ -291,7 +272,9 @@ mod tests {
             .await
             .context("create test server")?;
 
-        // Request with invalid keys should fail at deserialization
+        // Request with invalid keys should fail at deserialization.
+        // We use raw JSON here since we can't construct invalid keys with the typed
+        // builder.
         let request_body = serde_json::json!({
             "keys": ["not-a-hex-key", "also-invalid"]
         });
