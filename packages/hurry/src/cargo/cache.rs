@@ -26,7 +26,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, instrument, trace, warn};
 use uuid::Uuid;
 
-use client::{
+use clients::{
     Courier,
     courier::v1::{
         Key,

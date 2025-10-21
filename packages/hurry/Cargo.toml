@@ -14,7 +14,7 @@ name = "walkdir"
 harness = false
 
 [dependencies]
-client = { workspace = true, features = ["client"] }
+clients = { workspace = true, features = ["client"] }
 atomic-time = { workspace = true }
 blake3 = { workspace = true }
 bon = { workspace = true }

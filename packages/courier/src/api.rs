@@ -125,7 +125,7 @@ pub(crate) mod test_helpers {
     use axum::body::Bytes;
     use axum::http::StatusCode;
     use axum_test::TestServer;
-    use client::courier::v1::Key;
+    use clients::courier::v1::Key;
     use color_eyre::Result;
 
     /// Generate test content and compute its key.

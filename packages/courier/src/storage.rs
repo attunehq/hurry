@@ -12,7 +12,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tracing::warn;
 use uuid::Uuid;
 
-pub use client::courier::v1::Key;
+pub use clients::courier::v1::Key;
 
 /// Implements the CAS storage interface on disk.
 ///

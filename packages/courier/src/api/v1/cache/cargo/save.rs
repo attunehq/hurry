@@ -1,6 +1,6 @@
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
-use client::courier::v1::cache::CargoSaveRequest;
+use clients::courier::v1::cache::CargoSaveRequest;
 use color_eyre::eyre::Report;
 use tracing::{error, info};
 
@@ -43,7 +43,7 @@ impl IntoResponse for CacheSaveResponse {
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
-    use client::courier::v1::cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest};
+    use clients::courier::v1::cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest};
     use color_eyre::{Result, eyre::Context};
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use sqlx::PgPool;

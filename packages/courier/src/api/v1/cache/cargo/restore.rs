@@ -1,6 +1,6 @@
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
-use client::courier::v1::cache::{CargoRestoreRequest, CargoRestoreResponse};
+use clients::courier::v1::cache::{CargoRestoreRequest, CargoRestoreResponse};
 use color_eyre::eyre::Report;
 use tap::Pipe;
 use tracing::{error, info};
@@ -54,7 +54,7 @@ impl IntoResponse for CacheRestoreResponse {
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
-    use client::courier::v1::cache::{
+    use clients::courier::v1::cache::{
         ArtifactFile, CargoRestoreRequest, CargoRestoreResponse, CargoSaveRequest,
     };
     use color_eyre::{Result, eyre::Context};

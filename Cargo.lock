@@ -909,7 +909,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
-name = "client"
+name = "clients"
 version = "0.0.0"
 dependencies = [
  "async-tar",
@@ -1128,7 +1128,7 @@ dependencies = [
  "bigdecimal",
  "blake3",
  "clap",
- "client",
+ "clients",
  "color-eyre",
  "derive_more",
  "dotenvy",
@@ -2249,7 +2249,7 @@ dependencies = [
  "bon",
  "cargo_metadata",
  "clap",
- "client",
+ "clients",
  "color-eyre",
  "colored",
  "console",

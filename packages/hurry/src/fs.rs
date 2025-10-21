@@ -44,7 +44,7 @@ use tap::{Pipe, TapFallible};
 use tokio::{fs::ReadDir, io::AsyncReadExt, sync::Mutex, task::spawn_blocking};
 use tracing::{debug, error, instrument, trace};
 
-use client::courier::v1::Key;
+use clients::courier::v1::Key;
 
 use crate::{
     Locked, Unlocked,

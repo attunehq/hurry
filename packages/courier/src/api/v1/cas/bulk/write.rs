@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use aerosol::axum::Dep;
 use async_tar::Archive;
 use axum::{Json, body::Body, http::StatusCode, response::IntoResponse};
-use client::courier::v1::cas::{BulkWriteKeyError, CasBulkWriteResponse};
+use clients::courier::v1::cas::{BulkWriteKeyError, CasBulkWriteResponse};
 use color_eyre::{Report, eyre::Context};
 use futures::StreamExt;
 use tap::Pipe;
@@ -173,7 +173,7 @@ mod tests {
 
     use async_tar::{Builder, Header};
     use axum::http::StatusCode;
-    use client::courier::v1::cas::CasBulkWriteResponse;
+    use clients::courier::v1::cas::CasBulkWriteResponse;
     use color_eyre::{Result, eyre::Context};
     use futures::io::Cursor;
     use maplit::btreeset;

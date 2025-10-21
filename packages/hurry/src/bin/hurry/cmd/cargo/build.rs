@@ -10,7 +10,7 @@ use derive_more::Debug;
 use tap::Tap;
 use tracing::{debug, info, instrument, warn};
 
-use client::Courier;
+use clients::Courier;
 use hurry::{
     cargo::{self, CargoBuildArguments, CargoCache, Profile, Workspace},
     progress::{TransferBar, format_size, format_transfer_rate},

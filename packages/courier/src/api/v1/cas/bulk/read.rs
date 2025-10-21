@@ -6,7 +6,7 @@ use axum::{
     http::{StatusCode, header},
     response::IntoResponse,
 };
-use client::courier::v1::cas::CasBulkReadRequest;
+use clients::courier::v1::cas::CasBulkReadRequest;
 use futures::AsyncWriteExt;
 use tokio_util::{
     compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt},
@@ -131,7 +131,7 @@ impl IntoResponse for BulkReadResponse {
 #[cfg(test)]
 mod tests {
     use async_tar::Archive;
-    use client::courier::v1::{Key, cas::CasBulkReadRequest};
+    use clients::courier::v1::{Key, cas::CasBulkReadRequest};
     use color_eyre::{Result, eyre::Context};
     use futures::{StreamExt, io::Cursor};
     use maplit::btreemap;

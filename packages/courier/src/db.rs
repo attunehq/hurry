@@ -7,7 +7,7 @@
 //! serialize or deserialize these types, create public-facing types that do so
 //! and are able to convert back and forth with the internal types.
 
-use client::courier::v1::{
+use clients::courier::v1::{
     Key,
     cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest},
 };

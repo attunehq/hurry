@@ -2,7 +2,7 @@
 
 ## Overview
 
-This RFC proposes extracting the Courier HTTP client from the `hurry` package into a new shared `client` library crate. The primary goal is to eliminate type duplication between the client (in `hurry`) and server (in `courier`) while establishing a pattern for future API clients.
+This RFC proposes extracting the Courier HTTP client from the `hurry` package into a new shared `clients` library crate. The primary goal is to eliminate type duplication between the client (in `hurry`) and server (in `courier`) while establishing a pattern for future API clients.
 
 The shared library will contain both the type definitions used in Courier's API and the HTTP client implementation. Types will always be available, while the HTTP client code will be gated behind a `client` feature flag.
 
@@ -101,7 +101,7 @@ pub mod cache;
 mod client;
 
 #[cfg(feature = "client")]
-pub use client::Client;
+pub use clients::Client;
 
 /// The key to a content-addressed storage blob.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Display, From)]
@@ -159,9 +159,9 @@ Cargo cache API types:
 **In `hurry` (with `client` feature):**
 
 ```rust
-use client::courier::v1::{Client, Key};
+use clients::courier::v1::{Client, Key};
 // Or use the alias:
-use client::Courier;
+use clients::Courier;
 
 let courier = Courier::new(base_url)?;
 courier.cas_write(&key, content).await?;
@@ -170,7 +170,7 @@ courier.cas_write(&key, content).await?;
 **In `courier` (types only, no `client` feature):**
 
 ```rust
-use client::courier::v1::{Key, ArtifactFile, CargoSaveRequest};
+use clients::courier::v1::{Key, ArtifactFile, CargoSaveRequest};
 
 pub async fn handle(Json(request): Json<CargoSaveRequest>) -> Response {
     // Use shared types directly in API handlers
@@ -185,7 +185,7 @@ mod test {
 **Future GitHub client example:**
 
 ```rust
-use client::GitHub;
+use clients::GitHub;
 
 let github = GitHub::new(token)?;
 let repo = github.get_repository("owner/repo").await?;
@@ -270,18 +270,18 @@ This differs from the original `hurry::hash::Blake3` which stored the hex string
 
 ### Step 4: Update `courier` to use shared types
 
-- Add `client` dependency with default features only (no `client` feature)
-- Replace `courier::storage::Key` with `client::courier::v1::Key`
-- Replace API handler types with `client::courier::v1::{cas::*, cache::*}`
+- Add `clients` dependency with default features only (no `client` feature)
+- Replace `courier::storage::Key` with `clients::courier::v1::Key`
+- Replace API handler types with `clients::courier::v1::{cas::*, cache::*}`
 - Update database layer to use shared `Key` type
 - Remove duplicate type definitions from `courier::api::v1`
 
 ### Step 5: Update `hurry` to use shared client
 
-- Add `client` dependency with `client` feature enabled
-- Replace `hurry::client::Courier` with `client::Courier` (or `client::courier::v1::Client`)
+- Add `clients` dependency with `client` feature enabled
+- Replace `hurry::client::Courier` with `clients::Courier` (or `clients::courier::v1::Client`)
 - Update `hurry::cas` to use new client module and `Key` type
-- Remove `hurry::hash::Blake3` type entirely (replaced by `client::courier::v1::Key`)
+- Remove `hurry::hash::Blake3` type entirely (replaced by `clients::courier::v1::Key`)
 - Remove `hurry::hash` module entirely
 - Move `hash_file()` function to `hurry::fs` module, updating it to return `Key`
 - Remove old `hurry::client` module
@@ -301,7 +301,7 @@ This differs from the original `hurry::hash::Blake3` which stored the hex string
 
 ```toml
 [package]
-name = "client"
+name = "clients"
 version = "0.0.0"
 edition = "2024"
 
@@ -352,7 +352,7 @@ client = [
 
 ```toml
 [dependencies]
-client = { path = "../client", features = ["client"] }
+clients = { path = "../client", features = ["client"] }
 # Remove: reqwest, some tokio-util features used only for client
 ```
 
@@ -360,7 +360,7 @@ client = { path = "../client", features = ["client"] }
 
 ```toml
 [dependencies]
-client = { path = "../client" }
+clients = { path = "../client" }
 # Types available, no HTTP client code compiled
 ```
 
