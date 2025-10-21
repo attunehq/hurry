@@ -1,0 +1,41 @@
+[package]
+name = "client"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+# Always available (for types)
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+bon = { workspace = true }
+derive_more = { workspace = true, features = ["full"] }
+hex = { workspace = true }
+blake3 = { workspace = true }
+color-eyre = { workspace = true }
+
+# Only with "client" feature
+reqwest = { workspace = true, features = ["json", "stream", "rustls-tls", "gzip", "brotli"], optional = true }
+tokio = { workspace = true, features = ["full"], optional = true }
+tokio-util = { workspace = true, features = ["full"], optional = true }
+futures = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+async-tar = { workspace = true, optional = true }
+piper = { workspace = true, optional = true }
+tap = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+flume = { workspace = true, optional = true }
+
+[features]
+default = []
+client = [
+    "dep:reqwest",
+    "dep:tokio",
+    "dep:tokio-util",
+    "dep:futures",
+    "dep:url",
+    "dep:async-tar",
+    "dep:piper",
+    "dep:tap",
+    "dep:tracing",
+    "dep:flume"
+]

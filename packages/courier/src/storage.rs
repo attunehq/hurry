@@ -6,71 +6,14 @@ use async_compression::tokio::bufread::ZstdDecoder;
 use async_compression::tokio::write::ZstdEncoder;
 use color_eyre::eyre::bail;
 use color_eyre::{Result, eyre::Context};
-use derive_more::{Debug, Display, From};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use derive_more::{Debug, Display};
 use tokio::fs::{File, create_dir_all, metadata, remove_file, rename};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tracing::warn;
 use uuid::Uuid;
 
-/// The key to a content-addressed storage blob.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Display, From)]
-#[display("{}", self.to_hex())]
-pub struct Key(Vec<u8>);
-
-impl Key {
-    /// View the key as a hex string.
-    pub fn to_hex(&self) -> String {
-        hex::encode(&self.0)
-    }
-
-    /// Attempt to parse the key from a hex string.
-    pub fn from_hex(hex: impl AsRef<str>) -> Result<Self> {
-        hex::decode(hex.as_ref()).context("decode hex").map(Self)
-    }
-
-    /// View the key as bytes.
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl From<blake3::Hash> for Key {
-    fn from(hash: blake3::Hash) -> Self {
-        Self(hash.as_bytes().to_vec())
-    }
-}
-
-impl PartialEq<blake3::Hash> for Key {
-    fn eq(&self, other: &blake3::Hash) -> bool {
-        self.0 == other.as_bytes()
-    }
-}
-
-impl PartialEq<blake3::Hash> for &Key {
-    fn eq(&self, other: &blake3::Hash) -> bool {
-        self.0 == other.as_bytes()
-    }
-}
-
-impl Serialize for Key {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.to_hex())
-    }
-}
-
-impl<'de> Deserialize<'de> for Key {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let hex = String::deserialize(deserializer)?;
-        Self::from_hex(&hex).map_err(serde::de::Error::custom)
-    }
-}
+// Re-export the shared Key type
+pub use client::courier::v1::Key;
 
 /// Implements the CAS storage interface on disk.
 ///

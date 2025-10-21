@@ -33,6 +33,7 @@ bon.workspace = true
 async-tar = { workspace = true }
 piper = { workspace = true }
 maplit = { workspace = true }
+client = { version = "0.0.0", path = "../client" }
 
 [dev-dependencies]
 async-tempfile = { workspace = true }

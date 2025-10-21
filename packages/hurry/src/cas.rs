@@ -1,12 +1,11 @@
-use std::{collections::HashSet, convert::identity, fmt::Debug};
+use std::{collections::BTreeSet, convert::identity, fmt::Debug};
 
+use client::{Courier, courier::v1::Key};
 use color_eyre::{Result, eyre::OptionExt};
 use derive_more::Display;
 use futures::Stream;
 use tracing::{debug, instrument};
 use url::Url;
-
-use crate::{client::Courier, hash::Blake3};
 
 /// The remote content-addressed storage area backed by Courier.
 #[derive(Clone, Debug, Display)]
@@ -32,8 +31,8 @@ impl CourierCas {
     /// Returns the key and whether the content was actually uploaded (true) or
     /// already existed (false).
     #[instrument(name = "CourierCas::store", skip(content))]
-    pub async fn store(&self, content: &[u8]) -> Result<(Blake3, bool)> {
-        let key = Blake3::from_buffer(content);
+    pub async fn store(&self, content: &[u8]) -> Result<(Key, bool)> {
+        let key = Key::from_buffer(content);
         if self.client.cas_exists(&key).await.is_ok_and(identity) {
             return Ok((key, false));
         }
@@ -45,14 +44,14 @@ impl CourierCas {
 
     /// Get the entry out of the CAS.
     #[instrument(name = "CourierCas::get")]
-    pub async fn get(&self, key: &Blake3) -> Result<Option<Vec<u8>>> {
+    pub async fn get(&self, key: &Key) -> Result<Option<Vec<u8>>> {
         self.client.cas_read_bytes(key).await
     }
 
     /// Get the entry out of the CAS.
     /// Errors if the entry is not available.
     #[instrument(name = "CourierCas::get")]
-    pub async fn must_get(&self, key: &Blake3) -> Result<Vec<u8>> {
+    pub async fn must_get(&self, key: &Key) -> Result<Vec<u8>> {
         self.client
             .cas_read_bytes(key)
             .await?
@@ -63,7 +62,7 @@ impl CourierCas {
     #[instrument(name = "CourierCas::store_bulk", skip(entries))]
     pub async fn store_bulk(
         &self,
-        entries: impl Stream<Item = (Blake3, Vec<u8>)> + Unpin + Send + 'static,
+        entries: impl Stream<Item = (Key, Vec<u8>)> + Unpin + Send + 'static,
     ) -> Result<BulkStoreResult> {
         self.client
             .cas_write_bulk(entries)
@@ -86,21 +85,22 @@ impl CourierCas {
     #[instrument(name = "CourierCas::get_bulk", skip(keys))]
     pub async fn get_bulk(
         &self,
-        keys: impl IntoIterator<Item = impl Into<Blake3>>,
-    ) -> Result<impl Stream<Item = Result<(Blake3, Vec<u8>)>> + Unpin> {
+        keys: impl IntoIterator<Item = impl Into<Key>>,
+    ) -> Result<impl Stream<Item = Result<(Key, Vec<u8>)>> + Unpin> {
+        let keys = keys.into_iter().map(|k| k.into()).collect::<Vec<_>>();
         self.client.cas_read_bulk(keys).await
     }
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BulkStoreResult {
-    pub written: HashSet<Blake3>,
-    pub skipped: HashSet<Blake3>,
-    pub errors: HashSet<BulkStoreError>,
+    pub written: BTreeSet<Key>,
+    pub skipped: BTreeSet<Key>,
+    pub errors: BTreeSet<BulkStoreError>,
 }
 
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Debug)]
 pub struct BulkStoreError {
-    pub key: Blake3,
+    pub key: Key,
     pub error: String,
 }

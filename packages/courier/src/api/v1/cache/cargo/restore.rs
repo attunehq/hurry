@@ -1,30 +1,12 @@
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
-use derive_more::{Debug, From};
-use serde::{Deserialize, Serialize};
 use tap::Pipe;
 use tracing::{error, info};
 
 use crate::db::{CargoRestoreCacheRequest, Postgres};
 
-use super::ArtifactFile;
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RestoreRequest {
-    pub package_name: String,
-    pub package_version: String,
-    pub target: String,
-    pub library_crate_compilation_unit_hash: String,
-    pub build_script_compilation_unit_hash: Option<String>,
-    pub build_script_execution_unit_hash: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, From)]
-pub struct RestoreResponse {
-    #[debug("{:?}", self.artifacts.len())]
-    pub artifacts: Vec<ArtifactFile>,
-}
+use super::{ArtifactFile, CargoRestoreRequest as RestoreRequest, CargoRestoreResponse as RestoreResponse};
 
 #[tracing::instrument]
 pub async fn handle(
@@ -47,12 +29,9 @@ pub async fn handle(
         }
         Ok(artifacts) => {
             info!("cache.restore.hit");
-            RestoreResponse::from(
-                artifacts
-                    .into_iter()
-                    .map(ArtifactFile::from)
-                    .collect::<Vec<_>>(),
-            )
+            RestoreResponse {
+                artifacts: artifacts.into_iter().map(ArtifactFile::from).collect(),
+            }
             .pipe(Json)
             .pipe(CacheRestoreResponse::Ok)
         }
@@ -96,6 +75,9 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let (_, key1) = crate::api::test_helpers::test_blob(b"artifact_1_content");
+        let (_, key2) = crate::api::test_helpers::test_blob(b"artifact_2_content");
+
         let save_request = json!({
             "package_name": "serde",
             "package_version": "1.0.0",
@@ -106,13 +88,13 @@ mod tests {
             "content_hash": "content_abc123",
             "artifacts": [
                 {
-                    "object_key": "blake3_hash_1",
+                    "object_key": key1,
                     "path": "libserde.rlib",
                     "mtime_nanos": 1234567890123456789u128,
                     "executable": false
                 },
                 {
-                    "object_key": "blake3_hash_2",
+                    "object_key": key2,
                     "path": "libserde.so",
                     "mtime_nanos": 1234567890987654321u128,
                     "executable": true
@@ -146,13 +128,13 @@ mod tests {
         let expected = json!({
             "artifacts": [
                 {
-                    "object_key": "blake3_hash_1",
+                    "object_key": key1,
                     "path": "libserde.rlib",
                     "mtime_nanos": 1234567890123456789u128,
                     "executable": false
                 },
                 {
-                    "object_key": "blake3_hash_2",
+                    "object_key": key2,
                     "path": "libserde.so",
                     "mtime_nanos": 1234567890987654321u128,
                     "executable": true
@@ -196,6 +178,8 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let (_, key) = crate::api::test_helpers::test_blob(b"proc_macro_artifact");
+
         let save_request = json!({
             "package_name": "proc-macro-crate",
             "package_version": "2.0.0",
@@ -206,7 +190,7 @@ mod tests {
             "content_hash": "full_content_hash",
             "artifacts": [
                 {
-                    "object_key": "artifact_key",
+                    "object_key": key,
                     "path": "libproc_macro_crate.rlib",
                     "mtime_nanos": 9876543210123456789u128,
                     "executable": false
@@ -239,7 +223,7 @@ mod tests {
 
         let expected = json!({
             "artifacts": [{
-                "object_key": "artifact_key",
+                "object_key": key,
                 "path": "libproc_macro_crate.rlib",
                 "mtime_nanos": 9876543210123456789u128,
                 "executable": false
@@ -257,6 +241,8 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let (_, key) = crate::api::test_helpers::test_blob(b"crate_v1_artifact");
+
         let save_request = json!({
             "package_name": "crate-with-build",
             "package_version": "1.0.0",
@@ -267,7 +253,7 @@ mod tests {
             "content_hash": "content_v1",
             "artifacts": [
                 {
-                    "object_key": "key_v1",
+                    "object_key": key,
                     "path": "libcrate.rlib",
                     "mtime_nanos": 1000000000000000000u128,
                     "executable": false
@@ -312,7 +298,11 @@ mod tests {
             "aarch64-apple-darwin",
         ];
 
+        let mut keys = vec![];
         for (i, target) in targets.iter().enumerate() {
+            let (_, key) = crate::api::test_helpers::test_blob(format!("target_{target}").as_bytes());
+            keys.push(key.clone());
+
             let save_request = json!({
                 "package_name": "cross-platform-crate",
                 "package_version": "1.0.0",
@@ -323,7 +313,7 @@ mod tests {
                 "content_hash": format!("content_{i}"),
                 "artifacts": [
                     {
-                        "object_key": format!("key_{target}"),
+                        "object_key": key,
                         "path": "libcross_platform_crate.rlib",
                         "mtime_nanos": 1000000000000000000u128 + i as u128,
                         "executable": false
@@ -358,7 +348,7 @@ mod tests {
 
             let expected = json!({
                 "artifacts": [{
-                    "object_key": format!("key_{target}"),
+                    "object_key": keys[i],
                     "path": "libcross_platform_crate.rlib",
                     "mtime_nanos": 1000000000000000000u128 + i as u128,
                     "executable": false
@@ -377,10 +367,13 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let mut keys = vec![];
         let artifacts = (0..50)
             .map(|i| {
+                let (_, key) = crate::api::test_helpers::test_blob(format!("artifact_{i}").as_bytes());
+                keys.push(key.clone());
                 json!({
-                    "object_key": format!("object_key_{i}"),
+                    "object_key": key,
                     "path": format!("artifact_{i}.o"),
                     "mtime_nanos": 1000000000000000000u128 + i as u128,
                     "executable": i % 3 == 0
@@ -437,6 +430,7 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let (_, test_key) = crate::api::test_helpers::test_blob(b"concurrent_content");
         let save_request = json!({
             "package_name": "concurrent-test",
             "package_version": "1.0.0",
@@ -447,7 +441,7 @@ mod tests {
             "content_hash": "concurrent_content",
             "artifacts": [
                 {
-                    "object_key": "concurrent_key",
+                    "object_key": test_key,
                     "path": "libconcurrent.rlib",
                     "mtime_nanos": 1111111111111111111u128,
                     "executable": false
@@ -505,7 +499,7 @@ mod tests {
 
         let expected = json!({
             "artifacts": [{
-                "object_key": "concurrent_key",
+                "object_key": test_key,
                 "path": "libconcurrent.rlib",
                 "mtime_nanos": 1111111111111111111u128,
                 "executable": false
@@ -529,7 +523,11 @@ mod tests {
 
         let versions = vec!["1.0.0", "1.0.1", "2.0.0"];
 
+        let mut keys = vec![];
         for (i, version) in versions.iter().enumerate() {
+            let (_, key) = crate::api::test_helpers::test_blob(format!("version_{version}").as_bytes());
+            keys.push(key.clone());
+
             let save_request = json!({
                 "package_name": "versioned-crate",
                 "package_version": *version,
@@ -540,7 +538,7 @@ mod tests {
                 "content_hash": format!("content_{i}"),
                 "artifacts": [
                     {
-                        "object_key": format!("key_{version}"),
+                        "object_key": key,
                         "path": "libversioned_crate.rlib",
                         "mtime_nanos": 1000000000000000000u128 + i as u128,
                         "executable": false
@@ -575,7 +573,7 @@ mod tests {
 
             let expected = json!({
                 "artifacts": [{
-                    "object_key": format!("key_{version}"),
+                    "object_key": keys[i],
                     "path": "libversioned_crate.rlib",
                     "mtime_nanos": 1000000000000000000u128 + i as u128,
                     "executable": false
@@ -595,6 +593,7 @@ mod tests {
             .context("create test server")?;
 
         let precise_mtime = 1234567890123456789u128;
+        let (_, key) = crate::api::test_helpers::test_blob(b"precision_artifact");
 
         let save_request = json!({
             "package_name": "precision-test",
@@ -606,7 +605,7 @@ mod tests {
             "content_hash": "precision_content",
             "artifacts": [
                 {
-                    "object_key": "precision_key",
+                    "object_key": key,
                     "path": "libprecision.rlib",
                     "mtime_nanos": precise_mtime,
                     "executable": false
@@ -639,7 +638,7 @@ mod tests {
 
         let expected = json!({
             "artifacts": [{
-                "object_key": "precision_key",
+                "object_key": key,
                 "path": "libprecision.rlib",
                 "mtime_nanos": precise_mtime,
                 "executable": false
@@ -657,6 +656,8 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let (_, key) = crate::api::test_helpers::test_blob(b"wrong_name_test");
+
         let save_request = json!({
             "package_name": "test-crate",
             "package_version": "1.0.0",
@@ -666,7 +667,7 @@ mod tests {
             "build_script_execution_unit_hash": null,
             "content_hash": "test_content",
             "artifacts": [{
-                "object_key": "test_key",
+                "object_key": key,
                 "path": "libtest.rlib",
                 "mtime_nanos": 1000000000000000000u128,
                 "executable": false
@@ -703,6 +704,8 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let (_, key) = crate::api::test_helpers::test_blob(b"wrong_version_test");
+
         let save_request = json!({
             "package_name": "test-crate",
             "package_version": "1.0.0",
@@ -712,7 +715,7 @@ mod tests {
             "build_script_execution_unit_hash": null,
             "content_hash": "test_content",
             "artifacts": [{
-                "object_key": "test_key",
+                "object_key": key,
                 "path": "libtest.rlib",
                 "mtime_nanos": 1000000000000000000u128,
                 "executable": false
@@ -749,6 +752,8 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let (_, key) = crate::api::test_helpers::test_blob(b"wrong_target_test");
+
         let save_request = json!({
             "package_name": "test-crate",
             "package_version": "1.0.0",
@@ -758,7 +763,7 @@ mod tests {
             "build_script_execution_unit_hash": null,
             "content_hash": "test_content",
             "artifacts": [{
-                "object_key": "test_key",
+                "object_key": key,
                 "path": "libtest.rlib",
                 "mtime_nanos": 1000000000000000000u128,
                 "executable": false
@@ -795,6 +800,8 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let (_, key) = crate::api::test_helpers::test_blob(b"wrong_hash_test");
+
         let save_request = json!({
             "package_name": "test-crate",
             "package_version": "1.0.0",
@@ -804,7 +811,7 @@ mod tests {
             "build_script_execution_unit_hash": null,
             "content_hash": "test_content",
             "artifacts": [{
-                "object_key": "test_key",
+                "object_key": key,
                 "path": "libtest.rlib",
                 "mtime_nanos": 1000000000000000000u128,
                 "executable": false

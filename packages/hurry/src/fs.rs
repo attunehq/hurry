@@ -44,10 +44,12 @@ use tap::{Pipe, TapFallible};
 use tokio::{fs::ReadDir, sync::Mutex, task::spawn_blocking};
 use tracing::{debug, error, instrument, trace};
 
+use client::courier::v1::Key;
+
 use crate::{
     Locked, Unlocked,
     ext::then_context,
-    hash::Blake3,
+    hash,
     path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, RelativeTo},
 };
 
@@ -166,7 +168,7 @@ impl Index {
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct IndexEntry {
     /// The hash of the file's contents.
-    pub hash: Blake3,
+    pub hash: Key,
 
     /// The metadata of the file.
     pub metadata: Metadata,
@@ -176,7 +178,7 @@ impl IndexEntry {
     /// Construct the entry from the provided file on disk.
     #[instrument(name = "IndexEntry::from_file")]
     pub async fn from_file(path: &AbsFilePath) -> Result<Self> {
-        let hash = Blake3::from_file(path).then_context("hash file").await?;
+        let hash = hash::hash_file(path).then_context("hash file").await?;
         let metadata = Metadata::from_file(path)
             .then_context("get metadata")
             .await?

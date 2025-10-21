@@ -3,10 +3,8 @@ use std::collections::BTreeSet;
 use aerosol::axum::Dep;
 use async_tar::Archive;
 use axum::{Json, body::Body, http::StatusCode, response::IntoResponse};
-use bon::Builder;
 use color_eyre::{Report, eyre::Context};
 use futures::StreamExt;
-use serde::Serialize;
 use tap::Pipe;
 use tokio_util::{
     compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt},
@@ -16,39 +14,15 @@ use tracing::{error, info};
 
 use crate::storage::{Disk, Key};
 
+// Use shared types from client crate
+use client::courier::v1::cas::{CasBulkWriteResponse as BulkWriteResponseBody, BulkWriteKeyError};
+
 /// Responses for bulk write operation.
 pub enum BulkWriteResponse {
     Success(BulkWriteResponseBody),
     PartialSuccess(BulkWriteResponseBody),
     InvalidRequest(Report),
     Error(Report),
-}
-
-/// Response body for bulk write operation.
-#[derive(Debug, Serialize, Builder)]
-pub struct BulkWriteResponseBody {
-    /// Keys that were successfully written.
-    #[builder(default)]
-    pub written: BTreeSet<Key>,
-
-    /// Keys that were skipped because they already exist.
-    #[builder(default)]
-    pub skipped: BTreeSet<Key>,
-
-    /// Keys that failed to write with error messages.
-    #[builder(default)]
-    pub errors: BTreeSet<BulkWriteKeyError>,
-}
-
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Builder)]
-pub struct BulkWriteKeyError {
-    /// The key that failed to write.
-    #[builder(into)]
-    pub key: Key,
-
-    /// The error encountered when writing the content.
-    #[builder(into)]
-    pub error: String,
 }
 
 /// Write multiple blobs to the CAS from a tar archive.

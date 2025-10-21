@@ -909,6 +909,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
+name = "client"
+version = "0.0.0"
+dependencies = [
+ "async-tar",
+ "blake3",
+ "bon",
+ "color-eyre",
+ "derive_more",
+ "flume",
+ "futures",
+ "hex",
+ "piper",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tap",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "color-eyre"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1106,6 +1129,7 @@ dependencies = [
  "blake3",
  "bon",
  "clap",
+ "client",
  "color-eyre",
  "derive_more",
  "dotenvy",
@@ -2228,6 +2252,7 @@ dependencies = [
  "bon",
  "cargo_metadata",
  "clap",
+ "client",
  "color-eyre",
  "colored",
  "console",

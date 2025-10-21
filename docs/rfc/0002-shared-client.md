@@ -118,12 +118,10 @@ pub struct Key(Vec<u8>);
 **`packages/client/src/courier/v1.rs`:**
 
 - `Key`: Blake3 hash stored as `Vec<u8>` (adopts semantics from `courier::storage::Key`)
-  - Methods: `from_hex()`, `to_hex()`, `as_bytes()`, `from_blake3_hash()`
-  - Serializes as hex string for JSON API
+  - Methods: `from_hex()`, `to_hex()`, `as_bytes()`, `from_blake3_hash()`, `from_buffer()`, `from_fields()`
+  - Serializes as hex string for JSON API (via serde)
   - Uses byte representation internally for efficiency
-- `SerializeString<T>`: Wrapper that serializes `T` as a JSON-encoded string
-  - Used for serializing `QualifiedPath` in `ArtifactFile`
-  - Moved from `hurry::client` as it's a transport implementation detail
+  - Validates hash length is 32 bytes in `from_hex()`
 
 **`packages/client/src/courier/v1/cas.rs`:**
 
@@ -137,10 +135,14 @@ CAS-specific API types:
 
 Cargo cache API types:
 
-- `ArtifactFile { object_key: String, path: SerializeString<QualifiedPath>, mtime_nanos: u128, executable: bool }`
+- `ArtifactFile { object_key: Key, path: String, mtime_nanos: u128, executable: bool }`
+  - `object_key`: Uses `Key` type directly (was `String`)
+  - `path`: Stores JSON-encoded `QualifiedPath` as `String` (manual serialization)
 - `CargoSaveRequest { package_name, package_version, target, library_crate_compilation_unit_hash, build_script_compilation_unit_hash, build_script_execution_unit_hash, content_hash, artifacts: Vec<ArtifactFile> }`
 - `CargoRestoreRequest { package_name, package_version, target, library_crate_compilation_unit_hash, build_script_compilation_unit_hash, build_script_execution_unit_hash }`
 - `CargoRestoreResponse { artifacts: Vec<ArtifactFile> }`
+
+**Implementation note:** Rather than using a generic `SerializeString<T>` wrapper, the implementation uses manual JSON serialization for paths. This simplified the type system and avoided complex serde bounds issues while maintaining the same functionality.
 
 **`packages/client/src/courier/v1/client.rs`** (behind `client` feature):
 
@@ -215,22 +217,26 @@ This ensures:
 
 The assumption is that this library will _always_ provide `courier` API types, and `client` will _always_ enable the `courier` client: "courier" is the _main_ client type for this library. But maybe in the future we'll want to pick and choose other client types and implementations to actually compile- for example we might only compile the `github` client and its types if the `github` feature is enabled.
 
-### Key Type Semantics
+### Key Type Semantics and Migration
 
 The shared `Key` type adopts the semantics from `courier::storage::Key`:
 
 - Internal representation: `Vec<u8>` (32 bytes for Blake3)
-- Serialization: Hex string for JSON API
-- Conversion: `from_hex()` and `to_hex()` methods
+- Serialization: Hex string for JSON API (automatically via serde)
+- Conversion: `from_hex()` and `to_hex()` methods, plus `from_blake3_hash()`, `from_buffer()`, `from_fields()`
 
-This differs from `hurry::hash::Blake3` which stores the hex string directly. We choose the byte representation because:
+This differs from the original `hurry::hash::Blake3` which stored the hex string directly. The byte representation was chosen because:
 
 1. More efficient for storage and comparison
 2. Matches courier's existing implementation
 3. Smaller memory footprint
 4. Canonical representation is bytes, not hex
 
-The `hurry::hash::Blake3` type will remain in hurry for hurry-specific functionality like `from_file()` and will provide conversion to/from `client::courier::v1::Key`.
+**Migration in hurry:**
+- Removed `hurry::hash::Blake3` type entirely
+- Updated `hurry::hash::hash_file()` to return `Key` directly
+- Updated all internal usages to work with `Key`
+- Created type conversions at API boundaries (e.g., in `CourierCas` methods)
 
 ## Migration Plan
 
@@ -242,14 +248,15 @@ The `hurry::hash::Blake3` type will remain in hurry for hurry-specific functiona
 
 ### Step 2: Extract shared types
 
-- Move `Key` from `courier::storage` to `client::courier::v1::types`
+- Move `Key` from `courier::storage` to `client::courier::v1`
   - Keep `Vec<u8>` internal representation
   - Ensure hex serialization for JSON API
-  - Add conversion methods
-- Move `SerializeString` from `hurry::client` to `client::courier::v1::types`
+  - Add conversion methods: `from_hex()`, `to_hex()`, `from_blake3_hash()`, `from_buffer()`, `from_fields()`
 - Create `client::courier::v1::cas` module with CAS types
 - Create `client::courier::v1::cache` module with cache types
 - Deduplicate `ArtifactFile` and request/response types
+  - Update `ArtifactFile::object_key` from `String` to `Key`
+  - Use manual JSON serialization for path field (instead of generic `SerializeString<T>`)
 
 ### Step 3: Extract client code
 
@@ -301,18 +308,20 @@ serde_json = { workspace = true }
 bon = { workspace = true }
 derive_more = { workspace = true, features = ["full"] }
 hex = { workspace = true }
+blake3 = { workspace = true }
+color-eyre = { workspace = true }
 
 # Only with "client" feature
 reqwest = { workspace = true, features = ["json", "stream", "rustls-tls", "gzip", "brotli"], optional = true }
 tokio = { workspace = true, features = ["full"], optional = true }
 tokio-util = { workspace = true, features = ["full"], optional = true }
 futures = { workspace = true, optional = true }
-color-eyre = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 async-tar = { workspace = true, optional = true }
 piper = { workspace = true, optional = true }
 tap = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
+flume = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -321,14 +330,19 @@ client = [
     "dep:tokio",
     "dep:tokio-util",
     "dep:futures",
-    "dep:color-eyre",
     "dep:url",
     "dep:async-tar",
     "dep:piper",
     "dep:tap",
-    "dep:tracing"
+    "dep:tracing",
+    "dep:flume"
 ]
 ```
+
+**Notes on dependencies:**
+- `blake3` and `color-eyre`: Always included (needed for `Key` type methods)
+- `flume`: Added to support bulk read operations with channel-based streaming
+- All HTTP and async dependencies are behind the `client` feature flag
 
 **Update `packages/hurry/Cargo.toml`:**
 

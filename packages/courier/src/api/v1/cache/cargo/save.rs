@@ -1,30 +1,14 @@
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
-use derive_more::Debug;
-use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
 use crate::db::{CargoSaveCacheRequest, Postgres};
 
-use super::ArtifactFile;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SaveRequest {
-    pub package_name: String,
-    pub package_version: String,
-    pub target: String,
-    pub library_crate_compilation_unit_hash: String,
-    pub build_script_compilation_unit_hash: Option<String>,
-    pub build_script_execution_unit_hash: Option<String>,
-    pub content_hash: String,
-
-    #[debug("{:?}", self.artifacts.len())]
-    pub artifacts: Vec<ArtifactFile>,
-}
+use super::CargoSaveRequest;
 
 #[tracing::instrument]
-pub async fn handle(Dep(db): Dep<Postgres>, Json(request): Json<SaveRequest>) -> CacheSaveResponse {
+pub async fn handle(Dep(db): Dep<Postgres>, Json(request): Json<CargoSaveRequest>) -> CacheSaveResponse {
     let request = CargoSaveCacheRequest::builder()
         .package_name(request.package_name)
         .package_version(request.package_version)
@@ -79,6 +63,9 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let (_, key1) = crate::api::test_helpers::test_blob(b"serde_artifact_1");
+        let (_, key2) = crate::api::test_helpers::test_blob(b"serde_artifact_2");
+
         let request = json!({
             "package_name": "serde",
             "package_version": "1.0.0",
@@ -89,13 +76,13 @@ mod tests {
             "content_hash": "content_abc123",
             "artifacts": [
                 {
-                    "object_key": "blake3_hash_1",
+                    "object_key": key1,
                     "path": "libserde.rlib",
                     "mtime_nanos": 1234567890123456789u128,
                     "executable": false
                 },
                 {
-                    "object_key": "blake3_hash_2",
+                    "object_key": key2,
                     "path": "libserde.so",
                     "mtime_nanos": 1234567890987654321u128,
                     "executable": true
@@ -118,13 +105,13 @@ mod tests {
         let artifacts = db.cargo_cache_restore(restore_request).await?;
         let expected = vec![
             crate::db::CargoArtifact::builder()
-                .object_key("blake3_hash_1")
+                .object_key(key1.to_hex())
                 .path("libserde.rlib")
                 .mtime_nanos(1234567890123456789u128)
                 .executable(false)
                 .build(),
             crate::db::CargoArtifact::builder()
-                .object_key("blake3_hash_2")
+                .object_key(key2.to_hex())
                 .path("libserde.so")
                 .mtime_nanos(1234567890987654321u128)
                 .executable(true)
@@ -142,6 +129,9 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let (_, key1) = crate::api::test_helpers::test_blob(b"idempotent_1");
+        let (_, key2) = crate::api::test_helpers::test_blob(b"idempotent_2");
+
         let request = json!({
             "package_name": "serde",
             "package_version": "1.0.0",
@@ -152,13 +142,13 @@ mod tests {
             "content_hash": "content_abc123",
             "artifacts": [
                 {
-                    "object_key": "blake3_hash_1",
+                    "object_key": key1,
                     "path": "libserde.rlib",
                     "mtime_nanos": 1234567890123456789u128,
                     "executable": false
                 },
                 {
-                    "object_key": "blake3_hash_2",
+                    "object_key": key2,
                     "path": "libserde.so",
                     "mtime_nanos": 1234567890987654321u128,
                     "executable": true
@@ -184,13 +174,13 @@ mod tests {
         let artifacts = db.cargo_cache_restore(restore_request).await?;
         let expected = vec![
             crate::db::CargoArtifact::builder()
-                .object_key("blake3_hash_1")
+                .object_key(key1.to_hex())
                 .path("libserde.rlib")
                 .mtime_nanos(1234567890123456789u128)
                 .executable(false)
                 .build(),
             crate::db::CargoArtifact::builder()
-                .object_key("blake3_hash_2")
+                .object_key(key2.to_hex())
                 .path("libserde.so")
                 .mtime_nanos(1234567890987654321u128)
                 .executable(true)
@@ -208,6 +198,8 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let (_, key) = crate::api::test_helpers::test_blob(b"proc_macro_artifact");
+
         let request = json!({
             "package_name": "proc-macro-crate",
             "package_version": "2.0.0",
@@ -217,7 +209,7 @@ mod tests {
             "build_script_execution_unit_hash": "build_exec_hash",
             "content_hash": "full_content_hash",
             "artifacts": [{
-                "object_key": "artifact_key",
+                "object_key": key,
                 "path": "libproc_macro_crate.rlib",
                 "mtime_nanos": 9876543210123456789u128,
                 "executable": false
@@ -241,7 +233,7 @@ mod tests {
         let artifacts = db.cargo_cache_restore(restore_request).await?;
         let expected = vec![
             crate::db::CargoArtifact::builder()
-                .object_key("artifact_key")
+                .object_key(key.to_hex())
                 .path("libproc_macro_crate.rlib")
                 .mtime_nanos(9876543210123456789u128)
                 .executable(false)
@@ -260,7 +252,11 @@ mod tests {
             .context("create test server")?;
 
         let packages = [("serde", "1.0.0"), ("tokio", "1.35.0"), ("axum", "0.7.0")];
+        let mut keys = vec![];
         for (i, (name, version)) in packages.iter().enumerate() {
+            let (_, key) = crate::api::test_helpers::test_blob(format!("package_{i}").as_bytes());
+            keys.push(key.clone());
+
             let request = json!({
                 "package_name": name,
                 "package_version": version,
@@ -270,7 +266,7 @@ mod tests {
                 "build_script_execution_unit_hash": null,
                 "content_hash": format!("content_{i}"),
                 "artifacts": [{
-                    "object_key": format!("key_{i}"),
+                    "object_key": key,
                     "path": format!("lib{name}.rlib"),
                     "mtime_nanos": 1000000000000000000u128 + i as u128,
                     "executable": false
@@ -294,7 +290,7 @@ mod tests {
             let artifacts = db.cargo_cache_restore(restore_request).await?;
             let expected = vec![
                 crate::db::CargoArtifact::builder()
-                    .object_key(format!("key_{i}"))
+                    .object_key(keys[i].to_hex())
                     .path(format!("lib{name}.rlib"))
                     .mtime_nanos(1000000000000000000u128 + i as u128)
                     .executable(false)
@@ -318,7 +314,11 @@ mod tests {
             "aarch64-apple-darwin",
         ];
 
+        let mut keys = vec![];
         for (i, target) in targets.iter().enumerate() {
+            let (_, key) = crate::api::test_helpers::test_blob(format!("target_{target}").as_bytes());
+            keys.push(key.clone());
+
             let request = json!({
                 "package_name": "serde",
                 "package_version": "1.0.0",
@@ -328,7 +328,7 @@ mod tests {
                 "build_script_execution_unit_hash": null,
                 "content_hash": format!("content_{i}"),
                 "artifacts": [{
-                    "object_key": format!("key_{target}"),
+                    "object_key": key,
                     "path": "libserde.rlib",
                     "mtime_nanos": 1234567890000000000u128 + i as u128,
                     "executable": false
@@ -352,7 +352,7 @@ mod tests {
             let artifacts = db.cargo_cache_restore(restore_request).await?;
             let expected = vec![
                 crate::db::CargoArtifact::builder()
-                    .object_key(format!("key_{target}"))
+                    .object_key(keys[i].to_hex())
                     .path("libserde.rlib")
                     .mtime_nanos(1234567890000000000u128 + i as u128)
                     .executable(false)
@@ -370,7 +370,7 @@ mod tests {
             .await
             .context("create test server")?;
 
-        let shared_object_key = "shared_blake3_hash";
+        let (_, shared_object_key) = crate::api::test_helpers::test_blob(b"shared_object");
 
         let request1 = json!({
             "package_name": "dep-a",
@@ -429,7 +429,7 @@ mod tests {
         let artifacts_a = db.cargo_cache_restore(restore_a).await?;
         let expected_a = vec![
             crate::db::CargoArtifact::builder()
-                .object_key(shared_object_key)
+                .object_key(shared_object_key.to_hex())
                 .path("liba.rlib")
                 .mtime_nanos(1000000000000000000u128)
                 .executable(false)
@@ -447,7 +447,7 @@ mod tests {
         let artifacts_b = db.cargo_cache_restore(restore_b).await?;
         let expected_b = vec![
             crate::db::CargoArtifact::builder()
-                .object_key(shared_object_key)
+                .object_key(shared_object_key.to_hex())
                 .path("libb.rlib")
                 .mtime_nanos(2000000000000000000u128)
                 .executable(false)
@@ -464,10 +464,13 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let mut keys = vec![];
         let artifacts = (0..20)
             .map(|i| {
+                let (_, key) = crate::api::test_helpers::test_blob(format!("artifact_{i}").as_bytes());
+                keys.push(key.clone());
                 json!({
-                    "object_key": format!("object_key_{i}"),
+                    "object_key": key,
                     "path": format!("artifact_{i}.o"),
                     "mtime_nanos": 1000000000000000000u128 + i as u128,
                     "executable": i % 3 == 0
@@ -502,7 +505,7 @@ mod tests {
         let expected = (0..20)
             .map(|i| {
                 crate::db::CargoArtifact::builder()
-                    .object_key(format!("object_key_{i}"))
+                    .object_key(keys[i].to_hex())
                     .path(format!("artifact_{i}.o"))
                     .mtime_nanos(1000000000000000000u128 + i as u128)
                     .executable(i % 3 == 0)
@@ -521,8 +524,11 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let mut keys = vec![];
         let requests = (0..10)
             .map(|i| {
+                let (_, key) = crate::api::test_helpers::test_blob(format!("concurrent_{i}").as_bytes());
+                keys.push(key.clone());
                 json!({
                     "package_name": format!("crate-{i}"),
                     "package_version": "1.0.0",
@@ -532,7 +538,7 @@ mod tests {
                     "build_script_execution_unit_hash": null,
                     "content_hash": format!("content_{i}"),
                     "artifacts": [{
-                        "object_key": format!("key_{i}"),
+                        "object_key": key,
                         "path": format!("libcrate_{i}.rlib"),
                         "mtime_nanos": 1000000000000000000u128 + i as u128,
                         "executable": false
@@ -571,7 +577,7 @@ mod tests {
             let artifacts = db.cargo_cache_restore(restore_request).await?;
             let expected = vec![
                 crate::db::CargoArtifact::builder()
-                    .object_key(format!("key_{i}"))
+                    .object_key(keys[i].to_hex())
                     .path(format!("libcrate_{i}.rlib"))
                     .mtime_nanos(1000000000000000000u128 + i as u128)
                     .executable(false)
@@ -589,6 +595,9 @@ mod tests {
             .await
             .context("create test server")?;
 
+        let (_, key1) = crate::api::test_helpers::test_blob(b"content_v1");
+        let (_, key2) = crate::api::test_helpers::test_blob(b"content_v2");
+
         let request1 = json!({
             "package_name": "test-crate",
             "package_version": "1.0.0",
@@ -598,7 +607,7 @@ mod tests {
             "build_script_execution_unit_hash": null,
             "content_hash": "content_v1",
             "artifacts": [{
-                "object_key": "key_v1",
+                "object_key": key1,
                 "path": "libtest.rlib",
                 "mtime_nanos": 1000000000000000000u128,
                 "executable": false
@@ -621,7 +630,7 @@ mod tests {
             "build_script_execution_unit_hash": null,
             "content_hash": "content_v2",
             "artifacts": [{
-                "object_key": "key_v2",
+                "object_key": key2,
                 "path": "libtest.rlib",
                 "mtime_nanos": 2000000000000000000u128,
                 "executable": false
