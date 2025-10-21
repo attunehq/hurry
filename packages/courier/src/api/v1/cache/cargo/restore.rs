@@ -5,22 +5,13 @@ use color_eyre::eyre::Report;
 use tap::Pipe;
 use tracing::{error, info};
 
-use crate::db::{CargoRestoreCacheRequest, Postgres};
+use crate::db::Postgres;
 
 #[tracing::instrument]
 pub async fn handle(
     Dep(db): Dep<Postgres>,
     Json(request): Json<CargoRestoreRequest>,
 ) -> CacheRestoreResponse {
-    let request = CargoRestoreCacheRequest::builder()
-        .package_name(request.package_name)
-        .package_version(request.package_version)
-        .target(request.target)
-        .library_crate_compilation_unit_hash(request.library_crate_compilation_unit_hash)
-        .maybe_build_script_compilation_unit_hash(request.build_script_compilation_unit_hash)
-        .maybe_build_script_execution_unit_hash(request.build_script_execution_unit_hash)
-        .build();
-
     match db.cargo_cache_restore(request).await {
         Ok(artifacts) if artifacts.is_empty() => {
             info!("cache.restore.miss");
@@ -63,9 +54,11 @@ impl IntoResponse for CacheRestoreResponse {
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
+    use client::courier::v1::cache::{
+        ArtifactFile, CargoRestoreRequest, CargoRestoreResponse, CargoSaveRequest,
+    };
     use color_eyre::{Result, eyre::Context};
     use pretty_assertions::assert_eq as pretty_assert_eq;
-    use serde_json::json;
     use sqlx::PgPool;
 
     use crate::api::test_helpers::test_blob;
@@ -79,29 +72,27 @@ mod tests {
         let (_, key1) = crate::api::test_helpers::test_blob(b"artifact_1_content");
         let (_, key2) = crate::api::test_helpers::test_blob(b"artifact_2_content");
 
-        let save_request = json!({
-            "package_name": "serde",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "abc123",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "content_abc123",
-            "artifacts": [
-                {
-                    "object_key": key1,
-                    "path": "libserde.rlib",
-                    "mtime_nanos": 1234567890123456789u128,
-                    "executable": false
-                },
-                {
-                    "object_key": key2,
-                    "path": "libserde.so",
-                    "mtime_nanos": 1234567890987654321u128,
-                    "executable": true
-                }
-            ]
-        });
+        let save_request = CargoSaveRequest::builder()
+            .package_name("serde")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("abc123")
+            .content_hash("content_abc123")
+            .artifacts([
+                ArtifactFile::builder()
+                    .object_key(&key1)
+                    .path("libserde.rlib")
+                    .mtime_nanos(1234567890123456789u128)
+                    .executable(false)
+                    .build(),
+                ArtifactFile::builder()
+                    .object_key(&key2)
+                    .path("libserde.so")
+                    .mtime_nanos(1234567890987654321u128)
+                    .executable(true)
+                    .build(),
+            ])
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/save")
@@ -109,14 +100,12 @@ mod tests {
             .await;
         response.assert_status(StatusCode::CREATED);
 
-        let restore_request = json!({
-            "package_name": "serde",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "abc123",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null
-        });
+        let restore_request = CargoRestoreRequest::builder()
+            .package_name("serde")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("abc123")
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
@@ -124,24 +113,24 @@ mod tests {
             .await;
 
         response.assert_status_ok();
-        let restore_response = response.json::<serde_json::Value>();
+        let restore_response = response.json::<CargoRestoreResponse>();
 
-        let expected = json!({
-            "artifacts": [
-                {
-                    "object_key": key1,
-                    "path": "libserde.rlib",
-                    "mtime_nanos": 1234567890123456789u128,
-                    "executable": false
-                },
-                {
-                    "object_key": key2,
-                    "path": "libserde.so",
-                    "mtime_nanos": 1234567890987654321u128,
-                    "executable": true
-                }
-            ]
-        });
+        let expected = CargoRestoreResponse::builder()
+            .artifacts([
+                ArtifactFile::builder()
+                    .object_key(&key1)
+                    .path("libserde.rlib")
+                    .mtime_nanos(1234567890123456789u128)
+                    .executable(false)
+                    .build(),
+                ArtifactFile::builder()
+                    .object_key(&key2)
+                    .path("libserde.so")
+                    .mtime_nanos(1234567890987654321u128)
+                    .executable(true)
+                    .build(),
+            ])
+            .build();
 
         pretty_assert_eq!(restore_response, expected);
 
@@ -154,14 +143,12 @@ mod tests {
             .await
             .context("create test server")?;
 
-        let restore_request = json!({
-            "package_name": "nonexistent",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "does_not_exist",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null
-        });
+        let restore_request = CargoRestoreRequest::builder()
+            .package_name("nonexistent")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("does_not_exist")
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
@@ -181,23 +168,21 @@ mod tests {
 
         let (_, key) = crate::api::test_helpers::test_blob(b"proc_macro_artifact");
 
-        let save_request = json!({
-            "package_name": "proc-macro-crate",
-            "package_version": "2.0.0",
-            "target": "x86_64-apple-darwin",
-            "library_crate_compilation_unit_hash": "lib_hash",
-            "build_script_compilation_unit_hash": "build_comp_hash",
-            "build_script_execution_unit_hash": "build_exec_hash",
-            "content_hash": "full_content_hash",
-            "artifacts": [
-                {
-                    "object_key": key,
-                    "path": "libproc_macro_crate.rlib",
-                    "mtime_nanos": 9876543210123456789u128,
-                    "executable": false
-                }
-            ]
-        });
+        let save_request = CargoSaveRequest::builder()
+            .package_name("proc-macro-crate")
+            .package_version("2.0.0")
+            .target("x86_64-apple-darwin")
+            .library_crate_compilation_unit_hash("lib_hash")
+            .build_script_compilation_unit_hash("build_comp_hash")
+            .build_script_execution_unit_hash("build_exec_hash")
+            .content_hash("full_content_hash")
+            .artifacts([ArtifactFile::builder()
+                .object_key(&key)
+                .path("libproc_macro_crate.rlib")
+                .mtime_nanos(9876543210123456789u128)
+                .executable(false)
+                .build()])
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/save")
@@ -205,14 +190,14 @@ mod tests {
             .await;
         response.assert_status(StatusCode::CREATED);
 
-        let restore_request = json!({
-            "package_name": "proc-macro-crate",
-            "package_version": "2.0.0",
-            "target": "x86_64-apple-darwin",
-            "library_crate_compilation_unit_hash": "lib_hash",
-            "build_script_compilation_unit_hash": "build_comp_hash",
-            "build_script_execution_unit_hash": "build_exec_hash"
-        });
+        let restore_request = CargoRestoreRequest::builder()
+            .package_name("proc-macro-crate")
+            .package_version("2.0.0")
+            .target("x86_64-apple-darwin")
+            .library_crate_compilation_unit_hash("lib_hash")
+            .build_script_compilation_unit_hash("build_comp_hash")
+            .build_script_execution_unit_hash("build_exec_hash")
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
@@ -220,16 +205,16 @@ mod tests {
             .await;
 
         response.assert_status_ok();
-        let restore_response = response.json::<serde_json::Value>();
+        let restore_response = response.json::<CargoRestoreResponse>();
 
-        let expected = json!({
-            "artifacts": [{
-                "object_key": key,
-                "path": "libproc_macro_crate.rlib",
-                "mtime_nanos": 9876543210123456789u128,
-                "executable": false
-            }]
-        });
+        let expected = CargoRestoreResponse::builder()
+            .artifacts([ArtifactFile::builder()
+                .object_key(&key)
+                .path("libproc_macro_crate.rlib")
+                .mtime_nanos(9876543210123456789u128)
+                .executable(false)
+                .build()])
+            .build();
 
         pretty_assert_eq!(restore_response, expected);
 
@@ -244,23 +229,20 @@ mod tests {
 
         let (_, key) = crate::api::test_helpers::test_blob(b"crate_v1_artifact");
 
-        let save_request = json!({
-            "package_name": "crate-with-build",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "lib_hash",
-            "build_script_compilation_unit_hash": "build_hash_v1",
-            "build_script_execution_unit_hash": null,
-            "content_hash": "content_v1",
-            "artifacts": [
-                {
-                    "object_key": key,
-                    "path": "libcrate.rlib",
-                    "mtime_nanos": 1000000000000000000u128,
-                    "executable": false
-                }
-            ]
-        });
+        let save_request = CargoSaveRequest::builder()
+            .package_name("crate-with-build")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("lib_hash")
+            .build_script_compilation_unit_hash("build_hash_v1")
+            .content_hash("content_v1")
+            .artifacts([ArtifactFile::builder()
+                .object_key(key)
+                .path("libcrate.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/save")
@@ -268,14 +250,13 @@ mod tests {
             .await;
         response.assert_status(StatusCode::CREATED);
 
-        let restore_request = json!({
-            "package_name": "crate-with-build",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "lib_hash",
-            "build_script_compilation_unit_hash": "build_hash_v2",
-            "build_script_execution_unit_hash": null
-        });
+        let restore_request = CargoRestoreRequest::builder()
+            .package_name("crate-with-build")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("lib_hash")
+            .build_script_compilation_unit_hash("build_hash_v2")
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
@@ -303,23 +284,19 @@ mod tests {
             .iter()
             .map(|target| (target, test_blob(format!("target_{target}").as_bytes()).1));
         for (i, (target, key)) in keyed_targets.clone().enumerate() {
-            let save_request = json!({
-                "package_name": "cross-platform-crate",
-                "package_version": "1.0.0",
-                "target": *target,
-                "library_crate_compilation_unit_hash": format!("hash_{i}"),
-                "build_script_compilation_unit_hash": null,
-                "build_script_execution_unit_hash": null,
-                "content_hash": format!("content_{i}"),
-                "artifacts": [
-                    {
-                        "object_key": key,
-                        "path": "libcross_platform_crate.rlib",
-                        "mtime_nanos": 1000000000000000000u128 + i as u128,
-                        "executable": false
-                    }
-                ]
-            });
+            let save_request = CargoSaveRequest::builder()
+                .package_name("cross-platform-crate")
+                .package_version("1.0.0")
+                .target(*target)
+                .library_crate_compilation_unit_hash(format!("hash_{i}"))
+                .content_hash(format!("content_{i}"))
+                .artifacts([ArtifactFile::builder()
+                    .object_key(key)
+                    .path("libcross_platform_crate.rlib")
+                    .mtime_nanos(1000000000000000000u128 + i as u128)
+                    .executable(false)
+                    .build()])
+                .build();
 
             let response = server
                 .post("/api/v1/cache/cargo/save")
@@ -329,14 +306,12 @@ mod tests {
         }
 
         for (i, (target, key)) in keyed_targets.enumerate() {
-            let restore_request = json!({
-                "package_name": "cross-platform-crate",
-                "package_version": "1.0.0",
-                "target": *target,
-                "library_crate_compilation_unit_hash": format!("hash_{i}"),
-                "build_script_compilation_unit_hash": null,
-                "build_script_execution_unit_hash": null
-            });
+            let restore_request = CargoRestoreRequest::builder()
+                .package_name("cross-platform-crate")
+                .package_version("1.0.0")
+                .target(*target)
+                .library_crate_compilation_unit_hash(format!("hash_{i}"))
+                .build();
 
             let response = server
                 .post("/api/v1/cache/cargo/restore")
@@ -344,16 +319,16 @@ mod tests {
                 .await;
 
             response.assert_status_ok();
-            let restore_response = response.json::<serde_json::Value>();
+            let restore_response = response.json::<CargoRestoreResponse>();
 
-            let expected = json!({
-                "artifacts": [{
-                    "object_key": key,
-                    "path": "libcross_platform_crate.rlib",
-                    "mtime_nanos": 1000000000000000000u128 + i as u128,
-                    "executable": false
-                }]
-            });
+            let expected = CargoRestoreResponse::builder()
+                .artifacts([ArtifactFile::builder()
+                    .object_key(&key)
+                    .path("libcross_platform_crate.rlib")
+                    .mtime_nanos(1000000000000000000u128 + i as u128)
+                    .executable(false)
+                    .build()])
+                .build();
 
             pretty_assert_eq!(restore_response, expected);
         }
@@ -373,25 +348,23 @@ mod tests {
                 let (_, key) =
                     crate::api::test_helpers::test_blob(format!("artifact_{i}").as_bytes());
                 keys.push(key.clone());
-                json!({
-                    "object_key": key,
-                    "path": format!("artifact_{i}.o"),
-                    "mtime_nanos": 1000000000000000000u128 + i as u128,
-                    "executable": i % 3 == 0
-                })
+                ArtifactFile::builder()
+                    .object_key(&key)
+                    .path(format!("artifact_{i}.o"))
+                    .mtime_nanos(1000000000000000000u128 + i as u128)
+                    .executable(i % 3 == 0)
+                    .build()
             })
             .collect::<Vec<_>>();
 
-        let save_request = json!({
-            "package_name": "large-crate",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "large_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "large_content",
-            "artifacts": artifacts
-        });
+        let save_request = CargoSaveRequest::builder()
+            .package_name("large-crate")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("large_hash")
+            .content_hash("large_content")
+            .artifacts(&artifacts)
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/save")
@@ -399,14 +372,12 @@ mod tests {
             .await;
         response.assert_status(StatusCode::CREATED);
 
-        let restore_request = json!({
-            "package_name": "large-crate",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "large_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null
-        });
+        let restore_request = CargoRestoreRequest::builder()
+            .package_name("large-crate")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("large_hash")
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
@@ -414,11 +385,11 @@ mod tests {
             .await;
 
         response.assert_status_ok();
-        let restore_response = response.json::<serde_json::Value>();
+        let restore_response = response.json::<CargoRestoreResponse>();
 
-        let expected = json!({
-            "artifacts": artifacts
-        });
+        let expected = CargoRestoreResponse::builder()
+            .artifacts(&artifacts)
+            .build();
 
         pretty_assert_eq!(restore_response, expected);
 
@@ -432,23 +403,19 @@ mod tests {
             .context("create test server")?;
 
         let (_, test_key) = crate::api::test_helpers::test_blob(b"concurrent_content");
-        let save_request = json!({
-            "package_name": "concurrent-test",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "concurrent_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "concurrent_content",
-            "artifacts": [
-                {
-                    "object_key": test_key,
-                    "path": "libconcurrent.rlib",
-                    "mtime_nanos": 1111111111111111111u128,
-                    "executable": false
-                }
-            ]
-        });
+        let save_request = CargoSaveRequest::builder()
+            .package_name("concurrent-test")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("concurrent_hash")
+            .content_hash("concurrent_content")
+            .artifacts([ArtifactFile::builder()
+                .object_key(&test_key)
+                .path("libconcurrent.rlib")
+                .mtime_nanos(1111111111111111111u128)
+                .executable(false)
+                .build()])
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/save")
@@ -456,14 +423,12 @@ mod tests {
             .await;
         response.assert_status(StatusCode::CREATED);
 
-        let restore_request = json!({
-            "package_name": "concurrent-test",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "concurrent_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null
-        });
+        let restore_request = CargoRestoreRequest::builder()
+            .package_name("concurrent-test")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("concurrent_hash")
+            .build();
 
         let (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10) = tokio::join!(
             server
@@ -498,18 +463,18 @@ mod tests {
                 .json(&restore_request),
         );
 
-        let expected = json!({
-            "artifacts": [{
-                "object_key": test_key,
-                "path": "libconcurrent.rlib",
-                "mtime_nanos": 1111111111111111111u128,
-                "executable": false
-            }]
-        });
+        let expected = CargoRestoreResponse::builder()
+            .artifacts([ArtifactFile::builder()
+                .object_key(&test_key)
+                .path("libconcurrent.rlib")
+                .mtime_nanos(1111111111111111111u128)
+                .executable(false)
+                .build()])
+            .build();
 
         for response in [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10] {
             response.assert_status_ok();
-            let restore_response = response.json::<serde_json::Value>();
+            let restore_response = response.json::<CargoRestoreResponse>();
             pretty_assert_eq!(restore_response, expected);
         }
 
@@ -530,23 +495,19 @@ mod tests {
                 crate::api::test_helpers::test_blob(format!("version_{version}").as_bytes());
             keys.push(key.clone());
 
-            let save_request = json!({
-                "package_name": "versioned-crate",
-                "package_version": *version,
-                "target": "x86_64-unknown-linux-gnu",
-                "library_crate_compilation_unit_hash": format!("hash_{i}"),
-                "build_script_compilation_unit_hash": null,
-                "build_script_execution_unit_hash": null,
-                "content_hash": format!("content_{i}"),
-                "artifacts": [
-                    {
-                        "object_key": key,
-                        "path": "libversioned_crate.rlib",
-                        "mtime_nanos": 1000000000000000000u128 + i as u128,
-                        "executable": false
-                    }
-                ]
-            });
+            let save_request = CargoSaveRequest::builder()
+                .package_name("versioned-crate")
+                .package_version(*version)
+                .target("x86_64-unknown-linux-gnu")
+                .library_crate_compilation_unit_hash(format!("hash_{i}"))
+                .content_hash(format!("content_{i}"))
+                .artifacts([ArtifactFile::builder()
+                    .object_key(key)
+                    .path("libversioned_crate.rlib")
+                    .mtime_nanos(1000000000000000000u128 + i as u128)
+                    .executable(false)
+                    .build()])
+                .build();
 
             let response = server
                 .post("/api/v1/cache/cargo/save")
@@ -556,14 +517,12 @@ mod tests {
         }
 
         for (i, version) in versions.iter().enumerate() {
-            let restore_request = json!({
-                "package_name": "versioned-crate",
-                "package_version": *version,
-                "target": "x86_64-unknown-linux-gnu",
-                "library_crate_compilation_unit_hash": format!("hash_{i}"),
-                "build_script_compilation_unit_hash": null,
-                "build_script_execution_unit_hash": null
-            });
+            let restore_request = CargoRestoreRequest::builder()
+                .package_name("versioned-crate")
+                .package_version(*version)
+                .target("x86_64-unknown-linux-gnu")
+                .library_crate_compilation_unit_hash(format!("hash_{i}"))
+                .build();
 
             let response = server
                 .post("/api/v1/cache/cargo/restore")
@@ -571,16 +530,16 @@ mod tests {
                 .await;
 
             response.assert_status_ok();
-            let restore_response = response.json::<serde_json::Value>();
+            let restore_response = response.json::<CargoRestoreResponse>();
 
-            let expected = json!({
-                "artifacts": [{
-                    "object_key": keys[i],
-                    "path": "libversioned_crate.rlib",
-                    "mtime_nanos": 1000000000000000000u128 + i as u128,
-                    "executable": false
-                }]
-            });
+            let expected = CargoRestoreResponse::builder()
+                .artifacts([ArtifactFile::builder()
+                    .object_key(&keys[i])
+                    .path("libversioned_crate.rlib")
+                    .mtime_nanos(1000000000000000000u128 + i as u128)
+                    .executable(false)
+                    .build()])
+                .build();
 
             pretty_assert_eq!(restore_response, expected);
         }
@@ -597,23 +556,19 @@ mod tests {
         let precise_mtime = 1234567890123456789u128;
         let (_, key) = crate::api::test_helpers::test_blob(b"precision_artifact");
 
-        let save_request = json!({
-            "package_name": "precision-test",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "precision_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "precision_content",
-            "artifacts": [
-                {
-                    "object_key": key,
-                    "path": "libprecision.rlib",
-                    "mtime_nanos": precise_mtime,
-                    "executable": false
-                }
-            ]
-        });
+        let save_request = CargoSaveRequest::builder()
+            .package_name("precision-test")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("precision_hash")
+            .content_hash("precision_content")
+            .artifacts([ArtifactFile::builder()
+                .object_key(&key)
+                .path("libprecision.rlib")
+                .mtime_nanos(precise_mtime)
+                .executable(false)
+                .build()])
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/save")
@@ -621,14 +576,12 @@ mod tests {
             .await;
         response.assert_status(StatusCode::CREATED);
 
-        let restore_request = json!({
-            "package_name": "precision-test",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "precision_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null
-        });
+        let restore_request = CargoRestoreRequest::builder()
+            .package_name("precision-test")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("precision_hash")
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
@@ -636,16 +589,16 @@ mod tests {
             .await;
 
         response.assert_status_ok();
-        let restore_response = response.json::<serde_json::Value>();
+        let restore_response = response.json::<CargoRestoreResponse>();
 
-        let expected = json!({
-            "artifacts": [{
-                "object_key": key,
-                "path": "libprecision.rlib",
-                "mtime_nanos": precise_mtime,
-                "executable": false
-            }]
-        });
+        let expected = CargoRestoreResponse::builder()
+            .artifacts([ArtifactFile::builder()
+                .object_key(&key)
+                .path("libprecision.rlib")
+                .mtime_nanos(precise_mtime)
+                .executable(false)
+                .build()])
+            .build();
 
         pretty_assert_eq!(restore_response, expected);
 
@@ -660,21 +613,19 @@ mod tests {
 
         let (_, key) = crate::api::test_helpers::test_blob(b"wrong_name_test");
 
-        let save_request = json!({
-            "package_name": "test-crate",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "test_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "test_content",
-            "artifacts": [{
-                "object_key": key,
-                "path": "libtest.rlib",
-                "mtime_nanos": 1000000000000000000u128,
-                "executable": false
-            }]
-        });
+        let save_request = CargoSaveRequest::builder()
+            .package_name("test-crate")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("test_hash")
+            .content_hash("test_content")
+            .artifacts([ArtifactFile::builder()
+                .object_key(key)
+                .path("libtest.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/save")
@@ -682,14 +633,12 @@ mod tests {
             .await;
         response.assert_status(StatusCode::CREATED);
 
-        let restore_request = json!({
-            "package_name": "wrong-name",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "test_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null
-        });
+        let restore_request = CargoRestoreRequest::builder()
+            .package_name("wrong-name")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("test_hash")
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
@@ -708,21 +657,19 @@ mod tests {
 
         let (_, key) = crate::api::test_helpers::test_blob(b"wrong_version_test");
 
-        let save_request = json!({
-            "package_name": "test-crate",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "test_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "test_content",
-            "artifacts": [{
-                "object_key": key,
-                "path": "libtest.rlib",
-                "mtime_nanos": 1000000000000000000u128,
-                "executable": false
-            }]
-        });
+        let save_request = CargoSaveRequest::builder()
+            .package_name("test-crate")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("test_hash")
+            .content_hash("test_content")
+            .artifacts([ArtifactFile::builder()
+                .object_key(key)
+                .path("libtest.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/save")
@@ -730,14 +677,12 @@ mod tests {
             .await;
         response.assert_status(StatusCode::CREATED);
 
-        let restore_request = json!({
-            "package_name": "test-crate",
-            "package_version": "2.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "test_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null
-        });
+        let restore_request = CargoRestoreRequest::builder()
+            .package_name("test-crate")
+            .package_version("2.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("test_hash")
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
@@ -756,21 +701,19 @@ mod tests {
 
         let (_, key) = crate::api::test_helpers::test_blob(b"wrong_target_test");
 
-        let save_request = json!({
-            "package_name": "test-crate",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "test_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "test_content",
-            "artifacts": [{
-                "object_key": key,
-                "path": "libtest.rlib",
-                "mtime_nanos": 1000000000000000000u128,
-                "executable": false
-            }]
-        });
+        let save_request = CargoSaveRequest::builder()
+            .package_name("test-crate")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("test_hash")
+            .content_hash("test_content")
+            .artifacts([ArtifactFile::builder()
+                .object_key(key)
+                .path("libtest.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/save")
@@ -778,14 +721,12 @@ mod tests {
             .await;
         response.assert_status(StatusCode::CREATED);
 
-        let restore_request = json!({
-            "package_name": "test-crate",
-            "package_version": "1.0.0",
-            "target": "aarch64-apple-darwin",
-            "library_crate_compilation_unit_hash": "test_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null
-        });
+        let restore_request = CargoRestoreRequest::builder()
+            .package_name("test-crate")
+            .package_version("1.0.0")
+            .target("aarch64-apple-darwin")
+            .library_crate_compilation_unit_hash("test_hash")
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
@@ -804,21 +745,19 @@ mod tests {
 
         let (_, key) = crate::api::test_helpers::test_blob(b"wrong_hash_test");
 
-        let save_request = json!({
-            "package_name": "test-crate",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "correct_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "test_content",
-            "artifacts": [{
-                "object_key": key,
-                "path": "libtest.rlib",
-                "mtime_nanos": 1000000000000000000u128,
-                "executable": false
-            }]
-        });
+        let save_request = CargoSaveRequest::builder()
+            .package_name("test-crate")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("correct_hash")
+            .content_hash("test_content")
+            .artifacts([ArtifactFile::builder()
+                .object_key(key)
+                .path("libtest.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/save")
@@ -826,14 +765,12 @@ mod tests {
             .await;
         response.assert_status(StatusCode::CREATED);
 
-        let restore_request = json!({
-            "package_name": "test-crate",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "wrong_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null
-        });
+        let restore_request = CargoRestoreRequest::builder()
+            .package_name("test-crate")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("wrong_hash")
+            .build();
 
         let response = server
             .post("/api/v1/cache/cargo/restore")

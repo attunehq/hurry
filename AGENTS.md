@@ -198,6 +198,30 @@ Benefits:
 - ❌: `formats_str`
 - ✅: `formats`
 
+### Import Style
+Prefer direct imports over fully qualified paths unless ambiguous:
+
+```rust
+// ✅ Prefer: Import and use directly
+use client::courier::v1::{Key, cache::ArtifactFile};
+
+let key = Key::from_hex(&hex_string)?;
+let artifact = ArtifactFile::builder()
+    .object_key(key)
+    .build();
+
+// ❌ Avoid: Fully qualified paths when unambiguous
+let key = client::courier::v1::Key::from_hex(&hex_string)?;
+let artifact = client::courier::v1::cache::ArtifactFile::builder()
+    .object_key(key)
+    .build();
+```
+
+**Exceptions where fully qualified paths are preferred:**
+- When the function/type name is ambiguous or unclear on its own (e.g., `serde_json::to_string` is clearer than a freestanding `to_string`)
+- When multiple types with the same name exist in scope (use one-level-up imports or aliases)
+- When the import would create naming conflicts
+
 ### String Formatting
 - Always inline rust variables in format-like strings if they can be inlined:
 - Plain variables can be inlined: `format!("Hello, {name}")`

@@ -130,6 +130,12 @@ impl IntoResponse for BulkReadResponse {
 
 #[cfg(test)]
 mod tests {
+    //! Note: These tests use json! for request construction to test the raw API
+    //! contract rather than typed request models. This ensures the API
+    //! accepts the expected JSON format correctly. The bulk read API
+    //! returns tar format (not JSON), so response validation uses tar
+    //! parsing rather than typed response models.
+
     use async_tar::Archive;
     use color_eyre::{Result, eyre::Context};
     use futures::{StreamExt, io::Cursor};
@@ -158,6 +164,9 @@ mod tests {
         let key3 = write_cas(&server, content3).await?;
 
         // Request bulk read
+        // Note: Using json! here to test the raw API contract rather than typed request
+        // models. This ensures the API accepts the expected JSON format
+        // correctly.
         let request_body = serde_json::json!({
             "keys": [key1.to_string(), key2.to_string(), key3.to_string()]
         });

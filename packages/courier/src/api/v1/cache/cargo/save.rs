@@ -4,24 +4,13 @@ use client::courier::v1::cache::CargoSaveRequest;
 use color_eyre::eyre::Report;
 use tracing::{error, info};
 
-use crate::db::{CargoSaveCacheRequest, Postgres};
+use crate::db::Postgres;
 
 #[tracing::instrument]
 pub async fn handle(
     Dep(db): Dep<Postgres>,
     Json(request): Json<CargoSaveRequest>,
 ) -> CacheSaveResponse {
-    let request = CargoSaveCacheRequest::builder()
-        .package_name(request.package_name)
-        .package_version(request.package_version)
-        .target(request.target)
-        .library_crate_compilation_unit_hash(request.library_crate_compilation_unit_hash)
-        .maybe_build_script_compilation_unit_hash(request.build_script_compilation_unit_hash)
-        .maybe_build_script_execution_unit_hash(request.build_script_execution_unit_hash)
-        .content_hash(request.content_hash)
-        .artifacts(request.artifacts)
-        .build();
-
     match db.cargo_cache_save(request).await {
         Ok(()) => {
             info!("cache.save.created");
@@ -54,9 +43,9 @@ impl IntoResponse for CacheSaveResponse {
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
+    use client::courier::v1::cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest};
     use color_eyre::{Result, eyre::Context};
     use pretty_assertions::assert_eq as pretty_assert_eq;
-    use serde_json::json;
     use sqlx::PgPool;
 
     use crate::api::test_helpers::test_blob;
@@ -70,36 +59,34 @@ mod tests {
         let (_, key1) = crate::api::test_helpers::test_blob(b"serde_artifact_1");
         let (_, key2) = crate::api::test_helpers::test_blob(b"serde_artifact_2");
 
-        let request = json!({
-            "package_name": "serde",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "abc123",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "content_abc123",
-            "artifacts": [
-                {
-                    "object_key": key1,
-                    "path": "libserde.rlib",
-                    "mtime_nanos": 1234567890123456789u128,
-                    "executable": false
-                },
-                {
-                    "object_key": key2,
-                    "path": "libserde.so",
-                    "mtime_nanos": 1234567890987654321u128,
-                    "executable": true
-                }
-            ]
-        });
+        let request = CargoSaveRequest::builder()
+            .package_name("serde")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("abc123")
+            .content_hash("content_abc123")
+            .artifacts([
+                ArtifactFile::builder()
+                    .object_key(&key1)
+                    .path("libserde.rlib")
+                    .mtime_nanos(1234567890123456789u128)
+                    .executable(false)
+                    .build(),
+                ArtifactFile::builder()
+                    .object_key(&key2)
+                    .path("libserde.so")
+                    .mtime_nanos(1234567890987654321u128)
+                    .executable(true)
+                    .build(),
+            ])
+            .build();
 
         let response = server.post("/api/v1/cache/cargo/save").json(&request).await;
         response.assert_status(StatusCode::CREATED);
 
         // Verify database state
         let db = crate::db::Postgres { pool };
-        let restore_request = crate::db::CargoRestoreCacheRequest::builder()
+        let restore_request = CargoRestoreRequest::builder()
             .package_name("serde")
             .package_version("1.0.0")
             .target("x86_64-unknown-linux-gnu")
@@ -108,14 +95,14 @@ mod tests {
 
         let artifacts = db.cargo_cache_restore(restore_request).await?;
         let expected = vec![
-            crate::db::CargoArtifact::builder()
-                .object_key(key1.to_hex())
+            ArtifactFile::builder()
+                .object_key(key1)
                 .path("libserde.rlib")
                 .mtime_nanos(1234567890123456789u128)
                 .executable(false)
                 .build(),
-            crate::db::CargoArtifact::builder()
-                .object_key(key2.to_hex())
+            ArtifactFile::builder()
+                .object_key(key2)
                 .path("libserde.so")
                 .mtime_nanos(1234567890987654321u128)
                 .executable(true)
@@ -136,29 +123,27 @@ mod tests {
         let (_, key1) = crate::api::test_helpers::test_blob(b"idempotent_1");
         let (_, key2) = crate::api::test_helpers::test_blob(b"idempotent_2");
 
-        let request = json!({
-            "package_name": "serde",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "abc123",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "content_abc123",
-            "artifacts": [
-                {
-                    "object_key": key1,
-                    "path": "libserde.rlib",
-                    "mtime_nanos": 1234567890123456789u128,
-                    "executable": false
-                },
-                {
-                    "object_key": key2,
-                    "path": "libserde.so",
-                    "mtime_nanos": 1234567890987654321u128,
-                    "executable": true
-                }
-            ]
-        });
+        let request = CargoSaveRequest::builder()
+            .package_name("serde")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("abc123")
+            .content_hash("content_abc123")
+            .artifacts([
+                ArtifactFile::builder()
+                    .object_key(&key1)
+                    .path("libserde.rlib")
+                    .mtime_nanos(1234567890123456789u128)
+                    .executable(false)
+                    .build(),
+                ArtifactFile::builder()
+                    .object_key(&key2)
+                    .path("libserde.so")
+                    .mtime_nanos(1234567890987654321u128)
+                    .executable(true)
+                    .build(),
+            ])
+            .build();
 
         let response1 = server.post("/api/v1/cache/cargo/save").json(&request).await;
         response1.assert_status(StatusCode::CREATED);
@@ -168,7 +153,7 @@ mod tests {
 
         // Verify database state after idempotent saves
         let db = crate::db::Postgres { pool };
-        let restore_request = crate::db::CargoRestoreCacheRequest::builder()
+        let restore_request = CargoRestoreRequest::builder()
             .package_name("serde")
             .package_version("1.0.0")
             .target("x86_64-unknown-linux-gnu")
@@ -177,14 +162,14 @@ mod tests {
 
         let artifacts = db.cargo_cache_restore(restore_request).await?;
         let expected = vec![
-            crate::db::CargoArtifact::builder()
-                .object_key(key1.to_hex())
+            ArtifactFile::builder()
+                .object_key(key1)
                 .path("libserde.rlib")
                 .mtime_nanos(1234567890123456789u128)
                 .executable(false)
                 .build(),
-            crate::db::CargoArtifact::builder()
-                .object_key(key2.to_hex())
+            ArtifactFile::builder()
+                .object_key(key2)
                 .path("libserde.so")
                 .mtime_nanos(1234567890987654321u128)
                 .executable(true)
@@ -204,28 +189,28 @@ mod tests {
 
         let (_, key) = crate::api::test_helpers::test_blob(b"proc_macro_artifact");
 
-        let request = json!({
-            "package_name": "proc-macro-crate",
-            "package_version": "2.0.0",
-            "target": "x86_64-apple-darwin",
-            "library_crate_compilation_unit_hash": "lib_hash",
-            "build_script_compilation_unit_hash": "build_comp_hash",
-            "build_script_execution_unit_hash": "build_exec_hash",
-            "content_hash": "full_content_hash",
-            "artifacts": [{
-                "object_key": key,
-                "path": "libproc_macro_crate.rlib",
-                "mtime_nanos": 9876543210123456789u128,
-                "executable": false
-            }]
-        });
+        let request = CargoSaveRequest::builder()
+            .package_name("proc-macro-crate")
+            .package_version("2.0.0")
+            .target("x86_64-apple-darwin")
+            .library_crate_compilation_unit_hash("lib_hash")
+            .build_script_compilation_unit_hash("build_comp_hash")
+            .build_script_execution_unit_hash("build_exec_hash")
+            .content_hash("full_content_hash")
+            .artifacts([ArtifactFile::builder()
+                .object_key(&key)
+                .path("libproc_macro_crate.rlib")
+                .mtime_nanos(9876543210123456789u128)
+                .executable(false)
+                .build()])
+            .build();
 
         let response = server.post("/api/v1/cache/cargo/save").json(&request).await;
         response.assert_status(StatusCode::CREATED);
 
         // Verify database state
         let db = crate::db::Postgres { pool };
-        let restore_request = crate::db::CargoRestoreCacheRequest::builder()
+        let restore_request = CargoRestoreRequest::builder()
             .package_name("proc-macro-crate")
             .package_version("2.0.0")
             .target("x86_64-apple-darwin")
@@ -236,8 +221,8 @@ mod tests {
 
         let artifacts = db.cargo_cache_restore(restore_request).await?;
         let expected = vec![
-            crate::db::CargoArtifact::builder()
-                .object_key(key.to_hex())
+            ArtifactFile::builder()
+                .object_key(key)
                 .path("libproc_macro_crate.rlib")
                 .mtime_nanos(9876543210123456789u128)
                 .executable(false)
@@ -265,21 +250,19 @@ mod tests {
         });
 
         for (i, (name, version, key)) in keyed_packages.clone().enumerate() {
-            let request = json!({
-                "package_name": *name,
-                "package_version": *version,
-                "target": "x86_64-unknown-linux-gnu",
-                "library_crate_compilation_unit_hash": format!("hash_{i}"),
-                "build_script_compilation_unit_hash": null,
-                "build_script_execution_unit_hash": null,
-                "content_hash": format!("content_{i}"),
-                "artifacts": [{
-                    "object_key": key,
-                    "path": format!("lib{name}.rlib"),
-                    "mtime_nanos": 1000000000000000000u128 + i as u128,
-                    "executable": false
-                }]
-            });
+            let request = CargoSaveRequest::builder()
+                .package_name(*name)
+                .package_version(*version)
+                .target("x86_64-unknown-linux-gnu")
+                .library_crate_compilation_unit_hash(format!("hash_{i}"))
+                .content_hash(format!("content_{i}"))
+                .artifacts([ArtifactFile::builder()
+                    .object_key(key)
+                    .path(format!("lib{name}.rlib"))
+                    .mtime_nanos(1000000000000000000u128 + i as u128)
+                    .executable(false)
+                    .build()])
+                .build();
 
             let response = server.post("/api/v1/cache/cargo/save").json(&request).await;
             response.assert_status(StatusCode::CREATED);
@@ -288,7 +271,7 @@ mod tests {
         // Verify all packages were saved correctly
         let db = crate::db::Postgres { pool };
         for (i, (name, version, key)) in keyed_packages.enumerate() {
-            let restore_request = crate::db::CargoRestoreCacheRequest::builder()
+            let restore_request = CargoRestoreRequest::builder()
                 .package_name(*name)
                 .package_version(*version)
                 .target("x86_64-unknown-linux-gnu")
@@ -297,8 +280,8 @@ mod tests {
 
             let artifacts = db.cargo_cache_restore(restore_request).await?;
             let expected = vec![
-                crate::db::CargoArtifact::builder()
-                    .object_key(key.to_hex())
+                ArtifactFile::builder()
+                    .object_key(key)
                     .path(format!("lib{name}.rlib"))
                     .mtime_nanos(1000000000000000000u128 + i as u128)
                     .executable(false)
@@ -327,21 +310,19 @@ mod tests {
             .map(|target| (target, test_blob(format!("target_{target}").as_bytes()).1));
 
         for (i, (target, key)) in keyed_targets.clone().enumerate() {
-            let request = json!({
-                "package_name": "serde",
-                "package_version": "1.0.0",
-                "target": target,
-                "library_crate_compilation_unit_hash": format!("hash_{i}"),
-                "build_script_compilation_unit_hash": null,
-                "build_script_execution_unit_hash": null,
-                "content_hash": format!("content_{i}"),
-                "artifacts": [{
-                    "object_key": key,
-                    "path": "libserde.rlib",
-                    "mtime_nanos": 1234567890000000000u128 + i as u128,
-                    "executable": false
-                }]
-            });
+            let request = CargoSaveRequest::builder()
+                .package_name("serde")
+                .package_version("1.0.0")
+                .target(*target)
+                .library_crate_compilation_unit_hash(format!("hash_{i}"))
+                .content_hash(format!("content_{i}"))
+                .artifacts([ArtifactFile::builder()
+                    .object_key(key)
+                    .path("libserde.rlib")
+                    .mtime_nanos(1234567890000000000u128 + i as u128)
+                    .executable(false)
+                    .build()])
+                .build();
 
             let response = server.post("/api/v1/cache/cargo/save").json(&request).await;
             response.assert_status(StatusCode::CREATED);
@@ -350,7 +331,7 @@ mod tests {
         // Verify all targets were saved correctly for the same package
         let db = crate::db::Postgres { pool };
         for (i, (target, key)) in keyed_targets.enumerate() {
-            let restore_request = crate::db::CargoRestoreCacheRequest::builder()
+            let restore_request = CargoRestoreRequest::builder()
                 .package_name("serde")
                 .package_version("1.0.0")
                 .target(*target)
@@ -359,8 +340,8 @@ mod tests {
 
             let artifacts = db.cargo_cache_restore(restore_request).await?;
             let expected = vec![
-                crate::db::CargoArtifact::builder()
-                    .object_key(key.to_hex())
+                ArtifactFile::builder()
+                    .object_key(key)
                     .path("libserde.rlib")
                     .mtime_nanos(1234567890000000000u128 + i as u128)
                     .executable(false)
@@ -380,21 +361,19 @@ mod tests {
 
         let (_, shared_object_key) = crate::api::test_helpers::test_blob(b"shared_object");
 
-        let request1 = json!({
-            "package_name": "dep-a",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "hash_a",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "content_a",
-            "artifacts": [{
-                "object_key": shared_object_key,
-                "path": "liba.rlib",
-                "mtime_nanos": 1000000000000000000u128,
-                "executable": false
-            }]
-        });
+        let request1 = CargoSaveRequest::builder()
+            .package_name("dep-a")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash_a")
+            .content_hash("content_a")
+            .artifacts([ArtifactFile::builder()
+                .object_key(&shared_object_key)
+                .path("liba.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
 
         let response1 = server
             .post("/api/v1/cache/cargo/save")
@@ -402,21 +381,19 @@ mod tests {
             .await;
         response1.assert_status(StatusCode::CREATED);
 
-        let request2 = json!({
-            "package_name": "dep-b",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "hash_b",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "content_b",
-            "artifacts": [{
-                "object_key": shared_object_key,
-                "path": "libb.rlib",
-                "mtime_nanos": 2000000000000000000u128,
-                "executable": false
-            }]
-        });
+        let request2 = CargoSaveRequest::builder()
+            .package_name("dep-b")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash_b")
+            .content_hash("content_b")
+            .artifacts([ArtifactFile::builder()
+                .object_key(&shared_object_key)
+                .path("libb.rlib")
+                .mtime_nanos(2000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
 
         let response2 = server
             .post("/api/v1/cache/cargo/save")
@@ -427,7 +404,7 @@ mod tests {
         // Verify both packages can restore with shared object
         let db = crate::db::Postgres { pool };
 
-        let restore_a = crate::db::CargoRestoreCacheRequest::builder()
+        let restore_a = CargoRestoreRequest::builder()
             .package_name("dep-a")
             .package_version("1.0.0")
             .target("x86_64-unknown-linux-gnu")
@@ -436,8 +413,8 @@ mod tests {
 
         let artifacts_a = db.cargo_cache_restore(restore_a).await?;
         let expected_a = vec![
-            crate::db::CargoArtifact::builder()
-                .object_key(shared_object_key.to_hex())
+            ArtifactFile::builder()
+                .object_key(&shared_object_key)
                 .path("liba.rlib")
                 .mtime_nanos(1000000000000000000u128)
                 .executable(false)
@@ -445,7 +422,7 @@ mod tests {
         ];
         pretty_assert_eq!(artifacts_a, expected_a);
 
-        let restore_b = crate::db::CargoRestoreCacheRequest::builder()
+        let restore_b = CargoRestoreRequest::builder()
             .package_name("dep-b")
             .package_version("1.0.0")
             .target("x86_64-unknown-linux-gnu")
@@ -454,8 +431,8 @@ mod tests {
 
         let artifacts_b = db.cargo_cache_restore(restore_b).await?;
         let expected_b = vec![
-            crate::db::CargoArtifact::builder()
-                .object_key(shared_object_key.to_hex())
+            ArtifactFile::builder()
+                .object_key(&shared_object_key)
                 .path("libb.rlib")
                 .mtime_nanos(2000000000000000000u128)
                 .executable(false)
@@ -475,32 +452,30 @@ mod tests {
         let artifacts = (0..20)
             .map(|i| {
                 let (_, key) = test_blob(format!("artifact_{i}").as_bytes());
-                json!({
-                    "object_key": key,
-                    "path": format!("artifact_{i}.o"),
-                    "mtime_nanos": 1000000000000000000u128 + i as u128,
-                    "executable": i % 3 == 0
-                })
+                ArtifactFile::builder()
+                    .object_key(key)
+                    .path(format!("artifact_{i}.o"))
+                    .mtime_nanos(1000000000000000000u128 + i as u128)
+                    .executable(i % 3 == 0)
+                    .build()
             })
             .collect::<Vec<_>>();
 
-        let request = json!({
-            "package_name": "large-crate",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "large_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "large_content",
-            "artifacts": artifacts
-        });
+        let request = CargoSaveRequest::builder()
+            .package_name("large-crate")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("large_hash")
+            .content_hash("large_content")
+            .artifacts(artifacts)
+            .build();
 
         let response = server.post("/api/v1/cache/cargo/save").json(&request).await;
         response.assert_status(StatusCode::CREATED);
 
         // Verify all artifacts were saved correctly
         let db = crate::db::Postgres { pool };
-        let restore_request = crate::db::CargoRestoreCacheRequest::builder()
+        let restore_request = CargoRestoreRequest::builder()
             .package_name("large-crate")
             .package_version("1.0.0")
             .target("x86_64-unknown-linux-gnu")
@@ -512,8 +487,8 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, artifact)| {
-                crate::db::CargoArtifact::builder()
-                    .object_key(artifact.object_key.clone())
+                ArtifactFile::builder()
+                    .object_key(&artifact.object_key)
                     .path(format!("artifact_{i}.o"))
                     .mtime_nanos(1000000000000000000u128 + i as u128)
                     .executable(i % 3 == 0)
@@ -535,21 +510,19 @@ mod tests {
         let requests = (0..10)
             .map(|i| {
                 let (_, key) = test_blob(format!("concurrent_{i}").as_bytes());
-                json!({
-                    "package_name": format!("crate-{i}"),
-                    "package_version": "1.0.0",
-                    "target": "x86_64-unknown-linux-gnu",
-                    "library_crate_compilation_unit_hash": format!("hash_{i}"),
-                    "build_script_compilation_unit_hash": null,
-                    "build_script_execution_unit_hash": null,
-                    "content_hash": format!("content_{i}"),
-                    "artifacts": [{
-                        "object_key": key,
-                        "path": format!("libcrate_{i}.rlib"),
-                        "mtime_nanos": 1000000000000000000u128 + i as u128,
-                        "executable": false
-                    }]
-                })
+                CargoSaveRequest::builder()
+                    .package_name(format!("crate-{i}"))
+                    .package_version("1.0.0")
+                    .target("x86_64-unknown-linux-gnu")
+                    .library_crate_compilation_unit_hash(format!("hash_{i}"))
+                    .content_hash(format!("content_{i}"))
+                    .artifacts([ArtifactFile::builder()
+                        .object_key(key)
+                        .path(format!("libcrate_{i}.rlib"))
+                        .mtime_nanos(1000000000000000000u128 + i as u128)
+                        .executable(false)
+                        .build()])
+                    .build()
             })
             .collect::<Vec<_>>();
 
@@ -573,7 +546,7 @@ mod tests {
         // Verify all concurrent saves were correctly stored
         let db = crate::db::Postgres { pool };
         for i in 0..10 {
-            let restore_request = crate::db::CargoRestoreCacheRequest::builder()
+            let restore_request = CargoRestoreRequest::builder()
                 .package_name(format!("crate-{i}"))
                 .package_version("1.0.0")
                 .target("x86_64-unknown-linux-gnu")
@@ -584,7 +557,7 @@ mod tests {
             let expected = artifacts
                 .iter()
                 .map(|artifact| {
-                    crate::db::CargoArtifact::builder()
+                    ArtifactFile::builder()
                         .object_key(artifact.object_key.clone())
                         .path(format!("libcrate_{i}.rlib"))
                         .mtime_nanos(1000000000000000000u128 + i as u128)
@@ -607,21 +580,19 @@ mod tests {
         let (_, key1) = crate::api::test_helpers::test_blob(b"content_v1");
         let (_, key2) = crate::api::test_helpers::test_blob(b"content_v2");
 
-        let request1 = json!({
-            "package_name": "test-crate",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "same_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "content_v1",
-            "artifacts": [{
-                "object_key": key1,
-                "path": "libtest.rlib",
-                "mtime_nanos": 1000000000000000000u128,
-                "executable": false
-            }]
-        });
+        let request1 = CargoSaveRequest::builder()
+            .package_name("test-crate")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("same_hash")
+            .content_hash("content_v1")
+            .artifacts([ArtifactFile::builder()
+                .object_key(key1)
+                .path("libtest.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
 
         let response1 = server
             .post("/api/v1/cache/cargo/save")
@@ -630,21 +601,19 @@ mod tests {
         response1.assert_status(StatusCode::CREATED);
 
         // Try to save with same unit hashes but different content_hash
-        let request2 = json!({
-            "package_name": "test-crate",
-            "package_version": "1.0.0",
-            "target": "x86_64-unknown-linux-gnu",
-            "library_crate_compilation_unit_hash": "same_hash",
-            "build_script_compilation_unit_hash": null,
-            "build_script_execution_unit_hash": null,
-            "content_hash": "content_v2",
-            "artifacts": [{
-                "object_key": key2,
-                "path": "libtest.rlib",
-                "mtime_nanos": 2000000000000000000u128,
-                "executable": false
-            }]
-        });
+        let request2 = CargoSaveRequest::builder()
+            .package_name("test-crate")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("same_hash")
+            .content_hash("content_v2")
+            .artifacts([ArtifactFile::builder()
+                .object_key(key2)
+                .path("libtest.rlib")
+                .mtime_nanos(2000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
 
         let response2 = server
             .post("/api/v1/cache/cargo/save")

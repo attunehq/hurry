@@ -169,6 +169,12 @@ impl IntoResponse for BulkWriteResponse {
 
 #[cfg(test)]
 mod tests {
+    //! Note: These tests use json! for response validation to test the raw API
+    //! contract rather than typed response models. This ensures the API
+    //! returns the expected JSON format correctly. The bulk CAS API uses
+    //! tar format for requests (not JSON), so there are no typed request
+    //! builders to use here.
+
     use async_tar::{Builder, Header};
     use axum::http::StatusCode;
     use color_eyre::{Result, eyre::Context};
