@@ -4,6 +4,7 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
+client = { path = "../client" }
 axum = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["compat", "io"] }
@@ -31,7 +32,6 @@ bigdecimal = { workspace = true }
 async-tar = { workspace = true }
 piper = { workspace = true }
 maplit = { workspace = true }
-client = { workspace = true }
 
 [dev-dependencies]
 async-tempfile = { workspace = true }

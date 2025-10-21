@@ -14,6 +14,7 @@ name = "walkdir"
 harness = false
 
 [dependencies]
+client = { path = "../client", features = ["client"] }
 atomic-time = { workspace = true }
 blake3 = { workspace = true }
 bon = { workspace = true }
@@ -65,7 +66,6 @@ humansize = { workspace = true }
 scopeguard = { workspace = true }
 dashmap = { workspace = true }
 console = { workspace = true }
-client = { workspace = true, features = ["client"] }
 
 [dev-dependencies]
 async-walkdir.workspace = true
