@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
-client = { path = "../client" }
+client = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["compat", "io"] }
