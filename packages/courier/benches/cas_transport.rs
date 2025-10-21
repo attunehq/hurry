@@ -28,8 +28,9 @@ use url::Url;
 
 const KB: usize = 1_024;
 const MB: usize = 1_048_576;
+const GB: usize = 1_073_741_824;
 
-const SIZES: &[usize] = &[KB, 10 * KB, 100 * KB, MB, 10 * MB, 50 * MB, 100 * MB];
+const SIZES: &[usize] = &[KB, 10 * KB, 100 * KB, MB, 10 * MB, 50 * MB, 100 * MB, GB];
 const BULK_SIZES: &[usize] = &[KB, 10 * KB, 100 * KB, MB, 10 * MB];
 const BULK_COUNTS: &[usize] = &[1, 10, 50, 100];
 
