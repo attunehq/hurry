@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use async_compression::{Level, tokio::bufread::{ZstdDecoder, ZstdEncoder}};
 use async_tar::Archive;
 use color_eyre::{
     Result, Section, SectionExt,
@@ -11,7 +12,7 @@ use derive_more::{Debug, Display};
 use futures::{AsyncWriteExt, Stream, StreamExt, TryStreamExt};
 use reqwest::{Response, StatusCode};
 use tap::Pipe;
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, BufReader};
 use tokio_util::{
     compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt},
     io::{ReaderStream, StreamReader},
@@ -24,6 +25,13 @@ use super::{
     cache::{CargoRestoreRequest, CargoRestoreResponse, CargoSaveRequest},
     cas::{CasBulkReadRequest, CasBulkWriteResponse},
 };
+use crate::{ContentType, NETWORK_BUFFER_SIZE};
+
+/// Maximum decompressed size for individual blob decompression (1GB).
+///
+/// This limit applies to `zstd::bulk::decompress` calls for single blobs.
+/// It does not limit the total size of bulk operations or tar archives.
+const MAX_DECOMPRESSED_SIZE: usize = 1024 * 1024 * 1024;
 
 /// Client for the Courier API.
 ///
@@ -99,12 +107,20 @@ impl Client {
     #[instrument(skip(self))]
     pub async fn cas_read(&self, key: &Key) -> Result<Option<impl AsyncRead + Unpin>> {
         let url = self.base.join(&format!("api/v1/cas/{key}"))?;
-        let response = self.http.get(url).send().await.context("send")?;
+        let response = self
+            .http
+            .get(url)
+            .header(ContentType::ACCEPT, ContentType::BytesZstd.value())
+            .send()
+            .await
+            .context("send")?;
         match response.status() {
             StatusCode::OK => response
                 .bytes_stream()
                 .map_err(std::io::Error::other)
                 .pipe(StreamReader::new)
+                .pipe(BufReader::new)
+                .pipe(ZstdDecoder::new)
                 .pipe(Some)
                 .pipe(Ok),
             StatusCode::NOT_FOUND => Ok(None),
@@ -128,10 +144,19 @@ impl Client {
         content: impl AsyncRead + Unpin + Send + 'static,
     ) -> Result<()> {
         let url = self.base.join(&format!("api/v1/cas/{key}"))?;
-        let stream = ReaderStream::with_capacity(content, 1024 * 1024);
+        let content = BufReader::new(content);
+        let encoder = ZstdEncoder::with_quality(content, Level::Default);
+        let stream = ReaderStream::with_capacity(encoder, NETWORK_BUFFER_SIZE);
         let body = reqwest::Body::wrap_stream(stream);
 
-        let response = self.http.put(url).body(body).send().await.context("send")?;
+        let response = self
+            .http
+            .put(url)
+            .header(ContentType::HEADER, ContentType::BytesZstd.value())
+            .body(body)
+            .send()
+            .await
+            .context("send")?;
         match response.status() {
             StatusCode::CREATED => Ok(()),
             status => {
@@ -212,7 +237,15 @@ impl Client {
     #[instrument(name = "Client::cas_write_bytes", skip(body), fields(body = body.len()))]
     pub async fn cas_write_bytes(&self, key: &Key, body: Vec<u8>) -> Result<()> {
         let url = self.base.join(&format!("api/v1/cas/{key}"))?;
-        let response = self.http.put(url).body(body).send().await.context("send")?;
+        let compressed = zstd::bulk::compress(&body, 0).context("compress body")?;
+        let response = self
+            .http
+            .put(url)
+            .header(ContentType::HEADER, ContentType::BytesZstd.value())
+            .body(compressed)
+            .send()
+            .await
+            .context("send")?;
         match response.status() {
             StatusCode::CREATED => Ok(()),
             status => {
@@ -230,14 +263,20 @@ impl Client {
     /// Read a CAS object into a byte vector.
     pub async fn cas_read_bytes(&self, key: &Key) -> Result<Option<Vec<u8>>> {
         let url = self.base.join(&format!("api/v1/cas/{key}"))?;
-        let response = self.http.get(url).send().await.context("send")?;
+        let response = self
+            .http
+            .get(url)
+            .header(ContentType::ACCEPT, ContentType::BytesZstd.value())
+            .send()
+            .await
+            .context("send")?;
         match response.status() {
-            StatusCode::OK => response
-                .bytes()
-                .await
-                .context("read body")
-                .map(|body| body.to_vec())
-                .map(Some),
+            StatusCode::OK => {
+                let compressed = response.bytes().await.context("read body")?;
+                let decompressed = zstd::bulk::decompress(&compressed, MAX_DECOMPRESSED_SIZE)
+                    .context("decompress body")?;
+                Ok(Some(decompressed))
+            }
             StatusCode::NOT_FOUND => Ok(None),
             status => {
                 let url = response.url().to_string();
@@ -262,11 +301,13 @@ impl Client {
         let writer = tokio::task::spawn(async move {
             let mut tar = async_tar::Builder::new(writer);
             while let Some((key, content)) = entries.next().await {
+                let compressed = zstd::bulk::compress(&content, 0)
+                    .with_context(|| format!("compress entry: {key}"))?;
                 let mut header = async_tar::Header::new_gnu();
-                header.set_size(content.len() as u64);
+                header.set_size(compressed.len() as u64);
                 header.set_mode(0o644);
                 header.set_cksum();
-                tar.append_data(&mut header, key.to_hex(), content.as_slice())
+                tar.append_data(&mut header, key.to_hex(), compressed.as_slice())
                     .await
                     .with_context(|| format!("add entry: {key}"))?;
             }
@@ -275,12 +316,12 @@ impl Client {
             writer.close().await.context("close writer")
         });
 
-        let stream = ReaderStream::with_capacity(reader.compat(), 1024 * 1024);
+        let stream = ReaderStream::with_capacity(reader.compat(), NETWORK_BUFFER_SIZE);
         let body = reqwest::Body::wrap_stream(stream);
         let response = self
             .http
             .post(url)
-            .header("Content-Type", "application/x-tar")
+            .header(ContentType::HEADER, ContentType::TarZstd.value())
             .body(body)
             .send()
             .await
@@ -318,6 +359,7 @@ impl Client {
         let response = self
             .http
             .post(url)
+            .header(ContentType::ACCEPT, ContentType::TarZstd.value())
             .json(&request)
             .send()
             .await
@@ -347,12 +389,15 @@ impl Client {
                     let key = Key::from_hex(path.to_string_lossy())
                         .with_context(|| format!("parse entry name {path:?}"))?;
 
-                    let mut content = Vec::new();
-                    tokio::io::copy(&mut entry.compat(), &mut content)
+                    let mut compressed = Vec::new();
+                    tokio::io::copy(&mut entry.compat(), &mut compressed)
                         .await
-                        .context("read content")?;
+                        .context("read compressed content")?;
 
-                    tx.send_async(Ok((key, content)))
+                    let decompressed = zstd::bulk::decompress(&compressed, MAX_DECOMPRESSED_SIZE)
+                        .with_context(|| format!("decompress entry: {key}"))?;
+
+                    tx.send_async(Ok((key, decompressed)))
                         .await
                         .expect("invariant: sender cannot be closed");
                 }

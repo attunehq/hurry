@@ -20,7 +20,7 @@
 
 use derive_more::Display;
 use enum_assoc::Assoc;
-use reqwest::header::{self, HeaderName, HeaderValue};
+use http::header::{self, HeaderName, HeaderValue};
 
 pub mod courier;
 
