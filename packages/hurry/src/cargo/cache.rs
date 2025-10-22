@@ -764,8 +764,7 @@ impl CargoCache {
 
                     // Process each file with its fetched content.
                     for file in batch {
-                        let key = &file.object_key;
-                        let Some(data) = contents.get(key) else {
+                        let Some(data) = contents.get(&file.object_key) else {
                             warn!(?file, "file not found in bulk response");
                             continue;
                         };
