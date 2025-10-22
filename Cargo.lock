@@ -917,6 +917,7 @@ dependencies = [
  "bon",
  "color-eyre",
  "derive_more",
+ "enum-assoc",
  "flume",
  "futures",
  "hex",

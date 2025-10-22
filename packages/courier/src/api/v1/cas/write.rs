@@ -1,7 +1,14 @@
 use aerosol::axum::Dep;
-use axum::{body::Body, extract::Path, http::StatusCode, response::IntoResponse};
-use color_eyre::eyre::Report;
+use axum::{
+    body::Body,
+    extract::Path,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+};
+use clients::ContentType;
+use color_eyre::{Result, eyre::Report};
 use futures::{StreamExt, TryStreamExt};
+use tap::Pipe;
 use tokio_util::io::StreamReader;
 use tracing::{error, info};
 
@@ -38,8 +45,22 @@ use crate::storage::{Disk, Key};
 /// 2. It allows this service to colocate the temporary file with the ultimate
 ///    destination for the content, which makes implementation simpler if we
 ///    move to multiple mounted disks for subsets of the CAS.
+///
+/// ## Compression
+///
+/// The `Content-Type` header communicates the format:
+/// - `application/octet-stream+zstd`: The body is compressed with `zstd`.
+/// - Any other value: The body is uncompressed.
+///
+/// Pre-compressed content is validated to ensure it decompresses correctly and
+/// hashes to the expected key.
 #[tracing::instrument(skip(body))]
-pub async fn handle(Dep(cas): Dep<Disk>, Path(key): Path<Key>, body: Body) -> CasWriteResponse {
+pub async fn handle(
+    Dep(cas): Dep<Disk>,
+    Path(key): Path<Key>,
+    headers: HeaderMap,
+    body: Body,
+) -> CasWriteResponse {
     // Check if the key already exists before consuming the body
     // If it exists, we still need to consume the entire body; if we return early
     // instead then clients see a "connection reset by peer" error.
@@ -59,13 +80,18 @@ pub async fn handle(Dep(cas): Dep<Disk>, Path(key): Path<Key>, body: Body) -> Ca
         return CasWriteResponse::Created;
     }
 
-    let stream = body.into_data_stream();
-    let stream = stream.map_err(std::io::Error::other);
-    let reader = StreamReader::new(stream);
+    // Check Content-Type header to determine if content is pre-compressed
+    let is_compressed = headers
+        .get(ContentType::HEADER)
+        .is_some_and(|v| v == ContentType::BytesZstd);
 
-    // Note: [`Disk::write`] validates that the content hashes to the provided
-    // key. If the hash doesn't match, the write fails and we return an error.
-    match cas.write(&key, reader).await {
+    let result = if is_compressed {
+        handle_compressed(cas, key, body).await
+    } else {
+        handle_plain(cas, key, body).await
+    };
+
+    match result {
         Ok(()) => {
             info!("cas.write.success");
             CasWriteResponse::Created
@@ -75,6 +101,26 @@ pub async fn handle(Dep(cas): Dep<Disk>, Path(key): Path<Key>, body: Body) -> Ca
             CasWriteResponse::Error(err)
         }
     }
+}
+
+#[tracing::instrument(skip(body))]
+async fn handle_compressed(cas: Disk, key: Key, body: Body) -> Result<()> {
+    info!("cas.write.compressed");
+    let stream = body
+        .into_data_stream()
+        .map_err(std::io::Error::other)
+        .pipe(StreamReader::new);
+    cas.write_compressed(&key, stream).await
+}
+
+#[tracing::instrument(skip(body))]
+async fn handle_plain(cas: Disk, key: Key, body: Body) -> Result<()> {
+    info!("cas.write.uncompressed");
+    let stream = body
+        .into_data_stream()
+        .map_err(std::io::Error::other)
+        .pipe(StreamReader::new);
+    cas.write(&key, stream).await
 }
 
 #[derive(Debug)]

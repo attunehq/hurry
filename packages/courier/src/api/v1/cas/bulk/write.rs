@@ -2,8 +2,16 @@ use std::collections::BTreeSet;
 
 use aerosol::axum::Dep;
 use async_tar::Archive;
-use axum::{Json, body::Body, http::StatusCode, response::IntoResponse};
-use clients::courier::v1::cas::{CasBulkWriteKeyError, CasBulkWriteResponse};
+use axum::{
+    Json,
+    body::Body,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+};
+use clients::{
+    ContentType,
+    courier::v1::cas::{CasBulkWriteKeyError, CasBulkWriteResponse},
+};
 use color_eyre::{Report, eyre::Context};
 use futures::StreamExt;
 use tap::Pipe;
@@ -31,9 +39,13 @@ pub enum BulkWriteResponse {
 ///
 /// ## Request format
 ///
-/// The request body should be a tar archive (Content-Type: application/x-tar)
-/// where each entry is named with the hex-encoded key. The content of each
-/// entry is the uncompressed blob data.
+/// The request body should be a tar archive where each entry is named with the
+/// hex-encoded key. The `Content-Type` header determines the format:
+/// - `application/x-tar`: Each tar entry contains uncompressed blob data
+/// - `application/x-zstd-tar`: Each tar entry contains pre-compressed blob data
+///
+/// Note: The tar archive itself is always uncompressed. The Content-Type only
+/// indicates whether the individual blobs inside the tar are compressed.
 ///
 /// ## Response format
 ///
@@ -64,9 +76,34 @@ pub enum BulkWriteResponse {
 /// Each blob is validated during write to ensure its content hashes to the
 /// provided key, just like single-item writes.
 #[tracing::instrument(skip(body))]
-pub async fn handle(Dep(cas): Dep<Disk>, body: Body) -> BulkWriteResponse {
+pub async fn handle(Dep(cas): Dep<Disk>, headers: HeaderMap, body: Body) -> BulkWriteResponse {
     info!("cas.bulk.write.start");
 
+    // Check Content-Type to determine if entries are pre-compressed
+    let entries_compressed = headers
+        .get(ContentType::HEADER)
+        .is_some_and(|v| v == ContentType::TarZstd);
+
+    if entries_compressed {
+        handle_compressed(cas, body).await
+    } else {
+        handle_plain(cas, body).await
+    }
+}
+
+#[tracing::instrument(skip(body))]
+async fn handle_compressed(cas: Disk, body: Body) -> BulkWriteResponse {
+    info!("cas.bulk.write.compressed");
+    process_archive(cas, body, true).await
+}
+
+#[tracing::instrument(skip(body))]
+async fn handle_plain(cas: Disk, body: Body) -> BulkWriteResponse {
+    info!("cas.bulk.write.uncompressed");
+    process_archive(cas, body, false).await
+}
+
+async fn process_archive(cas: Disk, body: Body, entries_compressed: bool) -> BulkWriteResponse {
     let stream = body.into_data_stream();
     let stream = stream.map(|result| result.map_err(std::io::Error::other));
     let archive = StreamReader::new(stream).compat().pipe(Archive::new);
@@ -113,7 +150,13 @@ pub async fn handle(Dep(cas): Dep<Disk>, body: Body) -> BulkWriteResponse {
             continue;
         }
 
-        match cas.write(&key, entry.compat()).await {
+        let result = if entries_compressed {
+            cas.write_compressed(&key, entry.compat()).await
+        } else {
+            cas.write(&key, entry.compat()).await
+        };
+
+        match result {
             Ok(()) => {
                 info!(%key, "cas.bulk.write.success");
                 written.insert(key);
