@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use aerosol::axum::Dep;
 use async_tar::Archive;
 use axum::{Json, body::Body, http::StatusCode, response::IntoResponse};
-use clients::courier::v1::cas::{BulkWriteKeyError, CasBulkWriteResponse};
+use clients::courier::v1::cas::{CasBulkWriteKeyError, CasBulkWriteResponse};
 use color_eyre::{Report, eyre::Context};
 use futures::StreamExt;
 use tap::Pipe;
@@ -121,7 +121,7 @@ pub async fn handle(Dep(cas): Dep<Disk>, body: Body) -> BulkWriteResponse {
             Err(error) => {
                 error!(%key, ?error, "cas.bulk.write.error");
                 errors.insert(
-                    BulkWriteKeyError::builder()
+                    CasBulkWriteKeyError::builder()
                         .key(key)
                         .error(format!("{error:?}"))
                         .build(),
