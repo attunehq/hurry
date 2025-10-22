@@ -41,13 +41,14 @@ use futures::{Stream, TryStreamExt, future};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tap::{Pipe, TapFallible};
-use tokio::{fs::ReadDir, sync::Mutex, task::spawn_blocking};
+use tokio::{fs::ReadDir, io::AsyncReadExt, sync::Mutex, task::spawn_blocking};
 use tracing::{debug, error, instrument, trace};
+
+use clients::courier::v1::Key;
 
 use crate::{
     Locked, Unlocked,
     ext::then_context,
-    hash::Blake3,
     path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, RelativeTo},
 };
 
@@ -166,7 +167,7 @@ impl Index {
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct IndexEntry {
     /// The hash of the file's contents.
-    pub hash: Blake3,
+    pub hash: Key,
 
     /// The metadata of the file.
     pub metadata: Metadata,
@@ -176,7 +177,7 @@ impl IndexEntry {
     /// Construct the entry from the provided file on disk.
     #[instrument(name = "IndexEntry::from_file")]
     pub async fn from_file(path: &AbsFilePath) -> Result<Self> {
-        let hash = Blake3::from_file(path).then_context("hash file").await?;
+        let hash = hash_file(path).then_context("hash file").await?;
         let metadata = Metadata::from_file(path)
             .then_context("get metadata")
             .await?
@@ -552,4 +553,25 @@ pub async fn is_file(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
     metadata(path)
         .await
         .is_ok_and(|m| m.is_some_and(|m| m.is_file()))
+}
+
+/// Hash the contents of the file at the specified path.
+#[instrument]
+pub async fn hash_file(path: &AbsFilePath) -> Result<Key> {
+    let mut file = open_file(path).await.context("open file")?;
+    let mut hasher = blake3::Hasher::new();
+    let mut data = vec![0; 64 * 1024];
+    let mut bytes = 0;
+    loop {
+        let len = file.read(&mut data).await.context("read chunk")?;
+        if len == 0 {
+            break;
+        }
+        hasher.update(&data[..len]);
+        bytes += len;
+    }
+    let hash = hasher.finalize();
+    let key = Key::from_blake3(hash);
+    trace!(?path, hash = %key, ?bytes, "hash file");
+    Ok(key)
 }

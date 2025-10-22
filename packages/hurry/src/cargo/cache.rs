@@ -26,6 +26,14 @@ use tokio::task::JoinSet;
 use tracing::{debug, instrument, trace, warn};
 use uuid::Uuid;
 
+use clients::{
+    Courier,
+    courier::v1::{
+        Key,
+        cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest},
+    },
+};
+
 use crate::{
     Locked,
     cargo::{
@@ -33,10 +41,7 @@ use crate::{
         Profile, ProfileDir, QualifiedPath, RootOutput, RustcMetadata, Workspace,
     },
     cas::CourierCas,
-    client::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest, Courier},
-    fs,
-    hash::Blake3,
-    mk_rel_file,
+    fs, mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith, TryJoinWith as _},
     progress::{format_size, format_transfer_rate},
 };
@@ -52,7 +57,7 @@ pub struct CacheStats {
 #[derive(Debug, Clone, Default)]
 pub struct RestoreState {
     pub artifacts: DashSet<ArtifactKey>,
-    pub objects: DashSet<Blake3>,
+    pub objects: DashSet<Key>,
     pub stats: CacheStats,
 }
 
@@ -63,7 +68,7 @@ impl RestoreState {
     }
 
     /// Records that an object was restored from cache.
-    fn record_object(&self, key: &Blake3) {
+    fn record_object(&self, key: &Key) {
         self.objects.insert(key.clone());
     }
 
@@ -73,7 +78,7 @@ impl RestoreState {
     }
 
     /// Checks if an object was restored from cache.
-    fn check_object(&self, key: &Blake3) -> bool {
+    fn check_object(&self, key: &Key) -> bool {
         self.objects.contains(key)
     }
 
@@ -542,7 +547,7 @@ impl CargoCache {
                 match fs::read_buffered(&path).await? {
                     Some(content) => {
                         let content = Self::rewrite(&target_dir, &path, &content).await?;
-                        let key = Blake3::from_buffer(&content);
+                        let key = Key::from_buffer(&content);
 
                         // Gather metadata for the artifact file.
                         let metadata = fs::Metadata::from_file(&path)
@@ -555,8 +560,8 @@ impl CargoCache {
                         library_unit_files.push((qualified.clone(), key.clone()));
                         artifact_files.push(
                             ArtifactFile::builder()
-                                .object_key(key.to_string())
-                                .path(qualified)
+                                .object_key(key.clone())
+                                .path(serde_json::to_string(&qualified)?)
                                 .mtime_nanos(mtime_nanos)
                                 .executable(metadata.executable)
                                 .build(),
@@ -699,18 +704,19 @@ impl CargoCache {
                 let mut batch = Vec::new();
 
                 let restore = async |file: &ArtifactFile, data: &[u8]| -> Result<u64> {
-                    let key = Blake3::from_hex_string(&file.object_key)?;
+                    let key = &file.object_key;
 
-                    // Reconstruct the portable path to an absolute path for this machine.
-                    let path = file
-                        .path
+                    // Convert the artifact file path back to QualifiedPath and reconstruct it to an
+                    // absolute path for this machine.
+                    let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
+                    let path = qualified
                         .reconstruct_raw(&profile_root, &cargo_home)
                         .pipe(AbsFilePath::try_from)?;
 
                     // Check if file already exists with correct content.
                     if fs::exists(path.as_std_path()).await {
-                        let existing_hash = Blake3::from_file(&path).await?;
-                        if existing_hash == key {
+                        let existing_hash = fs::hash_file(&path).await?;
+                        if &existing_hash == key {
                             trace!(?path, "file already exists with correct hash, skipping");
                             return Ok(0);
                         }
@@ -727,7 +733,7 @@ impl CargoCache {
                         .build();
                     fs::write(&path, &data).await?;
                     metadata.set_file(&path).await?;
-                    restored.record_object(&key);
+                    restored.record_object(key);
                     Result::<u64>::Ok(data.len() as u64)
                 };
 
@@ -739,8 +745,8 @@ impl CargoCache {
                     // Collect keys to fetch.
                     let keys = batch
                         .iter()
-                        .map(|f| Blake3::from_hex_string(&f.object_key))
-                        .collect::<Result<Vec<_>>>()?;
+                        .map(|f| f.object_key.clone())
+                        .collect::<Vec<_>>();
 
                     // Bulk fetch from CAS as a stream.
                     let mut contents_stream = cas.get_bulk(keys).await?;
@@ -758,8 +764,7 @@ impl CargoCache {
 
                     // Process each file with its fetched content.
                     for file in batch {
-                        let key = Blake3::from_hex_string(&file.object_key)?;
-                        let Some(data) = contents.get(&key) else {
+                        let Some(data) = contents.get(&file.object_key) else {
                             warn!(?file, "file not found in bulk response");
                             continue;
                         };
@@ -1082,7 +1087,7 @@ impl BuiltArtifact {
 /// A content hash of a library unit's artifacts.
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize)]
 struct LibraryUnitHash {
-    files: Vec<(QualifiedPath, Blake3)>,
+    files: Vec<(QualifiedPath, Key)>,
 }
 
 impl LibraryUnitHash {
@@ -1091,7 +1096,7 @@ impl LibraryUnitHash {
     /// This constructor always ensures that the files are sorted, so any two
     /// sets of files with the same paths and contents will produce the same
     /// hash.
-    fn new(mut files: Vec<(QualifiedPath, Blake3)>) -> Self {
+    fn new(mut files: Vec<(QualifiedPath, Key)>) -> Self {
         files.sort();
         Self { files }
     }

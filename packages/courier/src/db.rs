@@ -7,7 +7,10 @@
 //! serialize or deserialize these types, create public-facing types that do so
 //! and are able to convert back and forth with the internal types.
 
-use bon::Builder;
+use clients::courier::v1::{
+    Key,
+    cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest},
+};
 use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context, Report, bail},
@@ -56,48 +59,6 @@ impl AsRef<PgPool> for Postgres {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Builder)]
-#[builder(on(String, into))]
-pub struct CargoSaveCacheRequest {
-    pub package_name: String,
-    pub package_version: String,
-    pub target: String,
-    pub library_crate_compilation_unit_hash: String,
-    pub build_script_compilation_unit_hash: Option<String>,
-    pub build_script_execution_unit_hash: Option<String>,
-    pub content_hash: String,
-
-    #[debug("{:?}", self.artifacts.len())]
-    #[builder(with = |a: impl IntoIterator<Item = impl Into<CargoArtifact>>| a.into_iter().map(|a| a.into()).collect())]
-    pub artifacts: Vec<CargoArtifact>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Builder)]
-#[builder(on(String, into))]
-pub struct CargoArtifact {
-    pub object_key: String,
-    pub path: String,
-    pub mtime_nanos: u128,
-    pub executable: bool,
-}
-
-impl From<&CargoArtifact> for CargoArtifact {
-    fn from(a: &CargoArtifact) -> Self {
-        a.clone()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Builder)]
-#[builder(on(String, into))]
-pub struct CargoRestoreCacheRequest {
-    pub package_name: String,
-    pub package_version: String,
-    pub target: String,
-    pub library_crate_compilation_unit_hash: String,
-    pub build_script_compilation_unit_hash: Option<String>,
-    pub build_script_execution_unit_hash: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 struct CargoLibraryUnitBuildRow {
     id: i64,
@@ -106,7 +67,7 @@ struct CargoLibraryUnitBuildRow {
 
 impl Postgres {
     #[tracing::instrument(name = "Postgres::save_cargo_cache")]
-    pub async fn cargo_cache_save(&self, request: CargoSaveCacheRequest) -> Result<()> {
+    pub async fn cargo_cache_save(&self, request: CargoSaveRequest) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         let package_id = sqlx::query!(
@@ -209,6 +170,7 @@ impl Postgres {
 
         // TODO: Bulk insert.
         for artifact in request.artifacts {
+            let object_key = artifact.object_key.to_hex();
             let object_id = sqlx::query!(
                 r#"
                 WITH inserted AS (
@@ -222,7 +184,7 @@ impl Postgres {
                 SELECT id FROM cargo_object WHERE key = $1
                 LIMIT 1
                 "#,
-                artifact.object_key
+                object_key
             )
             .fetch_one(&mut *tx)
             .await?
@@ -255,8 +217,8 @@ impl Postgres {
     #[tracing::instrument(name = "Postgres::cargo_cache_restore")]
     pub async fn cargo_cache_restore(
         &self,
-        request: CargoRestoreCacheRequest,
-    ) -> Result<Vec<CargoArtifact>, Report> {
+        request: CargoRestoreRequest,
+    ) -> Result<Vec<ArtifactFile>, Report> {
         let mut tx = self.pool.begin().await?;
 
         let unit_to_restore = {
@@ -327,7 +289,7 @@ impl Postgres {
             }
         };
 
-        let mut artifacts = Vec::<CargoArtifact>::new();
+        let mut artifacts = Vec::<ArtifactFile>::new();
         let mut rows = sqlx::query!(
             r#"
             SELECT
@@ -347,12 +309,15 @@ impl Postgres {
             let row = row
                 .context("query artifacts")
                 .with_section(|| format!("{unit_to_restore:#?}").header("Library unit build:"))?;
-            artifacts.push(CargoArtifact {
-                object_key: row.key,
-                path: row.path,
-                mtime_nanos: row.mtime.to_u128().unwrap_or_default(),
-                executable: row.executable,
-            });
+            let object_key = Key::from_hex(&row.key).context("parse object key from database")?;
+            artifacts.push(
+                ArtifactFile::builder()
+                    .object_key(object_key)
+                    .path(row.path)
+                    .mtime_nanos(row.mtime.to_u128().unwrap_or_default())
+                    .executable(row.executable)
+                    .build(),
+            );
         }
 
         debug!(

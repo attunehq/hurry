@@ -3,10 +3,9 @@ use std::collections::BTreeSet;
 use aerosol::axum::Dep;
 use async_tar::Archive;
 use axum::{Json, body::Body, http::StatusCode, response::IntoResponse};
-use bon::Builder;
+use clients::courier::v1::cas::{CasBulkWriteKeyError, CasBulkWriteResponse};
 use color_eyre::{Report, eyre::Context};
 use futures::StreamExt;
-use serde::Serialize;
 use tap::Pipe;
 use tokio_util::{
     compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt},
@@ -18,37 +17,10 @@ use crate::storage::{Disk, Key};
 
 /// Responses for bulk write operation.
 pub enum BulkWriteResponse {
-    Success(BulkWriteResponseBody),
-    PartialSuccess(BulkWriteResponseBody),
+    Success(CasBulkWriteResponse),
+    PartialSuccess(CasBulkWriteResponse),
     InvalidRequest(Report),
     Error(Report),
-}
-
-/// Response body for bulk write operation.
-#[derive(Debug, Serialize, Builder)]
-pub struct BulkWriteResponseBody {
-    /// Keys that were successfully written.
-    #[builder(default)]
-    pub written: BTreeSet<Key>,
-
-    /// Keys that were skipped because they already exist.
-    #[builder(default)]
-    pub skipped: BTreeSet<Key>,
-
-    /// Keys that failed to write with error messages.
-    #[builder(default)]
-    pub errors: BTreeSet<BulkWriteKeyError>,
-}
-
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Builder)]
-pub struct BulkWriteKeyError {
-    /// The key that failed to write.
-    #[builder(into)]
-    pub key: Key,
-
-    /// The error encountered when writing the content.
-    #[builder(into)]
-    pub error: String,
 }
 
 /// Write multiple blobs to the CAS from a tar archive.
@@ -148,10 +120,12 @@ pub async fn handle(Dep(cas): Dep<Disk>, body: Body) -> BulkWriteResponse {
             }
             Err(error) => {
                 error!(%key, ?error, "cas.bulk.write.error");
-                errors.insert(BulkWriteKeyError {
-                    key,
-                    error: format!("{error:?}"),
-                });
+                errors.insert(
+                    CasBulkWriteKeyError::builder()
+                        .key(key)
+                        .error(format!("{error:?}"))
+                        .build(),
+                );
             }
         }
     }
@@ -164,11 +138,11 @@ pub async fn handle(Dep(cas): Dep<Disk>, body: Body) -> BulkWriteResponse {
     );
 
     let partial = !errors.is_empty();
-    let body = BulkWriteResponseBody {
-        written,
-        skipped,
-        errors,
-    };
+    let body = CasBulkWriteResponse::builder()
+        .written(written)
+        .skipped(skipped)
+        .errors(errors)
+        .build();
     if partial {
         BulkWriteResponse::PartialSuccess(body)
     } else {
@@ -195,12 +169,15 @@ impl IntoResponse for BulkWriteResponse {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use async_tar::{Builder, Header};
     use axum::http::StatusCode;
+    use clients::courier::v1::cas::CasBulkWriteResponse;
     use color_eyre::{Result, eyre::Context};
     use futures::io::Cursor;
+    use maplit::btreeset;
     use pretty_assertions::assert_eq as pretty_assert_eq;
-    use serde_json::{Value, json};
     use sqlx::PgPool;
 
     use crate::api::test_helpers::test_blob;
@@ -234,11 +211,6 @@ mod tests {
         let (content1, key1) = test_blob(b"first blob content");
         let (content2, key2) = test_blob(b"second blob content");
         let (content3, key3) = test_blob(b"third blob content");
-        let expected = json!({
-            "written": [key1, key3, key2],
-            "skipped": [],
-            "errors": [],
-        });
 
         let tar_data = create_tar(vec![
             (key1.to_hex(), content1.to_vec()),
@@ -254,7 +226,11 @@ mod tests {
             .await;
 
         response.assert_status_success();
-        let body = response.json::<Value>();
+        let body = response.json::<CasBulkWriteResponse>();
+
+        let expected = CasBulkWriteResponse::builder()
+            .written([&key1, &key2, &key3])
+            .build();
         pretty_assert_eq!(body, expected);
 
         for (key, expected) in [(key1, content1), (key2, content2), (key3, content3)] {
@@ -276,12 +252,6 @@ mod tests {
         let (content, key) = test_blob(b"idempotent blob");
         let tar_data = create_tar(vec![(key.to_hex(), content)]).await?;
 
-        let expected1 = json!({
-            "written": [key],
-            "skipped": [],
-            "errors": [],
-        });
-
         let response1 = server
             .post("/api/v1/cas/bulk/write")
             .content_type("application/x-tar")
@@ -289,14 +259,10 @@ mod tests {
             .await;
 
         response1.assert_status_success();
-        let body1 = response1.json::<Value>();
-        pretty_assert_eq!(body1, expected1);
+        let body1 = response1.json::<CasBulkWriteResponse>();
 
-        let expected2 = json!({
-            "written": [],
-            "skipped": [key],
-            "errors": [],
-        });
+        let expected1 = CasBulkWriteResponse::builder().written([&key]).build();
+        pretty_assert_eq!(body1, expected1);
 
         let response2 = server
             .post("/api/v1/cas/bulk/write")
@@ -305,7 +271,9 @@ mod tests {
             .await;
 
         response2.assert_status_success();
-        let body2 = response2.json::<Value>();
+        let body2 = response2.json::<CasBulkWriteResponse>();
+
+        let expected2 = CasBulkWriteResponse::builder().skipped([&key]).build();
         pretty_assert_eq!(body2, expected2);
 
         Ok(())
@@ -328,19 +296,16 @@ mod tests {
             .await;
 
         response.assert_status_success();
-        let body = response.json::<Value>();
+        let body = response.json::<CasBulkWriteResponse>();
 
-        // We can't actually know what the exact error message will be.
-        pretty_assert_eq!(body["written"], json!([]));
-        pretty_assert_eq!(body["skipped"], json!([]));
-        pretty_assert_eq!(body["errors"].as_array().unwrap().len(), 1);
-        pretty_assert_eq!(body["errors"][0]["key"], key.to_hex());
-        assert!(
-            body["errors"][0]["error"]
-                .as_str()
-                .unwrap()
-                .contains("hash mismatch")
-        );
+        // For errors, we can't predict the exact error message, so check structure
+        pretty_assert_eq!(body.written, BTreeSet::new());
+        pretty_assert_eq!(body.skipped, BTreeSet::new());
+        pretty_assert_eq!(body.errors.len(), 1);
+
+        let error = body.errors.iter().next().unwrap();
+        pretty_assert_eq!(&error.key, &key);
+        assert!(error.error.contains("hash mismatch"));
 
         Ok(())
     }
@@ -384,13 +349,16 @@ mod tests {
             .bytes(tar_data.into())
             .await;
         response.assert_status_success();
-        let body = response.json::<Value>();
+        let body = response.json::<CasBulkWriteResponse>();
 
-        // We can't actually know what the exact error message will be.
-        pretty_assert_eq!(body["written"], json!([valid_key]));
-        pretty_assert_eq!(body["skipped"], json!([]));
-        pretty_assert_eq!(body["errors"].as_array().unwrap().len(), 1);
-        pretty_assert_eq!(body["errors"][0]["key"], wrong_key.to_hex());
+        // Check the written and skipped parts match exactly
+        pretty_assert_eq!(body.written, btreeset! { valid_key.clone() });
+        pretty_assert_eq!(body.skipped, BTreeSet::new());
+
+        // For errors, we can't predict the exact error message, so check structure
+        pretty_assert_eq!(body.errors.len(), 1);
+        let error = body.errors.iter().next().unwrap();
+        pretty_assert_eq!(&error.key, &wrong_key);
 
         let response = server.get(&format!("/api/v1/cas/{valid_key}")).await;
         response.assert_status_ok();
@@ -405,12 +373,6 @@ mod tests {
             .await
             .context("create test server")?;
 
-        let expected = json!({
-            "written": [],
-            "skipped": [],
-            "errors": [],
-        });
-
         let tar = create_tar(Vec::<(&str, &[u8])>::new()).await?;
         let response = server
             .post("/api/v1/cas/bulk/write")
@@ -419,7 +381,9 @@ mod tests {
             .await;
 
         response.assert_status_success();
-        let body = response.json::<Value>();
+        let body = response.json::<CasBulkWriteResponse>();
+
+        let expected = CasBulkWriteResponse::default();
         pretty_assert_eq!(body, expected);
 
         Ok(())

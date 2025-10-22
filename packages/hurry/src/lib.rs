@@ -8,10 +8,8 @@ use derive_more::Display;
 
 pub mod cargo;
 pub mod cas;
-pub mod client;
 pub mod ext;
 pub mod fs;
-pub mod hash;
 pub mod path;
 pub mod progress;
 
