@@ -640,19 +640,13 @@ mod tests {
 
         let read_response = server
             .post("/api/v1/cas/bulk/read")
-            .add_header(
-                clients::ContentType::ACCEPT,
-                ContentType::TarZstd.value(),
-            )
+            .add_header(clients::ContentType::ACCEPT, ContentType::TarZstd.value())
             .json(&request)
             .await;
 
         read_response.assert_status_ok();
         let content_type = read_response.header(clients::ContentType::HEADER);
-        pretty_assert_eq!(
-            content_type,
-            ContentType::TarZstd.value().to_str().unwrap()
-        );
+        pretty_assert_eq!(content_type, ContentType::TarZstd.value().to_str().unwrap());
 
         let tar_data = read_response.as_bytes();
         let cursor = Cursor::new(tar_data.to_vec());

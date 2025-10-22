@@ -6,9 +6,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use clients::{
-    ContentType, LOCAL_BUFFER_SIZE, NETWORK_BUFFER_SIZE, courier::v1::cas::CasBulkReadRequest,
-};
+use clients::{ContentType, NETWORK_BUFFER_SIZE, courier::v1::cas::CasBulkReadRequest};
 use futures::AsyncWriteExt;
 use tokio_util::{
     compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt},
@@ -74,7 +72,7 @@ pub async fn handle(
 #[tracing::instrument]
 async fn handle_compressed(cas: Disk, req: CasBulkReadRequest) -> BulkReadResponse {
     info!("cas.bulk.read.compressed");
-    let (reader, writer) = piper::pipe(LOCAL_BUFFER_SIZE);
+    let (reader, writer) = piper::pipe(NETWORK_BUFFER_SIZE);
     tokio::spawn(async move {
         let mut builder = Builder::new(writer);
         for key in req.keys {
@@ -135,7 +133,7 @@ async fn handle_compressed(cas: Disk, req: CasBulkReadRequest) -> BulkReadRespon
 #[tracing::instrument]
 async fn handle_plain(cas: Disk, req: CasBulkReadRequest) -> BulkReadResponse {
     info!("cas.bulk.read.uncompressed");
-    let (reader, writer) = piper::pipe(LOCAL_BUFFER_SIZE);
+    let (reader, writer) = piper::pipe(NETWORK_BUFFER_SIZE);
     tokio::spawn(async move {
         let mut builder = Builder::new(writer);
         for key in req.keys {
@@ -211,7 +209,10 @@ impl IntoResponse for BulkReadResponse {
 #[cfg(test)]
 mod tests {
     use async_tar::Archive;
-    use clients::{ContentType, courier::v1::{Key, cas::CasBulkReadRequest}};
+    use clients::{
+        ContentType,
+        courier::v1::{Key, cas::CasBulkReadRequest},
+    };
     use color_eyre::{Result, eyre::Context};
     use futures::{StreamExt, io::Cursor};
     use maplit::btreemap;

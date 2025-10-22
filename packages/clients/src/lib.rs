@@ -28,12 +28,15 @@ pub mod courier;
 ///
 /// We're sending relatively large chunks over the network, so we think this is
 /// a good buffer size to use, but haven't done a lot of testing with different
-/// sizes.
+/// sizes. Note that if you're piping content between tasks or threads (e.g.
+/// using `piper::pipe`) you probably want to use this value over
+/// [`LOCAL_BUFFER_SIZE`]; this seems to make a significant difference in
+/// benchmarks.
 pub const NETWORK_BUFFER_SIZE: usize = 1024 * 1024;
 
-/// The default buffer size for local buffering, e.g. when using reader pipes
-/// or hashing files. The goal with this is to allow things like SIMD operations
-/// but not be so large that the buffer is unwieldy or too expensive.
+/// The default buffer size for static local buffers, e.g. when hashing files.
+/// The goal with this is to allow things like SIMD operations but not be so
+/// large that the buffer is unwieldy or too expensive.
 ///
 /// We think this is a good buffer size to use, but haven't done a lot of
 /// testing with different sizes.

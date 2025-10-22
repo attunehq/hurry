@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use async_compression::{Level, tokio::bufread::{ZstdDecoder, ZstdEncoder}};
+use async_compression::{
+    Level,
+    tokio::bufread::{ZstdDecoder, ZstdEncoder},
+};
 use async_tar::Archive;
 use color_eyre::{
     Result, Section, SectionExt,
@@ -297,7 +300,7 @@ impl Client {
         mut entries: impl Stream<Item = (Key, Vec<u8>)> + Unpin + Send + 'static,
     ) -> Result<CasBulkWriteResponse> {
         let url = self.base.join("api/v1/cas/bulk/write")?;
-        let (reader, writer) = piper::pipe(64 * 1024);
+        let (reader, writer) = piper::pipe(NETWORK_BUFFER_SIZE);
         let writer = tokio::task::spawn(async move {
             let mut tar = async_tar::Builder::new(writer);
             while let Some((key, content)) = entries.next().await {

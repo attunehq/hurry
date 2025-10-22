@@ -5,6 +5,7 @@ use std::sync::LazyLock;
 use async_compression::Level;
 use async_compression::tokio::bufread::ZstdDecoder;
 use async_compression::tokio::write::ZstdEncoder;
+use clients::{LOCAL_BUFFER_SIZE, NETWORK_BUFFER_SIZE};
 use color_eyre::eyre::bail;
 use color_eyre::{Result, eyre::Context};
 use derive_more::{Debug, Display};
@@ -510,12 +511,11 @@ async fn hashed_copy_compressed(
     // We set the buffer size to this value because it's called out by the
     // `blake3` docs on the `update_reader` method:
     // https://docs.rs/blake3/1.8.2/blake3/struct.Hasher.html#method.update_reader
-    const BUF_SIZE: usize = 16 * 1024;
-    let (tee_reader, tee_writer) = piper::pipe(BUF_SIZE);
+    let (tee_reader, tee_writer) = piper::pipe(NETWORK_BUFFER_SIZE);
 
     let copy = async move || -> Result<()> {
         let mut tee = tee_writer.compat_write();
-        let mut buffer = vec![0; BUF_SIZE];
+        let mut buffer = vec![0; LOCAL_BUFFER_SIZE];
         loop {
             let n = source.read(&mut buffer).await.context("read source")?;
             if n == 0 {
@@ -534,7 +534,7 @@ async fn hashed_copy_compressed(
             .compat()
             .pipe(BufReader::new)
             .pipe(ZstdDecoder::new);
-        let mut buffer = vec![0; BUF_SIZE];
+        let mut buffer = vec![0; LOCAL_BUFFER_SIZE];
         let mut hasher = blake3::Hasher::new();
         let mut copied = 0;
         loop {
@@ -776,7 +776,11 @@ mod tests {
             .await?;
 
         let decompressed = decompress(&compressed_content);
-        pretty_assert_eq!(decompressed, content, "decompressing read_compressed output gives original content");
+        pretty_assert_eq!(
+            decompressed,
+            content,
+            "decompressing read_compressed output gives original content"
+        );
 
         Ok(())
     }
@@ -796,7 +800,11 @@ mod tests {
         pretty_assert_eq!(storage.exists(&key).await?, true);
 
         let read_content = storage.read_buffered(&key).await?;
-        pretty_assert_eq!(read_content, content, "reading via normal read() gives original content");
+        pretty_assert_eq!(
+            read_content,
+            content,
+            "reading via normal read() gives original content"
+        );
 
         Ok(())
     }
@@ -843,7 +851,8 @@ mod tests {
 
         let decompressed = decompress(&compressed_content);
         pretty_assert_eq!(
-            decompressed, content,
+            decompressed,
+            content,
             "write() then read_compressed() works"
         );
 
@@ -864,7 +873,8 @@ mod tests {
 
         let read_content = storage.read_buffered(&key).await?;
         pretty_assert_eq!(
-            read_content, content,
+            read_content,
+            content,
             "write_compressed() then read() works"
         );
 
@@ -929,14 +939,16 @@ mod tests {
         let size1 = storage1.size(&key).await?;
         let size2 = storage2.size(&key).await?;
         pretty_assert_eq!(
-            size1, size2,
+            size1,
+            size2,
             "write() and write_compressed() produce same uncompressed size"
         );
 
         let compressed_size1 = storage1.size_compressed(&key).await?;
         let compressed_size2 = storage2.size_compressed(&key).await?;
         pretty_assert_eq!(
-            compressed_size1, compressed_size2,
+            compressed_size1,
+            compressed_size2,
             "write() and write_compressed() produce same compressed size"
         );
 
@@ -944,7 +956,10 @@ mod tests {
     }
 
     #[proptest(async = "tokio")]
-    async fn write_compressed_validates_hash(#[any] content: Vec<u8>, #[any] wrong_content: Vec<u8>) {
+    async fn write_compressed_validates_hash(
+        #[any] content: Vec<u8>,
+        #[any] wrong_content: Vec<u8>,
+    ) {
         prop_assume!(content != wrong_content);
 
         let (storage, _temp) = Disk::new_temp().await.expect("temp dir");
