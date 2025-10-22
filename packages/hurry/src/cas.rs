@@ -87,7 +87,6 @@ impl CourierCas {
         &self,
         keys: impl IntoIterator<Item = impl Into<Key>>,
     ) -> Result<impl Stream<Item = Result<(Key, Vec<u8>)>> + Unpin> {
-        let keys = keys.into_iter().map(|k| k.into()).collect::<Vec<_>>();
         self.client.cas_read_bulk(keys).await
     }
 }
