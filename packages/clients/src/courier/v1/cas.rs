@@ -17,8 +17,8 @@ pub struct CasBulkWriteResponse {
     #[builder(default, with = |i: impl IntoIterator<Item = impl Into<Key>>| i.into_iter().map(Into::into).collect())]
     pub skipped: BTreeSet<Key>,
 
-    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<BulkWriteKeyError>>| i.into_iter().map(Into::into).collect())]
-    pub errors: BTreeSet<BulkWriteKeyError>,
+    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<CasBulkWriteKeyError>>| i.into_iter().map(Into::into).collect())]
+    pub errors: BTreeSet<CasBulkWriteKeyError>,
 }
 
 impl From<&CasBulkWriteResponse> for CasBulkWriteResponse {
@@ -30,7 +30,7 @@ impl From<&CasBulkWriteResponse> for CasBulkWriteResponse {
 /// Error for a specific key during bulk write operation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, Builder)]
 #[non_exhaustive]
-pub struct BulkWriteKeyError {
+pub struct CasBulkWriteKeyError {
     #[builder(into)]
     pub key: Key,
 
@@ -38,8 +38,8 @@ pub struct BulkWriteKeyError {
     pub error: String,
 }
 
-impl From<&BulkWriteKeyError> for BulkWriteKeyError {
-    fn from(err: &BulkWriteKeyError) -> Self {
+impl From<&CasBulkWriteKeyError> for CasBulkWriteKeyError {
+    fn from(err: &CasBulkWriteKeyError) -> Self {
         err.clone()
     }
 }
