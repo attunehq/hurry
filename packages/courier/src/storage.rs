@@ -558,7 +558,7 @@ mod tests {
     use super::{Disk, Key, hashed_copy};
     use color_eyre::Result;
     use pretty_assertions::assert_eq as pretty_assert_eq;
-    use proptest::{prop_assert, prop_assert_eq, prop_assert_ne};
+    use proptest::{prop_assert, prop_assert_eq, prop_assert_ne, prop_assume};
     use simple_test_case::test_case;
     use std::io::Cursor;
     use test_strategy::proptest;
@@ -758,5 +758,267 @@ mod tests {
             storage.exists(&key).await.expect("exists check"),
             "exists after write"
         );
+    }
+
+    #[proptest(async = "tokio")]
+    async fn read_compressed_basic(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        storage.write_buffered(&key, &content).await?;
+
+        let mut compressed_reader = storage.read_compressed(&key).await?;
+        let mut compressed_content = Vec::new();
+        compressed_reader
+            .read_to_end(&mut compressed_content)
+            .await?;
+
+        let decompressed = decompress(&compressed_content);
+        pretty_assert_eq!(decompressed, content, "decompressing read_compressed output gives original content");
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_compressed_basic(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        let compressed = compress(&content);
+        storage
+            .write_compressed(&key, Cursor::new(&compressed))
+            .await?;
+
+        pretty_assert_eq!(storage.exists(&key).await?, true);
+
+        let read_content = storage.read_buffered(&key).await?;
+        pretty_assert_eq!(read_content, content, "reading via normal read() gives original content");
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_compressed_roundtrip(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        let compressed = compress(&content);
+        storage
+            .write_compressed(&key, Cursor::new(&compressed))
+            .await?;
+
+        let mut compressed_reader = storage.read_compressed(&key).await?;
+        let mut read_compressed = Vec::new();
+        compressed_reader.read_to_end(&mut read_compressed).await?;
+
+        pretty_assert_eq!(
+            decompress(&read_compressed),
+            content,
+            "read_compressed after write_compressed roundtrips"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_then_read_compressed(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        storage.write_buffered(&key, &content).await?;
+
+        let mut compressed_reader = storage.read_compressed(&key).await?;
+        let mut compressed_content = Vec::new();
+        compressed_reader
+            .read_to_end(&mut compressed_content)
+            .await?;
+
+        let decompressed = decompress(&compressed_content);
+        pretty_assert_eq!(
+            decompressed, content,
+            "write() then read_compressed() works"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_compressed_then_read(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        let compressed = compress(&content);
+        storage
+            .write_compressed(&key, Cursor::new(&compressed))
+            .await?;
+
+        let read_content = storage.read_buffered(&key).await?;
+        pretty_assert_eq!(
+            read_content, content,
+            "write_compressed() then read() works"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn size_returns_uncompressed_size(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        storage.write_buffered(&key, &content).await?;
+
+        let size = storage.size(&key).await?;
+        pretty_assert_eq!(
+            size,
+            Some(content.len() as u64),
+            "size() returns uncompressed size"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn size_compressed_returns_compressed_size(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        storage.write_buffered(&key, &content).await?;
+
+        let compressed_size = storage.size_compressed(&key).await?;
+        let expected_compressed = compress(&content);
+
+        pretty_assert_eq!(
+            compressed_size,
+            Some(expected_compressed.len() as u64),
+            "size_compressed() returns compressed size"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn size_consistency_write_vs_write_compressed(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage1, _temp1) = Disk::new_temp().await?;
+        let (storage2, _temp2) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+
+        storage1.write_buffered(&key, &content).await?;
+        let compressed = compress(&content);
+        storage2
+            .write_compressed(&key, Cursor::new(&compressed))
+            .await?;
+
+        let size1 = storage1.size(&key).await?;
+        let size2 = storage2.size(&key).await?;
+        pretty_assert_eq!(
+            size1, size2,
+            "write() and write_compressed() produce same uncompressed size"
+        );
+
+        let compressed_size1 = storage1.size_compressed(&key).await?;
+        let compressed_size2 = storage2.size_compressed(&key).await?;
+        pretty_assert_eq!(
+            compressed_size1, compressed_size2,
+            "write() and write_compressed() produce same compressed size"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_compressed_validates_hash(#[any] content: Vec<u8>, #[any] wrong_content: Vec<u8>) {
+        prop_assume!(content != wrong_content);
+
+        let (storage, _temp) = Disk::new_temp().await.expect("temp dir");
+
+        let key = key_for(&content);
+        let wrong_compressed = compress(&wrong_content);
+
+        let result = storage
+            .write_compressed(&key, Cursor::new(&wrong_compressed))
+            .await;
+
+        prop_assert!(
+            result.is_err(),
+            "write_compressed() rejects content with wrong hash"
+        );
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_compressed_idempotent(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        let compressed = compress(&content);
+        storage
+            .write_compressed(&key, Cursor::new(&compressed))
+            .await?;
+        storage
+            .write_compressed(&key, Cursor::new(&compressed))
+            .await?;
+
+        let read_content = storage.read_buffered(&key).await?;
+        pretty_assert_eq!(read_content, content);
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_compressed_concurrent(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        let compressed = compress(&content);
+        tokio::try_join!(
+            storage.write_compressed(&key, Cursor::new(&compressed)),
+            storage.write_compressed(&key, Cursor::new(&compressed))
+        )?;
+
+        let read_content = storage.read_buffered(&key).await?;
+        pretty_assert_eq!(read_content, content);
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn size_nonexistent(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        let size = storage.size(&key).await?;
+        pretty_assert_eq!(size, None, "size() returns None for nonexistent blob");
+
+        let compressed_size = storage.size_compressed(&key).await?;
+        pretty_assert_eq!(
+            compressed_size,
+            None,
+            "size_compressed() returns None for nonexistent blob"
+        );
+
+        Ok(())
     }
 }
