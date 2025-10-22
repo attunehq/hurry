@@ -1131,6 +1131,7 @@ dependencies = [
  "clients",
  "color-eyre",
  "derive_more",
+ "divan",
  "dotenvy",
  "futures",
  "hex",
@@ -1139,6 +1140,7 @@ dependencies = [
  "piper",
  "pretty_assertions",
  "proptest",
+ "rand 0.8.5",
  "serde_json",
  "simple_test_case",
  "sqlx",
@@ -1153,6 +1155,7 @@ dependencies = [
  "tracing-error",
  "tracing-subscriber",
  "tracing-tree",
+ "url",
  "uuid",
  "zstd",
 ]

@@ -3,6 +3,10 @@ name = "courier"
 version = "0.0.0"
 edition = "2024"
 
+[[bench]]
+name = "cas_transport"
+harness = false
+
 [dependencies]
 clients = { workspace = true }
 axum = { workspace = true }
@@ -36,12 +40,18 @@ maplit = { workspace = true }
 [dev-dependencies]
 async-tempfile = { workspace = true }
 axum-test = { workspace = true, features = ["all"] }
+clients = { workspace = true, features = ["client"] }
+divan = { workspace = true }
+futures = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
+rand = { workspace = true }
 serde_json.workspace = true
 simple_test_case.workspace = true
 test-log = { workspace = true, features = ["trace"] }
 test-strategy = { workspace = true }
+tokio-util = { workspace = true, features = ["compat", "io"] }
+url = { workspace = true }
 
 [build-dependencies]
 dotenvy = { workspace = true }
