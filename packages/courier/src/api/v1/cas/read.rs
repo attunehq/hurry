@@ -109,11 +109,17 @@ impl IntoResponse for CasReadResponse {
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
+    use clients::ContentType;
     use color_eyre::{Result, eyre::Context};
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use sqlx::PgPool;
 
     use crate::api::test_helpers::{test_blob, write_cas};
+
+    #[track_caller]
+    fn decompress(data: impl AsRef<[u8]>) -> Vec<u8> {
+        zstd::bulk::decompress(data.as_ref(), 10 * 1024 * 1024).expect("decompress")
+    }
 
     #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     async fn read_after_write(pool: PgPool) -> Result<()> {
@@ -163,6 +169,76 @@ mod tests {
         let body = response.as_bytes();
         pretty_assert_eq!(body.len(), content.len());
         pretty_assert_eq!(body.as_ref(), content.as_slice());
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn read_compressed(pool: PgPool) -> Result<()> {
+        const CONTENT: &[u8] = b"test content for compression";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let key = write_cas(&server, CONTENT).await?;
+
+        let response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .add_header(ContentType::ACCEPT, ContentType::BytesZstd.value())
+            .await;
+
+        response.assert_status_ok();
+        let content_type = response.header(ContentType::HEADER);
+        pretty_assert_eq!(
+            content_type,
+            ContentType::BytesZstd.value().to_str().unwrap()
+        );
+
+        let compressed_body = response.as_bytes();
+        let decompressed = decompress(compressed_body);
+        pretty_assert_eq!(decompressed.as_slice(), CONTENT);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn read_uncompressed_explicit(pool: PgPool) -> Result<()> {
+        const CONTENT: &[u8] = b"test content without compression";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let key = write_cas(&server, CONTENT).await?;
+
+        let response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .add_header(ContentType::ACCEPT, ContentType::Bytes.value())
+            .await;
+
+        response.assert_status_ok();
+        let content_type = response.header(ContentType::HEADER);
+        pretty_assert_eq!(content_type, ContentType::Bytes.value().to_str().unwrap());
+
+        let body = response.as_bytes();
+        pretty_assert_eq!(body.as_ref(), CONTENT);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn read_compressed_nonexistent_key(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, nonexistent_key) = test_blob(b"never written");
+
+        let response = server
+            .get(&format!("/api/v1/cas/{nonexistent_key}"))
+            .add_header(ContentType::ACCEPT, ContentType::BytesZstd.value())
+            .await;
+
+        response.assert_status(StatusCode::NOT_FOUND);
 
         Ok(())
     }

@@ -211,7 +211,7 @@ impl IntoResponse for BulkReadResponse {
 #[cfg(test)]
 mod tests {
     use async_tar::Archive;
-    use clients::courier::v1::{Key, cas::CasBulkReadRequest};
+    use clients::{ContentType, courier::v1::{Key, cas::CasBulkReadRequest}};
     use color_eyre::{Result, eyre::Context};
     use futures::{StreamExt, io::Cursor};
     use maplit::btreemap;
@@ -222,6 +222,11 @@ mod tests {
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     use crate::api::test_helpers::write_cas;
+
+    #[track_caller]
+    fn decompress(data: impl AsRef<[u8]>) -> Vec<u8> {
+        zstd::bulk::decompress(data.as_ref(), 10 * 1024 * 1024).expect("decompress")
+    }
 
     #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     async fn bulk_read_multiple_blobs(pool: PgPool) -> Result<()> {
@@ -367,6 +372,162 @@ mod tests {
         // Should return 422 Unprocessable Entity for invalid keys
         response.assert_status(axum::http::StatusCode::UNPROCESSABLE_ENTITY);
 
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_read_compressed(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let content1 = b"first blob content";
+        let content2 = b"second blob content";
+        let content3 = b"third blob content";
+
+        let key1 = write_cas(&server, content1).await?;
+        let key2 = write_cas(&server, content2).await?;
+        let key3 = write_cas(&server, content3).await?;
+
+        let request = CasBulkReadRequest::builder()
+            .keys([&key1, &key2, &key3])
+            .build();
+
+        let response = server
+            .post("/api/v1/cas/bulk/read")
+            .add_header(ContentType::ACCEPT, ContentType::TarZstd.value())
+            .json(&request)
+            .await;
+
+        response.assert_status_ok();
+        let content_type = response.header(ContentType::HEADER);
+        pretty_assert_eq!(content_type, ContentType::TarZstd.value().to_str().unwrap());
+
+        let tar_data = response.as_bytes();
+
+        let cursor = Cursor::new(tar_data.to_vec());
+        let archive = Archive::new(cursor);
+        let mut entries = archive.entries()?;
+
+        let mut found = BTreeMap::new();
+        while let Some(entry) = entries.next().await {
+            let entry = entry?;
+            let path = entry.path()?.to_string_lossy().to_string();
+
+            let mut compressed = Vec::new();
+            tokio::io::copy(&mut entry.compat(), &mut compressed).await?;
+
+            let decompressed = decompress(&compressed);
+            found.insert(path, decompressed);
+        }
+
+        let expected = btreemap! {
+            key1.to_string() => content1.to_vec(),
+            key2.to_string() => content2.to_vec(),
+            key3.to_string() => content3.to_vec(),
+        };
+
+        pretty_assert_eq!(found, expected);
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_read_uncompressed_explicit(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let content1 = b"first blob content";
+        let content2 = b"second blob content";
+
+        let key1 = write_cas(&server, content1).await?;
+        let key2 = write_cas(&server, content2).await?;
+
+        let request = CasBulkReadRequest::builder().keys([&key1, &key2]).build();
+
+        let response = server
+            .post("/api/v1/cas/bulk/read")
+            .add_header(ContentType::ACCEPT, ContentType::Tar.value())
+            .json(&request)
+            .await;
+
+        response.assert_status_ok();
+        let content_type = response.header(ContentType::HEADER);
+        pretty_assert_eq!(content_type, ContentType::Tar.value().to_str().unwrap());
+
+        let tar_data = response.as_bytes();
+
+        let cursor = Cursor::new(tar_data.to_vec());
+        let archive = Archive::new(cursor);
+        let mut entries = archive.entries()?;
+
+        let mut found = BTreeMap::new();
+        while let Some(entry) = entries.next().await {
+            let entry = entry?;
+            let path = entry.path()?.to_string_lossy().to_string();
+
+            let mut content = Vec::new();
+            tokio::io::copy(&mut entry.compat(), &mut content).await?;
+            found.insert(path, content);
+        }
+
+        let expected = btreemap! {
+            key1.to_string() => content1.to_vec(),
+            key2.to_string() => content2.to_vec(),
+        };
+
+        pretty_assert_eq!(found, expected);
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_read_compressed_missing_keys(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let content = b"existing blob";
+        let key = write_cas(&server, content).await?;
+
+        let missing_key =
+            Key::from_hex("0000000000000000000000000000000000000000000000000000000000000000")?;
+        let request = CasBulkReadRequest::builder()
+            .keys([&key, &missing_key])
+            .build();
+
+        let response = server
+            .post("/api/v1/cas/bulk/read")
+            .add_header(ContentType::ACCEPT, ContentType::TarZstd.value())
+            .json(&request)
+            .await;
+
+        response.assert_status_ok();
+        let content_type = response.header(ContentType::HEADER);
+        pretty_assert_eq!(content_type, ContentType::TarZstd.value().to_str().unwrap());
+
+        let tar_data = response.as_bytes();
+
+        let cursor = Cursor::new(tar_data.to_vec());
+        let archive = Archive::new(cursor);
+        let mut entries = archive.entries()?;
+
+        let mut found = BTreeMap::new();
+        while let Some(entry) = entries.next().await {
+            let entry = entry?;
+            let path = entry.path()?.to_string_lossy().to_string();
+
+            let mut compressed = Vec::new();
+            tokio::io::copy(&mut entry.compat(), &mut compressed).await?;
+
+            let decompressed = decompress(&compressed);
+            found.insert(path, decompressed);
+        }
+
+        let expected = btreemap! {
+            key.to_string() => content.to_vec(),
+        };
+
+        pretty_assert_eq!(found, expected);
         Ok(())
     }
 }
