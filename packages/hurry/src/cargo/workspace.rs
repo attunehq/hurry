@@ -79,9 +79,15 @@ impl Workspace {
             )
         };
 
-        let cargo_home = home::cargo_home_with_cwd(workspace_root.as_std_path())?
-            .pipe(AbsDirPath::try_from)
-            .context("parse path as utf8")?;
+        let cargo_home = spawn_blocking({
+            let workspace_root = workspace_root.clone();
+            move || home::cargo_home_with_cwd(workspace_root.as_std_path())
+        })
+        .await
+        .context("join background task")?
+        .context("get $CARGO_HOME")?
+        .pipe(AbsDirPath::try_from)
+        .context("parse path as utf8")?;
 
         let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
         let profile_dir = workspace_target.try_join_dir(profile.as_str())?;
