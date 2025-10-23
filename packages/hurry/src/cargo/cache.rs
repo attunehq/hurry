@@ -689,7 +689,7 @@ impl CargoCache {
         let restored = RestoreState::default();
         let transferred_files = Arc::new(AtomicU64::new(0));
         let transferred_bytes = Arc::new(AtomicU64::new(0));
-        let (tx, rx) = flume::bounded::<ArtifactFile>(worker_count * 10);
+        let (tx, rx) = flume::bounded::<(ArtifactFile, AbsFilePath)>(worker_count * 10);
         let mut cas_restore_workers = JoinSet::new();
         for _ in 0..worker_count {
             let rx = rx.clone();
@@ -703,85 +703,68 @@ impl CargoCache {
                 const BATCH_SIZE: usize = 50;
                 let mut batch = Vec::new();
 
-                let restore = async |file: &ArtifactFile, data: &[u8]| -> Result<u64> {
-                    let key = &file.object_key;
+                let restore =
+                    async |file: &ArtifactFile, path: &AbsFilePath, data: &[u8]| -> Result<u64> {
+                        let data =
+                            Self::reconstruct(&profile_root, &cargo_home, &path, data).await?;
 
-                    // Convert the artifact file path back to QualifiedPath and reconstruct it to an
-                    // absolute path for this machine.
-                    let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
-                    let path = qualified
-                        .reconstruct_raw(&profile_root, &cargo_home)
-                        .pipe(AbsFilePath::try_from)?;
+                        let mtime = UNIX_EPOCH + Duration::from_nanos(file.mtime_nanos as u64);
+                        let metadata = fs::Metadata::builder()
+                            .mtime(mtime)
+                            .executable(file.executable)
+                            .build();
+                        fs::write(&path, &data).await?;
+                        metadata.set_file(&path).await?;
+                        restored.record_object(&file.object_key);
+                        Result::<u64>::Ok(data.len() as u64)
+                    };
 
-                    // Check if file already exists with correct content.
-                    if fs::exists(path.as_std_path()).await {
-                        let existing_hash = fs::hash_file(&path).await?;
-                        if &existing_hash == key {
-                            trace!(?path, "file already exists with correct hash, skipping");
-                            return Ok(0);
+                let process_batch =
+                    async |batch: &mut Vec<(ArtifactFile, AbsFilePath)>| -> Result<()> {
+                        if batch.is_empty() {
+                            return Ok(());
                         }
-                    }
 
-                    // Reconstruct the data according to the local machine.
-                    let data = Self::reconstruct(&profile_root, &cargo_home, &path, data).await?;
+                        // Collect keys to fetch.
+                        let keys = batch
+                            .iter()
+                            .map(|(file, _)| file.object_key.clone())
+                            .collect::<Vec<_>>();
 
-                    // Write the file.
-                    let mtime = UNIX_EPOCH + Duration::from_nanos(file.mtime_nanos as u64);
-                    let metadata = fs::Metadata::builder()
-                        .mtime(mtime)
-                        .executable(file.executable)
-                        .build();
-                    fs::write(&path, &data).await?;
-                    metadata.set_file(&path).await?;
-                    restored.record_object(key);
-                    Result::<u64>::Ok(data.len() as u64)
-                };
-
-                let process_batch = async |batch: &mut Vec<ArtifactFile>| -> Result<()> {
-                    if batch.is_empty() {
-                        return Ok(());
-                    }
-
-                    // Collect keys to fetch.
-                    let keys = batch
-                        .iter()
-                        .map(|f| f.object_key.clone())
-                        .collect::<Vec<_>>();
-
-                    // Bulk fetch from CAS as a stream.
-                    let mut contents_stream = cas.get_bulk(keys).await?;
-                    let mut contents = HashMap::new();
-                    while let Some(result) = contents_stream.next().await {
-                        match result {
-                            Ok((key, data)) => {
-                                contents.insert(key, data);
-                            }
-                            Err(error) => {
-                                warn!(?error, "failed to fetch blob from bulk stream");
+                        // Bulk fetch from CAS as a stream.
+                        let mut contents_stream = cas.get_bulk(keys).await?;
+                        let mut contents = HashMap::new();
+                        while let Some(result) = contents_stream.next().await {
+                            match result {
+                                Ok((key, data)) => {
+                                    contents.insert(key, data);
+                                }
+                                Err(error) => {
+                                    warn!(?error, "failed to fetch blob from bulk stream");
+                                }
                             }
                         }
-                    }
 
-                    // Process each file with its fetched content.
-                    for file in batch {
-                        let Some(data) = contents.get(&file.object_key) else {
-                            warn!(?file, "file not found in bulk response");
-                            continue;
-                        };
+                        // Process each file with its fetched content.
+                        for (file, path) in batch {
+                            let Some(data) = contents.get(&file.object_key) else {
+                                warn!(?file, "file not found in bulk response");
+                                continue;
+                            };
 
-                        match restore(file, data).await {
-                            Ok(transferred) => {
-                                transferred_files.fetch_add(1, Ordering::Relaxed);
-                                transferred_bytes.fetch_add(transferred, Ordering::Relaxed);
-                            }
-                            Err(error) => {
-                                warn!(?error, ?file, "failed to restore file");
+                            match restore(file, path, data).await {
+                                Ok(transferred) => {
+                                    transferred_files.fetch_add(1, Ordering::Relaxed);
+                                    transferred_bytes.fetch_add(transferred, Ordering::Relaxed);
+                                }
+                                Err(error) => {
+                                    warn!(?error, ?file, "failed to restore file");
+                                }
                             }
                         }
-                    }
 
-                    Ok(())
-                };
+                        Ok(())
+                    };
 
                 while let Ok(file) = rx.recv_async().await {
                     batch.push(file);
@@ -822,8 +805,25 @@ impl CargoCache {
             };
 
             // Send all files for this package to workers.
-            for artifact_file in response.artifacts {
-                if let Err(error) = tx.send_async(artifact_file).await {
+            for file in response.artifacts {
+                // Convert the artifact file path back to QualifiedPath and reconstruct it to an
+                // absolute path for this machine.
+                let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
+                let path = qualified
+                    .reconstruct_raw(&profile_root, &cargo_home)
+                    .pipe(AbsFilePath::try_from)?;
+
+                // Check if file already exists with correct content. If so, don't need to
+                // restore it.
+                if fs::exists(path.as_std_path()).await {
+                    let existing_hash = fs::hash_file(&path).await?;
+                    if &existing_hash == &file.object_key {
+                        trace!(?path, "file already exists with correct hash, skipping");
+                        continue;
+                    }
+                }
+
+                if let Err(error) = tx.send_async((file, path)).await {
                     panic!("invariant violated: no restore workers are alive: {error:?}");
                 }
             }
