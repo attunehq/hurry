@@ -1120,9 +1120,7 @@ impl LibraryUnitHash {
     /// hash.
     fn new(mut files: Vec<(QualifiedPath, Key)>) -> Self {
         files.sort_by(|(q1, k1), (q2, k2)| {
-            LibraryUnitHashOrd(q1)
-                .cmp(&LibraryUnitHashOrd(q2))
-                .then_with(|| k1.cmp(k2))
+            (LibraryUnitHashOrd(q1), k1).cmp(&(LibraryUnitHashOrd(q2), k2))
         });
         Self { files }
     }
