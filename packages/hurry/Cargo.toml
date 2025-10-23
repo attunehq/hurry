@@ -24,7 +24,7 @@ color-eyre = { workspace = true }
 derive_more = { workspace = true, features = ["full"] }
 enum-assoc = { workspace = true }
 filetime = { workspace = true }
-fslock = { workspace = true }
+fslock = { workspace = true, features = ["std"] }
 git-version = { workspace = true }
 homedir = { workspace = true }
 itertools = { workspace = true }
@@ -34,7 +34,7 @@ serde_json = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 subenum = { workspace = true }
 tap = { workspace = true }
-tracing = { workspace = true }
+tracing = { workspace = true, features = ["std"] }
 tracing-error = { workspace = true }
 tracing-flame = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
@@ -66,6 +66,10 @@ humansize = { workspace = true }
 scopeguard = { workspace = true }
 dashmap = { workspace = true }
 console = { workspace = true }
+sysinfo = { workspace = true }
+axum = { workspace = true, features = ["tokio", "http1"] }
+tower-http = { workspace = true, features = ["trace"] }
+signal-hook = { workspace = true }
 
 [dev-dependencies]
 async-walkdir.workspace = true
