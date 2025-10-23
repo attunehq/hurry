@@ -32,8 +32,10 @@ use crate::{ContentType, NETWORK_BUFFER_SIZE};
 
 /// Maximum decompressed size for individual blob decompression (1GB).
 ///
-/// This limit applies per blob, including within bulk operations (e.g., each entry in `cas_bulk_read_bytes_stream`).
-/// It does not limit the total size of all blobs in a bulk operation or tar archive, only the size of each decompressed blob.
+/// This limit applies per blob, including within bulk operations (e.g., each
+/// entry in `cas_bulk_read_bytes_stream`). It does not limit the total size of
+/// all blobs in a bulk operation or tar archive, only the size of each
+/// decompressed blob.
 const MAX_DECOMPRESSED_SIZE: usize = 1024 * 1024 * 1024;
 
 /// Client for the Courier API.
