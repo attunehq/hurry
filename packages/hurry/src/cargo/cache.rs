@@ -35,10 +35,9 @@ use clients::{
 };
 
 use crate::{
-    Locked,
     cargo::{
         self, BuildPlan, BuildScriptOutput, CargoBuildArguments, CargoCompileMode, DepInfo,
-        Profile, ProfileDir, QualifiedPath, RootOutput, RustcMetadata, Workspace,
+        Profile, QualifiedPath, RootOutput, RustcMetadata, Workspace,
     },
     cas::CourierCas,
     fs, mk_rel_file,
@@ -437,18 +436,13 @@ impl CargoCache {
         restored: &RestoreState,
     ) -> Result<CacheStats> {
         let start_time = std::time::Instant::now();
-        let target_dir = self.ws.open_profile_locked(&artifact_plan.profile).await?;
-        let target_path = target_dir.root();
+        let target_path = &self.ws.profile_dir;
 
         let mut transferred_files = 0u64;
         let mut transferred_bytes = 0u64;
 
         for artifact in artifact_plan.artifacts {
-            // TODO: The fact that this takes a `ProfileDir` is an expedient
-            // hack for now. We should really unroll this annoying abstraction
-            // and just take a path or something once we also update all
-            // upstream consumers (e.g. `BuildScriptOutput::from_file`).
-            let artifact = BuiltArtifact::from_key(&target_dir, artifact).await?;
+            let artifact = BuiltArtifact::from_key(&self.ws, artifact).await?;
             debug!(?artifact, "caching artifact");
 
             let artifact_key = artifact.reconstruct_key();
@@ -546,7 +540,7 @@ impl CargoCache {
             for path in files_to_save {
                 match fs::read_buffered(&path).await? {
                     Some(content) => {
-                        let content = Self::rewrite(&target_dir, &path, &content).await?;
+                        let content = Self::rewrite(&self.ws, &path, &content).await?;
                         let key = Key::from_buffer(&content);
 
                         // Gather metadata for the artifact file.
@@ -554,8 +548,7 @@ impl CargoCache {
                             .await?
                             .ok_or_eyre("could not stat file metadata")?;
                         let mtime_nanos = metadata.mtime.duration_since(UNIX_EPOCH)?.as_nanos();
-                        let qualified =
-                            QualifiedPath::parse(&target_dir, path.as_std_path()).await?;
+                        let qualified = QualifiedPath::parse(&self.ws, path.as_std_path()).await?;
 
                         library_unit_files.push((qualified.clone(), key.clone()));
                         artifact_files.push(
@@ -673,9 +666,8 @@ impl CargoCache {
         // We do this because `ProfileDir` has a lifetime for the lock, so we can't send
         // it to worker tasks; this is valid so long as we actually hold `ProfileDir`
         // for the entire time the task workers live (which we do).
-        let profile_dir = self.ws.open_profile_locked(&artifact_plan.profile).await?;
-        let profile_root = profile_dir.root().to_owned();
-        let cargo_home = profile_dir.workspace.cargo_home.clone();
+        let profile_root = &self.ws.profile_dir;
+        let cargo_home = &self.ws.cargo_home;
 
         // TODO: We should probably make this concurrent on something else since this is
         // likely going to be primarily blocked on network transfer.
@@ -858,11 +850,7 @@ impl CargoCache {
 
     /// Rewrite file contents before storing in CAS to normalize paths.
     #[instrument(name = "CargoCache::rewrite_for_storage", skip(content))]
-    async fn rewrite(
-        profile_dir: &ProfileDir<'_, Locked>,
-        path: &AbsFilePath,
-        content: &[u8],
-    ) -> Result<Vec<u8>> {
+    async fn rewrite(ws: &Workspace, path: &AbsFilePath, content: &[u8]) -> Result<Vec<u8>> {
         // Determine what kind of file this is based on path structure.
         let components = path.component_strs_lossy().collect::<Vec<_>>();
 
@@ -885,17 +873,17 @@ impl CargoCache {
         match file_type {
             Some("root-output") => {
                 trace!(?path, "rewriting root-output file");
-                let parsed = RootOutput::from_file(profile_dir, path).await?;
+                let parsed = RootOutput::from_file(ws, path).await?;
                 serde_json::to_vec(&parsed).context("serialize RootOutput")
             }
             Some("build-script-output") => {
                 trace!(?path, "rewriting build-script-output file");
-                let parsed = BuildScriptOutput::from_file(profile_dir, path).await?;
+                let parsed = BuildScriptOutput::from_file(ws, path).await?;
                 serde_json::to_vec(&parsed).context("serialize BuildScriptOutput")
             }
             Some("dep-info") => {
                 trace!(?path, "rewriting dep-info file");
-                let parsed = DepInfo::from_file(profile_dir, path).await?;
+                let parsed = DepInfo::from_file(ws, path).await?;
                 serde_json::to_vec(&parsed).context("serialize DepInfo")
             }
             None => {
@@ -1039,13 +1027,13 @@ impl BuiltArtifact {
     /// Given an `ArtifactKey`, read the build script output directories on
     /// disk and construct a `BuiltArtifact`.
     #[instrument(name = "BuiltArtifact::from_key")]
-    pub async fn from_key(profile: &ProfileDir<'_, Locked>, key: ArtifactKey) -> Result<Self> {
+    pub async fn from_key(ws: &Workspace, key: ArtifactKey) -> Result<Self> {
         // Read the build script output from the build folders, and parse
         // the output for directives.
         let build_script_output = match &key.build_script_files {
             Some(build_script_files) => {
                 let bso = BuildScriptOutput::from_file(
-                    profile,
+                    ws,
                     &build_script_files.output_dir.join(mk_rel_file!("output")),
                 )
                 .await?;
@@ -1090,6 +1078,40 @@ struct LibraryUnitHash {
     files: Vec<(QualifiedPath, Key)>,
 }
 
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+struct LibraryUnitHashOrd<'a>(&'a QualifiedPath);
+
+impl<'a> LibraryUnitHashOrd<'a> {
+    fn discriminant(&self) -> u64 {
+        match &self.0 {
+            QualifiedPath::Rootless(_) => 0,
+            QualifiedPath::RelativeTargetProfile(_) => 1,
+            QualifiedPath::RelativeCargoHome(_) => 2,
+            QualifiedPath::Absolute(_) => 3,
+        }
+    }
+}
+
+impl<'a> Ord for LibraryUnitHashOrd<'a> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (&self.0, &other.0) {
+            (QualifiedPath::Rootless(a), QualifiedPath::Rootless(b)) => a.cmp(&b),
+            (QualifiedPath::RelativeTargetProfile(a), QualifiedPath::RelativeTargetProfile(b)) => {
+                a.cmp(&b)
+            }
+            (QualifiedPath::RelativeCargoHome(a), QualifiedPath::RelativeCargoHome(b)) => a.cmp(&b),
+            (QualifiedPath::Absolute(a), QualifiedPath::Absolute(b)) => a.cmp(&b),
+            (_, _) => self.discriminant().cmp(&other.discriminant()),
+        }
+    }
+}
+
+impl<'a> PartialOrd for LibraryUnitHashOrd<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl LibraryUnitHash {
     /// Construct a library unit hash out of the files in the library unit.
     ///
@@ -1097,7 +1119,11 @@ impl LibraryUnitHash {
     /// sets of files with the same paths and contents will produce the same
     /// hash.
     fn new(mut files: Vec<(QualifiedPath, Key)>) -> Self {
-        files.sort();
+        files.sort_by(|(q1, k1), (q2, k2)| {
+            LibraryUnitHashOrd(q1)
+                .cmp(&LibraryUnitHashOrd(q2))
+                .then_with(|| k1.cmp(k2))
+        });
         Self { files }
     }
 }

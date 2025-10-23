@@ -7,9 +7,9 @@ use color_eyre::{Result, eyre::bail};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use super::workspace::ProfileDir;
 use crate::{
-    Locked, fs,
+    cargo::Workspace,
+    fs,
     path::{AbsDirPath, AbsFilePath, JoinWith as _, RelFilePath, RelativeTo as _},
 };
 
@@ -20,7 +20,7 @@ use crate::{
 /// these paths are relative to so that it can back up and restore paths in
 /// different workspaces and machines. This type supports `hurry` being able to
 /// determine what kind of path is being referenced.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
 #[serde(tag = "t", content = "c")]
 pub enum QualifiedPath {
     /// The path is "natively" relative without a root prior to `hurry` making
@@ -58,19 +58,19 @@ pub enum QualifiedPath {
 
 impl QualifiedPath {
     #[instrument(name = "QualifiedPath::parse_string")]
-    pub async fn parse_string(profile: &ProfileDir<'_, Locked>, path: &str) -> Result<Self> {
+    pub async fn parse_string(ws: &Workspace, path: &str) -> Result<Self> {
         Ok(if let Ok(rel) = RelFilePath::try_from(path) {
-            if fs::exists(profile.root().join(&rel).as_std_path()).await {
+            if fs::exists(ws.profile_dir.join(&rel).as_std_path()).await {
                 Self::RelativeTargetProfile(rel)
-            } else if fs::exists(profile.workspace.cargo_home.join(&rel).as_std_path()).await {
+            } else if fs::exists(ws.cargo_home.join(&rel).as_std_path()).await {
                 Self::RelativeCargoHome(rel)
             } else {
                 Self::Rootless(rel)
             }
         } else if let Ok(abs) = AbsFilePath::try_from(path) {
-            if let Ok(rel) = abs.relative_to(profile.root()) {
+            if let Ok(rel) = abs.relative_to(&ws.profile_dir) {
                 Self::RelativeTargetProfile(rel)
-            } else if let Ok(rel) = abs.relative_to(&profile.workspace.cargo_home) {
+            } else if let Ok(rel) = abs.relative_to(&ws.cargo_home) {
                 Self::RelativeCargoHome(rel)
             } else {
                 Self::Absolute(abs)
@@ -81,19 +81,19 @@ impl QualifiedPath {
     }
 
     #[instrument(name = "QualifiedPath::parse")]
-    pub async fn parse(profile: &ProfileDir<'_, Locked>, path: &Path) -> Result<Self> {
+    pub async fn parse(ws: &Workspace, path: &Path) -> Result<Self> {
         Ok(if let Ok(rel) = RelFilePath::try_from(path) {
-            if fs::exists(profile.root().join(&rel).as_std_path()).await {
+            if fs::exists(ws.profile_dir.join(&rel).as_std_path()).await {
                 Self::RelativeTargetProfile(rel)
-            } else if fs::exists(profile.workspace.cargo_home.join(&rel).as_std_path()).await {
+            } else if fs::exists(ws.cargo_home.join(&rel).as_std_path()).await {
                 Self::RelativeCargoHome(rel)
             } else {
                 Self::Rootless(rel)
             }
         } else if let Ok(abs) = AbsFilePath::try_from(path) {
-            if let Ok(rel) = abs.relative_to(profile.root()) {
+            if let Ok(rel) = abs.relative_to(&ws.profile_dir) {
                 Self::RelativeTargetProfile(rel)
-            } else if let Ok(rel) = abs.relative_to(&profile.workspace.cargo_home) {
+            } else if let Ok(rel) = abs.relative_to(&ws.cargo_home) {
                 Self::RelativeCargoHome(rel)
             } else {
                 Self::Absolute(abs)
@@ -104,23 +104,23 @@ impl QualifiedPath {
     }
 
     #[instrument(name = "QualifiedPath::reconstruct_string")]
-    pub fn reconstruct_string(&self, profile: &ProfileDir<'_, Locked>) -> String {
+    pub fn reconstruct_string(&self, ws: &Workspace) -> String {
         match self {
             QualifiedPath::Rootless(rel) => rel.to_string(),
-            QualifiedPath::RelativeTargetProfile(rel) => profile.root().join(rel).to_string(),
+            QualifiedPath::RelativeTargetProfile(rel) => ws.profile_dir.join(rel).to_string(),
             QualifiedPath::RelativeCargoHome(rel) => {
-                profile.workspace.cargo_home.join(rel).to_string()
+                ws.cargo_home.join(rel).to_string()
             }
             QualifiedPath::Absolute(abs) => abs.to_string(),
         }
     }
 
     #[instrument(name = "QualifiedPath::reconstruct")]
-    pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> PathBuf {
+    pub fn reconstruct(&self, ws: &Workspace) -> PathBuf {
         match self {
             QualifiedPath::Rootless(rel) => rel.into(),
-            QualifiedPath::RelativeTargetProfile(rel) => profile.root().join(rel).into(),
-            QualifiedPath::RelativeCargoHome(rel) => profile.workspace.cargo_home.join(rel).into(),
+            QualifiedPath::RelativeTargetProfile(rel) => ws.profile_dir.join(rel).into(),
+            QualifiedPath::RelativeCargoHome(rel) => ws.cargo_home.join(rel).into(),
             QualifiedPath::Absolute(abs) => abs.as_std_path().into(),
         }
     }

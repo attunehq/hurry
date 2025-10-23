@@ -47,7 +47,6 @@ use tracing::{debug, error, instrument, trace};
 use clients::courier::v1::Key;
 
 use crate::{
-    Locked, Unlocked,
     ext::then_context,
     path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, RelativeTo},
 };
@@ -69,6 +68,16 @@ pub struct LockFile<State> {
     path: AbsFilePath,
     inner: Arc<Mutex<FsLockFile>>,
 }
+
+/// The associated type's state is unlocked.
+/// Used for the typestate pattern.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Display, Default)]
+pub struct Unlocked;
+
+/// The associated type's state is locked.
+/// Used for the typestate pattern.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Display, Default)]
+pub struct Locked;
 
 impl LockFile<Unlocked> {
     /// Create a new instance at the provided path.
