@@ -13,8 +13,7 @@ use tap::TapFallible;
 use tracing::{instrument, trace};
 
 use crate::{
-    Locked,
-    cargo::{QualifiedPath, workspace::ProfileDir},
+    cargo::{QualifiedPath, Workspace},
     fs,
     path::{AbsDirPath, AbsFilePath},
 };
@@ -28,13 +27,13 @@ use crate::{
 /// ```not_rust
 /// /Users/jess/scratch/example/target/debug/build/rustls-5590c033895e7e9a/out
 /// ```
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
 pub struct RootOutput(QualifiedPath);
 
 impl RootOutput {
     /// Parse a "root output" file.
     #[instrument(name = "RootOutput::from_file")]
-    pub async fn from_file(profile: &ProfileDir<'_, Locked>, file: &AbsFilePath) -> Result<Self> {
+    pub async fn from_file(ws: &Workspace, file: &AbsFilePath) -> Result<Self> {
         let content = fs::read_buffered_utf8(file)
             .await
             .context("read file")?
@@ -43,7 +42,7 @@ impl RootOutput {
             .lines()
             .exactly_one()
             .map_err(|_| eyre!("RootOutput file has more than one line: {content:?}"))?;
-        QualifiedPath::parse_string(profile, line)
+        QualifiedPath::parse_string(ws, line)
             .await
             .context("parse file")
             .map(Self)
@@ -52,8 +51,8 @@ impl RootOutput {
 
     /// Reconstruct the file in the context of the profile directory.
     #[instrument(name = "RootOutput::reconstruct")]
-    pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
-        self.reconstruct_raw(profile.root(), &profile.workspace.cargo_home)
+    pub fn reconstruct(&self, ws: &Workspace) -> String {
+        self.reconstruct_raw(&ws.profile_dir, &ws.cargo_home)
     }
 
     /// Reconstruct the file using owned path data.
@@ -87,13 +86,13 @@ pub struct BuildScriptOutput(Vec<BuildScriptOutputLine>);
 impl BuildScriptOutput {
     /// Parse a build script output file.
     #[instrument(name = "BuildScriptOutput::from_file")]
-    pub async fn from_file(profile: &ProfileDir<'_, Locked>, file: &AbsFilePath) -> Result<Self> {
+    pub async fn from_file(ws: &Workspace, file: &AbsFilePath) -> Result<Self> {
         let content = fs::read_buffered_utf8(file)
             .await
             .context("read file")?
             .ok_or_eyre("file does not exist")?;
         let lines = stream::iter(content.lines())
-            .then(|line| BuildScriptOutputLine::parse(profile, line))
+            .then(|line| BuildScriptOutputLine::parse(ws, line))
             .collect::<Vec<_>>()
             .await;
 
@@ -103,11 +102,8 @@ impl BuildScriptOutput {
 
     /// Reconstruct the file in the context of the profile directory.
     #[instrument(name = "BuildScriptOutput::reconstruct")]
-    pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
-        self.0
-            .iter()
-            .map(|line| line.reconstruct(profile))
-            .join("\n")
+    pub fn reconstruct(&self, ws: &Workspace) -> String {
+        self.0.iter().map(|line| line.reconstruct(ws)).join("\n")
     }
 
     /// Reconstruct the file using owned path data.
@@ -178,7 +174,7 @@ impl FromStr for BuildScriptOutputLineStyle {
 ///
 /// Reference for possible options according to the Cargo docs:
 /// https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
 pub enum BuildScriptOutputLine {
     /// `cargo::rerun-if-changed=PATH`
     RerunIfChanged(BuildScriptOutputLineStyle, QualifiedPath),
@@ -264,8 +260,8 @@ impl BuildScriptOutputLine {
 
     /// Parse a line of the build script file.
     #[instrument(name = "BuildScriptOutputLine::parse")]
-    pub async fn parse(profile: &ProfileDir<'_, Locked>, line: &str) -> Self {
-        match Self::parse_inner(profile, line).await {
+    pub async fn parse(ws: &Workspace, line: &str) -> Self {
+        match Self::parse_inner(ws, line).await {
             Ok(parsed) => parsed,
             Err(err) => {
                 trace!(?line, ?err, "failed to parse build script output line");
@@ -275,7 +271,7 @@ impl BuildScriptOutputLine {
     }
 
     /// Inner fallible parser for cargo directives.
-    async fn parse_inner(profile: &ProfileDir<'_, Locked>, line: &str) -> Result<Self> {
+    async fn parse_inner(ws: &Workspace, line: &str) -> Result<Self> {
         let (style, line) = BuildScriptOutputLineStyle::parse_line(line)?;
         let Some((key, value)) = line.split_once('=') else {
             return Err(eyre!("directive does not contain '='"));
@@ -283,7 +279,7 @@ impl BuildScriptOutputLine {
 
         match key {
             Self::RERUN_IF_CHANGED => {
-                let path = QualifiedPath::parse_string(profile, value).await?;
+                let path = QualifiedPath::parse_string(ws, value).await?;
                 Ok(Self::RerunIfChanged(style, path))
             }
             Self::RERUN_IF_ENV_CHANGED => Ok(Self::RerunIfEnvChanged(style, String::from(value))),
@@ -294,13 +290,13 @@ impl BuildScriptOutputLine {
                     Ok(Self::RustcLinkSearch {
                         style,
                         kind: Some(String::from(kind)),
-                        path: QualifiedPath::parse_string(profile, path).await?,
+                        path: QualifiedPath::parse_string(ws, path).await?,
                     })
                 } else {
                     Ok(Self::RustcLinkSearch {
                         style,
                         kind: None,
-                        path: QualifiedPath::parse_string(profile, value).await?,
+                        path: QualifiedPath::parse_string(ws, value).await?,
                     })
                 }
             }
@@ -351,8 +347,8 @@ impl BuildScriptOutputLine {
 
     /// Reconstruct the line in the current context.
     #[instrument(name = "BuildScriptOutputLine::reconstruct")]
-    pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
-        self.reconstruct_raw(profile.root(), &profile.workspace.cargo_home)
+    pub fn reconstruct(&self, ws: &Workspace) -> String {
+        self.reconstruct_raw(&ws.profile_dir, &ws.cargo_home)
     }
 
     #[instrument(name = "BuildScriptOutputLine::reconstruct_raw")]
@@ -420,13 +416,13 @@ impl BuildScriptOutputLine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cargo::{CargoBuildArguments, Profile, Workspace};
+    use crate::cargo::{CargoBuildArguments, Workspace};
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use simple_test_case::test_case;
 
-    fn replace_path_placeholders(line: &str, profile: &ProfileDir<Locked>) -> String {
-        line.replace("__PROFILE__", &profile.root().to_string())
-            .replace("__CARGO__", &profile.workspace.cargo_home.to_string())
+    fn replace_path_placeholders(line: &str, ws: &Workspace) -> String {
+        line.replace("__PROFILE__", &ws.profile_dir.to_string())
+            .replace("__CARGO__", &ws.cargo_home.to_string())
     }
 
     #[test_case("cargo:rerun-if-changed=__PROFILE__/out/build.rs", BuildScriptOutputLineStyle::Old, "__PROFILE__/out/build.rs"; "old_style_profile_root")]
@@ -442,16 +438,12 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
-        let line = replace_path_placeholders(line, &profile);
-        let expected_path = replace_path_placeholders(expected_path, &profile);
+        let line = replace_path_placeholders(line, &workspace);
+        let expected_path = replace_path_placeholders(expected_path, &workspace);
 
-        match BuildScriptOutputLine::parse(&profile, &line).await {
+        match BuildScriptOutputLine::parse(&workspace, &line).await {
             BuildScriptOutputLine::RerunIfChanged(style, path) => {
-                pretty_assert_eq!(path.reconstruct_string(&profile), expected_path);
+                pretty_assert_eq!(path.reconstruct_string(&workspace), expected_path);
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RerunIfChanged variant"),
@@ -469,12 +461,8 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
 
-        match BuildScriptOutputLine::parse(&profile, line).await {
+        match BuildScriptOutputLine::parse(&workspace, line).await {
             BuildScriptOutputLine::RerunIfEnvChanged(style, var) => {
                 pretty_assert_eq!(var, expected_var);
                 pretty_assert_eq!(style, expected_style);
@@ -494,12 +482,8 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
 
-        match BuildScriptOutputLine::parse(&profile, line).await {
+        match BuildScriptOutputLine::parse(&workspace, line).await {
             BuildScriptOutputLine::RustcLinkArg(style, flag) => {
                 pretty_assert_eq!(flag, expected_flag);
                 pretty_assert_eq!(style, expected_style);
@@ -519,12 +503,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
-
-        match BuildScriptOutputLine::parse(&profile, line).await {
+        match BuildScriptOutputLine::parse(&workspace, line).await {
             BuildScriptOutputLine::RustcLinkLib(style, lib) => {
                 pretty_assert_eq!(lib, expected_lib);
                 pretty_assert_eq!(style, expected_style);
@@ -544,17 +523,13 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
-        let line = replace_path_placeholders(line, &profile);
-        let expected_path = replace_path_placeholders(expected_path, &profile);
+        let line = replace_path_placeholders(line, &workspace);
+        let expected_path = replace_path_placeholders(expected_path, &workspace);
 
-        match BuildScriptOutputLine::parse(&profile, &line).await {
+        match BuildScriptOutputLine::parse(&workspace, &line).await {
             BuildScriptOutputLine::RustcLinkSearch { style, kind, path } => {
                 pretty_assert_eq!(kind, None);
-                pretty_assert_eq!(path.reconstruct_string(&profile), expected_path);
+                pretty_assert_eq!(path.reconstruct_string(&workspace), expected_path);
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkSearch variant"),
@@ -573,17 +548,13 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
-        let line = replace_path_placeholders(line, &profile);
-        let expected_path = replace_path_placeholders(expected_path, &profile);
+        let line = replace_path_placeholders(line, &workspace);
+        let expected_path = replace_path_placeholders(expected_path, &workspace);
 
-        match BuildScriptOutputLine::parse(&profile, &line).await {
+        match BuildScriptOutputLine::parse(&workspace, &line).await {
             BuildScriptOutputLine::RustcLinkSearch { style, kind, path } => {
                 pretty_assert_eq!(kind, Some(String::from(expected_kind)));
-                pretty_assert_eq!(path.reconstruct_string(&profile), expected_path);
+                pretty_assert_eq!(path.reconstruct_string(&workspace), expected_path);
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkSearch variant"),
@@ -601,12 +572,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
-
-        match BuildScriptOutputLine::parse(&profile, line).await {
+        match BuildScriptOutputLine::parse(&workspace, line).await {
             BuildScriptOutputLine::RustcFlags(style, flags) => {
                 pretty_assert_eq!(flags, expected_flags);
                 pretty_assert_eq!(style, expected_style);
@@ -629,12 +595,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
-
-        match BuildScriptOutputLine::parse(&profile, line).await {
+        match BuildScriptOutputLine::parse(&workspace, line).await {
             BuildScriptOutputLine::RustcCfg { style, key, value } => {
                 pretty_assert_eq!(key, expected_key);
                 pretty_assert_eq!(value.as_deref(), expected_value);
@@ -655,12 +616,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
-
-        match BuildScriptOutputLine::parse(&profile, line).await {
+        match BuildScriptOutputLine::parse(&workspace, line).await {
             BuildScriptOutputLine::RustcCheckCfg(style, check_cfg) => {
                 pretty_assert_eq!(check_cfg, expected_check_cfg);
                 pretty_assert_eq!(style, expected_style);
@@ -681,12 +637,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
-
-        match BuildScriptOutputLine::parse(&profile, line).await {
+        match BuildScriptOutputLine::parse(&workspace, line).await {
             BuildScriptOutputLine::RustcEnv { style, var, value } => {
                 pretty_assert_eq!(var, expected_var);
                 pretty_assert_eq!(value, expected_value);
@@ -707,12 +658,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
-
-        match BuildScriptOutputLine::parse(&profile, line).await {
+        match BuildScriptOutputLine::parse(&workspace, line).await {
             BuildScriptOutputLine::Error(style, msg) => {
                 pretty_assert_eq!(msg, expected_msg);
                 pretty_assert_eq!(style, expected_style);
@@ -732,12 +678,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
-
-        match BuildScriptOutputLine::parse(&profile, line).await {
+        match BuildScriptOutputLine::parse(&workspace, line).await {
             BuildScriptOutputLine::Warning(style, msg) => {
                 pretty_assert_eq!(msg, expected_msg);
                 pretty_assert_eq!(style, expected_style);
@@ -758,12 +699,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
-
-        match BuildScriptOutputLine::parse(&profile, line).await {
+        match BuildScriptOutputLine::parse(&workspace, line).await {
             BuildScriptOutputLine::Metadata { style, key, value } => {
                 pretty_assert_eq!(key, expected_key);
                 pretty_assert_eq!(value, expected_value);
@@ -782,12 +718,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
-
-        match BuildScriptOutputLine::parse(&profile, line).await {
+        match BuildScriptOutputLine::parse(&workspace, line).await {
             BuildScriptOutputLine::Other(content) => {
                 pretty_assert_eq!(content, line);
             }
@@ -800,12 +731,8 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
         let line = "cargo:rustc-env=INVALID";
-        let parsed = BuildScriptOutputLine::parse(&profile, line).await;
+        let parsed = BuildScriptOutputLine::parse(&workspace, line).await;
 
         match parsed {
             BuildScriptOutputLine::Other(content) => {
@@ -820,12 +747,8 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
         let line = "cargo:metadata=INVALID";
-        let parsed = BuildScriptOutputLine::parse(&profile, line).await;
+        let parsed = BuildScriptOutputLine::parse(&workspace, line).await;
 
         match parsed {
             BuildScriptOutputLine::Other(content) => {
@@ -840,22 +763,18 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
 
         let fixture = include_str!("fixtures/build_script_output_1.txt");
-        let input = replace_path_placeholders(fixture, &profile);
+        let input = replace_path_placeholders(fixture, &workspace);
 
         let parsed = BuildScriptOutput(
             futures::stream::iter(input.lines())
-                .then(|line| BuildScriptOutputLine::parse(&profile, line))
+                .then(|line| BuildScriptOutputLine::parse(&workspace, line))
                 .collect::<Vec<_>>()
                 .await,
         );
 
-        let reconstructed = parsed.reconstruct(&profile);
+        let reconstructed = parsed.reconstruct(&workspace);
         pretty_assert_eq!(reconstructed, input.trim_end());
     }
 
@@ -864,22 +783,18 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
 
         let fixture = include_str!("fixtures/build_script_output_2.txt");
-        let input = replace_path_placeholders(fixture, &profile);
+        let input = replace_path_placeholders(fixture, &workspace);
 
         let parsed = BuildScriptOutput(
             futures::stream::iter(input.lines())
-                .then(|line| BuildScriptOutputLine::parse(&profile, line))
+                .then(|line| BuildScriptOutputLine::parse(&workspace, line))
                 .collect::<Vec<_>>()
                 .await,
         );
 
-        let reconstructed = parsed.reconstruct(&profile);
+        let reconstructed = parsed.reconstruct(&workspace);
         pretty_assert_eq!(reconstructed, input.trim_end());
     }
 
@@ -888,22 +803,18 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
 
         let fixture = include_str!("fixtures/build_script_output_mixed.txt");
-        let input = replace_path_placeholders(fixture, &profile);
+        let input = replace_path_placeholders(fixture, &workspace);
 
         let parsed = BuildScriptOutput(
             futures::stream::iter(input.lines())
-                .then(|line| BuildScriptOutputLine::parse(&profile, line))
+                .then(|line| BuildScriptOutputLine::parse(&workspace, line))
                 .collect::<Vec<_>>()
                 .await,
         );
 
-        let reconstructed = parsed.reconstruct(&profile);
+        let reconstructed = parsed.reconstruct(&workspace);
         pretty_assert_eq!(reconstructed, input.trim_end());
     }
 
@@ -912,17 +823,13 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let profile = workspace
-            .open_profile_locked(&Profile::Debug)
-            .await
-            .expect("open profile");
 
         let fixture = include_str!("fixtures/build_script_output_mixed_styles.txt");
-        let input = replace_path_placeholders(fixture, &profile);
+        let input = replace_path_placeholders(fixture, &workspace);
 
         let parsed = BuildScriptOutput(
             futures::stream::iter(input.lines())
-                .then(|line| BuildScriptOutputLine::parse(&profile, line))
+                .then(|line| BuildScriptOutputLine::parse(&workspace, line))
                 .collect::<Vec<_>>()
                 .await,
         );
@@ -942,7 +849,7 @@ mod tests {
             _ => panic!("Expected RustcCfg with Current style"),
         }
 
-        let reconstructed = parsed.reconstruct(&profile);
+        let reconstructed = parsed.reconstruct(&workspace);
         pretty_assert_eq!(reconstructed, input.trim_end());
     }
 }

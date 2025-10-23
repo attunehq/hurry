@@ -10,10 +10,8 @@ use serde::{Deserialize, Serialize};
 use tap::Pipe;
 use tracing::{instrument, trace};
 
-use super::workspace::ProfileDir;
 use crate::{
-    Locked,
-    cargo::QualifiedPath,
+    cargo::{QualifiedPath, Workspace},
     ext::{then_context, then_with_context},
     fs::{self, DEFAULT_CONCURRENCY},
     path::{AbsDirPath, AbsFilePath},
@@ -52,7 +50,7 @@ use crate::{
 ///
 /// [^1]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/struct.RustcDepInfo.html
 /// [^2]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/struct.EncodedDepInfo.html
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
 pub struct DepInfo(Vec<DepInfoLine>);
 
 impl DepInfo {
@@ -62,7 +60,7 @@ impl DepInfo {
     /// parses each line for the `output:` format, and filters for relevant
     /// file extensions. All returned paths are relative to the profile root.
     #[instrument(name = "DepInfo::from_file")]
-    pub async fn from_file(profile: &ProfileDir<'_, Locked>, dotd: &AbsFilePath) -> Result<Self> {
+    pub async fn from_file(ws: &Workspace, dotd: &AbsFilePath) -> Result<Self> {
         let content = fs::read_buffered_utf8(dotd)
             .await
             .context("read file")?
@@ -71,7 +69,7 @@ impl DepInfo {
         let lines = escaped_lines(&content)
             .pipe(stream::iter)
             .then(|line| async move {
-                DepInfoLine::parse(profile, &line)
+                DepInfoLine::parse(ws, &line)
                     .await
                     .with_context(|| format!("parse line: {line:?}"))
             })
@@ -84,8 +82,8 @@ impl DepInfo {
 
     /// Reconstruct the "dep-info" file in the context of the profile directory.
     #[instrument(name = "DepInfo::reconstruct")]
-    pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
-        self.reconstruct_raw(profile.root(), &profile.workspace.cargo_home)
+    pub fn reconstruct(&self, ws: &Workspace) -> String {
+        self.reconstruct_raw(&ws.profile_dir, &ws.cargo_home)
     }
 
     /// Reconstruct the "dep-info" file using owned path data.
@@ -123,7 +121,7 @@ impl DepInfo {
 }
 
 /// A single line inside a ["dep-info" file](DepInfo).
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
 #[serde(tag = "t", content = "c")]
 pub enum DepInfoLine {
     /// An empty line.
@@ -152,13 +150,13 @@ impl DepInfoLine {
     // [^3]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/struct.RustcDepInfo.html
     // [^4]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/fn.parse_rustc_dep_info.html
     #[instrument(name = "DepInfoLine::parse")]
-    pub async fn parse(profile: &ProfileDir<'_, Locked>, line: &str) -> Result<Self> {
+    pub async fn parse(ws: &Workspace, line: &str) -> Result<Self> {
         Ok(if line.is_empty() {
             Self::Space
         } else if let Some(comment) = line.strip_prefix('#') {
             Self::Comment(comment.to_string())
         } else if let Some(output) = line.strip_suffix(':') {
-            let output = QualifiedPath::parse_string(profile, output)
+            let output = QualifiedPath::parse_string(ws, output)
                 .then_with_context(move || format!("parse output path: {output:?}"))
                 .await?;
             Self::Build(output, Vec::new())
@@ -167,11 +165,11 @@ impl DepInfoLine {
                 bail!("no output/input separator");
             };
 
-            let output = QualifiedPath::parse_string(profile, output)
+            let output = QualifiedPath::parse_string(ws, output)
                 .then_with_context(move || format!("parse output path: {output:?}"));
             let inputs = stream::iter(inputs.split_whitespace())
                 .map(|input| {
-                    QualifiedPath::parse_string(profile, input)
+                    QualifiedPath::parse_string(ws, input)
                         .then_with_context(move || format!("parse input path: {input:?}"))
                 })
                 .buffer_unordered(DEFAULT_CONCURRENCY)
@@ -183,8 +181,8 @@ impl DepInfoLine {
     }
 
     #[instrument(name = "DepInfoLine::reconstruct")]
-    pub fn reconstruct(&self, profile: &ProfileDir<'_, Locked>) -> String {
-        self.reconstruct_raw(profile.root(), &profile.workspace.cargo_home)
+    pub fn reconstruct(&self, ws: &Workspace) -> String {
+        self.reconstruct_raw(&ws.profile_dir, &ws.cargo_home)
     }
 
     #[instrument(name = "DepInfoLine::reconstruct_raw")]
