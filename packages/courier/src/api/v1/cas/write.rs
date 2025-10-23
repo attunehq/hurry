@@ -1,7 +1,14 @@
 use aerosol::axum::Dep;
-use axum::{body::Body, extract::Path, http::StatusCode, response::IntoResponse};
-use color_eyre::eyre::Report;
+use axum::{
+    body::Body,
+    extract::Path,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+};
+use clients::ContentType;
+use color_eyre::{Result, eyre::Report};
 use futures::{StreamExt, TryStreamExt};
+use tap::Pipe;
 use tokio_util::io::StreamReader;
 use tracing::{error, info};
 
@@ -38,8 +45,22 @@ use crate::storage::{Disk, Key};
 /// 2. It allows this service to colocate the temporary file with the ultimate
 ///    destination for the content, which makes implementation simpler if we
 ///    move to multiple mounted disks for subsets of the CAS.
+///
+/// ## Compression
+///
+/// The `Content-Type` header communicates the format:
+/// - `application/octet-stream+zstd`: The body is compressed with `zstd`.
+/// - Any other value: The body is uncompressed.
+///
+/// Pre-compressed content is validated to ensure it decompresses correctly and
+/// hashes to the expected key.
 #[tracing::instrument(skip(body))]
-pub async fn handle(Dep(cas): Dep<Disk>, Path(key): Path<Key>, body: Body) -> CasWriteResponse {
+pub async fn handle(
+    Dep(cas): Dep<Disk>,
+    Path(key): Path<Key>,
+    headers: HeaderMap,
+    body: Body,
+) -> CasWriteResponse {
     // Check if the key already exists before consuming the body
     // If it exists, we still need to consume the entire body; if we return early
     // instead then clients see a "connection reset by peer" error.
@@ -59,13 +80,18 @@ pub async fn handle(Dep(cas): Dep<Disk>, Path(key): Path<Key>, body: Body) -> Ca
         return CasWriteResponse::Created;
     }
 
-    let stream = body.into_data_stream();
-    let stream = stream.map_err(std::io::Error::other);
-    let reader = StreamReader::new(stream);
+    // Check Content-Type header to determine if content is pre-compressed
+    let is_compressed = headers
+        .get(ContentType::HEADER)
+        .is_some_and(|v| v == ContentType::BytesZstd);
 
-    // Note: [`Disk::write`] validates that the content hashes to the provided
-    // key. If the hash doesn't match, the write fails and we return an error.
-    match cas.write(&key, reader).await {
+    let result = if is_compressed {
+        handle_compressed(cas, key, body).await
+    } else {
+        handle_plain(cas, key, body).await
+    };
+
+    match result {
         Ok(()) => {
             info!("cas.write.success");
             CasWriteResponse::Created
@@ -75,6 +101,26 @@ pub async fn handle(Dep(cas): Dep<Disk>, Path(key): Path<Key>, body: Body) -> Ca
             CasWriteResponse::Error(err)
         }
     }
+}
+
+#[tracing::instrument(skip(body))]
+async fn handle_compressed(cas: Disk, key: Key, body: Body) -> Result<()> {
+    info!("cas.write.compressed");
+    let stream = body
+        .into_data_stream()
+        .map_err(std::io::Error::other)
+        .pipe(StreamReader::new);
+    cas.write_compressed(&key, stream).await
+}
+
+#[tracing::instrument(skip(body))]
+async fn handle_plain(cas: Disk, key: Key, body: Body) -> Result<()> {
+    info!("cas.write.uncompressed");
+    let stream = body
+        .into_data_stream()
+        .map_err(std::io::Error::other)
+        .pipe(StreamReader::new);
+    cas.write(&key, stream).await
 }
 
 #[derive(Debug)]
@@ -98,11 +144,22 @@ impl IntoResponse for CasWriteResponse {
 mod tests {
     use axum::body::Bytes;
     use axum::http::StatusCode;
+    use clients::ContentType;
     use color_eyre::{Result, eyre::Context};
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use sqlx::PgPool;
 
     use crate::api::test_helpers::{test_blob, write_cas};
+
+    #[track_caller]
+    fn compress(data: impl AsRef<[u8]>) -> Vec<u8> {
+        zstd::bulk::compress(data.as_ref(), 0).expect("compress")
+    }
+
+    #[track_caller]
+    fn decompress(data: impl AsRef<[u8]>) -> Vec<u8> {
+        zstd::bulk::decompress(data.as_ref(), 10 * 1024 * 1024).expect("decompress")
+    }
 
     #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     async fn basic_write_flow(pool: PgPool) -> Result<()> {
@@ -351,6 +408,122 @@ mod tests {
                 "blob content should match for key {key}"
             );
         }
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn write_compressed(pool: PgPool) -> Result<()> {
+        const CONTENT: &[u8] = b"test content for compression";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(CONTENT);
+        let compressed = compress(CONTENT);
+
+        let response = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .content_type(ContentType::BytesZstd.to_str())
+            .bytes(Bytes::copy_from_slice(&compressed))
+            .await;
+
+        response.assert_status(StatusCode::CREATED);
+
+        let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
+        read_response.assert_status_ok();
+        let body = read_response.as_bytes();
+        pretty_assert_eq!(body.as_ref(), CONTENT);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn write_compressed_idempotent(pool: PgPool) -> Result<()> {
+        const CONTENT: &[u8] = b"idempotent compressed test";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(CONTENT);
+        let compressed = compress(CONTENT);
+
+        let response1 = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .content_type(ContentType::BytesZstd.to_str())
+            .bytes(Bytes::copy_from_slice(&compressed))
+            .await;
+        response1.assert_status(StatusCode::CREATED);
+
+        let response2 = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .content_type(ContentType::BytesZstd.to_str())
+            .bytes(Bytes::copy_from_slice(&compressed))
+            .await;
+        response2.assert_status(StatusCode::CREATED);
+
+        let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
+        read_response.assert_status_ok();
+        let body = read_response.as_bytes();
+        pretty_assert_eq!(body.as_ref(), CONTENT);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn write_compressed_invalid_hash(pool: PgPool) -> Result<()> {
+        const ACTUAL_CONTENT: &[u8] = b"actual content";
+        const WRONG_CONTENT: &[u8] = b"different content";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, wrong_key) = test_blob(WRONG_CONTENT);
+        let compressed = compress(ACTUAL_CONTENT);
+
+        let response = server
+            .put(&format!("/api/v1/cas/{wrong_key}"))
+            .content_type(ContentType::BytesZstd.to_str())
+            .bytes(Bytes::copy_from_slice(&compressed))
+            .await;
+
+        response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn write_compressed_roundtrip(pool: PgPool) -> Result<()> {
+        const CONTENT: &[u8] = b"roundtrip test content";
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(CONTENT);
+        let compressed = compress(CONTENT);
+
+        let write_response = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .content_type(ContentType::BytesZstd.to_str())
+            .bytes(Bytes::copy_from_slice(&compressed))
+            .await;
+        write_response.assert_status(StatusCode::CREATED);
+
+        let read_response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .add_header(ContentType::ACCEPT, ContentType::BytesZstd.value())
+            .await;
+
+        read_response.assert_status_ok();
+        let content_type = read_response.header(ContentType::HEADER);
+        pretty_assert_eq!(
+            content_type,
+            ContentType::BytesZstd.value().to_str().unwrap()
+        );
+
+        let compressed_body = read_response.as_bytes();
+        let decompressed = decompress(compressed_body);
+        pretty_assert_eq!(decompressed.as_slice(), CONTENT);
 
         Ok(())
     }

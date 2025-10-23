@@ -84,3 +84,4 @@ piper = "0.2.4"
 console = "0.16.1"
 rand = "0.8.5"
 clients = { path = "packages/clients" }
+http = "1.3.1"

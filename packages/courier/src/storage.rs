@@ -2,13 +2,17 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use async_compression::Level;
 use async_compression::tokio::bufread::ZstdDecoder;
 use async_compression::tokio::write::ZstdEncoder;
+use clients::{LOCAL_BUFFER_SIZE, NETWORK_BUFFER_SIZE};
 use color_eyre::eyre::bail;
 use color_eyre::{Result, eyre::Context};
 use derive_more::{Debug, Display};
+use tap::Pipe;
 use tokio::fs::{File, create_dir_all, metadata, remove_file, rename};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -174,6 +178,20 @@ impl Disk {
         }
     }
 
+    /// Get the compressed size of the content for the provided key.
+    ///
+    /// [`Disk::size`] reports the uncompressed size of the data. This method,
+    /// in contrast, reports the compressed size of the data.
+    #[tracing::instrument(name = "Disk::size_compressed")]
+    pub async fn size_compressed(&self, key: &Key) -> Result<Option<u64>> {
+        let path = self.key_path(key);
+        match tokio::fs::metadata(&path).await {
+            Ok(metadata) => Ok(Some(metadata.len())),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err).context(format!("read metadata of blob at {path:?}")),
+        }
+    }
+
     /// Read the size of the content for the provided key, if it exists.
     #[tracing::instrument(name = "Disk::read_size")]
     async fn read_size(&self, key: &Key) -> Result<Option<u64>> {
@@ -216,16 +234,21 @@ impl Disk {
             .with_context(|| format!("open blob file {:?}", self.key_path(key)))
     }
 
-    async fn read_inner(
-        &self,
-        key: &Key,
-    ) -> Result<impl AsyncRead + Unpin + 'static, std::io::Error> {
+    /// Read the compressed content from storage for the provided key.
+    ///
+    /// [`Disk::read`] works with the data in its uncompressed form, meaning
+    /// that compression is transparently handled. This method, in contrast,
+    /// reads the compressed data from disk without decompressing it.
+    ///
+    /// Note: the returned reader is buffered with the capacity of
+    /// [`Disk::DEFAULT_BUF_SIZE`]; callers should probably not buffer further.
+    #[tracing::instrument(name = "Disk::read_compressed")]
+    pub async fn read_compressed(&self, key: &Key) -> Result<impl AsyncRead + Unpin + 'static> {
         let path = self.key_path(key);
         File::open(&path)
             .await
-            .map(BufReader::new)
-            .map(ZstdDecoder::new)
             .map(|reader| BufReader::with_capacity(Self::DEFAULT_BUF_SIZE, reader))
+            .with_context(|| format!("open blob file {:?}", self.key_path(key)))
     }
 
     /// Write the content to storage for the provided key.
@@ -259,7 +282,7 @@ impl Disk {
 
         // We don't have solid data on a better default for zstd compression
         // level, so we start with the default.
-        let mut encoder = ZstdEncoder::with_quality(file, async_compression::Level::Default);
+        let mut encoder = ZstdEncoder::with_quality(file, Level::Default);
 
         // While we're writing we also need to compute the hash of the content
         // to make sure that it actually matches the key we were provided.
@@ -302,6 +325,85 @@ impl Disk {
         }
     }
 
+    /// Write the compressed content to storage for the provided key.
+    ///
+    /// [`Disk::write`] works with the data in its uncompressed form, meaning
+    /// that compression is transparently handled. This method, in contrast,
+    /// expects the data to already be compressed when writing.
+    ///
+    /// Important: [`Disk`] assumes `zstd` compression. As such, this method
+    /// also validates that the data provided is able to be decompressed using a
+    /// `zstd` decoder. This is done mainly in order to validate the content key
+    /// (which is expected to be generated from the _uncompressed_ content) but
+    /// it also has the happy side effect of not allowing anything to be written
+    /// here which can't be read later using [`Disk::read`].
+    ///
+    /// Note: This method does NOT check if the key already exists. Callers
+    /// should check via `exists()` first if they want to avoid unnecessary
+    /// work. The method will handle the AlreadyExists case gracefully
+    /// during the final rename operation.
+    #[tracing::instrument(name = "Disk::write_compressed", skip(content))]
+    pub async fn write_compressed(&self, key: &Key, content: impl AsyncRead + Unpin) -> Result<()> {
+        let path = self.key_path(key);
+
+        if let Some(parent) = path.parent() {
+            create_dir_all(parent)
+                .await
+                .with_context(|| format!("create parent directory {parent:?} for {path:?}"))?;
+        }
+
+        // We want to try to saturate write buffers as much as possible: for
+        // example the `Blake3` hash implementation benefits from SIMD
+        // instructions if we feed it larger chunks.
+        let mut content = BufReader::with_capacity(Self::DEFAULT_BUF_SIZE, content);
+
+        // We need to write the content to a temporary file first:
+        // - Once the file exists in its final destination it's assumed that it'll never
+        //   change, so we can't partially write the content.
+        // - Other instances could be trying to write the same file at the same time; a
+        //   rename is atomic but a partial write is not.
+        let temp = temp_path(&path);
+        let mut file = File::create(&temp).await.context("create temporary file")?;
+
+        // While we're writing we also need to compute the hash of the content
+        // to make sure that it actually matches the key we were provided.
+        let (hash, size) = hashed_copy_compressed(&mut content, &mut file)
+            .await
+            .with_context(|| format!("write content to {temp:?}"))?;
+
+        // Even if the hash didn't match we still need to finalize the write so
+        // that we can delete the temp file before returning.
+        file.flush().await.context("flush file")?;
+        drop(file);
+
+        if key != hash {
+            if let Err(err) = remove_file(&temp).await {
+                warn!("failed to remove temp file {temp:?}: {err}");
+            }
+            bail!("hash mismatch of uncompressed content: {hash:?} != {key:?}");
+        }
+
+        // Atomically rename the temp file to the final destination.
+        // If the file already exists, we can just abort: file contents never
+        // change and are always named by their content hash.
+        match rename(&temp, &path).await {
+            Ok(()) => self
+                .write_size(key, size)
+                .await
+                .with_context(|| format!("write uncompressed size for {key:?}")),
+            Err(err) => {
+                if let Err(err) = remove_file(&temp).await {
+                    warn!("failed to remove temp file {temp:?}: {err}");
+                }
+                if err.kind() == std::io::ErrorKind::AlreadyExists {
+                    Ok(())
+                } else {
+                    Err(err).context(format!("rename {temp:?} to {path:?}"))
+                }
+            }
+        }
+    }
+
     /// Read and buffer the entire content from storage.
     async fn read_buffered(&self, key: &Key) -> Result<Vec<u8>> {
         let mut content = self.read(key).await?;
@@ -316,6 +418,18 @@ impl Disk {
     async fn write_buffered(&self, key: &Key, content: impl AsRef<[u8]>) -> Result<()> {
         let cursor = Cursor::new(content.as_ref());
         self.write(key, cursor).await
+    }
+
+    async fn read_inner(
+        &self,
+        key: &Key,
+    ) -> Result<impl AsyncRead + Unpin + 'static, std::io::Error> {
+        let path = self.key_path(key);
+        File::open(&path)
+            .await
+            .map(BufReader::new)
+            .map(ZstdDecoder::new)
+            .map(|reader| BufReader::with_capacity(Self::DEFAULT_BUF_SIZE, reader))
     }
 }
 
@@ -344,6 +458,8 @@ fn temp_path(target: &Path) -> PathBuf {
 
 /// Copy the content from the source reader into the target writer while
 /// computing the hash of the copied content.
+///
+/// Returns the hash of the content and the number of bytes copied.
 async fn hashed_copy(
     mut source: impl AsyncRead + Unpin,
     mut target: impl AsyncWrite + Unpin,
@@ -374,17 +490,89 @@ async fn hashed_copy(
     Ok((hasher.finalize(), copied))
 }
 
+/// Copy the content from the source reader into the target writer while
+/// simultaneously decompressing the source reader and computing the hash of the
+/// decompressed content.
+///
+/// The decompressed content is only used for calculating the hash; the
+/// compressed content is what's written to the destination.
+///
+/// Returns the hash of the _uncompressed_ content and the number of
+/// _uncompressed_ bytes copied. The intention of this is to enable the
+/// compressed and uncompressed disk APIs to smoothly interoperate: for example
+/// [`Disk::write_compressed`] needs to know the uncompressed size so that it
+/// can write a size file that [`Disk::size`] can read. Meanwhile
+/// [`Disk::size_compressed`] doesn't need to know the size ahead of time, as it
+/// can just check the metadata of the actual file on disk.
+async fn hashed_copy_compressed(
+    mut source: impl AsyncRead + Unpin,
+    mut target: impl AsyncWrite + Unpin,
+) -> Result<(blake3::Hash, u64)> {
+    // We set the buffer size to this value because it's called out by the
+    // `blake3` docs on the `update_reader` method:
+    // https://docs.rs/blake3/1.8.2/blake3/struct.Hasher.html#method.update_reader
+    let (tee_reader, tee_writer) = piper::pipe(NETWORK_BUFFER_SIZE);
+
+    let copy = async move || -> Result<()> {
+        let mut tee = tee_writer.compat_write();
+        let mut buffer = vec![0; LOCAL_BUFFER_SIZE];
+        loop {
+            let n = source.read(&mut buffer).await.context("read source")?;
+            if n == 0 {
+                break;
+            }
+
+            let chunk = &buffer[..n];
+            target.write_all(chunk).await.context("write target")?;
+            tee.write_all(chunk).await.context("write tee")?;
+        }
+        Ok(())
+    };
+
+    let hash = async move || -> Result<(blake3::Hash, u64)> {
+        let mut tee = tee_reader
+            .compat()
+            .pipe(BufReader::new)
+            .pipe(ZstdDecoder::new);
+        let mut buffer = vec![0; LOCAL_BUFFER_SIZE];
+        let mut hasher = blake3::Hasher::new();
+        let mut copied = 0;
+        loop {
+            let n = tee.read(&mut buffer).await.context("read tee")?;
+            if n == 0 {
+                break;
+            }
+            let chunk = &buffer[..n];
+            hasher.update(chunk);
+            copied += n as u64;
+        }
+        Ok((hasher.finalize(), copied))
+    };
+
+    let (metrics, _) = tokio::try_join!(hash(), copy())?;
+    Ok(metrics)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Disk, Key, hashed_copy};
     use color_eyre::Result;
     use pretty_assertions::assert_eq as pretty_assert_eq;
-    use proptest::{prop_assert, prop_assert_eq, prop_assert_ne};
+    use proptest::{prop_assert, prop_assert_eq, prop_assert_ne, prop_assume};
     use simple_test_case::test_case;
     use std::io::Cursor;
     use test_strategy::proptest;
     use tokio::io::AsyncReadExt;
-    use zstd::bulk::decompress;
+
+    #[track_caller]
+    fn compress(data: impl AsRef<[u8]>) -> Vec<u8> {
+        zstd::bulk::compress(data.as_ref(), 0).expect("compress")
+    }
+
+    #[track_caller]
+    fn decompress(data: impl AsRef<[u8]>) -> Vec<u8> {
+        zstd::bulk::decompress(data.as_ref(), 100 * 1024 * 1024).expect("decompress")
+    }
 
     fn key_for(input: &[u8]) -> Key {
         Key::from_blake3(blake3::hash(input))
@@ -516,8 +704,7 @@ mod tests {
         prop_assert_ne!(&file_contents, &content);
 
         // But decompressing gives us the original
-        let decompressed = decompress(&file_contents, 100 * 1024 * 1024).expect("decompress");
-        prop_assert_eq!(decompressed, content);
+        prop_assert_eq!(decompress(&file_contents), content);
     }
 
     #[proptest(async = "tokio")]
@@ -571,5 +758,282 @@ mod tests {
             storage.exists(&key).await.expect("exists check"),
             "exists after write"
         );
+    }
+
+    #[proptest(async = "tokio")]
+    async fn read_compressed_basic(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        storage.write_buffered(&key, &content).await?;
+
+        let mut compressed_reader = storage.read_compressed(&key).await?;
+        let mut compressed_content = Vec::new();
+        compressed_reader
+            .read_to_end(&mut compressed_content)
+            .await?;
+
+        let decompressed = decompress(&compressed_content);
+        pretty_assert_eq!(
+            decompressed,
+            content,
+            "decompressing read_compressed output gives original content"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_compressed_basic(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        let compressed = compress(&content);
+        storage
+            .write_compressed(&key, Cursor::new(&compressed))
+            .await?;
+
+        pretty_assert_eq!(storage.exists(&key).await?, true);
+
+        let read_content = storage.read_buffered(&key).await?;
+        pretty_assert_eq!(
+            read_content,
+            content,
+            "reading via normal read() gives original content"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_compressed_roundtrip(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        let compressed = compress(&content);
+        storage
+            .write_compressed(&key, Cursor::new(&compressed))
+            .await?;
+
+        let mut compressed_reader = storage.read_compressed(&key).await?;
+        let mut read_compressed = Vec::new();
+        compressed_reader.read_to_end(&mut read_compressed).await?;
+
+        pretty_assert_eq!(
+            decompress(&read_compressed),
+            content,
+            "read_compressed after write_compressed roundtrips"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_then_read_compressed(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        storage.write_buffered(&key, &content).await?;
+
+        let mut compressed_reader = storage.read_compressed(&key).await?;
+        let mut compressed_content = Vec::new();
+        compressed_reader
+            .read_to_end(&mut compressed_content)
+            .await?;
+
+        let decompressed = decompress(&compressed_content);
+        pretty_assert_eq!(
+            decompressed,
+            content,
+            "write() then read_compressed() works"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_compressed_then_read(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        let compressed = compress(&content);
+        storage
+            .write_compressed(&key, Cursor::new(&compressed))
+            .await?;
+
+        let read_content = storage.read_buffered(&key).await?;
+        pretty_assert_eq!(
+            read_content,
+            content,
+            "write_compressed() then read() works"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn size_returns_uncompressed_size(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        storage.write_buffered(&key, &content).await?;
+
+        let size = storage.size(&key).await?;
+        pretty_assert_eq!(
+            size,
+            Some(content.len() as u64),
+            "size() returns uncompressed size"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn size_compressed_returns_compressed_size(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        storage.write_buffered(&key, &content).await?;
+
+        let compressed_size = storage.size_compressed(&key).await?;
+        let expected_compressed = compress(&content);
+
+        pretty_assert_eq!(
+            compressed_size,
+            Some(expected_compressed.len() as u64),
+            "size_compressed() returns compressed size"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn size_consistency_write_vs_write_compressed(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage1, _temp1) = Disk::new_temp().await?;
+        let (storage2, _temp2) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+
+        storage1.write_buffered(&key, &content).await?;
+        let compressed = compress(&content);
+        storage2
+            .write_compressed(&key, Cursor::new(&compressed))
+            .await?;
+
+        let size1 = storage1.size(&key).await?;
+        let size2 = storage2.size(&key).await?;
+        pretty_assert_eq!(
+            size1,
+            size2,
+            "write() and write_compressed() produce same uncompressed size"
+        );
+
+        let compressed_size1 = storage1.size_compressed(&key).await?;
+        let compressed_size2 = storage2.size_compressed(&key).await?;
+        pretty_assert_eq!(
+            compressed_size1,
+            compressed_size2,
+            "write() and write_compressed() produce same compressed size"
+        );
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_compressed_validates_hash(
+        #[any] content: Vec<u8>,
+        #[any] wrong_content: Vec<u8>,
+    ) {
+        prop_assume!(content != wrong_content);
+
+        let (storage, _temp) = Disk::new_temp().await.expect("temp dir");
+
+        let key = key_for(&content);
+        let wrong_compressed = compress(&wrong_content);
+
+        let result = storage
+            .write_compressed(&key, Cursor::new(&wrong_compressed))
+            .await;
+
+        prop_assert!(
+            result.is_err(),
+            "write_compressed() rejects content with wrong hash"
+        );
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_compressed_idempotent(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        let compressed = compress(&content);
+        storage
+            .write_compressed(&key, Cursor::new(&compressed))
+            .await?;
+        storage
+            .write_compressed(&key, Cursor::new(&compressed))
+            .await?;
+
+        let read_content = storage.read_buffered(&key).await?;
+        pretty_assert_eq!(read_content, content);
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn write_compressed_concurrent(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        let compressed = compress(&content);
+        tokio::try_join!(
+            storage.write_compressed(&key, Cursor::new(&compressed)),
+            storage.write_compressed(&key, Cursor::new(&compressed))
+        )?;
+
+        let read_content = storage.read_buffered(&key).await?;
+        pretty_assert_eq!(read_content, content);
+
+        Ok(())
+    }
+
+    #[proptest(async = "tokio")]
+    async fn size_nonexistent(#[any] content: Vec<u8>) -> Result<()> {
+        let _ = color_eyre::install();
+
+        let (storage, _temp) = Disk::new_temp().await?;
+
+        let key = key_for(&content);
+        let size = storage.size(&key).await?;
+        pretty_assert_eq!(size, None, "size() returns None for nonexistent blob");
+
+        let compressed_size = storage.size_compressed(&key).await?;
+        pretty_assert_eq!(
+            compressed_size,
+            None,
+            "size_compressed() returns None for nonexistent blob"
+        );
+
+        Ok(())
     }
 }

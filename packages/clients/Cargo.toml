@@ -20,6 +20,10 @@ piper = { workspace = true, optional = true }
 tap = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 flume = { workspace = true, optional = true }
+enum-assoc.workspace = true
+async-compression = { workspace = true, features = ["tokio", "zstd"], optional = true }
+zstd = { workspace = true, optional = true }
+http = { workspace = true }
 
 [features]
 default = []
@@ -33,7 +37,9 @@ client = [
     "dep:piper",
     "dep:tap",
     "dep:tracing",
-    "dep:flume"
+    "dep:flume",
+    "dep:async-compression",
+    "dep:zstd"
 ]
 
 [dev-dependencies]
