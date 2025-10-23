@@ -1,5 +1,6 @@
 use enum_assoc::Assoc;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use strum::{EnumIter, IntoEnumIterator};
 use subenum::subenum;
 use tracing::instrument;
@@ -23,7 +24,7 @@ use super::read_argv;
 // which is an empty string; this is meaningless from an application logic
 // perspective and can only ever result in bugs and wasted allocations.
 #[subenum(ProfileBuiltin(derive(EnumIter)))]
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default, Assoc)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Default, Assoc, Serialize, Deserialize)]
 #[func(pub const fn as_str(&self) -> &str)]
 pub enum Profile {
     /// The `debug` profile.

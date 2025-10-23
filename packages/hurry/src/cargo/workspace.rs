@@ -3,6 +3,7 @@ use std::{fmt::Debug, marker::PhantomData};
 use color_eyre::{Result, eyre::Context};
 use derive_more::{Debug as DebugExt, Display};
 use location_macros::workspace_dir;
+use serde::{Deserialize, Serialize};
 use tap::{Pipe as _, Tap as _, TapFallible as _};
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument};
@@ -16,15 +17,12 @@ use crate::{
 
 use super::{CargoBuildArguments, Profile};
 
-/// Represents a Cargo workspace with caching metadata.
+/// The Cargo workspace of a build.
 ///
-/// A workspace is the root container for a Rust project, containing
-/// the `Cargo.toml`, `Cargo.lock`, and `target/` directory. This struct
-/// holds parsed metadata needed for intelligent caching of build artifacts.
-///
-/// Note: For hurry's purposes, workspace and non-workspace projects
-/// are treated identically.
-#[derive(Clone, Eq, PartialEq, DebugExt, Display)]
+/// Workspaces contain all the paths needed to unambiguously specify the files
+/// in a build. Note that workspaces are constructed with a specific profile in
+/// mind, which we parse from the build command's arguments.
+#[derive(Clone, Eq, PartialEq, Hash, DebugExt, Display, Serialize, Deserialize)]
 #[display("{root}")]
 pub struct Workspace {
     /// The root directory of the workspace.
@@ -37,6 +35,13 @@ pub struct Workspace {
     /// The $CARGO_HOME value.
     #[debug(skip)]
     pub cargo_home: AbsDirPath,
+
+    /// The build profile of this workspace invocation.
+    pub profile: Profile,
+
+    /// The build profile target directory.
+    #[debug(skip)]
+    pub profile_dir: AbsDirPath,
 }
 
 impl Workspace {
@@ -47,49 +52,52 @@ impl Workspace {
         args: impl AsRef<CargoBuildArguments> + Debug,
     ) -> Result<Self> {
         let args = args.as_ref();
-        // TODO: Maybe we should just replicate this logic and perform it
-        // statically using filesystem operations instead of shelling out? This
-        // costs something on the order of 200ms, which is not _terrible_ but
-        // feels much slower than if we just did our own filesystem reads,
-        // especially since we don't actually use any of the logic except the
-        // paths.
-        let manifest_path = args.manifest_path().map(String::from);
-        let cmd_current_dir = path.as_std_path().to_path_buf();
-        let metadata = spawn_blocking(move || -> Result<_> {
-            cargo_metadata::MetadataCommand::new()
-                .tap_mut(|cmd| {
-                    if let Some(p) = manifest_path {
-                        cmd.manifest_path(p);
-                    }
-                })
-                .current_dir(cmd_current_dir)
-                .exec()
-                .context("exec and parse cargo metadata")
-        })
-        .await
-        .context("join task")?
-        .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
-        .context("get cargo metadata")?;
 
-        let workspace_root = AbsDirPath::try_from(&metadata.workspace_root)
-            .context("parse workspace root as absolute directory")?;
-        let workspace_target = AbsDirPath::try_from(&metadata.target_directory)
-            .context("parse workspace target as absolute directory")?;
+        let (workspace_root, workspace_target) = {
+            // TODO: Maybe we should just replicate this logic and perform it
+            // statically using filesystem operations instead of shelling out?
+            // This costs something on the order of 200ms, which is not
+            // _terrible_ but feels much slower than if we just did our own
+            // filesystem reads, especially since we don't actually use any of
+            // the logic except the paths.
+            let manifest_path = args.manifest_path().map(String::from);
+            let cmd_current_dir = path.as_std_path().to_path_buf();
+            let metadata = spawn_blocking(move || -> Result<_> {
+                cargo_metadata::MetadataCommand::new()
+                    .tap_mut(|cmd| {
+                        if let Some(p) = manifest_path {
+                            cmd.manifest_path(p);
+                        }
+                    })
+                    .current_dir(cmd_current_dir)
+                    .exec()
+                    .context("exec and parse cargo metadata")
+            })
+            .await
+            .context("join task")?
+            .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
+            .context("get cargo metadata")?;
+            (
+                AbsDirPath::try_from(&metadata.workspace_root)
+                    .context("parse workspace root as absolute directory")?,
+                AbsDirPath::try_from(&metadata.target_directory)
+                    .context("parse workspace target as absolute directory")?,
+            )
+        };
 
-        let cargo_home = spawn_blocking({
-            let workspace_root = workspace_root.clone();
-            move || home::cargo_home_with_cwd(workspace_root.as_std_path())
-        })
-        .await
-        .context("join background task")?
-        .context("get $CARGO_HOME")?
-        .pipe(AbsDirPath::try_from)
-        .context("parse path as utf8")?;
+        let cargo_home = home::cargo_home_with_cwd(workspace_root.as_std_path())?
+            .pipe(AbsDirPath::try_from)
+            .context("parse path as utf8")?;
+
+        let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
+        let profile_dir = workspace_target.try_join_dir(profile.as_str())?;
 
         Ok(Self {
             root: workspace_root,
             target: workspace_target,
             cargo_home,
+            profile,
+            profile_dir,
         })
     }
 
