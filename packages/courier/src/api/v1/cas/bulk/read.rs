@@ -39,7 +39,7 @@ use crate::storage::Disk;
 ///
 /// The response sets `Content-Type`:
 /// - `application/x-zstd-tar` indicates the CAS blobs are compressed
-/// - `application/x-tar` indicates the CAS blobs are uncompresed
+/// - `application/x-tar` indicates the CAS blobs are uncompressed
 ///
 /// Note: The tar archive itself is always uncompressed. The Accept header only
 /// indicates whether the individual blobs inside the tar should be compressed.
