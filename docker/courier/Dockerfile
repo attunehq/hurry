@@ -15,6 +15,7 @@ RUN cargo build --release --bin courier
 
 FROM debian:bookworm-slim AS runtime
 WORKDIR /courier
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /courier/target/release/courier /usr/local/bin
 
 USER 1000:1000
