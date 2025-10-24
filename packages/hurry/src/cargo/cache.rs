@@ -428,226 +428,37 @@ impl CargoCache {
         })
     }
 
-    #[instrument(name = "CargoCache::save", skip(progress))]
+    #[instrument(name = "CargoCache::save", skip(_progress))]
     pub async fn save(
         &self,
         artifact_plan: ArtifactPlan,
-        progress: &ProgressBar,
-        restored: &RestoreState,
+        _progress: &ProgressBar,
+        restored: RestoreState,
     ) -> Result<CacheStats> {
-        let start_time = std::time::Instant::now();
-        let target_path = &self.ws.profile_dir;
+        let hurry_cache_dir = fs::user_global_cache_path().await?;
 
-        let mut transferred_files = 0u64;
-        let mut transferred_bytes = 0u64;
+        // TODO: Start daemon if it's not already running.
 
-        for artifact_key in artifact_plan.artifacts {
-            let artifact = BuiltArtifact::from_key(&self.ws, artifact_key.clone()).await?;
-            debug!(?artifact, "caching artifact");
+        // Connect to daemon HTTP server.
+        let hurryd_sock_path = hurry_cache_dir.join(mk_rel_file!("hurryd.sock"));
+        let client = reqwest::Client::builder()
+            .unix_socket(hurryd_sock_path.as_std_path())
+            .build()?;
 
-            // Determine which files will be saved.
-            let lib_files = {
-                let lib_fingerprint_dir = target_path.try_join_dirs(&[
-                    String::from(".fingerprint"),
-                    format!(
-                        "{}-{}",
-                        artifact.package_name, artifact.library_crate_compilation_unit_hash
-                    ),
-                ])?;
-                let lib_fingerprint_files = fs::walk_files(&lib_fingerprint_dir)
-                    .try_collect::<Vec<_>>()
-                    .await?;
-                artifact
-                    .lib_files
-                    .into_iter()
-                    .chain(lib_fingerprint_files)
-                    .collect::<Vec<_>>()
-            };
-            let build_script_files = match artifact.build_script_files {
-                Some(build_script_files) => {
-                    let compiled_files = fs::walk_files(&build_script_files.compiled_dir)
-                        .try_collect::<Vec<_>>()
-                        .await?;
-                    let compiled_fingerprint_dir = target_path.try_join_dirs(&[
-                        String::from(".fingerprint"),
-                        format!(
-                            "{}-{}",
-                            artifact.package_name,
-                            artifact
-                                .build_script_compilation_unit_hash
-                                .as_ref()
-                                .expect("build script files have compilation unit hash")
-                        ),
-                    ])?;
-                    let compiled_fingerprint_files = fs::walk_files(&compiled_fingerprint_dir)
-                        .try_collect::<Vec<_>>()
-                        .await?;
-                    let output_files = fs::walk_files(&build_script_files.output_dir)
-                        .try_collect::<Vec<_>>()
-                        .await?;
-                    let output_fingerprint_dir = target_path.try_join_dirs(&[
-                        String::from(".fingerprint"),
-                        format!(
-                            "{}-{}",
-                            artifact.package_name,
-                            artifact
-                                .build_script_execution_unit_hash
-                                .as_ref()
-                                .expect("build script files have execution unit hash")
-                        ),
-                    ])?;
-                    let output_fingerprint_files = fs::walk_files(&output_fingerprint_dir)
-                        .try_collect::<Vec<_>>()
-                        .await?;
-                    compiled_files
-                        .into_iter()
-                        .chain(compiled_fingerprint_files)
-                        .chain(output_files)
-                        .chain(output_fingerprint_files)
-                        .collect()
-                }
-                None => vec![],
-            };
+        // Send upload request.
+        let response = client
+            .post("http://localhost/api/v0/cargo/upload")
+            .json(&CargoUploadRequest {
+                ws: self.ws.clone(),
+                artifact_plan,
+                skip_artifacts: restored.artifacts.into_iter().collect(),
+                skip_objects: restored.objects.into_iter().collect(),
+            })
+            .send()
+            .await?;
+        debug!(?response, "submitted upload request");
 
-            let files_to_save = lib_files.into_iter().chain(build_script_files);
-            if restored.check_artifact(&artifact_key) {
-                trace!(
-                    ?artifact_key,
-                    "skipping backup: artifact was restored from cache"
-                );
-                transferred_files += files_to_save.count() as u64;
-                progress.inc(1);
-                progress.set_message(format!(
-                    "Backing up cache ({} files, {} at {})",
-                    transferred_files,
-                    format_size(transferred_bytes),
-                    format_transfer_rate(transferred_bytes, start_time)
-                ));
-                continue;
-            }
-
-            // For each file, save it into the CAS and calculate its key.
-            //
-            // TODO: Fuse this operation with the loop above where we discover the
-            // needed files? Would that give better performance?
-            let mut library_unit_files = vec![];
-            let mut artifact_files = vec![];
-            let mut bulk_entries = vec![];
-
-            // First pass: read files, calculate keys, and collect entries for bulk upload.
-            for path in files_to_save {
-                match fs::read_buffered(&path).await? {
-                    Some(content) => {
-                        let content = Self::rewrite(&self.ws, &path, &content).await?;
-                        let key = Key::from_buffer(&content);
-
-                        // Gather metadata for the artifact file.
-                        let metadata = fs::Metadata::from_file(&path)
-                            .await?
-                            .ok_or_eyre("could not stat file metadata")?;
-                        let mtime_nanos = metadata.mtime.duration_since(UNIX_EPOCH)?.as_nanos();
-                        let qualified = QualifiedPath::parse(&self.ws, path.as_std_path()).await?;
-
-                        library_unit_files.push((qualified.clone(), key.clone()));
-                        artifact_files.push(
-                            ArtifactFile::builder()
-                                .object_key(key.clone())
-                                .path(serde_json::to_string(&qualified)?)
-                                .mtime_nanos(mtime_nanos)
-                                .executable(metadata.executable)
-                                .build(),
-                        );
-
-                        if restored.check_object(&key) {
-                            trace!(?path, ?key, "skipping backup: file was restored from cache");
-                            transferred_files += 1;
-                        } else {
-                            bulk_entries.push((key, content, path));
-                        }
-                    }
-                    None => {
-                        // Note that this is not necessarily incorrect! For example,
-                        // Cargo seems to claim to emit `.dwp` files for its `.so`s,
-                        // but those don't seem to be there by the time the process
-                        // actually finishes. I'm not sure if they're deleted or
-                        // just never written.
-                        warn!("failed to read file: {}", path);
-                    }
-                }
-            }
-
-            // Second pass: upload files using bulk operations.
-            if !bulk_entries.is_empty() {
-                debug!(count = bulk_entries.len(), "uploading files");
-
-                // Store the actual entries.
-                let result = bulk_entries
-                    .iter()
-                    .map(|(key, content, _)| (key.clone(), content.clone()))
-                    .collect::<Vec<_>>()
-                    .pipe(stream::iter)
-                    .pipe(|stream| self.cas.store_bulk(stream))
-                    .await
-                    .context("upload batch")?;
-
-                // Update statistics based on bulk result.
-                for (key, content, path) in &bulk_entries {
-                    if result.written.contains(key) {
-                        transferred_bytes += content.len() as u64;
-                        debug!(?path, ?key, "uploaded via bulk");
-                    } else if result.skipped.contains(key) {
-                        debug!(?path, ?key, "skipped by server (already exists)");
-                    }
-                    transferred_files += 1;
-                }
-
-                // Log any errors but continue (partial success model).
-                for error in &result.errors {
-                    warn!(
-                        key = ?error.key,
-                        error = %error.error,
-                        "failed to upload file in bulk operation"
-                    );
-                }
-            }
-
-            // Calculate the content hash.
-            let content_hash = {
-                let mut hasher = blake3::Hasher::new();
-                let bytes = serde_json::to_vec(&LibraryUnitHash::new(library_unit_files))?;
-                hasher.write_all(&bytes)?;
-                hasher.finalize().to_hex().to_string()
-            };
-            debug!(?content_hash, "calculated content hash");
-
-            // Save the library unit via the Courier API.
-            let request = CargoSaveRequest::builder()
-                .package_name(artifact.package_name)
-                .package_version(artifact.package_version)
-                .target(&artifact_plan.target)
-                .library_crate_compilation_unit_hash(artifact.library_crate_compilation_unit_hash)
-                .maybe_build_script_compilation_unit_hash(
-                    artifact.build_script_compilation_unit_hash,
-                )
-                .maybe_build_script_execution_unit_hash(artifact.build_script_execution_unit_hash)
-                .content_hash(content_hash)
-                .artifacts(artifact_files)
-                .build();
-
-            self.courier.cargo_cache_save(request).await?;
-            progress.inc(1);
-            progress.set_message(format!(
-                "Backing up cache ({} files, {} at {})",
-                transferred_files,
-                format_size(transferred_bytes),
-                format_transfer_rate(transferred_bytes, start_time)
-            ));
-        }
-
-        Ok(CacheStats {
-            files: transferred_files,
-            bytes: transferred_bytes,
-        })
+        Ok(CacheStats { files: 0, bytes: 0 })
     }
 
     #[instrument(name = "CargoCache::restore", skip(progress))]
@@ -953,6 +764,14 @@ impl CargoCache {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CargoUploadRequest {
+    ws: Workspace,
+    artifact_plan: ArtifactPlan,
+    skip_artifacts: Vec<ArtifactKey>,
+    skip_objects: Vec<Key>,
 }
 
 /// An ArtifactPlan represents the collection of information known about the

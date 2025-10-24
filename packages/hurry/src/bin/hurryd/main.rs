@@ -10,12 +10,16 @@ use clients::{
     },
 };
 use color_eyre::{
-    eyre::{bail, Context as _, Error, OptionExt as _}, Result
+    Result,
+    eyre::{Context as _, Error, OptionExt as _, bail},
 };
 use derive_more::Debug;
 use futures::{TryStreamExt as _, stream};
 use hurry::{
-    cargo::{ArtifactKey, ArtifactPlan, BuildScriptOutput, BuiltArtifact, DepInfo, LibraryUnitHash, QualifiedPath, RootOutput, Workspace},
+    cargo::{
+        ArtifactKey, ArtifactPlan, BuildScriptOutput, BuiltArtifact, DepInfo, LibraryUnitHash,
+        QualifiedPath, RootOutput, Workspace,
+    },
     cas::CourierCas,
     fs, mk_rel_file,
     path::{AbsFilePath, JoinWith, TryJoinWith},
@@ -173,13 +177,8 @@ async fn upload(
 ) -> Json<CargoUploadResponse> {
     let state = state.clone();
     tokio::spawn(async move {
-        store_async(req, state).await;
-    });
-    Json(CargoUploadResponse { ok: true })
-}
-
-async fn store_async(req: CargoUploadRequest, state: ServerState) -> Result<()> {
-    let restored_artifacts: HashSet<ArtifactKey, RandomState> = HashSet::from_iter(req.skip_artifacts);
+        let restored_artifacts: HashSet<ArtifactKey, RandomState> =
+            HashSet::from_iter(req.skip_artifacts);
         let restored_objects: HashSet<Key, RandomState> = HashSet::from_iter(req.skip_objects);
 
         let target_path = &req.ws.profile_dir;
@@ -325,7 +324,7 @@ async fn store_async(req: CargoUploadRequest, state: ServerState) -> Result<()> 
                     .context("upload batch")?;
 
                 // Update statistics based on bulk result.
-                for (key, content, path) in &bulk_entries {
+                for (key, _, path) in &bulk_entries {
                     if result.written.contains(key) {
                         debug!(?path, ?key, "uploaded via bulk");
                     } else if result.skipped.contains(key) {
@@ -369,6 +368,8 @@ async fn store_async(req: CargoUploadRequest, state: ServerState) -> Result<()> 
             state.courier.cargo_cache_save(request).await?;
         }
         Ok::<(), Error>(())
+    });
+    Json(CargoUploadResponse { ok: true })
 }
 
 #[instrument]

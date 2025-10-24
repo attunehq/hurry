@@ -195,7 +195,7 @@ pub async fn exec(options: Options) -> Result<()> {
         let count = artifact_plan.artifacts.len() as u64;
         let progress = TransferBar::new(count, "Backing up cache");
 
-        let stats = cache.save(artifact_plan, &progress, &restored).await?;
+        let stats = cache.save(artifact_plan, &progress, restored).await?;
         progress.finish_with_message(format!(
             "Cache backed up ({} files, {} at {})",
             stats.files,
