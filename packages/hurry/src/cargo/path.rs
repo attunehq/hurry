@@ -108,9 +108,7 @@ impl QualifiedPath {
         match self {
             QualifiedPath::Rootless(rel) => rel.to_string(),
             QualifiedPath::RelativeTargetProfile(rel) => ws.profile_dir.join(rel).to_string(),
-            QualifiedPath::RelativeCargoHome(rel) => {
-                ws.cargo_home.join(rel).to_string()
-            }
+            QualifiedPath::RelativeCargoHome(rel) => ws.cargo_home.join(rel).to_string(),
             QualifiedPath::Absolute(abs) => abs.to_string(),
         }
     }

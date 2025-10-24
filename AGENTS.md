@@ -2,6 +2,27 @@
 
 This file provides guidance for AI coding assistants (Claude Code, OpenAI Codex, Windsurf, Cursor, Zed, etc) when working with code in this repository.
 
+## Core Principle: Follow Existing Patterns
+
+**IMPORTANT**: When implementing anything, always look for similar examples in the codebase first and follow those patterns.
+
+### Pattern Discovery Process
+1. **Before writing code**: Search for similar implementations in the same package/module
+2. **When writing tests**: Read 2-3 other tests in the same package/module and follow their structure
+3. **When adding features**: Look for analogous features and use similar approaches
+4. **When refactoring**: If the user asks to change something in one area and similar patterns exist elsewhere, ask if they'd like you to update those too
+
+### Why This Matters
+- **Principle of least surprise**: Code behaves consistently across the codebase
+- **Maintainability**: Future developers (human or AI) can understand patterns quickly
+- **Quality**: Proven patterns are less likely to have issues
+
+### Examples
+- Writing a new API handler? Look at existing handlers in `api/v1/` first
+- Adding a new CLI command? Check how other commands in `cmd/` are structured
+- Creating a test? Read tests in that module to see assertion styles, setup patterns, and naming conventions
+- Implementing serialization? See how other types handle it
+
 ## Project Overview
 
 This is a monorepo containing two main projects:
