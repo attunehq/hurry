@@ -1,0 +1,796 @@
+use aerosol::axum::Dep;
+use axum::{Json, http::StatusCode, response::IntoResponse};
+use clients::courier::v1::cache::{
+    ArtifactFile, CargoBulkRestoreHit, CargoBulkRestoreRequest, CargoBulkRestoreResponse,
+    CargoRestoreRequest,
+};
+use color_eyre::{
+    Result,
+    eyre::{Context, Report, eyre},
+};
+use futures::{StreamExt, TryStreamExt, stream};
+use tap::Pipe;
+use tracing::{error, info};
+
+use crate::db::Postgres;
+
+/// The max amount of items in a single bulk restore request.
+/// Not chosen for a specific reason, just feels reasonable.
+const MAX_BULK_RESTORE_REQUESTS: usize = 500;
+
+/// The number of concurrent lookups to perform.
+/// Not chosen for a specific reason, just feels reasonable.
+/// Ideally we do a single bulk query instead.
+const CONCURRENT_LOOKUPS: usize = 30;
+
+#[tracing::instrument(skip(body))]
+pub async fn handle(
+    Dep(db): Dep<Postgres>,
+    Json(body): Json<CargoBulkRestoreRequest>,
+) -> CacheBulkRestoreResponse {
+    info!(requests = body.requests.len(), "cache.bulk_restore.start");
+
+    if body.requests.len() > MAX_BULK_RESTORE_REQUESTS {
+        error!(
+            count = body.requests.len(),
+            max = MAX_BULK_RESTORE_REQUESTS,
+            "cache.bulk_restore.too_many_requests"
+        );
+        return CacheBulkRestoreResponse::InvalidRequest(eyre!(
+            "bulk restore limited to {} requests, got {}",
+            MAX_BULK_RESTORE_REQUESTS,
+            body.requests.len()
+        ));
+    }
+
+    // TODO: do batch queries instead.
+    let lookups = stream::iter(body.requests)
+        .map(|req| async {
+            let files = db
+                .cargo_cache_restore(req.clone())
+                .await
+                .context("get files")?;
+            Result::<(CargoRestoreRequest, Vec<ArtifactFile>)>::Ok((req, files))
+        })
+        .buffer_unordered(CONCURRENT_LOOKUPS)
+        .try_collect::<Vec<_>>()
+        .await;
+    let lookups = match lookups {
+        Ok(lookups) => lookups,
+        Err(err) => {
+            error!(error = ?err, "cache.bulk_restore.error");
+            return CacheBulkRestoreResponse::Error(err);
+        }
+    };
+    let (misses, hits) = lookups.into_iter().fold(
+        (Vec::new(), Vec::new()),
+        |(mut misses, mut hits), (req, files)| {
+            if files.is_empty() {
+                misses.push(req);
+            } else {
+                hits.push(
+                    CargoBulkRestoreHit::builder()
+                        .artifacts(files)
+                        .request(req)
+                        .build(),
+                );
+            }
+            (misses, hits)
+        },
+    );
+
+    info!(
+        hits = hits.len(),
+        misses = misses.len(),
+        "cache.bulk_restore.complete"
+    );
+
+    CargoBulkRestoreResponse::builder()
+        .hits(hits)
+        .misses(misses)
+        .build()
+        .pipe(CacheBulkRestoreResponse::Success)
+}
+
+#[derive(Debug)]
+pub enum CacheBulkRestoreResponse {
+    Success(CargoBulkRestoreResponse),
+    InvalidRequest(Report),
+    Error(Report),
+}
+
+impl IntoResponse for CacheBulkRestoreResponse {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            CacheBulkRestoreResponse::Success(body) => (StatusCode::OK, Json(body)).into_response(),
+            CacheBulkRestoreResponse::InvalidRequest(error) => {
+                (StatusCode::BAD_REQUEST, format!("{error:?}")).into_response()
+            }
+            CacheBulkRestoreResponse::Error(error) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+    use clients::courier::v1::cache::{
+        ArtifactFile, CargoBulkRestoreRequest, CargoBulkRestoreResponse, CargoRestoreRequest,
+        CargoSaveRequest,
+    };
+    use color_eyre::{Result, eyre::Context};
+    use pretty_assertions::assert_eq as pretty_assert_eq;
+    use sqlx::PgPool;
+
+    use crate::api::test_helpers::test_blob;
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_restore_multiple_packages(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        // Save 3 different packages
+        let packages = vec![
+            ("serde", "1.0.0", "abc123"),
+            ("tokio", "1.28.0", "def456"),
+            ("axum", "0.6.0", "ghi789"),
+        ];
+
+        let mut keys = vec![];
+        for (name, version, hash) in &packages {
+            let (_, key) = test_blob(format!("{name}_content").as_bytes());
+            keys.push(key.clone());
+
+            let save_request = CargoSaveRequest::builder()
+                .package_name(*name)
+                .package_version(*version)
+                .target("x86_64-unknown-linux-gnu")
+                .library_crate_compilation_unit_hash(*hash)
+                .content_hash(format!("content_{hash}"))
+                .artifacts([ArtifactFile::builder()
+                    .object_key(&key)
+                    .path(format!("lib{name}.rlib"))
+                    .mtime_nanos(1000000000000000000u128)
+                    .executable(false)
+                    .build()])
+                .build();
+
+            let response = server
+                .post("/api/v1/cache/cargo/save")
+                .json(&save_request)
+                .await;
+            response.assert_status(StatusCode::CREATED);
+        }
+
+        // Bulk restore all 3
+        let bulk_request = CargoBulkRestoreRequest::builder()
+            .requests(packages.iter().map(|(name, version, hash)| {
+                CargoRestoreRequest::builder()
+                    .package_name(*name)
+                    .package_version(*version)
+                    .target("x86_64-unknown-linux-gnu")
+                    .library_crate_compilation_unit_hash(*hash)
+                    .build()
+            }))
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/bulk/restore")
+            .json(&bulk_request)
+            .await;
+
+        response.assert_status_ok();
+        let bulk_response = response.json::<CargoBulkRestoreResponse>();
+
+        pretty_assert_eq!(bulk_response.hits.len(), 3);
+        pretty_assert_eq!(bulk_response.misses.len(), 0);
+
+        // Verify each hit
+        for (i, (name, version, hash)) in packages.iter().enumerate() {
+            let hit = bulk_response
+                .hits
+                .iter()
+                .find(|h| h.request.package_name == *name)
+                .expect("hit not found");
+
+            pretty_assert_eq!(hit.request.package_name, *name);
+            pretty_assert_eq!(hit.request.package_version, *version);
+            pretty_assert_eq!(hit.request.library_crate_compilation_unit_hash, *hash);
+            pretty_assert_eq!(hit.artifacts.len(), 1);
+            pretty_assert_eq!(hit.artifacts[0].object_key, keys[i]);
+        }
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_restore_partial_hits(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        // Save only 2 packages
+        let saved_packages = vec![("serde", "1.0.0", "abc123"), ("tokio", "1.28.0", "def456")];
+
+        for (name, version, hash) in &saved_packages {
+            let (_, key) = test_blob(format!("{name}_content").as_bytes());
+
+            let save_request = CargoSaveRequest::builder()
+                .package_name(*name)
+                .package_version(*version)
+                .target("x86_64-unknown-linux-gnu")
+                .library_crate_compilation_unit_hash(*hash)
+                .content_hash(format!("content_{hash}"))
+                .artifacts([ArtifactFile::builder()
+                    .object_key(&key)
+                    .path(format!("lib{name}.rlib"))
+                    .mtime_nanos(1000000000000000000u128)
+                    .executable(false)
+                    .build()])
+                .build();
+
+            let response = server
+                .post("/api/v1/cache/cargo/save")
+                .json(&save_request)
+                .await;
+            response.assert_status(StatusCode::CREATED);
+        }
+
+        // Request 4 packages (2 exist, 2 don't)
+        let all_packages = vec![
+            ("serde", "1.0.0", "abc123"),
+            ("tokio", "1.28.0", "def456"),
+            ("axum", "0.6.0", "missing1"),
+            ("reqwest", "0.11.0", "missing2"),
+        ];
+
+        let bulk_request = CargoBulkRestoreRequest::builder()
+            .requests(all_packages.iter().map(|(name, version, hash)| {
+                CargoRestoreRequest::builder()
+                    .package_name(*name)
+                    .package_version(*version)
+                    .target("x86_64-unknown-linux-gnu")
+                    .library_crate_compilation_unit_hash(*hash)
+                    .build()
+            }))
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/bulk/restore")
+            .json(&bulk_request)
+            .await;
+
+        response.assert_status_ok();
+        let bulk_response = response.json::<CargoBulkRestoreResponse>();
+
+        pretty_assert_eq!(bulk_response.hits.len(), 2);
+        pretty_assert_eq!(bulk_response.misses.len(), 2);
+
+        // Verify hits are the ones we saved
+        let hit_names: Vec<_> = bulk_response
+            .hits
+            .iter()
+            .map(|h| h.request.package_name.as_str())
+            .collect();
+        assert!(hit_names.contains(&"serde"));
+        assert!(hit_names.contains(&"tokio"));
+
+        // Verify misses are the ones we didn't save
+        let miss_names: Vec<_> = bulk_response
+            .misses
+            .iter()
+            .map(|m| m.package_name.as_str())
+            .collect();
+        assert!(miss_names.contains(&"axum"));
+        assert!(miss_names.contains(&"reqwest"));
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_restore_all_misses(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        // Don't save anything, request nonexistent packages
+        let bulk_request = CargoBulkRestoreRequest::builder()
+            .requests([
+                CargoRestoreRequest::builder()
+                    .package_name("nonexistent1")
+                    .package_version("1.0.0")
+                    .target("x86_64-unknown-linux-gnu")
+                    .library_crate_compilation_unit_hash("missing1")
+                    .build(),
+                CargoRestoreRequest::builder()
+                    .package_name("nonexistent2")
+                    .package_version("2.0.0")
+                    .target("x86_64-unknown-linux-gnu")
+                    .library_crate_compilation_unit_hash("missing2")
+                    .build(),
+            ])
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/bulk/restore")
+            .json(&bulk_request)
+            .await;
+
+        response.assert_status_ok();
+        let bulk_response = response.json::<CargoBulkRestoreResponse>();
+
+        pretty_assert_eq!(bulk_response.hits.len(), 0);
+        pretty_assert_eq!(bulk_response.misses.len(), 2);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_restore_empty_request(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let bulk_request = CargoBulkRestoreRequest::builder().build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/bulk/restore")
+            .json(&bulk_request)
+            .await;
+
+        response.assert_status_ok();
+        let bulk_response = response.json::<CargoBulkRestoreResponse>();
+
+        pretty_assert_eq!(bulk_response.hits.len(), 0);
+        pretty_assert_eq!(bulk_response.misses.len(), 0);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_restore_with_build_scripts(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(b"proc_macro_content");
+
+        // Save package with build script hashes
+        let save_request = CargoSaveRequest::builder()
+            .package_name("proc-macro")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("lib_hash")
+            .build_script_compilation_unit_hash("build_comp_hash")
+            .build_script_execution_unit_hash("build_exec_hash")
+            .content_hash("content_hash")
+            .artifacts([ArtifactFile::builder()
+                .object_key(&key)
+                .path("libproc_macro.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .json(&save_request)
+            .await;
+        response.assert_status(StatusCode::CREATED);
+
+        // Bulk restore with matching hashes
+        let bulk_request = CargoBulkRestoreRequest::builder()
+            .requests([CargoRestoreRequest::builder()
+                .package_name("proc-macro")
+                .package_version("1.0.0")
+                .target("x86_64-unknown-linux-gnu")
+                .library_crate_compilation_unit_hash("lib_hash")
+                .build_script_compilation_unit_hash("build_comp_hash")
+                .build_script_execution_unit_hash("build_exec_hash")
+                .build()])
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/bulk/restore")
+            .json(&bulk_request)
+            .await;
+
+        response.assert_status_ok();
+        let bulk_response = response.json::<CargoBulkRestoreResponse>();
+
+        pretty_assert_eq!(bulk_response.hits.len(), 1);
+        pretty_assert_eq!(bulk_response.misses.len(), 0);
+        pretty_assert_eq!(bulk_response.hits[0].artifacts[0].object_key, key);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_restore_wrong_hashes(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        // Save packages with specific hashes
+        let packages = vec![("correct", "1.0.0", "correct_hash")];
+
+        for (name, version, hash) in &packages {
+            let (_, key) = test_blob(format!("{name}_content").as_bytes());
+
+            let save_request = CargoSaveRequest::builder()
+                .package_name(*name)
+                .package_version(*version)
+                .target("x86_64-unknown-linux-gnu")
+                .library_crate_compilation_unit_hash(*hash)
+                .content_hash(format!("content_{hash}"))
+                .artifacts([ArtifactFile::builder()
+                    .object_key(&key)
+                    .path(format!("lib{name}.rlib"))
+                    .mtime_nanos(1000000000000000000u128)
+                    .executable(false)
+                    .build()])
+                .build();
+
+            let response = server
+                .post("/api/v1/cache/cargo/save")
+                .json(&save_request)
+                .await;
+            response.assert_status(StatusCode::CREATED);
+        }
+
+        // Request with mix of correct and incorrect hashes
+        let bulk_request = CargoBulkRestoreRequest::builder()
+            .requests([
+                CargoRestoreRequest::builder()
+                    .package_name("correct")
+                    .package_version("1.0.0")
+                    .target("x86_64-unknown-linux-gnu")
+                    .library_crate_compilation_unit_hash("correct_hash")
+                    .build(),
+                CargoRestoreRequest::builder()
+                    .package_name("correct")
+                    .package_version("1.0.0")
+                    .target("x86_64-unknown-linux-gnu")
+                    .library_crate_compilation_unit_hash("wrong_hash")
+                    .build(),
+            ])
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/bulk/restore")
+            .json(&bulk_request)
+            .await;
+
+        response.assert_status_ok();
+        let bulk_response = response.json::<CargoBulkRestoreResponse>();
+
+        // Only the correct hash should hit
+        pretty_assert_eq!(bulk_response.hits.len(), 1);
+        pretty_assert_eq!(bulk_response.misses.len(), 1);
+        pretty_assert_eq!(
+            bulk_response.hits[0]
+                .request
+                .library_crate_compilation_unit_hash,
+            "correct_hash"
+        );
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_restore_same_package_different_targets(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let targets = vec![
+            "x86_64-unknown-linux-gnu",
+            "x86_64-apple-darwin",
+            "aarch64-apple-darwin",
+        ];
+
+        // Save same package for different targets
+        for (i, target) in targets.iter().enumerate() {
+            let (_, key) = test_blob(format!("content_{target}").as_bytes());
+
+            let save_request = CargoSaveRequest::builder()
+                .package_name("cross-platform")
+                .package_version("1.0.0")
+                .target(*target)
+                .library_crate_compilation_unit_hash(format!("hash_{i}"))
+                .content_hash(format!("content_{i}"))
+                .artifacts([ArtifactFile::builder()
+                    .object_key(&key)
+                    .path("libcross_platform.rlib")
+                    .mtime_nanos(1000000000000000000u128)
+                    .executable(false)
+                    .build()])
+                .build();
+
+            let response = server
+                .post("/api/v1/cache/cargo/save")
+                .json(&save_request)
+                .await;
+            response.assert_status(StatusCode::CREATED);
+        }
+
+        // Bulk restore all targets
+        let bulk_request = CargoBulkRestoreRequest::builder()
+            .requests(targets.iter().enumerate().map(|(i, target)| {
+                CargoRestoreRequest::builder()
+                    .package_name("cross-platform")
+                    .package_version("1.0.0")
+                    .target(*target)
+                    .library_crate_compilation_unit_hash(format!("hash_{i}"))
+                    .build()
+            }))
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/bulk/restore")
+            .json(&bulk_request)
+            .await;
+
+        response.assert_status_ok();
+        let bulk_response = response.json::<CargoBulkRestoreResponse>();
+
+        pretty_assert_eq!(bulk_response.hits.len(), 3);
+        pretty_assert_eq!(bulk_response.misses.len(), 0);
+
+        // Verify each target is present
+        for target in &targets {
+            assert!(
+                bulk_response
+                    .hits
+                    .iter()
+                    .any(|h| h.request.target == *target)
+            );
+        }
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_restore_duplicate_requests(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(b"duplicate_content");
+
+        // Save one package
+        let save_request = CargoSaveRequest::builder()
+            .package_name("duplicate-test")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash")
+            .content_hash("content_hash")
+            .artifacts([ArtifactFile::builder()
+                .object_key(&key)
+                .path("libduplicate.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .json(&save_request)
+            .await;
+        response.assert_status(StatusCode::CREATED);
+
+        // Request same package twice - should only get one hit back
+        let bulk_request = CargoBulkRestoreRequest::builder()
+            .requests([
+                CargoRestoreRequest::builder()
+                    .package_name("duplicate-test")
+                    .package_version("1.0.0")
+                    .target("x86_64-unknown-linux-gnu")
+                    .library_crate_compilation_unit_hash("hash")
+                    .build(),
+                CargoRestoreRequest::builder()
+                    .package_name("duplicate-test")
+                    .package_version("1.0.0")
+                    .target("x86_64-unknown-linux-gnu")
+                    .library_crate_compilation_unit_hash("hash")
+                    .build(),
+            ])
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/bulk/restore")
+            .json(&bulk_request)
+            .await;
+
+        response.assert_status_ok();
+        let bulk_response = response.json::<CargoBulkRestoreResponse>();
+
+        // Duplicate requests are NOT deduplicated - get both hits
+        pretty_assert_eq!(bulk_response.hits.len(), 2);
+        pretty_assert_eq!(bulk_response.misses.len(), 0);
+
+        // Both hits should be for the same package
+        for hit in &bulk_response.hits {
+            pretty_assert_eq!(hit.request.package_name, "duplicate-test");
+            pretty_assert_eq!(hit.artifacts[0].object_key, key);
+        }
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_restore_concurrent(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(b"concurrent_content");
+
+        // Save one package
+        let save_request = CargoSaveRequest::builder()
+            .package_name("concurrent-test")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash")
+            .content_hash("content_hash")
+            .artifacts([ArtifactFile::builder()
+                .object_key(&key)
+                .path("libconcurrent.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .json(&save_request)
+            .await;
+        response.assert_status(StatusCode::CREATED);
+
+        let bulk_request = CargoBulkRestoreRequest::builder()
+            .requests([CargoRestoreRequest::builder()
+                .package_name("concurrent-test")
+                .package_version("1.0.0")
+                .target("x86_64-unknown-linux-gnu")
+                .library_crate_compilation_unit_hash("hash")
+                .build()])
+            .build();
+
+        // Make 5 concurrent requests
+        let (r1, r2, r3, r4, r5) = tokio::join!(
+            server
+                .post("/api/v1/cache/cargo/bulk/restore")
+                .json(&bulk_request),
+            server
+                .post("/api/v1/cache/cargo/bulk/restore")
+                .json(&bulk_request),
+            server
+                .post("/api/v1/cache/cargo/bulk/restore")
+                .json(&bulk_request),
+            server
+                .post("/api/v1/cache/cargo/bulk/restore")
+                .json(&bulk_request),
+            server
+                .post("/api/v1/cache/cargo/bulk/restore")
+                .json(&bulk_request),
+        );
+
+        // All should succeed
+        for response in [r1, r2, r3, r4, r5] {
+            response.assert_status_ok();
+            let bulk_response = response.json::<CargoBulkRestoreResponse>();
+            pretty_assert_eq!(bulk_response.hits.len(), 1);
+            pretty_assert_eq!(bulk_response.misses.len(), 0);
+        }
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_restore_exceeds_limit(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        // Create more than MAX_BULK_RESTORE_REQUESTS
+        let requests = (0..501)
+            .map(|i| {
+                CargoRestoreRequest::builder()
+                    .package_name(format!("package{i}"))
+                    .package_version("1.0.0")
+                    .target("x86_64-unknown-linux-gnu")
+                    .library_crate_compilation_unit_hash(format!("hash{i}"))
+                    .build()
+            })
+            .collect::<Vec<_>>();
+
+        let bulk_request = CargoBulkRestoreRequest::builder()
+            .requests(requests)
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/bulk/restore")
+            .json(&bulk_request)
+            .await;
+
+        response.assert_status(StatusCode::BAD_REQUEST);
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    async fn bulk_restore_preserves_request_data(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(b"preserve_content");
+
+        // Save one package
+        let save_request = CargoSaveRequest::builder()
+            .package_name("preserve-test")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash")
+            .build_script_compilation_unit_hash("build_comp")
+            .build_script_execution_unit_hash("build_exec")
+            .content_hash("content_hash")
+            .artifacts([ArtifactFile::builder()
+                .object_key(&key)
+                .path("libpreserve.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .json(&save_request)
+            .await;
+        response.assert_status(StatusCode::CREATED);
+
+        let original_request = CargoRestoreRequest::builder()
+            .package_name("preserve-test")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash")
+            .build_script_compilation_unit_hash("build_comp")
+            .build_script_execution_unit_hash("build_exec")
+            .build();
+
+        let bulk_request = CargoBulkRestoreRequest::builder()
+            .requests([
+                original_request.clone(),
+                CargoRestoreRequest::builder()
+                    .package_name("missing")
+                    .package_version("2.0.0")
+                    .target("aarch64-apple-darwin")
+                    .library_crate_compilation_unit_hash("missing_hash")
+                    .build(),
+            ])
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/bulk/restore")
+            .json(&bulk_request)
+            .await;
+
+        response.assert_status_ok();
+        let bulk_response = response.json::<CargoBulkRestoreResponse>();
+
+        // Verify hit contains full original request
+        pretty_assert_eq!(bulk_response.hits.len(), 1);
+        pretty_assert_eq!(bulk_response.hits[0].request, original_request);
+
+        // Verify miss contains full original request
+        pretty_assert_eq!(bulk_response.misses.len(), 1);
+        pretty_assert_eq!(bulk_response.misses[0].package_name, "missing");
+        pretty_assert_eq!(bulk_response.misses[0].package_version, "2.0.0");
+        pretty_assert_eq!(bulk_response.misses[0].target, "aarch64-apple-darwin");
+
+        Ok(())
+    }
+}

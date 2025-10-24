@@ -1139,6 +1139,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "hex",
+ "itertools",
  "maplit",
  "num-traits",
  "piper",

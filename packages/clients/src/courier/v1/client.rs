@@ -25,7 +25,10 @@ use url::Url;
 
 use super::{
     Key,
-    cache::{CargoRestoreRequest, CargoRestoreResponse, CargoSaveRequest},
+    cache::{
+        CargoBulkRestoreRequest, CargoBulkRestoreResponse, CargoRestoreRequest,
+        CargoRestoreResponse, CargoSaveRequest,
+    },
     cas::{CasBulkReadRequest, CasBulkWriteResponse},
 };
 use crate::{ContentType, NETWORK_BUFFER_SIZE};
@@ -234,6 +237,45 @@ impl Client {
                     .with_section(|| url.header("Url:"))
                     .with_section(|| body.header("Body:"))
                     .with_section(|| request_id.header("Request ID:"));
+            }
+        }
+    }
+
+    /// Restore multiple cargo cache entries in bulk.
+    #[instrument(skip(self, requests))]
+    pub async fn cargo_cache_restore_bulk(
+        &self,
+        requests: impl IntoIterator<Item = impl Into<CargoRestoreRequest>>,
+    ) -> Result<CargoBulkRestoreResponse> {
+        let url = self.base.join("api/v1/cache/cargo/bulk/restore")?;
+        let body = CargoBulkRestoreRequest::builder()
+            .requests(requests)
+            .build();
+
+        let response = self
+            .http
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .context("send")?;
+
+        match response.status() {
+            StatusCode::OK => {
+                let data = response
+                    .json::<CargoBulkRestoreResponse>()
+                    .await
+                    .context("parse JSON response")?;
+                Ok(data)
+            }
+            status => {
+                let url = response.url().to_string();
+                let request_id = request_id(&response);
+                let body = response.text().await.unwrap_or_default();
+                Err(eyre!("unexpected status code: {status}"))
+                    .with_section(|| url.header("Url:"))
+                    .with_section(|| body.header("Body:"))
+                    .with_section(|| request_id.header("Request ID:"))
             }
         }
     }

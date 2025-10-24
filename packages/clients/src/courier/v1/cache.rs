@@ -84,6 +84,27 @@ pub struct CargoRestoreRequest {
     pub build_script_execution_unit_hash: Option<String>,
 }
 
+impl CargoRestoreRequest {
+    pub fn hash_hex(&self) -> String {
+        hex::encode(self.hash())
+    }
+
+    pub fn hash(&self) -> Vec<u8> {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(self.package_name.as_bytes());
+        hasher.update(self.package_version.as_bytes());
+        hasher.update(self.target.as_bytes());
+        hasher.update(self.library_crate_compilation_unit_hash.as_bytes());
+        if let Some(hash) = &self.build_script_compilation_unit_hash {
+            hasher.update(hash.as_bytes());
+        }
+        if let Some(hash) = &self.build_script_execution_unit_hash {
+            hasher.update(hash.as_bytes());
+        }
+        hasher.finalize().as_bytes().to_vec()
+    }
+}
+
 impl From<&CargoRestoreRequest> for CargoRestoreRequest {
     fn from(req: &CargoRestoreRequest) -> Self {
         req.clone()
@@ -100,6 +121,57 @@ pub struct CargoRestoreResponse {
 
 impl From<&CargoRestoreResponse> for CargoRestoreResponse {
     fn from(resp: &CargoRestoreResponse) -> Self {
+        resp.clone()
+    }
+}
+
+/// Request to restore multiple cargo cache entries in bulk.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]
+#[non_exhaustive]
+pub struct CargoBulkRestoreRequest {
+    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<CargoRestoreRequest>>| i.into_iter().map(Into::into).collect())]
+    pub requests: Vec<CargoRestoreRequest>,
+}
+
+impl From<&CargoBulkRestoreRequest> for CargoBulkRestoreRequest {
+    fn from(req: &CargoBulkRestoreRequest) -> Self {
+        req.clone()
+    }
+}
+
+/// A single cache hit in a bulk restore operation.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]
+#[non_exhaustive]
+pub struct CargoBulkRestoreHit {
+    /// The original request that produced this hit
+    pub request: CargoRestoreRequest,
+
+    /// The artifacts for this cache entry
+    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<ArtifactFile>>| i.into_iter().map(Into::into).collect())]
+    pub artifacts: Vec<ArtifactFile>,
+}
+
+impl From<&CargoBulkRestoreHit> for CargoBulkRestoreHit {
+    fn from(hit: &CargoBulkRestoreHit) -> Self {
+        hit.clone()
+    }
+}
+
+/// Response from bulk restore operation.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]
+#[non_exhaustive]
+pub struct CargoBulkRestoreResponse {
+    /// Requests that had matching cache entries
+    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<CargoBulkRestoreHit>>| i.into_iter().map(Into::into).collect())]
+    pub hits: Vec<CargoBulkRestoreHit>,
+
+    /// Requests that had no matching cache entry
+    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<CargoRestoreRequest>>| i.into_iter().map(Into::into).collect())]
+    pub misses: Vec<CargoRestoreRequest>,
+}
+
+impl From<&CargoBulkRestoreResponse> for CargoBulkRestoreResponse {
+    fn from(resp: &CargoBulkRestoreResponse) -> Self {
         resp.clone()
     }
 }
