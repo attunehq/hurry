@@ -167,10 +167,15 @@ impl DepInfoLine {
 
             let output = QualifiedPath::parse_string(ws, output)
                 .then_with_context(move || format!("parse output path: {output:?}"));
-            let inputs = stream::iter(inputs.split_whitespace())
-                .map(|input| {
-                    QualifiedPath::parse_string(ws, input)
-                        .then_with_context(move || format!("parse input path: {input:?}"))
+            let inputs = inputs
+                .split_whitespace()
+                .map(String::from)
+                .collect_vec()
+                .pipe(stream::iter)
+                .map(|input| async move {
+                    QualifiedPath::parse_string(ws, &input)
+                        .await
+                        .with_context(move || format!("parse input path: {input:?}"))
                 })
                 .buffer_unordered(DEFAULT_CONCURRENCY)
                 .try_collect::<Vec<_>>()
