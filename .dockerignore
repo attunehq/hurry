@@ -6,6 +6,7 @@
 .gitmodules
 .scratch
 .vscode
+.hurrydata
 docker/courier/
 !docker/dev/entrypoint.sh
 docs/
