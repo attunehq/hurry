@@ -231,6 +231,59 @@ let Some(value) = value else {
 
 This makes the control flow explicit and immune to bugs from forgetting to handle the None case.
 
+### Array Indexing
+Avoid array indexing when possible. Use iterator methods instead:
+
+**Using indices in loops:** Use `.enumerate()` to get both index and value:
+```rust
+// ❌ Avoid
+for i in 0..items.len() {
+    let item = &items[i];
+    process(i, item);
+}
+
+// ✅ Prefer
+for (i, item) in items.iter().enumerate() {
+    process(i, item);
+}
+```
+
+**Accessing elements in maps:** Use `.iter().map()` with destructuring:
+```rust
+// ❌ Avoid
+let keyed = (0..items.len()).map(|i| (items[i].name, compute_key(i)));
+
+// ✅ Prefer
+let keyed = items
+    .iter()
+    .enumerate()
+    .map(|(i, item)| (&item.name, compute_key(i)));
+```
+
+**Building expected values from restored data:** Use `.iter().map()` to pair iteration with indices:
+```rust
+// ❌ Avoid
+let expected = (0..count)
+    .map(|i| ExpectedValue::new(restored[i].clone(), ...))
+    .collect::<Vec<_>>();
+
+// ✅ Prefer
+let expected = restored
+    .iter()
+    .enumerate()
+    .map(|(i, value)| ExpectedValue::new(value.clone(), ...))
+    .collect::<Vec<_>>();
+```
+
+Benefits:
+- Eliminates bounds-checking concerns
+- More readable intent
+- Reduces off-by-one errors
+- More functional and idiomatic Rust
+
+Exceptions:
+- Macros requiring individual arguments (e.g., `tokio::join!`) may require indexing unavoidably
+
 ### Naming Conventions
 
 #### Type Names: Avoid Stuttering
@@ -280,8 +333,8 @@ Benefits:
 - ❌ `fn test_parses_config()`
 - ✅ `fn parses_config()`
 
-### Variable Names
-- Don't use hungarian notation; prefer just shadowing.
+#### Variable Names
+- Don't use hungarian notation; prefer just shadowing
 - ❌: `formats_str`
 - ✅: `formats`
 
@@ -310,31 +363,36 @@ let artifact = client::courier::v1::cache::ArtifactFile::builder()
 - When the import would create naming conflicts
 
 ### String Formatting
-- Always inline rust variables in format-like strings if they can be inlined:
+- Always inline rust variables in format-like strings if they can be inlined
 - Plain variables can be inlined: `format!("Hello, {name}")`
 - Expressions cannot be inlined: `format!("Hello, {}", user.name())`
 
-### Documentation
-- Don't bold bullet points in markdown
-- ❌ `- **Hook**: message`
-- ✅ `- Hook: message`
-- Avoid the "space dash space" pattern when writing prose/comments, use ":" instead.
-- ❌: "All commands work the same way - do x then y"
-- ✅: "All commands work the same way: do x then y"
-
-### Other Preferences
-- Use `if Some(...) = ... else { ... }` or `let ... = match { ... }` pattern over `is_some` or `is_ok` usage.
-- Do not use `mod.rs`. Always prefer to create Rust modules using a `.rs` file, then put other files inside a directory with the same name.
+### Module Structure
+- Do not use `mod.rs`. Always prefer to create Rust modules using a `.rs` file, then put other files inside a directory with the same name
   - ✅ Good: `my_module.rs`, `my_module/other_file.rs`
   - ❌ Bad: `my_module/mod.rs`, `my_module/other_file.rs`
-- When adding packages to `Cargo.toml`, use `cargo add` instead of adding the package manually. After adding all packages, run `cargo autoinherit` to update workspace dependencies.
-- After writing a batch of Rust changes, use `make format` to format code.
-- After writing a batch of Rust changes, run `cargo clippy` on the project.
+
+### Dependency Management
+- When adding packages to `Cargo.toml`, use `cargo add` instead of adding the package manually
+- After adding all packages, run `cargo autoinherit` to update workspace dependencies
+
+### Code Quality
+- After writing a batch of Rust changes, use `make format` to format code
+- After writing a batch of Rust changes, run `cargo clippy` on the project
+- Prefer operations like `Itertools::sorted` over `Vec::sort` if we're going to work with the collection as an iterator
 
 ### Error Handling
 - Use `color-eyre` for error handling and reporting
 - Only panic if the problem is an invariant violation that makes it impossible for the program to continue safely, or in test code
 - Prefer returning `Result` types for recoverable errors
+
+### Documentation
+- Don't bold bullet points in markdown
+  - ❌ `- **Hook**: message`
+  - ✅ `- Hook: message`
+- Avoid the "space dash space" pattern when writing prose/comments, use ":" instead
+  - ❌: "All commands work the same way - do x then y"
+  - ✅: "All commands work the same way: do x then y"
 
 ## Testing Strategy
 
