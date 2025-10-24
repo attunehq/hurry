@@ -158,7 +158,7 @@ impl From<&CargoBulkRestoreHit> for CargoBulkRestoreHit {
 }
 
 /// Response from bulk restore operation.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder, Default)]
 #[non_exhaustive]
 pub struct CargoBulkRestoreResponse {
     /// Requests that had matching cache entries
