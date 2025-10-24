@@ -36,7 +36,7 @@ pub async fn handle(
     }
 
     let mut results = match db.cargo_cache_restore_bulk(&body.requests).await {
-        Ok(results) => results.into_iter().collect::<HashMap<_, _>>(),
+        Ok(results) => results,
         Err(err) => {
             error!(error = ?err, "cache.bulk_restore.error");
             return CacheBulkRestoreResponse::Error(err);
