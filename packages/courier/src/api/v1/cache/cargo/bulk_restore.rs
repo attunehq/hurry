@@ -15,11 +15,11 @@ use tracing::{error, info};
 use crate::db::Postgres;
 
 /// The max amount of items in a single bulk restore request.
-/// Not chosen for a specific reason, just feels reasonable.
+/// Not chosen for a specific reason: just feels reasonable.
 const MAX_BULK_RESTORE_REQUESTS: usize = 500;
 
 /// The number of concurrent lookups to perform.
-/// Not chosen for a specific reason, just feels reasonable.
+/// Not chosen for a specific reason: just feels reasonable.
 /// Ideally we do a single bulk query instead.
 const CONCURRENT_LOOKUPS: usize = 30;
 
@@ -117,8 +117,8 @@ impl IntoResponse for CacheBulkRestoreResponse {
 mod tests {
     use axum::http::StatusCode;
     use clients::courier::v1::cache::{
-        ArtifactFile, CargoBulkRestoreRequest, CargoBulkRestoreResponse, CargoRestoreRequest,
-        CargoSaveRequest,
+        ArtifactFile, CargoBulkRestoreHit, CargoBulkRestoreRequest, CargoBulkRestoreResponse,
+        CargoRestoreRequest, CargoSaveRequest,
     };
     use color_eyre::{Result, eyre::Context};
     use pretty_assertions::assert_eq as pretty_assert_eq;
@@ -139,28 +139,33 @@ mod tests {
             ("axum", "0.6.0", "ghi789"),
         ];
 
-        let mut keys = vec![];
-        for (name, version, hash) in &packages {
-            let (_, key) = test_blob(format!("{name}_content").as_bytes());
-            keys.push(key.clone());
+        let saved_packages = packages
+            .iter()
+            .map(|(name, version, hash)| {
+                let (_, key) = test_blob(format!("{name}_content").as_bytes());
 
-            let save_request = CargoSaveRequest::builder()
-                .package_name(*name)
-                .package_version(*version)
-                .target("x86_64-unknown-linux-gnu")
-                .library_crate_compilation_unit_hash(*hash)
-                .content_hash(format!("content_{hash}"))
-                .artifacts([ArtifactFile::builder()
-                    .object_key(&key)
-                    .path(format!("lib{name}.rlib"))
-                    .mtime_nanos(1000000000000000000u128)
-                    .executable(false)
-                    .build()])
-                .build();
+                let save_request = CargoSaveRequest::builder()
+                    .package_name(*name)
+                    .package_version(*version)
+                    .target("x86_64-unknown-linux-gnu")
+                    .library_crate_compilation_unit_hash(*hash)
+                    .content_hash(format!("content_{hash}"))
+                    .artifacts([ArtifactFile::builder()
+                        .object_key(&key)
+                        .path(format!("lib{name}.rlib"))
+                        .mtime_nanos(1000000000000000000u128)
+                        .executable(false)
+                        .build()])
+                    .build();
 
+                (*name, *version, *hash, key, save_request)
+            })
+            .collect::<Vec<_>>();
+
+        for (_, _, _, _, save_request) in &saved_packages {
             let response = server
                 .post("/api/v1/cache/cargo/save")
-                .json(&save_request)
+                .json(save_request)
                 .await;
             response.assert_status(StatusCode::CREATED);
         }
@@ -189,18 +194,29 @@ mod tests {
         pretty_assert_eq!(bulk_response.misses.len(), 0);
 
         // Verify each hit
-        for (i, (name, version, hash)) in packages.iter().enumerate() {
+        for (name, version, hash, key, _) in &saved_packages {
             let hit = bulk_response
                 .hits
                 .iter()
                 .find(|h| h.request.package_name == *name)
                 .expect("hit not found");
 
-            pretty_assert_eq!(hit.request.package_name, *name);
-            pretty_assert_eq!(hit.request.package_version, *version);
-            pretty_assert_eq!(hit.request.library_crate_compilation_unit_hash, *hash);
-            pretty_assert_eq!(hit.artifacts.len(), 1);
-            pretty_assert_eq!(hit.artifacts[0].object_key, keys[i]);
+            let expected_request = CargoRestoreRequest::builder()
+                .package_name(*name)
+                .package_version(*version)
+                .target("x86_64-unknown-linux-gnu")
+                .library_crate_compilation_unit_hash(*hash)
+                .build();
+
+            let expected_artifact = ArtifactFile::builder()
+                .object_key(key)
+                .path(format!("lib{name}.rlib"))
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build();
+
+            pretty_assert_eq!(hit.request, expected_request);
+            pretty_assert_eq!(hit.artifacts, vec![expected_artifact]);
         }
 
         Ok(())
@@ -270,22 +286,22 @@ mod tests {
         pretty_assert_eq!(bulk_response.misses.len(), 2);
 
         // Verify hits are the ones we saved
-        let hit_names: Vec<_> = bulk_response
+        let mut hit_names = bulk_response
             .hits
             .iter()
             .map(|h| h.request.package_name.as_str())
-            .collect();
-        assert!(hit_names.contains(&"serde"));
-        assert!(hit_names.contains(&"tokio"));
+            .collect::<Vec<_>>();
+        hit_names.sort_unstable();
+        pretty_assert_eq!(hit_names, vec!["serde", "tokio"]);
 
         // Verify misses are the ones we didn't save
-        let miss_names: Vec<_> = bulk_response
+        let mut miss_names = bulk_response
             .misses
             .iter()
             .map(|m| m.package_name.as_str())
-            .collect();
-        assert!(miss_names.contains(&"axum"));
-        assert!(miss_names.contains(&"reqwest"));
+            .collect::<Vec<_>>();
+        miss_names.sort_unstable();
+        pretty_assert_eq!(miss_names, vec!["axum", "reqwest"]);
 
         Ok(())
     }
@@ -401,9 +417,30 @@ mod tests {
         response.assert_status_ok();
         let bulk_response = response.json::<CargoBulkRestoreResponse>();
 
-        pretty_assert_eq!(bulk_response.hits.len(), 1);
-        pretty_assert_eq!(bulk_response.misses.len(), 0);
-        pretty_assert_eq!(bulk_response.hits[0].artifacts[0].object_key, key);
+        let expected_hit = CargoBulkRestoreHit::builder()
+            .request(
+                CargoRestoreRequest::builder()
+                    .package_name("proc-macro")
+                    .package_version("1.0.0")
+                    .target("x86_64-unknown-linux-gnu")
+                    .library_crate_compilation_unit_hash("lib_hash")
+                    .build_script_compilation_unit_hash("build_comp_hash")
+                    .build_script_execution_unit_hash("build_exec_hash")
+                    .build(),
+            )
+            .artifacts([ArtifactFile::builder()
+                .object_key(&key)
+                .path("libproc_macro.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
+
+        let expected = CargoBulkRestoreResponse::builder()
+            .hits([expected_hit])
+            .build();
+
+        pretty_assert_eq!(bulk_response, expected);
 
         Ok(())
     }
@@ -470,6 +507,15 @@ mod tests {
         // Only the correct hash should hit
         pretty_assert_eq!(bulk_response.hits.len(), 1);
         pretty_assert_eq!(bulk_response.misses.len(), 1);
+
+        let expected_miss = CargoRestoreRequest::builder()
+            .package_name("correct")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("wrong_hash")
+            .build();
+
+        pretty_assert_eq!(bulk_response.misses, vec![expected_miss]);
         pretty_assert_eq!(
             bulk_response.hits[0]
                 .request
@@ -541,14 +587,17 @@ mod tests {
         pretty_assert_eq!(bulk_response.misses.len(), 0);
 
         // Verify each target is present
-        for target in &targets {
-            assert!(
-                bulk_response
-                    .hits
-                    .iter()
-                    .any(|h| h.request.target == *target)
-            );
-        }
+        let mut hit_targets = bulk_response
+            .hits
+            .iter()
+            .map(|h| h.request.target.as_str())
+            .collect::<Vec<_>>();
+        hit_targets.sort_unstable();
+
+        let mut expected_targets = targets.clone();
+        expected_targets.sort_unstable();
+
+        pretty_assert_eq!(hit_targets, expected_targets);
 
         Ok(())
     }
@@ -609,14 +658,28 @@ mod tests {
         let bulk_response = response.json::<CargoBulkRestoreResponse>();
 
         // Duplicate requests are NOT deduplicated - get both hits
-        pretty_assert_eq!(bulk_response.hits.len(), 2);
-        pretty_assert_eq!(bulk_response.misses.len(), 0);
+        let expected_hit = CargoBulkRestoreHit::builder()
+            .request(
+                CargoRestoreRequest::builder()
+                    .package_name("duplicate-test")
+                    .package_version("1.0.0")
+                    .target("x86_64-unknown-linux-gnu")
+                    .library_crate_compilation_unit_hash("hash")
+                    .build(),
+            )
+            .artifacts([ArtifactFile::builder()
+                .object_key(&key)
+                .path("libduplicate.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
 
-        // Both hits should be for the same package
-        for hit in &bulk_response.hits {
-            pretty_assert_eq!(hit.request.package_name, "duplicate-test");
-            pretty_assert_eq!(hit.artifacts[0].object_key, key);
-        }
+        let expected = CargoBulkRestoreResponse::builder()
+            .hits([expected_hit.clone(), expected_hit])
+            .build();
+
+        pretty_assert_eq!(bulk_response, expected);
 
         Ok(())
     }
