@@ -186,6 +186,12 @@ TAG="v$VERSION"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Check that we're on main branch
+CURRENT_BRANCH="$(git branch --show-current)"
+if [[ "$CURRENT_BRANCH" != "main" ]]; then
+    fail "Releases must be created from the 'main' branch. Currently on: $CURRENT_BRANCH"
+fi
+
 # Check for uncommitted changes
 if [[ "$DRY_RUN" == "false" ]] && ! git diff-index --quiet HEAD --; then
     fail "You have uncommitted changes. Please commit or stash them before releasing."
