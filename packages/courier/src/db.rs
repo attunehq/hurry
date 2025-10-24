@@ -485,10 +485,7 @@ impl Postgres {
             "cache.restore_bulk.complete"
         );
 
-        results_by_request_idx
-            .into_iter()
-            .collect::<HashMap<_, _>>()
-            .pipe(Ok)
+        Ok(results_by_request_idx)
     }
 }
 
