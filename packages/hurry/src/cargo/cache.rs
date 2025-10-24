@@ -20,7 +20,7 @@ use futures::{StreamExt, TryStreamExt as _, stream};
 use indicatif::ProgressBar;
 use itertools::Itertools;
 use scopeguard::defer;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tap::Pipe as _;
 use tokio::task::JoinSet;
 use tracing::{debug, instrument, trace, warn};
@@ -46,7 +46,7 @@ use crate::{
 };
 
 /// Statistics about cache operations.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct CacheStats {
     pub files: u64,
     pub bytes: u64,
@@ -441,11 +441,9 @@ impl CargoCache {
         let mut transferred_files = 0u64;
         let mut transferred_bytes = 0u64;
 
-        for artifact in artifact_plan.artifacts {
-            let artifact = BuiltArtifact::from_key(&self.ws, artifact).await?;
+        for artifact_key in artifact_plan.artifacts {
+            let artifact = BuiltArtifact::from_key(&self.ws, artifact_key.clone()).await?;
             debug!(?artifact, "caching artifact");
-
-            let artifact_key = artifact.reconstruct_key();
 
             // Determine which files will be saved.
             let lib_files = {
@@ -959,7 +957,7 @@ impl CargoCache {
 
 /// An ArtifactPlan represents the collection of information known about the
 /// artifacts for a build statically at compile-time.
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub struct ArtifactPlan {
     pub profile: Profile,
     pub target: String,
@@ -974,7 +972,7 @@ pub struct ArtifactPlan {
 /// In particular, this information does _not_ include information derived from
 /// compiling and running the build script, such as `rustc` flags from build
 /// script output directives.
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub struct ArtifactKey {
     // Partial artifact key information. Note that this is only derived from the
     // build plan, and therefore is missing essential information (e.g. `rustc`
@@ -996,10 +994,10 @@ pub struct ArtifactKey {
     build_script_execution_unit_hash: Option<String>,
 }
 
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub struct BuildScriptDirs {
-    compiled_dir: AbsDirPath,
-    output_dir: AbsDirPath,
+    pub compiled_dir: AbsDirPath,
+    pub output_dir: AbsDirPath,
 }
 
 /// A BuiltArtifact represents the information known about a library unit (i.e.
@@ -1007,20 +1005,20 @@ pub struct BuildScriptDirs {
 /// has been built.
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct BuiltArtifact {
-    package_name: String,
-    package_version: String,
+    pub package_name: String,
+    pub package_version: String,
 
-    lib_files: Vec<AbsFilePath>,
-    build_script_files: Option<BuildScriptDirs>,
+    pub lib_files: Vec<AbsFilePath>,
+    pub build_script_files: Option<BuildScriptDirs>,
 
-    library_crate_compilation_unit_hash: String,
-    build_script_compilation_unit_hash: Option<String>,
-    build_script_execution_unit_hash: Option<String>,
+    pub library_crate_compilation_unit_hash: String,
+    pub build_script_compilation_unit_hash: Option<String>,
+    pub build_script_execution_unit_hash: Option<String>,
 
     // TODO: Should these all be in a larger `BuildScript` struct that includes
     // the files, unit hashes, and output? It's a little silly to all have them
     // be separately optional, as if we could have some fields but not others.
-    build_script_output: Option<BuildScriptOutput>,
+    pub build_script_output: Option<BuildScriptOutput>,
 }
 
 impl BuiltArtifact {
@@ -1057,24 +1055,11 @@ impl BuiltArtifact {
             build_script_output,
         })
     }
-
-    /// Reconstruct a representative `ArtifactKey`.
-    pub fn reconstruct_key(&self) -> ArtifactKey {
-        ArtifactKey {
-            package_name: self.package_name.clone(),
-            package_version: self.package_version.clone(),
-            lib_files: self.lib_files.clone(),
-            build_script_files: self.build_script_files.clone(),
-            library_crate_compilation_unit_hash: self.library_crate_compilation_unit_hash.clone(),
-            build_script_compilation_unit_hash: self.build_script_compilation_unit_hash.clone(),
-            build_script_execution_unit_hash: self.build_script_execution_unit_hash.clone(),
-        }
-    }
 }
 
 /// A content hash of a library unit's artifacts.
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize)]
-struct LibraryUnitHash {
+pub struct LibraryUnitHash {
     files: Vec<(QualifiedPath, Key)>,
 }
 
@@ -1118,7 +1103,7 @@ impl LibraryUnitHash {
     /// This constructor always ensures that the files are sorted, so any two
     /// sets of files with the same paths and contents will produce the same
     /// hash.
-    fn new(mut files: Vec<(QualifiedPath, Key)>) -> Self {
+    pub fn new(mut files: Vec<(QualifiedPath, Key)>) -> Self {
         files.sort_by(|(q1, k1), (q2, k2)| {
             (LibraryUnitHashOrd(q1), k1).cmp(&(LibraryUnitHashOrd(q2), k2))
         });

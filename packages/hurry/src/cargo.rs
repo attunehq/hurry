@@ -28,7 +28,7 @@ mod workspace;
 pub use build_args::{CargoBuildArgument, CargoBuildArguments, ColorWhen, MessageFormat};
 pub use build_plan::BuildPlan;
 pub use build_script::{BuildScriptOutput, RootOutput};
-pub use cache::{ArtifactKey, BuiltArtifact, CacheStats, CargoCache, RestoreState};
+pub use cache::{ArtifactKey, ArtifactPlan, BuiltArtifact, CacheStats, CargoCache, RestoreState, LibraryUnitHash};
 pub use dep_info::{DepInfo, DepInfoLine};
 pub use dependency::{Dependency, DependencyBuild, Optimizations};
 pub use path::QualifiedPath;
