@@ -32,7 +32,10 @@
 use std::time::{Duration, Instant};
 
 use aerosol::Aero;
-use axum::{Router, extract::Request, http::HeaderValue, middleware::Next, response::Response};
+use axum::{
+    Router, extract::DefaultBodyLimit, extract::Request, http::HeaderValue, middleware::Next,
+    response::Response,
+};
 use tower::ServiceBuilder;
 use tower_http::{
     compression::CompressionLayer, decompression::RequestDecompressionLayer,
@@ -49,10 +52,14 @@ pub mod v1;
 /// connections.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(1800);
 
-/// Body size limit is set to accommodate bulk CAS operations. Single artifacts
+/// Body size limit for streaming operations (CAS uploads). Single artifacts
 /// can be large (e.g., libaws_sdk_s3 produces 125MB rlibs) and bulk operations
 /// may transfer many artifacts in one request.
 const MAX_BODY_SIZE: usize = 10 * 1024 * 1024 * 1024; // 10GB
+
+/// Body size limit for JSON deserialization. Set to accommodate bulk metadata
+/// operations like bulk restore requests.
+const MAX_JSON_BODY_SIZE: usize = 100 * 1024 * 1024; // 100MB
 
 pub type State = Aero![crate::db::Postgres, crate::storage::Disk,];
 
@@ -65,6 +72,7 @@ pub fn router(state: State) -> Router {
 
     Router::new()
         .nest("/api/v1", v1::router())
+        .layer(DefaultBodyLimit::max(MAX_JSON_BODY_SIZE))
         .layer(middleware)
         .layer(axum::middleware::from_fn(trace_request))
         .with_state(state)

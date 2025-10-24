@@ -7,7 +7,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, UNIX_EPOCH},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
 use cargo_metadata::TargetKind;
@@ -517,8 +517,7 @@ impl CargoCache {
                     ?artifact_key,
                     "skipping backup: artifact was restored from cache"
                 );
-                transferred_files += files_to_save.count() as u64;
-                progress.inc(1);
+                progress.dec_length(1);
                 progress.set_message(format!(
                     "Backing up cache ({} files, {} at {})",
                     transferred_files,
@@ -659,35 +658,19 @@ impl CargoCache {
         progress: &ProgressBar,
     ) -> Result<RestoreState> {
         debug!("start restoring");
-
-        let start_time = std::time::Instant::now();
-
-        // Open the profile dir once to extract owned paths upfront.
-        // We do this because `ProfileDir` has a lifetime for the lock, so we can't send
-        // it to worker tasks; this is valid so long as we actually hold `ProfileDir`
-        // for the entire time the task workers live (which we do).
-        let profile_root = &self.ws.profile_dir;
-        let cargo_home = &self.ws.cargo_home;
+        let start_time = Instant::now();
 
         // TODO: We should probably make this concurrent on something else since this is
         // likely going to be primarily blocked on network transfer.
         let worker_count = num_cpus::get();
-
-        // Normally I don't like buffered channels, but here we let it buffer so that we
-        // can potentially start working on the next artifact_plan while the prior is
-        // still being worked on. We want to avoid uneccesary memory overhead but each
-        // individual artifact file is relatively small so we'd rather trade some space
-        // for latency mitigation here.
         let restored = RestoreState::default();
         let transferred_files = Arc::new(AtomicU64::new(0));
         let transferred_bytes = Arc::new(AtomicU64::new(0));
-        let (tx, rx) = flume::bounded::<(ArtifactFile, AbsFilePath)>(worker_count * 10);
+        let (tx, rx) = flume::bounded::<(ArtifactFile, AbsFilePath)>(0);
         let mut cas_restore_workers = JoinSet::new();
         for _ in 0..worker_count {
             let rx = rx.clone();
-            let cas = self.cas.clone();
-            let profile_root = profile_root.clone();
-            let cargo_home = cargo_home.clone();
+            let cache = self.clone();
             let transferred_files = transferred_files.clone();
             let transferred_bytes = transferred_bytes.clone();
             let restored = restored.clone();
@@ -695,21 +678,24 @@ impl CargoCache {
                 const BATCH_SIZE: usize = 50;
                 let mut batch = Vec::new();
 
-                let restore =
-                    async |file: &ArtifactFile, path: &AbsFilePath, data: &[u8]| -> Result<u64> {
-                        let data =
-                            Self::reconstruct(&profile_root, &cargo_home, &path, data).await?;
+                let restore = async |file: &ArtifactFile,
+                                     path: &AbsFilePath,
+                                     data: &[u8]|
+                       -> Result<u64> {
+                    let data =
+                        Self::reconstruct(&cache.ws.profile_dir, &cache.ws.cargo_home, path, data)
+                            .await?;
 
-                        let mtime = UNIX_EPOCH + Duration::from_nanos(file.mtime_nanos as u64);
-                        let metadata = fs::Metadata::builder()
-                            .mtime(mtime)
-                            .executable(file.executable)
-                            .build();
-                        fs::write(&path, &data).await?;
-                        metadata.set_file(&path).await?;
-                        restored.record_object(&file.object_key);
-                        Result::<u64>::Ok(data.len() as u64)
-                    };
+                    let mtime = UNIX_EPOCH + Duration::from_nanos(file.mtime_nanos as u64);
+                    let metadata = fs::Metadata::builder()
+                        .mtime(mtime)
+                        .executable(file.executable)
+                        .build();
+                    fs::write(path, &data).await?;
+                    metadata.set_file(path).await?;
+                    restored.record_object(&file.object_key);
+                    Result::<u64>::Ok(data.len() as u64)
+                };
 
                 let process_batch =
                     async |batch: &mut Vec<(ArtifactFile, AbsFilePath)>| -> Result<()> {
@@ -724,7 +710,7 @@ impl CargoCache {
                             .collect::<Vec<_>>();
 
                         // Bulk fetch from CAS as a stream.
-                        let mut contents_stream = cas.get_bulk(keys).await?;
+                        let mut contents_stream = cache.cas.get_bulk(keys).await?;
                         let mut contents = HashMap::new();
                         while let Some(result) = contents_stream.next().await {
                             match result {
@@ -776,40 +762,56 @@ impl CargoCache {
             });
         }
 
-        for artifact in &artifact_plan.artifacts {
-            let request = CargoRestoreRequest::builder()
-                .package_name(&artifact.package_name)
-                .package_version(&artifact.package_version)
-                .target(&artifact_plan.target)
-                .library_crate_compilation_unit_hash(&artifact.library_crate_compilation_unit_hash)
-                .maybe_build_script_compilation_unit_hash(
-                    artifact.build_script_compilation_unit_hash.as_ref(),
-                )
-                .maybe_build_script_execution_unit_hash(
-                    artifact.build_script_execution_unit_hash.as_ref(),
-                )
-                .build();
+        let (artifacts, requests) = artifact_plan.artifacts.iter().fold(
+            (HashMap::new(), Vec::new()),
+            |(mut artifacts, mut requests), artifact| {
+                let req = CargoRestoreRequest::builder()
+                    .package_name(&artifact.package_name)
+                    .package_version(&artifact.package_version)
+                    .target(&artifact_plan.target)
+                    .library_crate_compilation_unit_hash(
+                        &artifact.library_crate_compilation_unit_hash,
+                    )
+                    .maybe_build_script_compilation_unit_hash(
+                        artifact.build_script_compilation_unit_hash.as_ref(),
+                    )
+                    .maybe_build_script_execution_unit_hash(
+                        artifact.build_script_execution_unit_hash.as_ref(),
+                    )
+                    .build();
+                artifacts.insert(req.hash(), artifact);
+                requests.push(req);
+                (artifacts, requests)
+            },
+        );
 
-            let Some(response) = self.courier.cargo_cache_restore(request).await? else {
-                debug!(?artifact, "no matching library unit build found");
-                progress.inc(1);
-                continue;
+        let restore = self
+            .courier
+            .cargo_cache_restore_bulk(requests)
+            .await
+            .context("cache restore")?;
+        for miss in restore.misses {
+            debug!(artifact = ?miss, "no matching library unit build found");
+            progress.dec_length(1);
+        }
+        for hit in restore.hits {
+            let Some(artifact) = artifacts.get(&hit.request.hash()) else {
+                bail!("artifact was not requested but was restored: {hit:?}");
             };
 
-            // Send all files for this package to workers.
-            for file in response.artifacts {
+            for file in hit.artifacts {
                 // Convert the artifact file path back to QualifiedPath and reconstruct it to an
                 // absolute path for this machine.
                 let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
                 let path = qualified
-                    .reconstruct_raw(&profile_root, &cargo_home)
+                    .reconstruct_raw(&self.ws.profile_dir, &self.ws.cargo_home)
                     .pipe(AbsFilePath::try_from)?;
 
                 // Check if file already exists with correct content. If so, don't need to
                 // restore it.
                 if fs::exists(path.as_std_path()).await {
                     let existing_hash = fs::hash_file(&path).await?;
-                    if &existing_hash == &file.object_key {
+                    if existing_hash == file.object_key {
                         trace!(?path, "file already exists with correct hash, skipping");
                         continue;
                     }
@@ -904,8 +906,6 @@ impl CargoCache {
         path: &AbsFilePath,
         content: &[u8],
     ) -> Result<Vec<u8>> {
-        use itertools::Itertools as _;
-
         // Determine what kind of file this is based on path structure.
         let components = path.component_strs_lossy().collect::<Vec<_>>();
 
@@ -1095,12 +1095,12 @@ impl<'a> LibraryUnitHashOrd<'a> {
 impl<'a> Ord for LibraryUnitHashOrd<'a> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match (&self.0, &other.0) {
-            (QualifiedPath::Rootless(a), QualifiedPath::Rootless(b)) => a.cmp(&b),
+            (QualifiedPath::Rootless(a), QualifiedPath::Rootless(b)) => a.cmp(b),
             (QualifiedPath::RelativeTargetProfile(a), QualifiedPath::RelativeTargetProfile(b)) => {
-                a.cmp(&b)
+                a.cmp(b)
             }
-            (QualifiedPath::RelativeCargoHome(a), QualifiedPath::RelativeCargoHome(b)) => a.cmp(&b),
-            (QualifiedPath::Absolute(a), QualifiedPath::Absolute(b)) => a.cmp(&b),
+            (QualifiedPath::RelativeCargoHome(a), QualifiedPath::RelativeCargoHome(b)) => a.cmp(b),
+            (QualifiedPath::Absolute(a), QualifiedPath::Absolute(b)) => a.cmp(b),
             (_, _) => self.discriminant().cmp(&other.discriminant()),
         }
     }
