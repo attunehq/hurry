@@ -77,6 +77,14 @@ The `scripts/` directory contains specialized debugging tools:
 
 These scripts are essential for cache correctness validation and performance analysis.
 
+#### Release Management
+- `scripts/release.sh`: Automated release script for publishing to S3
+  - Usage: `./scripts/release.sh <version>` (e.g., `./scripts/release.sh 1.0.0`)
+  - Supports options: `--dry-run`, `--skip-build`, `--skip-upload`
+  - Automatically tags git, builds for all platforms, generates checksums, and uploads to S3
+  - Run `aws sso login --profile <your-profile-name>` first to authenticate
+  - After release, push the git tag: `git push origin v<version>`
+
 ### Courier-specific Commands
 
 #### Running the Server
@@ -114,6 +122,85 @@ These scripts are essential for cache correctness validation and performance ana
 5. Make API requests: Use curl, xh, httpie, or the test client
 6. Iterate on code: Tests use isolated databases via `#[sqlx::test]` macro
 7. Schema changes: Edit `schema/schema.sql` → run `sql-schema migration --name {name}` → review migrations → apply with sqlx-cli → run `make sqlx-prepare`
+
+### Release Workflow
+
+Hurry uses S3-based distribution for binary releases. Releases are created manually using a local script.
+
+#### Prerequisites
+- AWS SSO access configured with appropriate S3 permissions
+- `cross` installed for cross-compilation: `cargo install cross`
+- `cargo-set-version` installed: `cargo install cargo-set-version`
+- `jq` or `jaq` for JSON processing
+
+#### Release Process
+
+1. **Authenticate with AWS**:
+   ```bash
+   aws sso login --profile <your-profile-name>
+   ```
+
+2. **Create and test release** (dry run recommended first):
+   ```bash
+   # Dry run: builds everything but doesn't upload or create tags
+   ./scripts/release.sh 1.0.0 --dry-run
+
+   # Review artifacts in target/release-artifacts/
+   ```
+
+3. **Publish release**:
+   ```bash
+   # For stable releases
+   ./scripts/release.sh 1.0.0
+
+   # For prereleases (won't update /latest/ pointer)
+   ./scripts/release.sh 1.0.0-beta.1
+   ```
+
+4. **Push git tag**:
+   ```bash
+   git push origin v1.0.0
+   ```
+
+5. **Verify release**:
+   ```bash
+   # Check S3 structure
+   aws s3 ls s3://hurry-releases/releases/ --recursive --profile <your-profile-name>
+
+   # Test installer
+   curl -sSfL https://raw.githubusercontent.com/attunehq/hurry/main/install.sh | bash -s -- -v 1.0.0
+   ```
+
+#### Release Artifacts
+
+The release script builds and uploads:
+- Binaries for 6 platforms (macOS x86_64/arm64, Linux glibc/musl x86_64/arm64)
+- SHA256 checksums file
+- `versions.json` manifest with release metadata
+
+S3 structure:
+```
+s3://hurry-releases/releases/
+├── v1.0.0/                    # Versioned releases (immutable)
+│   ├── hurry-*.tar.gz         # Platform-specific archives
+│   └── checksums.txt
+├── latest/                    # Points to latest stable release
+│   └── hurry-*.tar.gz
+└── versions.json              # Machine-readable version list
+```
+
+#### Release Script Options
+
+- `--dry-run`: Build and test without uploading or creating git tags
+- `--skip-build`: Use existing artifacts from `target/release-artifacts/`
+- `--skip-upload`: Build but don't upload to S3 (useful for testing builds)
+
+#### Important Notes
+
+- Version changes in `Cargo.toml` are temporary and not committed
+- Prereleases (e.g., `1.0.0-beta.1`) don't update the `/latest/` pointer
+- Cache headers are set appropriately: versioned releases are immutable, latest is no-cache
+- The script uses `cross` for Linux targets when building from macOS
 
 ## Rust Code Style
 

@@ -288,11 +288,20 @@ if [[ "$SKIP_UPLOAD" == "false" ]]; then
             --cache-control "no-cache, must-revalidate" \
             --profile "$AWS_PROFILE" || fail "Failed to upload versions.json"
 
+        # Upload install.sh to bucket root
+        step "Uploading install.sh"
+        aws s3 cp "$REPO_ROOT/install.sh" "s3://$BUCKET/install.sh" \
+            --cache-control "no-cache, must-revalidate" \
+            --profile "$AWS_PROFILE" || fail "Failed to upload install.sh"
+
         info "✓ Uploaded to S3"
 
         # Display download URLs
         echo ""
         info "Release published successfully!"
+        echo ""
+        echo "Install command:"
+        echo "  curl -sSfL https://$BUCKET.s3.amazonaws.com/install.sh | bash"
         echo ""
         echo "Download URLs:"
         for target in "${BUILD_TARGETS[@]}"; do

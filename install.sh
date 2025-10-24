@@ -4,9 +4,9 @@ set -euo pipefail
 # hurry installer script
 #
 # Usage:
-#   curl -sSfL https://raw.githubusercontent.com/attunehq/hurry/main/install.sh | bash
-#   curl -sSfL https://raw.githubusercontent.com/attunehq/hurry/main/install.sh | bash -s -- -b /usr/local/bin
-#   curl -sSfL https://raw.githubusercontent.com/attunehq/hurry/main/install.sh | bash -s -- -v 1.0.0
+#   curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash
+#   curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash -s -- -b /usr/local/bin
+#   curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash -s -- -v 1.0.0
 #
 # Options:
 #   -v, --version    Specify a version (default: latest)
@@ -107,7 +107,7 @@ parse_args() {
       -h|--help)
         echo "hurry installer"
         echo
-        echo "Usage: curl -sSfL https://raw.githubusercontent.com/attunehq/hurry/main/install.sh | bash [args]"
+        echo "Usage: curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash [args]"
         echo
         echo "Options:"
         echo "  -v, --version    Specify a version (default: latest)"
@@ -117,13 +117,13 @@ parse_args() {
         echo
         echo "Examples:"
         echo "  # Install latest version"
-        echo "  curl -sSfL https://raw.githubusercontent.com/attunehq/hurry/main/install.sh | bash"
+        echo "  curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash"
         echo
         echo "  # Install specific version"
-        echo "  curl -sSfL https://raw.githubusercontent.com/attunehq/hurry/main/install.sh | bash -s -- -v 1.0.0"
+        echo "  curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash -s -- -v 1.0.0"
         echo
         echo "  # Install to custom directory"
-        echo "  curl -sSfL https://raw.githubusercontent.com/attunehq/hurry/main/install.sh | bash -s -- -b /usr/local/bin"
+        echo "  curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash -s -- -b /usr/local/bin"
         exit 0
         ;;
       *)
