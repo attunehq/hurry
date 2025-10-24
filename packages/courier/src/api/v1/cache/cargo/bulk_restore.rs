@@ -10,8 +10,18 @@ use tracing::{error, info};
 use crate::db::Postgres;
 
 /// The max amount of items in a single bulk restore request.
-/// Not chosen for a specific reason: just feels reasonable.
-const MAX_BULK_RESTORE_REQUESTS: usize = 500;
+///
+/// This limit is based on payload size analysis (see `examples/size_calculator.rs`):
+/// - 100 items: ~23 KB request, ~122 KB response (5 artifacts/hit)
+/// - 500 items: ~115 KB request, ~611 KB response (5 artifacts/hit)
+/// - 1,000 items: ~230 KB request, ~1.2 MB response (5 artifacts/hit)
+/// - 10,000 items: ~2.2 MB request, ~12 MB response (5 artifacts/hit)
+/// - 100,000 items: ~22 MB request, ~120 MB response (5 artifacts/hit)
+///
+/// With compression enabled (which reduces JSON by ~70-80%), even 100k items
+/// results in manageable payload sizes. This high limit allows the client to
+/// avoid complex batching logic while still protecting against excessive requests.
+const MAX_BULK_RESTORE_REQUESTS: usize = 100_000;
 
 #[tracing::instrument(skip(body))]
 pub async fn handle(
