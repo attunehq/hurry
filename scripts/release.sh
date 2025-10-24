@@ -39,6 +39,64 @@ step() {
     echo -e "${BLUE}==>${NC} $1" >&2
 }
 
+check_requirements() {
+    local missing=()
+
+    # Check for cargo
+    if ! command -v cargo > /dev/null; then
+        missing+=("cargo")
+    fi
+
+    # Check for cross (only if we're not skipping build)
+    if [[ "$SKIP_BUILD" == "false" ]] && ! command -v cross > /dev/null; then
+        missing+=("cross")
+    fi
+
+    # Check for cargo-set-version
+    if ! command -v cargo-set-version > /dev/null; then
+        missing+=("cargo-set-version")
+    fi
+
+    # Check for jq
+    if ! command -v jq > /dev/null; then
+        missing+=("jq")
+    fi
+
+    # Check for git
+    if ! command -v git > /dev/null; then
+        missing+=("git")
+    fi
+
+    # Check for aws cli (only if we're not skipping upload)
+    if [[ "$SKIP_UPLOAD" == "false" ]] && [[ "$DRY_RUN" == "false" ]] && ! command -v aws > /dev/null; then
+        missing+=("aws")
+    fi
+
+    # Check for tar
+    if ! command -v tar > /dev/null; then
+        missing+=("tar")
+    fi
+
+    # Check for sha256sum
+    if ! command -v sha256sum > /dev/null; then
+        missing+=("sha256sum")
+    fi
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        fail "Missing required commands: ${missing[*]}
+
+Please install the missing commands:
+
+  cargo:              https://rustup.rs/
+  cross:              cargo install cross
+  cargo-set-version:  cargo install cargo-set-version
+  jq:                 https://jqlang.github.io/jq/download/ (or: brew install jq, apt install jq)
+  aws:                https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+  git:                https://git-scm.com/downloads
+  tar/sha256sum:      (should be pre-installed on Unix systems)"
+    fi
+}
+
 usage() {
     cat <<EOF
 Usage: $0 <version> [options]
@@ -111,6 +169,9 @@ fi
 if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-z]+\.[0-9]+)?$ ]]; then
     fail "Invalid version format: $VERSION. Expected format: X.Y.Z or X.Y.Z-prerelease.N"
 fi
+
+# Check for required commands
+check_requirements
 
 # Determine if this is a prerelease
 PRERELEASE=false

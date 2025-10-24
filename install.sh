@@ -39,6 +39,37 @@ warn() {
   echo -e "${YELLOW}Warning: $1${NC}" >&2
 }
 
+# Check for required commands
+check_requirements() {
+  local missing=()
+
+  # Check for curl
+  if ! command -v curl > /dev/null; then
+    missing+=("curl")
+  fi
+
+  # Check for tar
+  if ! command -v tar > /dev/null; then
+    missing+=("tar")
+  fi
+
+  # Check for checksum utility
+  if ! command -v sha256sum > /dev/null && ! command -v shasum > /dev/null; then
+    missing+=("sha256sum or shasum")
+  fi
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    fail "Missing required commands: ${missing[*]}
+
+Please install the missing commands and try again:
+
+  Debian/Ubuntu:  apt-get update && apt-get install -y curl tar coreutils
+  Alpine:         apk add --no-cache curl tar coreutils
+  RHEL/CentOS:    yum install -y curl tar coreutils
+  macOS:          (should be pre-installed)"
+  fi
+}
+
 # Detect the operating system and architecture
 detect_platform() {
   local kernel
@@ -137,14 +168,18 @@ parse_args() {
 get_latest_version() {
   local versions_url="${S3_BASE_URL}/versions.json"
   local version
+  local response
 
   # Try to fetch versions.json
-  if ! version=$(curl -sSfL "$versions_url" 2>/dev/null | grep -o '"latest": *"[^"]*"' | cut -d'"' -f4); then
-    fail "Failed to get latest version from $versions_url"
+  if ! response=$(curl -sSfL "$versions_url" 2>&1); then
+    fail "Failed to download from $versions_url. Error: $response"
   fi
 
+  # Parse the latest version from JSON
+  version=$(echo "$response" | grep -o '"latest": *"[^"]*"' | cut -d'"' -f4)
+
   if [[ -z "$version" ]]; then
-    fail "Could not determine latest version"
+    fail "Could not parse version from versions.json. Response: $response"
   fi
 
   echo "$version"
@@ -256,6 +291,9 @@ main() {
 
   # Parse command line arguments
   parse_args "$@"
+
+  # Check for required commands
+  check_requirements
 
   # Detect platform
   local PLATFORM
