@@ -1,10 +1,49 @@
 //! Calculate typical request/response sizes for bulk restore operations.
 //!
-//! Run with: cargo run --package courier --example size_calculator
+//! This example calculates the JSON payload sizes for bulk cargo cache restore
+//! operations at various scales. The results were used to determine the
+//! server's request limit of 100,000 items (see `MAX_BULK_RESTORE_REQUESTS` in
+//! `src/api/v1/cache/cargo/bulk_restore.rs`).
+//!
+//! ## Key Findings
+//!
+//! With typical package metadata (package name ~12 chars, version ~7 chars,
+//! target 24 chars, hashes 16 chars) and artifact files (path ~55 chars,
+//! key 64 chars, mtime, executable flag):
+//!
+//! - Single CargoRestoreRequest: ~234 bytes
+//! - Single ArtifactFile: ~197 bytes
+//!
+//! Bulk request sizes (uncompressed):
+//! - 100 items: ~23 KB
+//! - 500 items: ~115 KB
+//! - 1,000 items: ~230 KB
+//! - 10,000 items: ~2.2 MB
+//! - 100,000 items: ~22 MB
+//!
+//! Bulk response sizes (uncompressed, assuming 5 artifacts per hit):
+//! - 100 hits: ~122 KB
+//! - 500 hits: ~611 KB
+//! - 1,000 hits: ~1.2 MB
+//! - 10,000 hits: ~12 MB
+//! - 100,000 hits: ~120 MB
+//!
+//! With HTTP compression enabled (which reduces JSON by ~70-80%), even 100k
+//! items results in manageable payload sizes (~4-6 MB request, ~24-36 MB
+//! response).
+//!
+//! ## Usage
+//!
+//! ```bash
+//! cargo run --package courier --example size_calculator
+//! ```
 
 use clients::courier::v1::{
     Key,
-    cache::{ArtifactFile, CargoBulkRestoreHit, CargoBulkRestoreRequest, CargoBulkRestoreResponse, CargoRestoreRequest},
+    cache::{
+        ArtifactFile, CargoBulkRestoreHit, CargoBulkRestoreRequest, CargoBulkRestoreResponse,
+        CargoRestoreRequest,
+    },
 };
 
 fn main() {
@@ -71,15 +110,13 @@ fn main() {
             })
             .collect::<Vec<_>>();
 
-        let bulk_response = CargoBulkRestoreResponse::builder()
-            .hits(hits)
-            .build();
+        let bulk_response = CargoBulkRestoreResponse::builder().hits(hits).build();
 
         let json = serde_json::to_string(&bulk_response).unwrap();
         let kb = json.len() as f64 / 1024.0;
         let mb = kb / 1024.0;
 
-        println!("Bulk Response with {} hits × {} artifacts:", count, artifacts_per_hit);
+        println!("Bulk Response with {count} hits × {artifacts_per_hit} artifacts:");
         println!("  Size: {} bytes ({:.2} KB, {:.3} MB)", json.len(), kb, mb);
     }
 }

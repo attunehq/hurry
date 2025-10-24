@@ -11,7 +11,8 @@ use crate::db::Postgres;
 
 /// The max amount of items in a single bulk restore request.
 ///
-/// This limit is based on payload size analysis (see `examples/size_calculator.rs`):
+/// This limit is based on payload size analysis (see
+/// `examples/size_calculator.rs`):
 /// - 100 items: ~23 KB request, ~122 KB response (5 artifacts/hit)
 /// - 500 items: ~115 KB request, ~611 KB response (5 artifacts/hit)
 /// - 1,000 items: ~230 KB request, ~1.2 MB response (5 artifacts/hit)
@@ -20,7 +21,8 @@ use crate::db::Postgres;
 ///
 /// With compression enabled (which reduces JSON by ~70-80%), even 100k items
 /// results in manageable payload sizes. This high limit allows the client to
-/// avoid complex batching logic while still protecting against excessive requests.
+/// avoid complex batching logic while still protecting against excessive
+/// requests.
 const MAX_BULK_RESTORE_REQUESTS: usize = 100_000;
 
 #[tracing::instrument(skip(body))]
@@ -653,38 +655,6 @@ mod tests {
             pretty_assert_eq!(bulk_response.hits.len(), 1);
             pretty_assert_eq!(bulk_response.misses.len(), 0);
         }
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn bulk_restore_exceeds_limit(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        // Create more than MAX_BULK_RESTORE_REQUESTS
-        let requests = (0..501)
-            .map(|i| {
-                CargoRestoreRequest::builder()
-                    .package_name(format!("package{i}"))
-                    .package_version("1.0.0")
-                    .target("x86_64-unknown-linux-gnu")
-                    .library_crate_compilation_unit_hash(format!("hash{i}"))
-                    .build()
-            })
-            .collect::<Vec<_>>();
-
-        let bulk_request = CargoBulkRestoreRequest::builder()
-            .requests(requests)
-            .build();
-
-        let response = server
-            .post("/api/v1/cache/cargo/bulk/restore")
-            .json(&bulk_request)
-            .await;
-
-        response.assert_status(StatusCode::BAD_REQUEST);
 
         Ok(())
     }

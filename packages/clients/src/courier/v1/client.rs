@@ -12,7 +12,7 @@ use color_eyre::{
     eyre::{Context, eyre},
 };
 use derive_more::{Debug, Display};
-use futures::{AsyncWriteExt, Stream, StreamExt, TryStreamExt, stream};
+use futures::{AsyncWriteExt, Stream, StreamExt, TryStreamExt};
 use reqwest::{Response, StatusCode};
 use tap::Pipe;
 use tokio::io::{AsyncRead, BufReader};
@@ -243,51 +243,16 @@ impl Client {
 
     /// Restore multiple cargo cache entries in bulk.
     ///
-    /// This method automatically partitions requests into batches of 500
-    /// (the server's limit) and makes concurrent requests.
-    ///
-    /// The order of the returned requests is not currently defined.
+    /// Note: The server supports up to 100,000 requests in a single bulk
+    /// operation. If you exceed this limit, the server will return a 400
+    /// Bad Request error.
     #[instrument(skip(self, requests))]
     pub async fn cargo_cache_restore_bulk(
         &self,
         requests: impl IntoIterator<Item = impl Into<CargoRestoreRequest>>,
     ) -> Result<CargoBulkRestoreResponse> {
-        const BATCH_SIZE: usize = 500;
-
-        // If we're under the batch size, make a single request
-        let requests = requests.into_iter().map(Into::into).collect::<Vec<_>>();
-        if requests.len() <= BATCH_SIZE {
-            return self.cargo_cache_restore_bulk_single(requests).await;
-        }
-
-        // Partition into batches and send concurrently
-        let batches = requests
-            .chunks(BATCH_SIZE)
-            .map(|chunk| chunk.to_vec())
-            .collect::<Vec<_>>();
-
-        stream::iter(batches)
-            .map(|batch| self.cargo_cache_restore_bulk_single(batch))
-            .buffer_unordered(10)
-            .try_collect::<Vec<_>>()
-            .await
-            .context("batch requests")?
-            .into_iter()
-            .reduce(|mut bulk, res| {
-                bulk.hits.extend(res.hits);
-                bulk.misses.extend(res.misses);
-                bulk
-            })
-            .unwrap_or_default()
-            .pipe(Ok)
-    }
-
-    /// Internal helper for single batch of a bulk restore request.
-    async fn cargo_cache_restore_bulk_single(
-        &self,
-        requests: Vec<CargoRestoreRequest>,
-    ) -> Result<CargoBulkRestoreResponse> {
         let url = self.base.join("api/v1/cache/cargo/bulk/restore")?;
+        let requests = requests.into_iter().map(Into::into).collect::<Vec<_>>();
         let body = CargoBulkRestoreRequest::builder()
             .requests(requests)
             .build();

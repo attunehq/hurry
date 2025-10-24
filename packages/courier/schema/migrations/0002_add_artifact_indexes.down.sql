@@ -1,0 +1,2 @@
+DROP INDEX idx_cargo_library_unit_build_artifact_object_id;
+DROP INDEX idx_cargo_library_unit_build_artifact_build_id;
