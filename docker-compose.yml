@@ -41,7 +41,7 @@ services:
         ports:
             - "3000:3000"
         volumes:
-            - .scratch/courier/cas:/data/cas
+            - .hurrydata/courier/cas:/data/cas
         env_file: ./.env
         environment:
             - COURIER_DATABASE_URL=postgres://courier:courier@postgres:5432/courier
@@ -69,7 +69,7 @@ services:
         ports:
             - "5432:5432"
         volumes:
-            - .scratch/postgres/data:/var/lib/postgresql/18/docker
+            - .hurrydata/postgres/data:/var/lib/postgresql/18/docker
         healthcheck:
             test: ["CMD", "pg_isready", "-U", "courier"]
             interval: 3s
