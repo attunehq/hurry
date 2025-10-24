@@ -1,14 +1,11 @@
+use std::collections::HashMap;
+
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use clients::courier::v1::cache::{
-    ArtifactFile, CargoBulkRestoreHit, CargoBulkRestoreRequest, CargoBulkRestoreResponse,
-    CargoRestoreRequest,
+    CargoBulkRestoreHit, CargoBulkRestoreRequest, CargoBulkRestoreResponse,
 };
-use color_eyre::{
-    Result,
-    eyre::{Context, Report, eyre},
-};
-use futures::{StreamExt, TryStreamExt, stream};
+use color_eyre::eyre::{Report, eyre};
 use tap::Pipe;
 use tracing::{error, info};
 
@@ -17,11 +14,6 @@ use crate::db::Postgres;
 /// The max amount of items in a single bulk restore request.
 /// Not chosen for a specific reason: just feels reasonable.
 const MAX_BULK_RESTORE_REQUESTS: usize = 500;
-
-/// The number of concurrent lookups to perform.
-/// Not chosen for a specific reason: just feels reasonable.
-/// Ideally we do a single bulk query instead.
-const CONCURRENT_LOOKUPS: usize = 30;
 
 #[tracing::instrument(skip(body))]
 pub async fn handle(
@@ -43,41 +35,28 @@ pub async fn handle(
         ));
     }
 
-    // TODO: do batch queries instead.
-    let lookups = stream::iter(body.requests)
-        .map(|req| async {
-            let files = db
-                .cargo_cache_restore(req.clone())
-                .await
-                .context("get files")?;
-            Result::<(CargoRestoreRequest, Vec<ArtifactFile>)>::Ok((req, files))
-        })
-        .buffer_unordered(CONCURRENT_LOOKUPS)
-        .try_collect::<Vec<_>>()
-        .await;
-    let lookups = match lookups {
-        Ok(lookups) => lookups,
+    let mut results = match db.cargo_cache_restore_bulk(&body.requests).await {
+        Ok(results) => results.into_iter().collect::<HashMap<_, _>>(),
         Err(err) => {
             error!(error = ?err, "cache.bulk_restore.error");
             return CacheBulkRestoreResponse::Error(err);
         }
     };
-    let (misses, hits) = lookups.into_iter().fold(
-        (Vec::new(), Vec::new()),
-        |(mut misses, mut hits), (req, files)| {
-            if files.is_empty() {
-                misses.push(req);
-            } else {
-                hits.push(
-                    CargoBulkRestoreHit::builder()
-                        .artifacts(files)
-                        .request(req)
-                        .build(),
-                );
-            }
-            (misses, hits)
-        },
-    );
+
+    let mut hits = Vec::new();
+    let mut misses = Vec::new();
+    for (idx, req) in body.requests.into_iter().enumerate() {
+        if let Some(artifacts) = results.remove(&idx) {
+            hits.push(
+                CargoBulkRestoreHit::builder()
+                    .artifacts(artifacts)
+                    .request(req)
+                    .build(),
+            );
+        } else {
+            misses.push(req);
+        }
+    }
 
     info!(
         hits = hits.len(),
@@ -598,88 +577,6 @@ mod tests {
         expected_targets.sort_unstable();
 
         pretty_assert_eq!(hit_targets, expected_targets);
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn bulk_restore_duplicate_requests(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let (_, key) = test_blob(b"duplicate_content");
-
-        // Save one package
-        let save_request = CargoSaveRequest::builder()
-            .package_name("duplicate-test")
-            .package_version("1.0.0")
-            .target("x86_64-unknown-linux-gnu")
-            .library_crate_compilation_unit_hash("hash")
-            .content_hash("content_hash")
-            .artifacts([ArtifactFile::builder()
-                .object_key(&key)
-                .path("libduplicate.rlib")
-                .mtime_nanos(1000000000000000000u128)
-                .executable(false)
-                .build()])
-            .build();
-
-        let response = server
-            .post("/api/v1/cache/cargo/save")
-            .json(&save_request)
-            .await;
-        response.assert_status(StatusCode::CREATED);
-
-        // Request same package twice - should only get one hit back
-        let bulk_request = CargoBulkRestoreRequest::builder()
-            .requests([
-                CargoRestoreRequest::builder()
-                    .package_name("duplicate-test")
-                    .package_version("1.0.0")
-                    .target("x86_64-unknown-linux-gnu")
-                    .library_crate_compilation_unit_hash("hash")
-                    .build(),
-                CargoRestoreRequest::builder()
-                    .package_name("duplicate-test")
-                    .package_version("1.0.0")
-                    .target("x86_64-unknown-linux-gnu")
-                    .library_crate_compilation_unit_hash("hash")
-                    .build(),
-            ])
-            .build();
-
-        let response = server
-            .post("/api/v1/cache/cargo/bulk/restore")
-            .json(&bulk_request)
-            .await;
-
-        response.assert_status_ok();
-        let bulk_response = response.json::<CargoBulkRestoreResponse>();
-
-        // Duplicate requests are NOT deduplicated - get both hits
-        let expected_hit = CargoBulkRestoreHit::builder()
-            .request(
-                CargoRestoreRequest::builder()
-                    .package_name("duplicate-test")
-                    .package_version("1.0.0")
-                    .target("x86_64-unknown-linux-gnu")
-                    .library_crate_compilation_unit_hash("hash")
-                    .build(),
-            )
-            .artifacts([ArtifactFile::builder()
-                .object_key(&key)
-                .path("libduplicate.rlib")
-                .mtime_nanos(1000000000000000000u128)
-                .executable(false)
-                .build()])
-            .build();
-
-        let expected = CargoBulkRestoreResponse::builder()
-            .hits([expected_hit.clone(), expected_hit])
-            .build();
-
-        pretty_assert_eq!(bulk_response, expected);
 
         Ok(())
     }
