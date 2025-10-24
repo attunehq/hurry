@@ -351,7 +351,7 @@ if [[ "$SKIP_UPLOAD" == "false" ]]; then
 
         # Upload install.sh to bucket root
         step "Uploading install.sh"
-        aws s3 cp "$REPO_ROOT/install.sh" "s3://$BUCKET/install.sh" \
+        aws s3 cp "$REPO_ROOT/scripts/install.sh" "s3://$BUCKET/install.sh" \
             --cache-control "no-cache, must-revalidate" \
             --profile "$AWS_PROFILE" || fail "Failed to upload install.sh"
 
