@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use clients::courier::v1::cache::{

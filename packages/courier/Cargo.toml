@@ -40,7 +40,6 @@ bigdecimal = { workspace = true }
 async-tar = { workspace = true }
 piper = { workspace = true }
 maplit = { workspace = true }
-itertools.workspace = true
 
 [dev-dependencies]
 async-tempfile = { workspace = true }

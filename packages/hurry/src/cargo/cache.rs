@@ -698,15 +698,15 @@ impl CargoCache {
                 let restore =
                     async |file: &ArtifactFile, path: &AbsFilePath, data: &[u8]| -> Result<u64> {
                         let data =
-                            Self::reconstruct(&profile_root, &cargo_home, &path, data).await?;
+                            Self::reconstruct(&profile_root, &cargo_home, path, data).await?;
 
                         let mtime = UNIX_EPOCH + Duration::from_nanos(file.mtime_nanos as u64);
                         let metadata = fs::Metadata::builder()
                             .mtime(mtime)
                             .executable(file.executable)
                             .build();
-                        fs::write(&path, &data).await?;
-                        metadata.set_file(&path).await?;
+                        fs::write(path, &data).await?;
+                        metadata.set_file(path).await?;
                         restored.record_object(&file.object_key);
                         Result::<u64>::Ok(data.len() as u64)
                     };
@@ -802,14 +802,14 @@ impl CargoCache {
                 // absolute path for this machine.
                 let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
                 let path = qualified
-                    .reconstruct_raw(&profile_root, &cargo_home)
+                    .reconstruct_raw(profile_root, cargo_home)
                     .pipe(AbsFilePath::try_from)?;
 
                 // Check if file already exists with correct content. If so, don't need to
                 // restore it.
                 if fs::exists(path.as_std_path()).await {
                     let existing_hash = fs::hash_file(&path).await?;
-                    if &existing_hash == &file.object_key {
+                    if existing_hash == file.object_key {
                         trace!(?path, "file already exists with correct hash, skipping");
                         continue;
                     }
@@ -1095,12 +1095,12 @@ impl<'a> LibraryUnitHashOrd<'a> {
 impl<'a> Ord for LibraryUnitHashOrd<'a> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match (&self.0, &other.0) {
-            (QualifiedPath::Rootless(a), QualifiedPath::Rootless(b)) => a.cmp(&b),
+            (QualifiedPath::Rootless(a), QualifiedPath::Rootless(b)) => a.cmp(b),
             (QualifiedPath::RelativeTargetProfile(a), QualifiedPath::RelativeTargetProfile(b)) => {
-                a.cmp(&b)
+                a.cmp(b)
             }
-            (QualifiedPath::RelativeCargoHome(a), QualifiedPath::RelativeCargoHome(b)) => a.cmp(&b),
-            (QualifiedPath::Absolute(a), QualifiedPath::Absolute(b)) => a.cmp(&b),
+            (QualifiedPath::RelativeCargoHome(a), QualifiedPath::RelativeCargoHome(b)) => a.cmp(b),
+            (QualifiedPath::Absolute(a), QualifiedPath::Absolute(b)) => a.cmp(b),
             (_, _) => self.discriminant().cmp(&other.discriminant()),
         }
     }

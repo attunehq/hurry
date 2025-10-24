@@ -21,7 +21,6 @@ use derive_more::Debug;
 use futures::StreamExt;
 use num_traits::ToPrimitive;
 use sqlx::{PgPool, migrate::Migrator};
-use tap::Pipe;
 use tracing::{debug, warn};
 
 /// A connected Postgres database instance.

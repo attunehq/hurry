@@ -84,27 +84,6 @@ pub struct CargoRestoreRequest {
     pub build_script_execution_unit_hash: Option<String>,
 }
 
-impl CargoRestoreRequest {
-    pub fn hash_hex(&self) -> String {
-        hex::encode(self.hash())
-    }
-
-    pub fn hash(&self) -> Vec<u8> {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(self.package_name.as_bytes());
-        hasher.update(self.package_version.as_bytes());
-        hasher.update(self.target.as_bytes());
-        hasher.update(self.library_crate_compilation_unit_hash.as_bytes());
-        if let Some(hash) = &self.build_script_compilation_unit_hash {
-            hasher.update(hash.as_bytes());
-        }
-        if let Some(hash) = &self.build_script_execution_unit_hash {
-            hasher.update(hash.as_bytes());
-        }
-        hasher.finalize().as_bytes().to_vec()
-    }
-}
-
 impl From<&CargoRestoreRequest> for CargoRestoreRequest {
     fn from(req: &CargoRestoreRequest) -> Self {
         req.clone()
