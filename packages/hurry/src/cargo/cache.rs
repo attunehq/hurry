@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     fmt::Debug,
-    io::Write,
     path::PathBuf,
     sync::{
         Arc,
@@ -16,13 +15,12 @@ use color_eyre::{
     eyre::{Context as _, OptionExt, bail, eyre},
 };
 use dashmap::DashSet;
-use futures::{StreamExt, TryStreamExt as _, stream};
+use futures::StreamExt;
 use indicatif::ProgressBar;
-use itertools::Itertools;
 use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use tap::Pipe as _;
-use tokio::task::JoinSet;
+use tokio::{process::Command, task::JoinSet};
 use tracing::{debug, instrument, trace, warn};
 use uuid::Uuid;
 
@@ -30,7 +28,7 @@ use clients::{
     Courier,
     courier::v1::{
         Key,
-        cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest},
+        cache::{ArtifactFile, CargoRestoreRequest},
     },
 };
 
@@ -41,7 +39,7 @@ use crate::{
     },
     cas::CourierCas,
     fs, mk_rel_file,
-    path::{AbsDirPath, AbsFilePath, JoinWith, TryJoinWith as _},
+    path::{AbsDirPath, AbsFilePath, JoinWith},
     progress::{format_size, format_transfer_rate},
 };
 
@@ -69,16 +67,6 @@ impl RestoreState {
     /// Records that an object was restored from cache.
     fn record_object(&self, key: &Key) {
         self.objects.insert(key.clone());
-    }
-
-    /// Checks if an artifact was restored from cache.
-    fn check_artifact(&self, artifact: &ArtifactKey) -> bool {
-        self.artifacts.contains(artifact)
-    }
-
-    /// Checks if an object was restored from cache.
-    fn check_object(&self, key: &Key) -> bool {
-        self.objects.contains(key)
     }
 
     fn with_stats(self, stats: CacheStats) -> Self {
@@ -429,15 +417,14 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::save")]
-    pub async fn save(
-        &self,
-        artifact_plan: ArtifactPlan,
-        restored: RestoreState,
-    ) -> Result<()> {
+    pub async fn save(&self, artifact_plan: ArtifactPlan, restored: RestoreState) -> Result<()> {
         let hurry_cache_dir = fs::user_global_cache_path().await?;
 
-        // Start daemon if it's not already running.
-
+        // TODO: Start daemon if it's not already running.
+        tokio::process::Command::new("hurry")
+            .arg("daemon")
+            .arg("start")
+            .spawn()?;
 
         // Connect to daemon HTTP server.
         let hurryd_sock_path = hurry_cache_dir.join(mk_rel_file!("hurryd.sock"));
