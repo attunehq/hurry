@@ -14,7 +14,7 @@ use indicatif::{HumanDuration, ProgressBar, ProgressStyle};
 /// - In non-interactive environments emits log lines every 5 seconds.
 #[derive(Clone, Debug, Display)]
 #[display("{}", self.inner)]
-#[debug("{self}")]
+#[debug("{}", self.inner)]
 pub struct TransferBar {
     inner: Arc<TransferBarInner>,
 }
@@ -83,7 +83,7 @@ impl TransferBarInner {
         let operation = operation.into();
         let progress = ProgressBar::new(items);
         let style = ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos/{len} {msg}")
+            .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
             .expect("invalid progress bar template")
             .progress_chars("=> ");
         progress.set_style(style);
