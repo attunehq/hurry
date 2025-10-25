@@ -109,10 +109,6 @@ impl TransferBarInner {
                 let progress = progress.clone();
                 let signal = signal.clone();
                 move || {
-                    // Log immediately on start
-                    // println!("{}", Self::render_plain(start, &progress));
-
-                    // Log every interval
                     loop {
                         println!("{}", Self::render_plain(start, &progress));
                         if signal.wait_timeout(Duration::from_secs(5)) {
