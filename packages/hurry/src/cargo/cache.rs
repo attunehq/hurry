@@ -448,7 +448,6 @@ impl CargoCache {
             let lib_files = self.collect_library_files(&artifact).await?;
             let build_script_files = self.collect_build_script_files(&artifact).await?;
             let files_to_save = lib_files.into_iter().chain(build_script_files).collect();
-
             let (library_unit_files, artifact_files, bulk_entries) = self
                 .process_files_for_upload(files_to_save, restored)
                 .await?;
@@ -465,8 +464,8 @@ impl CargoCache {
                 content_hash,
                 artifact_files,
             );
-            self.courier.cargo_cache_save(request).await?;
 
+            self.courier.cargo_cache_save(request).await?;
             progress.inc(1);
         }
 
@@ -482,14 +481,11 @@ impl CargoCache {
         artifact_plan: &ArtifactPlan,
         progress: &TransferBar,
     ) -> Result<RestoreState> {
-        debug!("start restoring");
-
         let worker_count = num_cpus::get();
         let restored = RestoreState::default();
         let (tx, rx) = flume::bounded::<(ArtifactFile, AbsFilePath)>(0);
 
-        let mut cas_restore_workers =
-            self.spawn_restore_workers(worker_count, rx.clone(), progress, &restored);
+        let mut workers = self.spawn_restore_workers(worker_count, rx.clone(), progress, &restored);
         let (artifacts, requests) = build_restore_requests(artifact_plan);
         let restore_result = self
             .courier
@@ -514,7 +510,7 @@ impl CargoCache {
 
         drop(rx);
         drop(tx);
-        while let Some(worker) = cas_restore_workers.join_next().await {
+        while let Some(worker) = workers.join_next().await {
             worker.context("cas restore worker")?;
         }
 
