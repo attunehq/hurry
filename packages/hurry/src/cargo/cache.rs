@@ -3,11 +3,7 @@ use std::{
     fmt::Debug,
     io::Write,
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{Duration, Instant, UNIX_EPOCH},
+    time::{Duration, UNIX_EPOCH},
 };
 
 use cargo_metadata::TargetKind;
@@ -17,7 +13,6 @@ use color_eyre::{
 };
 use dashmap::DashSet;
 use futures::{StreamExt, TryStreamExt as _, stream};
-use indicatif::ProgressBar;
 use itertools::Itertools;
 
 use crate::progress::TransferBar;
@@ -32,7 +27,7 @@ use clients::{
     Courier,
     courier::v1::{
         Key,
-        cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest},
+        cache::{ArtifactFile, CargoBulkRestoreHit, CargoRestoreRequest, CargoSaveRequest},
     },
 };
 
@@ -44,7 +39,6 @@ use crate::{
     cas::CourierCas,
     fs, mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith, TryJoinWith as _},
-    progress::{format_size, format_transfer_rate},
 };
 
 /// Statistics about cache operations.
@@ -455,8 +449,9 @@ impl CargoCache {
             let build_script_files = self.collect_build_script_files(&artifact).await?;
             let files_to_save = lib_files.into_iter().chain(build_script_files).collect();
 
-            let (library_unit_files, artifact_files, bulk_entries) =
-                self.process_files_for_upload(files_to_save, restored).await?;
+            let (library_unit_files, artifact_files, bulk_entries) = self
+                .process_files_for_upload(files_to_save, restored)
+                .await?;
 
             let uploaded_bytes = self.upload_files_bulk(bulk_entries, progress).await?;
             progress.add_bytes(uploaded_bytes);
@@ -464,7 +459,12 @@ impl CargoCache {
             let content_hash = calculate_content_hash(library_unit_files)?;
             debug!(?content_hash, "calculated content hash");
 
-            let request = build_save_request(&artifact, &artifact_plan.target, content_hash, artifact_files);
+            let request = build_save_request(
+                &artifact,
+                &artifact_plan.target,
+                content_hash,
+                artifact_files,
+            );
             self.courier.cargo_cache_save(request).await?;
 
             progress.inc(1);
@@ -480,198 +480,48 @@ impl CargoCache {
     pub async fn restore(
         &self,
         artifact_plan: &ArtifactPlan,
-        progress: &ProgressBar,
+        progress: &TransferBar,
     ) -> Result<RestoreState> {
         debug!("start restoring");
-        let start_time = Instant::now();
 
-        // TODO: We should probably make this concurrent on something else since this is
-        // likely going to be primarily blocked on network transfer.
         let worker_count = num_cpus::get();
         let restored = RestoreState::default();
-        let transferred_files = Arc::new(AtomicU64::new(0));
-        let transferred_bytes = Arc::new(AtomicU64::new(0));
         let (tx, rx) = flume::bounded::<(ArtifactFile, AbsFilePath)>(0);
-        let mut cas_restore_workers = JoinSet::new();
-        for _ in 0..worker_count {
-            let rx = rx.clone();
-            let cache = self.clone();
-            let transferred_files = transferred_files.clone();
-            let transferred_bytes = transferred_bytes.clone();
-            let restored = restored.clone();
-            cas_restore_workers.spawn(async move {
-                const BATCH_SIZE: usize = 50;
-                let mut batch = Vec::new();
 
-                let restore = async |file: &ArtifactFile,
-                                     path: &AbsFilePath,
-                                     data: &[u8]|
-                       -> Result<u64> {
-                    let data =
-                        Self::reconstruct(&cache.ws.profile_dir, &cache.ws.cargo_home, path, data)
-                            .await?;
-
-                    let mtime = UNIX_EPOCH + Duration::from_nanos(file.mtime_nanos as u64);
-                    let metadata = fs::Metadata::builder()
-                        .mtime(mtime)
-                        .executable(file.executable)
-                        .build();
-                    fs::write(path, &data).await?;
-                    metadata.set_file(path).await?;
-                    restored.record_object(&file.object_key);
-                    Result::<u64>::Ok(data.len() as u64)
-                };
-
-                let process_batch =
-                    async |batch: &mut Vec<(ArtifactFile, AbsFilePath)>| -> Result<()> {
-                        if batch.is_empty() {
-                            return Ok(());
-                        }
-
-                        // Collect keys to fetch.
-                        let keys = batch
-                            .iter()
-                            .map(|(file, _)| file.object_key.clone())
-                            .collect::<Vec<_>>();
-
-                        // Bulk fetch from CAS as a stream.
-                        let mut contents_stream = cache.cas.get_bulk(keys).await?;
-                        let mut contents = HashMap::new();
-                        while let Some(result) = contents_stream.next().await {
-                            match result {
-                                Ok((key, data)) => {
-                                    contents.insert(key, data);
-                                }
-                                Err(error) => {
-                                    warn!(?error, "failed to fetch blob from bulk stream");
-                                }
-                            }
-                        }
-
-                        // Process each file with its fetched content.
-                        for (file, path) in batch {
-                            let Some(data) = contents.get(&file.object_key) else {
-                                warn!(?file, "file not found in bulk response");
-                                continue;
-                            };
-
-                            match restore(file, path, data).await {
-                                Ok(transferred) => {
-                                    transferred_files.fetch_add(1, Ordering::Relaxed);
-                                    transferred_bytes.fetch_add(transferred, Ordering::Relaxed);
-                                }
-                                Err(error) => {
-                                    warn!(?error, ?file, "failed to restore file");
-                                }
-                            }
-                        }
-
-                        Ok(())
-                    };
-
-                while let Ok(file) = rx.recv_async().await {
-                    batch.push(file);
-
-                    if batch.len() >= BATCH_SIZE {
-                        if let Err(error) = process_batch(&mut batch).await {
-                            warn!(?error, "failed to process batch");
-                        }
-                        batch.clear();
-                    }
-                }
-
-                // Process remaining files in batch.
-                if let Err(error) = process_batch(&mut batch).await {
-                    warn!(?error, "failed to process final batch");
-                }
-            });
-        }
-
-        let (artifacts, requests) = artifact_plan.artifacts.iter().fold(
-            (HashMap::new(), Vec::new()),
-            |(mut artifacts, mut requests), artifact| {
-                let req = CargoRestoreRequest::builder()
-                    .package_name(&artifact.package_name)
-                    .package_version(&artifact.package_version)
-                    .target(&artifact_plan.target)
-                    .library_crate_compilation_unit_hash(
-                        &artifact.library_crate_compilation_unit_hash,
-                    )
-                    .maybe_build_script_compilation_unit_hash(
-                        artifact.build_script_compilation_unit_hash.as_ref(),
-                    )
-                    .maybe_build_script_execution_unit_hash(
-                        artifact.build_script_execution_unit_hash.as_ref(),
-                    )
-                    .build();
-                artifacts.insert(req.hash(), artifact);
-                requests.push(req);
-                (artifacts, requests)
-            },
-        );
-
-        let restore = self
+        let mut cas_restore_workers =
+            self.spawn_restore_workers(worker_count, rx.clone(), progress, &restored);
+        let (artifacts, requests) = build_restore_requests(artifact_plan);
+        let restore_result = self
             .courier
             .cargo_cache_restore_bulk(requests)
             .await
             .context("cache restore")?;
-        for miss in restore.misses {
+
+        for miss in restore_result.misses {
             debug!(artifact = ?miss, "no matching library unit build found");
             progress.dec_length(1);
         }
-        for hit in restore.hits {
+
+        for hit in restore_result.hits {
             let Some(artifact) = artifacts.get(&hit.request.hash()) else {
                 bail!("artifact was not requested but was restored: {hit:?}");
             };
 
-            for file in hit.artifacts {
-                // Convert the artifact file path back to QualifiedPath and reconstruct it to an
-                // absolute path for this machine.
-                let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
-                let path = qualified
-                    .reconstruct_raw(&self.ws.profile_dir, &self.ws.cargo_home)
-                    .pipe(AbsFilePath::try_from)?;
-
-                // Check if file already exists with correct content. If so, don't need to
-                // restore it.
-                if fs::exists(path.as_std_path()).await {
-                    let existing_hash = fs::hash_file(&path).await?;
-                    if existing_hash == file.object_key {
-                        trace!(?path, "file already exists with correct hash, skipping");
-                        continue;
-                    }
-                }
-
-                if let Err(error) = tx.send_async((file, path)).await {
-                    panic!("invariant violated: no restore workers are alive: {error:?}");
-                }
-            }
-
+            self.process_restore_hit(hit, &tx).await?;
             restored.record_artifact(artifact);
             progress.inc(1);
-            let bytes = transferred_bytes.load(Ordering::Relaxed);
-            progress.set_message(format!(
-                "Restoring cache ({} files, {} at {})",
-                transferred_files.load(Ordering::Relaxed),
-                format_size(bytes),
-                format_transfer_rate(bytes, start_time)
-            ));
         }
 
-        // The channels are done being used here, so we drop them; the workers may still
-        // be using their clones if they're in process writing files but they'll keep
-        // rx alive until they're all done.
         drop(rx);
         drop(tx);
-
         while let Some(worker) = cas_restore_workers.join_next().await {
             worker.context("cas restore worker")?;
         }
 
         debug!("done restoring");
         Ok(restored.with_stats(CacheStats {
-            files: transferred_files.load(Ordering::Relaxed),
-            bytes: transferred_bytes.load(Ordering::Relaxed),
+            files: progress.files(),
+            bytes: progress.bytes(),
         }))
     }
 
@@ -745,7 +595,10 @@ impl CargoCache {
     }
 
     /// Collect build script files and their fingerprints for an artifact.
-    async fn collect_build_script_files(&self, artifact: &BuiltArtifact) -> Result<Vec<AbsFilePath>> {
+    async fn collect_build_script_files(
+        &self,
+        artifact: &BuiltArtifact,
+    ) -> Result<Vec<AbsFilePath>> {
         let Some(ref build_script_files) = artifact.build_script_files else {
             return Ok(vec![]);
         };
@@ -794,12 +647,17 @@ impl CargoCache {
             .pipe(Ok)
     }
 
-    /// Process files for upload: read, rewrite, calculate keys, and prepare metadata.
+    /// Process files for upload: read, rewrite, calculate keys, and prepare
+    /// metadata.
     async fn process_files_for_upload(
         &self,
         files: Vec<AbsFilePath>,
         restored: &RestoreState,
-    ) -> Result<(Vec<(QualifiedPath, Key)>, Vec<ArtifactFile>, Vec<(Key, Vec<u8>, AbsFilePath)>)> {
+    ) -> Result<(
+        Vec<(QualifiedPath, Key)>,
+        Vec<ArtifactFile>,
+        Vec<(Key, Vec<u8>, AbsFilePath)>,
+    )> {
         let mut library_unit_files = vec![];
         let mut artifact_files = vec![];
         let mut bulk_entries = vec![];
@@ -880,6 +738,148 @@ impl CargoCache {
         }
 
         Ok(uploaded_bytes)
+    }
+
+    /// Spawn worker tasks to restore files from CAS in batches.
+    fn spawn_restore_workers(
+        &self,
+        worker_count: usize,
+        rx: flume::Receiver<(ArtifactFile, AbsFilePath)>,
+        progress: &TransferBar,
+        restored: &RestoreState,
+    ) -> JoinSet<()> {
+        let mut workers = JoinSet::new();
+        for _ in 0..worker_count {
+            let rx = rx.clone();
+            let cache = self.clone();
+            let progress = progress.clone();
+            let restored = restored.clone();
+            workers.spawn(async move {
+                const BATCH_SIZE: usize = 50;
+                let mut batch = Vec::new();
+
+                while let Ok(file) = rx.recv_async().await {
+                    batch.push(file);
+                    if batch.len() < BATCH_SIZE {
+                        continue;
+                    }
+
+                    let restore = cache
+                        .process_restore_batch(&batch, &progress, &restored)
+                        .await;
+                    if let Err(error) = restore {
+                        warn!(?error, "failed to process batch");
+                    }
+
+                    batch.clear();
+                }
+
+                let restore = cache
+                    .process_restore_batch(&batch, &progress, &restored)
+                    .await;
+                if let Err(error) = restore {
+                    warn!(?error, "failed to process final batch");
+                }
+            });
+        }
+        workers
+    }
+
+    /// Process a batch of files to restore from CAS.
+    async fn process_restore_batch(
+        &self,
+        batch: &[(ArtifactFile, AbsFilePath)],
+        progress: &TransferBar,
+        restored: &RestoreState,
+    ) -> Result<()> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+
+        let keys = batch
+            .iter()
+            .map(|(file, _)| file.object_key.clone())
+            .collect::<Vec<_>>();
+
+        let mut contents_stream = self.cas.get_bulk(keys).await?;
+        let mut contents = HashMap::new();
+        while let Some(result) = contents_stream.next().await {
+            match result {
+                Ok((key, data)) => {
+                    contents.insert(key, data);
+                }
+                Err(error) => {
+                    warn!(?error, "failed to fetch blob from bulk stream");
+                }
+            }
+        }
+
+        for (file, path) in batch {
+            let Some(data) = contents.get(&file.object_key) else {
+                warn!(?file, "file not found in bulk response");
+                continue;
+            };
+
+            match self.restore_single_file(file, path, data, restored).await {
+                Ok(transferred) => {
+                    progress.add_files(1);
+                    progress.add_bytes(transferred);
+                }
+                Err(error) => {
+                    warn!(?error, ?file, "failed to restore file");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Restore a single file from CAS data.
+    async fn restore_single_file(
+        &self,
+        file: &ArtifactFile,
+        path: &AbsFilePath,
+        data: &[u8],
+        restored: &RestoreState,
+    ) -> Result<u64> {
+        let data = Self::reconstruct(&self.ws.profile_dir, &self.ws.cargo_home, path, data).await?;
+
+        let mtime = UNIX_EPOCH + Duration::from_nanos(file.mtime_nanos as u64);
+        let metadata = fs::Metadata::builder()
+            .mtime(mtime)
+            .executable(file.executable)
+            .build();
+        fs::write(path, &data).await?;
+        metadata.set_file(path).await?;
+        restored.record_object(&file.object_key);
+        Ok(data.len() as u64)
+    }
+
+    /// Process a single restore hit by queuing files for restoration.
+    async fn process_restore_hit(
+        &self,
+        hit: CargoBulkRestoreHit,
+        tx: &flume::Sender<(ArtifactFile, AbsFilePath)>,
+    ) -> Result<()> {
+        for file in hit.artifacts {
+            let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
+            let path = qualified
+                .reconstruct_raw(&self.ws.profile_dir, &self.ws.cargo_home)
+                .pipe(AbsFilePath::try_from)?;
+
+            if fs::exists(path.as_std_path()).await {
+                let existing_hash = fs::hash_file(&path).await?;
+                if existing_hash == file.object_key {
+                    trace!(?path, "file already exists with correct hash, skipping");
+                    continue;
+                }
+            }
+
+            if let Err(error) = tx.send_async((file, path)).await {
+                panic!("invariant violated: no restore workers are alive: {error:?}");
+            }
+        }
+        Ok(())
     }
 
     /// Reconstruct file contents after retrieving from CAS.
@@ -968,6 +968,32 @@ fn build_save_request(
         .content_hash(content_hash)
         .artifacts(artifact_files)
         .build()
+}
+
+/// Build CargoRestoreRequest objects from an artifact plan.
+fn build_restore_requests(
+    artifact_plan: &ArtifactPlan,
+) -> (HashMap<Vec<u8>, &ArtifactKey>, Vec<CargoRestoreRequest>) {
+    artifact_plan.artifacts.iter().fold(
+        (HashMap::new(), Vec::new()),
+        |(mut artifacts, mut requests), artifact| {
+            let req = CargoRestoreRequest::builder()
+                .package_name(&artifact.package_name)
+                .package_version(&artifact.package_version)
+                .target(&artifact_plan.target)
+                .library_crate_compilation_unit_hash(&artifact.library_crate_compilation_unit_hash)
+                .maybe_build_script_compilation_unit_hash(
+                    artifact.build_script_compilation_unit_hash.as_ref(),
+                )
+                .maybe_build_script_execution_unit_hash(
+                    artifact.build_script_execution_unit_hash.as_ref(),
+                )
+                .build();
+            artifacts.insert(req.hash(), artifact);
+            requests.push(req);
+            (artifacts, requests)
+        },
+    )
 }
 
 /// An ArtifactPlan represents the collection of information known about the

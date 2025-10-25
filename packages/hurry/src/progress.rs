@@ -5,16 +5,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use derive_more::Deref;
 use indicatif::{HumanDuration, ProgressBar, ProgressStyle};
 
-/// A progress bar wrapper that emits periodic updates.
-///
-/// - In interactive terminals, displays a normal progress bar.
-/// - In non-interactive environments emits log lines every 5 seconds.
-#[derive(Deref)]
-pub struct TransferBar {
-    #[deref]
+struct TransferBarInner {
     progress: ProgressBar,
     start: Instant,
     operation: String,
@@ -22,6 +15,15 @@ pub struct TransferBar {
     bytes: Arc<AtomicU64>,
     handle: Option<JoinHandle<()>>,
     signal: Option<Arc<StopSignal>>,
+}
+
+/// A progress bar wrapper that emits periodic updates.
+///
+/// - In interactive terminals, displays a normal progress bar.
+/// - In non-interactive environments emits log lines every 5 seconds.
+#[derive(Clone)]
+pub struct TransferBar {
+    inner: Arc<TransferBarInner>,
 }
 
 impl TransferBar {
@@ -42,8 +44,8 @@ impl TransferBar {
         let initial_message = format!("{operation} (0 files, 0 B at 0 MB/s)");
         progress.set_message(initial_message);
 
-        if is_interactive() {
-            Self {
+        let inner = if is_interactive() {
+            TransferBarInner {
                 progress,
                 start,
                 operation,
@@ -88,7 +90,7 @@ impl TransferBar {
                     }
                 }
             });
-            Self {
+            TransferBarInner {
                 progress,
                 start,
                 operation,
@@ -97,46 +99,85 @@ impl TransferBar {
                 handle: Some(handle),
                 signal: Some(signal),
             }
+        };
+
+        Self {
+            inner: Arc::new(inner),
         }
     }
 
     /// Increment the transferred file count and update the progress message.
     pub fn add_files(&self, count: u64) {
-        self.files.fetch_add(count, Ordering::Relaxed);
+        self.inner.files.fetch_add(count, Ordering::Relaxed);
         self.update_message();
     }
 
     /// Add to the transferred byte count and update the progress message.
     pub fn add_bytes(&self, count: u64) {
-        self.bytes.fetch_add(count, Ordering::Relaxed);
+        self.inner.bytes.fetch_add(count, Ordering::Relaxed);
         self.update_message();
     }
 
     /// Get the current transferred file count.
     pub fn files(&self) -> u64 {
-        self.files.load(Ordering::Relaxed)
+        self.inner.files.load(Ordering::Relaxed)
     }
 
     /// Get the current transferred byte count.
     pub fn bytes(&self) -> u64 {
-        self.bytes.load(Ordering::Relaxed)
+        self.inner.bytes.load(Ordering::Relaxed)
     }
 
     /// Update the progress message with current transfer statistics.
     fn update_message(&self) {
-        let files = self.files.load(Ordering::Relaxed);
-        let bytes = self.bytes.load(Ordering::Relaxed);
-        self.progress.set_message(format!(
+        let files = self.inner.files.load(Ordering::Relaxed);
+        let bytes = self.inner.bytes.load(Ordering::Relaxed);
+        self.inner.progress.set_message(format!(
             "{} ({} files, {} at {})",
-            self.operation,
+            self.inner.operation,
             files,
             format_size(bytes),
-            format_transfer_rate(bytes, self.start)
+            format_transfer_rate(bytes, self.inner.start)
         ));
+    }
+
+    /// Increment the progress bar position.
+    pub fn inc(&self, delta: u64) {
+        self.inner.progress.inc(delta);
+    }
+
+    /// Decrement the progress bar length.
+    pub fn dec_length(&self, delta: u64) {
+        self.inner.progress.dec_length(delta);
+    }
+
+    /// Finish the progress bar with a final message.
+    pub fn finish_with_message(&self, msg: impl Into<std::borrow::Cow<'static, str>>) {
+        self.inner.progress.finish_with_message(msg);
     }
 }
 
-impl Drop for TransferBar {
+impl std::fmt::Debug for TransferBar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let elapsed = self.inner.start.elapsed();
+        let pos = self.inner.progress.position();
+        let len = self.inner.progress.length().unwrap_or(0);
+        let msg = self.inner.progress.message();
+        write!(f, "[{elapsed:?}] [{pos}/{len}] {msg}")
+    }
+}
+
+impl std::fmt::Display for TransferBar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let elapsed = self.inner.start.elapsed();
+        let pos = self.inner.progress.position();
+        let len = self.inner.progress.length().unwrap_or(0);
+        let msg = self.inner.progress.message();
+        write!(f, "[{elapsed:?}] [{pos}/{len}] {msg}")
+    }
+}
+
+impl Drop for TransferBarInner {
     fn drop(&mut self) {
         // Signal the logging thread to stop and wake it up
         if let Some(signal) = &self.signal {
