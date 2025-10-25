@@ -19,6 +19,8 @@ use dashmap::DashSet;
 use futures::{StreamExt, TryStreamExt as _, stream};
 use indicatif::ProgressBar;
 use itertools::Itertools;
+
+use crate::progress::TransferBar;
 use scopeguard::defer;
 use serde::Serialize;
 use tap::Pipe as _;
@@ -432,13 +434,9 @@ impl CargoCache {
     pub async fn save(
         &self,
         artifact_plan: ArtifactPlan,
-        progress: &ProgressBar,
+        progress: &TransferBar,
         restored: &RestoreState,
     ) -> Result<CacheStats> {
-        let start_time = std::time::Instant::now();
-        let mut transferred_files = 0u64;
-        let mut transferred_bytes = 0u64;
-
         for artifact in artifact_plan.artifacts {
             let artifact = BuiltArtifact::from_key(&self.ws, artifact).await?;
             debug!(?artifact, "caching artifact");
@@ -450,7 +448,6 @@ impl CargoCache {
                     "skipping backup: artifact was restored from cache"
                 );
                 progress.dec_length(1);
-                update_progress_message(progress, transferred_files, transferred_bytes, start_time);
                 continue;
             }
 
@@ -461,8 +458,8 @@ impl CargoCache {
             let (library_unit_files, artifact_files, bulk_entries) =
                 self.process_files_for_upload(files_to_save, restored).await?;
 
-            let uploaded_bytes = self.upload_files_bulk(bulk_entries, &mut transferred_files).await?;
-            transferred_bytes += uploaded_bytes;
+            let uploaded_bytes = self.upload_files_bulk(bulk_entries, progress).await?;
+            progress.add_bytes(uploaded_bytes);
 
             let content_hash = calculate_content_hash(library_unit_files)?;
             debug!(?content_hash, "calculated content hash");
@@ -471,12 +468,11 @@ impl CargoCache {
             self.courier.cargo_cache_save(request).await?;
 
             progress.inc(1);
-            update_progress_message(progress, transferred_files, transferred_bytes, start_time);
         }
 
         Ok(CacheStats {
-            files: transferred_files,
-            bytes: transferred_bytes,
+            files: progress.files(),
+            bytes: progress.bytes(),
         })
     }
 
@@ -847,7 +843,7 @@ impl CargoCache {
     async fn upload_files_bulk(
         &self,
         bulk_entries: Vec<(Key, Vec<u8>, AbsFilePath)>,
-        transferred_files: &mut u64,
+        progress: &TransferBar,
     ) -> Result<u64> {
         if bulk_entries.is_empty() {
             return Ok(0);
@@ -872,7 +868,7 @@ impl CargoCache {
             } else if result.skipped.contains(key) {
                 debug!(?path, ?key, "skipped by server (already exists)");
             }
-            *transferred_files += 1;
+            progress.add_files(1);
         }
 
         for error in &result.errors {
@@ -943,21 +939,6 @@ impl CargoCache {
             }
         }
     }
-}
-
-/// Update progress bar message with current transfer statistics.
-fn update_progress_message(
-    progress: &ProgressBar,
-    transferred_files: u64,
-    transferred_bytes: u64,
-    start_time: Instant,
-) {
-    progress.set_message(format!(
-        "Backing up cache ({} files, {} at {})",
-        transferred_files,
-        format_size(transferred_bytes),
-        format_transfer_rate(transferred_bytes, start_time)
-    ));
 }
 
 /// Calculate content hash for a library unit from its files.
