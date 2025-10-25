@@ -191,17 +191,7 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Cache the built artifacts.
     if !options.skip_backup {
-        let start_time = std::time::Instant::now();
-        let count = artifact_plan.artifacts.len() as u64;
-        let progress = TransferBar::new(count, "Backing up cache");
-
-        let stats = cache.save(artifact_plan, &progress, restored).await?;
-        progress.finish_with_message(format!(
-            "Cache backed up ({} files, {} at {})",
-            stats.files,
-            format_size(stats.bytes),
-            format_transfer_rate(stats.bytes, start_time),
-        ));
+        cache.save(artifact_plan, restored).await?;
     }
 
     Ok(())

@@ -428,16 +428,16 @@ impl CargoCache {
         })
     }
 
-    #[instrument(name = "CargoCache::save", skip(_progress))]
+    #[instrument(name = "CargoCache::save")]
     pub async fn save(
         &self,
         artifact_plan: ArtifactPlan,
-        _progress: &ProgressBar,
         restored: RestoreState,
-    ) -> Result<CacheStats> {
+    ) -> Result<()> {
         let hurry_cache_dir = fs::user_global_cache_path().await?;
 
-        // TODO: Start daemon if it's not already running.
+        // Start daemon if it's not already running.
+
 
         // Connect to daemon HTTP server.
         let hurryd_sock_path = hurry_cache_dir.join(mk_rel_file!("hurryd.sock"));
@@ -458,7 +458,7 @@ impl CargoCache {
             .await?;
         debug!(?response, "submitted upload request");
 
-        Ok(CacheStats { files: 0, bytes: 0 })
+        Ok(())
     }
 
     #[instrument(name = "CargoCache::restore", skip(progress))]
@@ -655,54 +655,6 @@ impl CargoCache {
             files: transferred_files.load(Ordering::Relaxed),
             bytes: transferred_bytes.load(Ordering::Relaxed),
         }))
-    }
-
-    /// Rewrite file contents before storing in CAS to normalize paths.
-    #[instrument(name = "CargoCache::rewrite_for_storage", skip(content))]
-    async fn rewrite(ws: &Workspace, path: &AbsFilePath, content: &[u8]) -> Result<Vec<u8>> {
-        // Determine what kind of file this is based on path structure.
-        let components = path.component_strs_lossy().collect::<Vec<_>>();
-
-        // Look at the last few components to determine file type.
-        // We use .rev() to start from the filename and work backwards.
-        let file_type = components
-            .iter()
-            .rev()
-            .tuple_windows::<(_, _, _)>()
-            .find_map(|(name, parent, gparent)| {
-                let ext = name.as_ref().rsplit_once('.').map(|(_, ext)| ext);
-                match (gparent.as_ref(), parent.as_ref(), name.as_ref(), ext) {
-                    ("build", _, "output", _) => Some("build-script-output"),
-                    ("build", _, "root-output", _) => Some("root-output"),
-                    (_, _, _, Some("d")) => Some("dep-info"),
-                    _ => None,
-                }
-            });
-
-        match file_type {
-            Some("root-output") => {
-                trace!(?path, "rewriting root-output file");
-                let parsed = RootOutput::from_file(ws, path).await?;
-                serde_json::to_vec(&parsed).context("serialize RootOutput")
-            }
-            Some("build-script-output") => {
-                trace!(?path, "rewriting build-script-output file");
-                let parsed = BuildScriptOutput::from_file(ws, path).await?;
-                serde_json::to_vec(&parsed).context("serialize BuildScriptOutput")
-            }
-            Some("dep-info") => {
-                trace!(?path, "rewriting dep-info file");
-                let parsed = DepInfo::from_file(ws, path).await?;
-                serde_json::to_vec(&parsed).context("serialize DepInfo")
-            }
-            None => {
-                // No rewriting needed, store as-is.
-                Ok(content.to_vec())
-            }
-            Some(unknown) => {
-                bail!("unknown file type for rewriting: {unknown}")
-            }
-        }
     }
 
     /// Reconstruct file contents after retrieving from CAS.
