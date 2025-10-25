@@ -30,7 +30,7 @@ use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tap::Pipe as _;
 use tokio::net::UnixListener;
 use tower_http::trace::TraceLayer;
-use tracing::{Subscriber, debug, dispatcher, info, instrument, trace, warn};
+use tracing::{Subscriber, debug, dispatcher, error, info, instrument, trace, warn};
 use tracing_subscriber::util::SubscriberInitExt as _;
 use url::Url;
 
@@ -56,6 +56,8 @@ pub async fn exec(
 ) -> Result<()> {
     // Set up daemon directory.
     let cache_dir = hurry::fs::user_global_cache_path().await?;
+    hurry::fs::create_dir_all(&cache_dir).await?;
+
     let pid = std::process::id();
     let socket_path = cache_dir.join(mk_rel_file!("hurryd.sock"));
     let pid_file_path = cache_dir.join(mk_rel_file!("hurryd.pid"));
@@ -116,7 +118,15 @@ pub async fn exec(
     }
 
     // Open the socket and start the server.
-    std::fs::remove_file(&socket_path.as_std_path())?;
+    match std::fs::remove_file(&socket_path.as_std_path()) {
+        Ok(_) => {}
+        Err(err) => {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                error!(?err, "could not remove socket file");
+                bail!("could not remove socket file");
+            }
+        }
+    }
     let listener = UnixListener::bind(socket_path.as_std_path())?;
     info!(?socket_path, "server listening");
 
@@ -381,7 +391,7 @@ async fn upload(
     Json(CargoUploadResponse { ok: true })
 }
 
-#[instrument]
+#[instrument(skip(content))]
 async fn rewrite(ws: &Workspace, path: &AbsFilePath, content: &[u8]) -> Result<Vec<u8>> {
     // Determine what kind of file this is based on path structure.
     let components = path.component_strs_lossy().collect::<Vec<_>>();
