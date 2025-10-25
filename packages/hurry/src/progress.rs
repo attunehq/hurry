@@ -26,13 +26,11 @@ impl TransferBar {
             .expect("invalid progress bar template")
             .progress_chars("=> ");
         progress.set_style(style);
-
-        let transferred_files = Arc::new(AtomicU64::new(0));
-        let transferred_bytes = Arc::new(AtomicU64::new(0));
+        progress.set_message(operation.clone());
 
         let start = Instant::now();
-        let initial_message = format!("{operation} (0 files, 0 B at 0 MB/s)");
-        progress.set_message(initial_message);
+        let transferred_files = Arc::new(AtomicU64::new(0));
+        let transferred_bytes = Arc::new(AtomicU64::new(0));
 
         let inner = if is_interactive() {
             TransferBarInner {
@@ -50,33 +48,14 @@ impl TransferBar {
                 let progress = progress.clone();
                 let signal = signal.clone();
                 move || {
-                    // Log immediately on start
-                    let elapsed = HumanDuration(start.elapsed());
-                    let pos = progress.position();
-                    let len = progress.length().unwrap_or(0);
-                    let msg = progress.message();
-                    progress.suspend(|| {
-                        println!("[{elapsed}] [{pos}/{len}] {msg}");
-                    });
-
-                    // Log every interval.
-                    let interval = Duration::from_secs(5);
                     loop {
-                        if signal.wait_timeout(interval) {
+                        progress.suspend(|| TransferBar::render_plain(start, &progress));
+                        if signal.wait_timeout(Duration::from_secs(5)) {
                             break;
                         }
-
                         if progress.is_finished() {
                             break;
                         }
-
-                        let elapsed = HumanDuration(start.elapsed());
-                        let pos = progress.position();
-                        let len = progress.length().unwrap_or(0);
-                        let msg = progress.message();
-                        progress.suspend(|| {
-                            println!("[{elapsed}] [{pos}/{len}] {msg}");
-                        });
                     }
                 }
             });
@@ -131,6 +110,15 @@ impl TransferBar {
         ));
     }
 
+    /// Render the plain message used in non-TTY contexts.
+    fn render_plain(start: Instant, progress: &ProgressBar) -> String {
+        let elapsed = HumanDuration(start.elapsed());
+        let pos = progress.position();
+        let len = progress.length().unwrap_or(0);
+        let msg = progress.message();
+        format!("[{elapsed}] [{pos}/{len}] {msg}")
+    }
+
     /// Increment the progress bar position.
     pub fn inc(&self, delta: u64) {
         self.inner.progress.inc(delta);
@@ -141,11 +129,6 @@ impl TransferBar {
         self.inner.progress.dec_length(delta);
     }
 
-    /// Finish the progress bar with a final message.
-    pub fn finish_with_message(&self, msg: impl Into<std::borrow::Cow<'static, str>>) {
-        self.inner.progress.finish_with_message(msg);
-    }
-
     /// Finish the progress bar and display final statistics.
     ///
     /// This consumes the `TransferBar`, explicitly dropping it and triggering
@@ -154,19 +137,12 @@ impl TransferBar {
     ///
     /// Note: You can also just let the `TransferBar` drop naturally at the end
     /// of its scope to achieve the same effect.
-    pub fn finish(self) {
-        // Explicitly drop to show final statistics
-        drop(self);
-    }
+    pub fn finish(self) {}
 }
 
 impl std::fmt::Debug for TransferBar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let elapsed = self.inner.start.elapsed();
-        let pos = self.inner.progress.position();
-        let len = self.inner.progress.length().unwrap_or(0);
-        let msg = self.inner.progress.message();
-        write!(f, "[{elapsed:?}] [{pos}/{len}] {msg}")
+        write!(f, "{self}")
     }
 }
 
@@ -205,7 +181,7 @@ impl Drop for TransferBarInner {
         // Finish the progress bar with final statistics
         let files = self.files.load(Ordering::Relaxed);
         let bytes = self.bytes.load(Ordering::Relaxed);
-        let final_message = format!(
+        let message = format!(
             "{} ({} files, {} at {})",
             self.operation,
             files,
@@ -214,14 +190,14 @@ impl Drop for TransferBarInner {
         );
 
         if is_interactive() {
-            self.progress.finish_with_message(final_message);
+            self.progress.finish_with_message(message);
         } else {
             // In non-interactive mode, log the final state
             let elapsed = HumanDuration(self.start.elapsed());
             let pos = self.progress.position();
             let len = self.progress.length().unwrap_or(0);
             self.progress.suspend(|| {
-                println!("[{elapsed}] [{pos}/{len}] {final_message}");
+                println!("[{elapsed}] [{pos}/{len}] {message}");
             });
         }
     }
