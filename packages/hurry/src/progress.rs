@@ -145,6 +145,19 @@ impl TransferBar {
     pub fn finish_with_message(&self, msg: impl Into<std::borrow::Cow<'static, str>>) {
         self.inner.progress.finish_with_message(msg);
     }
+
+    /// Finish the progress bar and display final statistics.
+    ///
+    /// This consumes the `TransferBar`, explicitly dropping it and triggering
+    /// the final statistics display. This is equivalent to simply dropping the
+    /// bar, but makes the intent more explicit in the code.
+    ///
+    /// Note: You can also just let the `TransferBar` drop naturally at the end
+    /// of its scope to achieve the same effect.
+    pub fn finish(self) {
+        // Explicitly drop to show final statistics
+        drop(self);
+    }
 }
 
 impl std::fmt::Debug for TransferBar {
@@ -189,14 +202,26 @@ impl Drop for TransferBarInner {
             let _ = handle.join();
         }
 
-        // In non-interactive mode, log the final state immediately
-        if !is_interactive() {
+        // Finish the progress bar with final statistics
+        let files = self.files.load(Ordering::Relaxed);
+        let bytes = self.bytes.load(Ordering::Relaxed);
+        let final_message = format!(
+            "{} ({} files, {} at {})",
+            self.operation,
+            files,
+            format_size(bytes),
+            format_transfer_rate(bytes, self.start)
+        );
+
+        if is_interactive() {
+            self.progress.finish_with_message(final_message);
+        } else {
+            // In non-interactive mode, log the final state
             let elapsed = HumanDuration(self.start.elapsed());
             let pos = self.progress.position();
             let len = self.progress.length().unwrap_or(0);
-            let msg = self.progress.message();
             self.progress.suspend(|| {
-                println!("[{elapsed}] [{pos}/{len}] {msg}");
+                println!("[{elapsed}] [{pos}/{len}] {final_message}");
             });
         }
     }
