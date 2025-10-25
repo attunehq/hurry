@@ -30,9 +30,11 @@ use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tap::Pipe as _;
 use tokio::net::UnixListener;
 use tower_http::trace::TraceLayer;
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{debug, dispatcher, info, instrument, trace, warn};
 use tracing_error::ErrorLayer;
-use tracing_subscriber::{Layer as _, layer::SubscriberExt as _, util::SubscriberInitExt};
+use tracing_subscriber::{
+    Layer as _, fmt::MakeWriter, layer::SubscriberExt as _, util::SubscriberInitExt,
+};
 use tracing_tree::time::Uptime;
 use url::Url;
 
@@ -46,6 +48,34 @@ pub struct Flags {
     )]
     #[debug("{courier_url}")]
     courier_url: Url,
+}
+
+fn make_logger<W>(writer: W) -> impl tracing::Subscriber
+where
+    W: for<'writer> MakeWriter<'writer> + 'static,
+{
+    return tracing_subscriber::registry()
+        .with(ErrorLayer::default())
+        .with(
+            tracing_tree::HierarchicalLayer::default()
+                .with_indent_lines(true)
+                .with_indent_amount(2)
+                .with_thread_ids(false)
+                .with_thread_names(false)
+                .with_verbose_exit(false)
+                .with_verbose_entry(false)
+                .with_deferred_spans(false)
+                .with_bracketed_fields(true)
+                .with_span_retrace(true)
+                .with_timer(Uptime::default())
+                .with_writer(writer)
+                .with_targets(false)
+                .with_filter(
+                    tracing_subscriber::EnvFilter::builder()
+                        .with_env_var("HURRYD_LOG")
+                        .from_env_lossy(),
+                ),
+        );
 }
 
 #[instrument]
@@ -63,37 +93,18 @@ async fn main() -> Result<()> {
     let socket_path = cache_dir.join(mk_rel_file!("hurryd.sock"));
     let pid_file_path = cache_dir.join(mk_rel_file!("hurryd.pid"));
     let stderr_file_path = cache_dir.try_join_file(format!("hurryd.{}.err", pid))?;
+    dispatcher::with_default(&make_logger(std::io::stderr).into(), || {
+        debug!(
+            ?socket_path,
+            ?pid_file_path,
+            ?stderr_file_path,
+            "file paths"
+        );
+        info!(?stderr_file_path, "logging to file");
+    });
 
     // Initialize logging.
-    tracing_subscriber::registry()
-        .with(ErrorLayer::default())
-        .with(
-            tracing_tree::HierarchicalLayer::default()
-                .with_indent_lines(true)
-                .with_indent_amount(2)
-                .with_thread_ids(false)
-                .with_thread_names(false)
-                .with_verbose_exit(false)
-                .with_verbose_entry(false)
-                .with_deferred_spans(false)
-                .with_bracketed_fields(true)
-                .with_span_retrace(true)
-                .with_timer(Uptime::default())
-                .with_writer(std::fs::File::create(stderr_file_path.as_std_path())?)
-                .with_targets(false)
-                .with_filter(
-                    tracing_subscriber::EnvFilter::builder()
-                        .with_env_var("HURRYD_LOG")
-                        .from_env_lossy(),
-                ),
-        )
-        .init();
-    debug!(
-        ?socket_path,
-        ?pid_file_path,
-        ?stderr_file_path,
-        "file paths"
-    );
+    make_logger(std::fs::File::create(stderr_file_path.as_std_path())?).init();
 
     // If a pid-file exists, read it and check if the process is running. Exit
     // if another instance is running.
