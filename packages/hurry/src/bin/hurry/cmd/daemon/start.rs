@@ -59,7 +59,7 @@ pub async fn exec(
     let pid = std::process::id();
     let socket_path = cache_dir.join(mk_rel_file!("hurryd.sock"));
     let pid_file_path = cache_dir.join(mk_rel_file!("hurryd.pid"));
-    let stderr_file_path = cache_dir.try_join_file(format!("hurryd.{}.err", pid))?;
+    let log_file_path = cache_dir.try_join_file(format!("hurryd.{}.log", pid))?;
 
     // Redirect logging into file (for daemon mode). We need to redirect the
     // logging firstly so that we can continue to see logs if the invoking
@@ -68,16 +68,11 @@ pub async fn exec(
     // which means the process crashes with a SIGPIPE if it attempts to write to
     // them.
     let (file_logger, flame_guard) = dispatcher::with_default(&cli_logger.into(), || {
-        debug!(
-            ?socket_path,
-            ?pid_file_path,
-            ?stderr_file_path,
-            "file paths"
-        );
-        info!(?stderr_file_path, "logging to file");
+        debug!(?socket_path, ?pid_file_path, ?log_file_path, "file paths");
+        info!(?log_file_path, "logging to file");
 
         log::make_logger(
-            std::fs::File::create(stderr_file_path.as_std_path())?,
+            std::fs::File::create(log_file_path.as_std_path())?,
             top_level_flags.profile,
             top_level_flags.color,
         )
@@ -136,6 +131,19 @@ pub async fn exec(
     let app = Router::new()
         .nest("/api/v0/cargo", cargo)
         .layer(TraceLayer::new_for_http());
+
+    // Print ready message to STDOUT for parent processes. This uses `println!`
+    // instead of the tracing macros because it emits a special sentinel value
+    // on STDOUT.
+    println!(
+        "{}",
+        serde_json::to_string(&DaemonReadyMessage {
+            pid,
+            socket_path,
+            log_file_path,
+        })?
+    );
+
     axum::serve(listener, app).await?;
 
     // TODO: Unsure if we need to keep this, the guard _should_ flush on drop.
@@ -144,6 +152,13 @@ pub async fn exec(
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DaemonReadyMessage {
+    pid: u32,
+    socket_path: AbsFilePath,
+    log_file_path: AbsFilePath,
 }
 
 #[derive(Debug, Clone)]

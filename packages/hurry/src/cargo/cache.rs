@@ -1,7 +1,9 @@
 use std::{
     collections::HashMap,
+    env::VarError,
     fmt::Debug,
     path::PathBuf,
+    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -19,9 +21,10 @@ use futures::StreamExt;
 use indicatif::ProgressBar;
 use scopeguard::defer;
 use serde::{Deserialize, Serialize};
+use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tap::Pipe as _;
-use tokio::{process::Command, task::JoinSet};
-use tracing::{debug, instrument, trace, warn};
+use tokio::{io::AsyncBufReadExt as _, task::JoinSet};
+use tracing::{debug, error, instrument, trace, warn};
 use uuid::Uuid;
 
 use clients::{
@@ -419,12 +422,74 @@ impl CargoCache {
     #[instrument(name = "CargoCache::save")]
     pub async fn save(&self, artifact_plan: ArtifactPlan, restored: RestoreState) -> Result<()> {
         let hurry_cache_dir = fs::user_global_cache_path().await?;
+        let pid_file_path = hurry_cache_dir.join(mk_rel_file!("hurryd.pid"));
 
-        // TODO: Start daemon if it's not already running.
-        tokio::process::Command::new("hurry")
-            .arg("daemon")
-            .arg("start")
-            .spawn()?;
+        // Start daemon if it's not already running.
+        let is_running = if pid_file_path.exists().await {
+            let pid = fs::must_read_buffered_utf8(&pid_file_path).await?;
+            match pid.trim().parse::<u32>() {
+                Ok(pid) => {
+                    let system = System::new_with_specifics(
+                        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+                    );
+                    let process = system.process(Pid::from_u32(pid));
+                    if process.is_some() { true } else { false }
+                }
+                Err(err) => {
+                    warn!(?err, "could not parse pid-file");
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        if !is_running {
+            // Spawn a child and wait for the ready message on STDOUT.
+            let mut cmd = tokio::process::Command::new("hurry");
+            cmd.arg("daemon")
+                .arg("start")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+
+            match std::env::var("HURRY_LOG") {
+                // If `HURRY_LOG` is not set, set it to `debug` by default so
+                // the logs are useful.
+                Err(VarError::NotPresent) => {
+                    cmd.env("HURRY_LOG", "debug");
+                }
+                _ => {}
+            }
+
+            let mut child = cmd.spawn()?;
+            let stdout = child.stdout.take().ok_or_eyre("daemon has no stdout")?;
+            let mut stdout = tokio::io::BufReader::new(stdout).lines();
+            match tokio::time::timeout(Duration::from_secs(5), stdout.next_line()).await {
+                Ok(Ok(Some(line))) => {
+                    debug!(?line, "received daemon output line");
+                    match serde_json::from_str::<DaemonReadyMessage>(&line) {
+                        Ok(msg) => {
+                            debug!(?msg, "received daemon ready message");
+                        }
+                        Err(err) => {
+                            error!(?err, "could not parse daemon output");
+                            bail!("could not parse daemon output");
+                        }
+                    }
+                }
+                Ok(Ok(None)) => {
+                    error!("daemon closed pipe unexpectedly");
+                    bail!("daemon crashed on startup");
+                }
+                Ok(Err(err)) => {
+                    error!(?err, "could not read daemon output");
+                    bail!("daemon not ready");
+                }
+                Err(elapsed) => {
+                    error!(?elapsed, "daemon timed out while starting");
+                    bail!("could not start daemon");
+                }
+            }
+        }
 
         // Connect to daemon HTTP server.
         let hurryd_sock_path = hurry_cache_dir.join(mk_rel_file!("hurryd.sock"));
@@ -703,6 +768,13 @@ impl CargoCache {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DaemonReadyMessage {
+    pid: u32,
+    socket_path: AbsFilePath,
+    log_file_path: AbsFilePath,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
