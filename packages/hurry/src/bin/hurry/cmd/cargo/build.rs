@@ -7,7 +7,6 @@
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use derive_more::Debug;
-use tap::Tap;
 use tracing::{debug, info, instrument, warn};
 
 use clients::Courier;
@@ -95,11 +94,7 @@ pub async fn exec(options: Options) -> Result<()> {
     let restored = if !options.skip_restore {
         let count = artifact_plan.artifacts.len() as u64;
         let progress = TransferBar::new(count, "Restoring cache");
-
-        cache
-            .restore(&artifact_plan, &progress)
-            .await?
-            .tap(|_| progress.finish())
+        cache.restore(&artifact_plan, &progress).await?
     } else {
         Default::default()
     };
@@ -185,9 +180,7 @@ pub async fn exec(options: Options) -> Result<()> {
     if !options.skip_backup {
         let count = artifact_plan.artifacts.len() as u64;
         let progress = TransferBar::new(count, "Backing up cache");
-
         cache.save(artifact_plan, &progress, &restored).await?;
-        progress.finish();
     }
 
     Ok(())

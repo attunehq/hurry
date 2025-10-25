@@ -5,13 +5,16 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use derive_more::{Debug, Display};
 use indicatif::{HumanDuration, ProgressBar, ProgressStyle};
 
 /// A progress bar wrapper that emits periodic updates.
 ///
 /// - In interactive terminals, displays a normal progress bar.
 /// - In non-interactive environments emits log lines every 5 seconds.
-#[derive(Clone)]
+#[derive(Clone, Debug, Display)]
+#[display("{}", self.inner)]
+#[debug("{self}")]
 pub struct TransferBar {
     inner: Arc<TransferBarInner>,
 }
@@ -19,10 +22,68 @@ pub struct TransferBar {
 impl TransferBar {
     /// Creates a new transfer progress tracker.
     pub fn new(items: u64, operation: impl Into<String>) -> Self {
+        Self {
+            inner: Arc::new(TransferBarInner::new(items, operation)),
+        }
+    }
+
+    /// Increment the transferred file count and update the progress message.
+    pub fn add_files(&self, count: u64) {
+        self.inner.add_files(count);
+    }
+
+    /// Add to the transferred byte count and update the progress message.
+    pub fn add_bytes(&self, count: u64) {
+        self.inner.add_bytes(count);
+    }
+
+    /// Get the current transferred file count.
+    pub fn files(&self) -> u64 {
+        self.inner.files()
+    }
+
+    /// Get the current transferred byte count.
+    pub fn bytes(&self) -> u64 {
+        self.inner.bytes()
+    }
+
+    /// Increment the progress bar position.
+    pub fn inc(&self, delta: u64) {
+        self.inner.inc(delta);
+    }
+
+    /// Decrement the progress bar length.
+    pub fn dec_length(&self, delta: u64) {
+        self.inner.dec_length(delta);
+    }
+
+    /// Finish the progress bar and display final statistics.
+    ///
+    /// This consumes the `TransferBar`, explicitly dropping it and triggering
+    /// the final statistics display. This is equivalent to simply dropping the
+    /// bar, but makes the intent more explicit in the code.
+    ///
+    /// Note: You can also just let the `TransferBar` drop naturally at the end
+    /// of its scope to achieve the same effect.
+    pub fn finish(self) {}
+}
+
+struct TransferBarInner {
+    progress: ProgressBar,
+    start: Instant,
+    operation: String,
+    files: Arc<AtomicU64>,
+    bytes: Arc<AtomicU64>,
+    handle: Option<JoinHandle<()>>,
+    signal: Option<Arc<StopSignal>>,
+}
+
+impl TransferBarInner {
+    fn new(items: u64, operation: impl Into<String>) -> Self {
         let operation = operation.into();
         let progress = ProgressBar::new(items);
         let style = ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+            .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos/{len} {msg}")
             .expect("invalid progress bar template")
             .progress_chars("=> ");
         progress.set_style(style);
@@ -32,8 +93,8 @@ impl TransferBar {
         let transferred_files = Arc::new(AtomicU64::new(0));
         let transferred_bytes = Arc::new(AtomicU64::new(0));
 
-        let inner = if is_interactive() {
-            TransferBarInner {
+        if is_interactive() {
+            Self {
                 progress,
                 start,
                 operation,
@@ -48,8 +109,12 @@ impl TransferBar {
                 let progress = progress.clone();
                 let signal = signal.clone();
                 move || {
+                    // Log immediately on start
+                    // println!("{}", Self::render_plain(start, &progress));
+
+                    // Log every interval
                     loop {
-                        progress.suspend(|| TransferBar::render_plain(start, &progress));
+                        println!("{}", Self::render_plain(start, &progress));
                         if signal.wait_timeout(Duration::from_secs(5)) {
                             break;
                         }
@@ -59,7 +124,7 @@ impl TransferBar {
                     }
                 }
             });
-            TransferBarInner {
+            Self {
                 progress,
                 start,
                 operation,
@@ -68,49 +133,39 @@ impl TransferBar {
                 handle: Some(handle),
                 signal: Some(signal),
             }
-        };
-
-        Self {
-            inner: Arc::new(inner),
         }
     }
 
-    /// Increment the transferred file count and update the progress message.
-    pub fn add_files(&self, count: u64) {
-        self.inner.files.fetch_add(count, Ordering::Relaxed);
+    fn add_files(&self, count: u64) {
+        self.files.fetch_add(count, Ordering::Relaxed);
         self.update_message();
     }
 
-    /// Add to the transferred byte count and update the progress message.
-    pub fn add_bytes(&self, count: u64) {
-        self.inner.bytes.fetch_add(count, Ordering::Relaxed);
+    fn add_bytes(&self, count: u64) {
+        self.bytes.fetch_add(count, Ordering::Relaxed);
         self.update_message();
     }
 
-    /// Get the current transferred file count.
-    pub fn files(&self) -> u64 {
-        self.inner.files.load(Ordering::Relaxed)
+    fn files(&self) -> u64 {
+        self.files.load(Ordering::Relaxed)
     }
 
-    /// Get the current transferred byte count.
-    pub fn bytes(&self) -> u64 {
-        self.inner.bytes.load(Ordering::Relaxed)
+    fn bytes(&self) -> u64 {
+        self.bytes.load(Ordering::Relaxed)
     }
 
-    /// Update the progress message with current transfer statistics.
     fn update_message(&self) {
-        let files = self.inner.files.load(Ordering::Relaxed);
-        let bytes = self.inner.bytes.load(Ordering::Relaxed);
-        self.inner.progress.set_message(format!(
+        let files = self.files.load(Ordering::Relaxed);
+        let bytes = self.bytes.load(Ordering::Relaxed);
+        self.progress.set_message(format!(
             "{} ({} files, {} at {})",
-            self.inner.operation,
+            self.operation,
             files,
             format_size(bytes),
-            format_transfer_rate(bytes, self.inner.start)
+            format_transfer_rate(bytes, self.start)
         ));
     }
 
-    /// Render the plain message used in non-TTY contexts.
     fn render_plain(start: Instant, progress: &ProgressBar) -> String {
         let elapsed = HumanDuration(start.elapsed());
         let pos = progress.position();
@@ -119,68 +174,35 @@ impl TransferBar {
         format!("[{elapsed}] [{pos}/{len}] {msg}")
     }
 
-    /// Increment the progress bar position.
-    pub fn inc(&self, delta: u64) {
-        self.inner.progress.inc(delta);
+    fn inc(&self, delta: u64) {
+        self.progress.inc(delta);
     }
 
-    /// Decrement the progress bar length.
-    pub fn dec_length(&self, delta: u64) {
-        self.inner.progress.dec_length(delta);
+    fn dec_length(&self, delta: u64) {
+        self.progress.dec_length(delta);
     }
-
-    /// Finish the progress bar and display final statistics.
-    ///
-    /// This consumes the `TransferBar`, explicitly dropping it and triggering
-    /// the final statistics display. This is equivalent to simply dropping the
-    /// bar, but makes the intent more explicit in the code.
-    ///
-    /// Note: You can also just let the `TransferBar` drop naturally at the end
-    /// of its scope to achieve the same effect.
-    pub fn finish(self) {}
 }
 
-impl std::fmt::Debug for TransferBar {
+impl std::fmt::Debug for TransferBarInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self}")
     }
 }
 
-impl std::fmt::Display for TransferBar {
+impl std::fmt::Display for TransferBarInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let elapsed = self.inner.start.elapsed();
-        let pos = self.inner.progress.position();
-        let len = self.inner.progress.length().unwrap_or(0);
-        let msg = self.inner.progress.message();
+        let elapsed = self.start.elapsed();
+        let pos = self.progress.position();
+        let len = self.progress.length().unwrap_or(0);
+        let msg = self.progress.message();
         write!(f, "[{elapsed:?}] [{pos}/{len}] {msg}")
     }
 }
 
-struct TransferBarInner {
-    progress: ProgressBar,
-    start: Instant,
-    operation: String,
-    files: Arc<AtomicU64>,
-    bytes: Arc<AtomicU64>,
-    handle: Option<JoinHandle<()>>,
-    signal: Option<Arc<StopSignal>>,
-}
-
 impl Drop for TransferBarInner {
     fn drop(&mut self) {
-        // Signal the logging thread to stop and wake it up
-        if let Some(signal) = &self.signal {
-            signal.stop();
-        }
-
-        // Wait for the logging thread to complete if it exists
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-
-        // Finish the progress bar with final statistics
-        let files = self.files.load(Ordering::Relaxed);
-        let bytes = self.bytes.load(Ordering::Relaxed);
+        let files = self.files();
+        let bytes = self.bytes();
         let message = format!(
             "{} ({} files, {} at {})",
             self.operation,
@@ -192,13 +214,17 @@ impl Drop for TransferBarInner {
         if is_interactive() {
             self.progress.finish_with_message(message);
         } else {
-            // In non-interactive mode, log the final state
             let elapsed = HumanDuration(self.start.elapsed());
             let pos = self.progress.position();
             let len = self.progress.length().unwrap_or(0);
-            self.progress.suspend(|| {
-                println!("[{elapsed}] [{pos}/{len}] {message}");
-            });
+            println!("[{elapsed}] [{pos}/{len}] {message}");
+        }
+
+        if let Some(signal) = &self.signal {
+            signal.stop();
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
         }
     }
 }
