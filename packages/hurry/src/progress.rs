@@ -7,16 +7,6 @@ use std::time::{Duration, Instant};
 
 use indicatif::{HumanDuration, ProgressBar, ProgressStyle};
 
-struct TransferBarInner {
-    progress: ProgressBar,
-    start: Instant,
-    operation: String,
-    files: Arc<AtomicU64>,
-    bytes: Arc<AtomicU64>,
-    handle: Option<JoinHandle<()>>,
-    signal: Option<Arc<StopSignal>>,
-}
-
 /// A progress bar wrapper that emits periodic updates.
 ///
 /// - In interactive terminals, displays a normal progress bar.
@@ -175,6 +165,16 @@ impl std::fmt::Display for TransferBar {
         let msg = self.inner.progress.message();
         write!(f, "[{elapsed:?}] [{pos}/{len}] {msg}")
     }
+}
+
+struct TransferBarInner {
+    progress: ProgressBar,
+    start: Instant,
+    operation: String,
+    files: Arc<AtomicU64>,
+    bytes: Arc<AtomicU64>,
+    handle: Option<JoinHandle<()>>,
+    signal: Option<Arc<StopSignal>>,
 }
 
 impl Drop for TransferBarInner {
