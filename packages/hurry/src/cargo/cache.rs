@@ -498,13 +498,28 @@ impl CargoCache {
             progress.dec_length(1);
         }
 
-        for hit in restore_result.hits {
-            let Some(artifact) = artifacts.get(&hit.request.hash()) else {
-                bail!("artifact was not requested but was restored: {hit:?}");
-            };
+        let files_to_restore = stream::iter(restore_result.hits)
+            .zip(stream::repeat(&artifacts))
+            .map(|(hit, artifacts)| async move {
+                let hash = hit.request.hash();
+                let Some(artifact) = artifacts.get(&hash).copied() else {
+                    bail!("artifact was not requested but was restored: {hash:?}");
+                };
 
-            self.process_restore_hit(hit, &tx).await?;
-            restored.record_artifact(artifact);
+                let files = self.process_restore_hit(hit).await?;
+                Result::<_>::Ok((artifact.clone(), files))
+            })
+            .buffer_unordered(worker_count)
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        for (artifact, files) in files_to_restore {
+            for (file, path) in files {
+                if let Err(error) = tx.send_async((file, path)).await {
+                    panic!("invariant violated: no restore workers are alive: {error:?}");
+                }
+            }
+            restored.record_artifact(&artifact);
             progress.inc(1);
         }
 
@@ -851,31 +866,38 @@ impl CargoCache {
         Ok(data.len() as u64)
     }
 
-    /// Process a single restore hit by queuing files for restoration.
+    /// Process a single restore hit and return files that need restoration.
+    ///
+    /// This checks which files already exist with correct hashes and filters
+    /// them out, returning only files that need to be restored.
     async fn process_restore_hit(
         &self,
         hit: CargoBulkRestoreHit,
-        tx: &flume::Sender<(ArtifactFile, AbsFilePath)>,
-    ) -> Result<()> {
-        for file in hit.artifacts {
-            let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
-            let path = qualified
-                .reconstruct_raw(&self.ws.profile_dir, &self.ws.cargo_home)
-                .pipe(AbsFilePath::try_from)?;
+    ) -> Result<Vec<(ArtifactFile, AbsFilePath)>> {
+        stream::iter(hit.artifacts)
+            .map(|file| async move {
+                let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
+                let path = qualified
+                    .reconstruct_raw(&self.ws.profile_dir, &self.ws.cargo_home)
+                    .pipe(AbsFilePath::try_from)?;
 
-            if fs::exists(path.as_std_path()).await {
-                let existing_hash = fs::hash_file(&path).await?;
-                if existing_hash == file.object_key {
-                    trace!(?path, "file already exists with correct hash, skipping");
-                    continue;
+                if fs::exists(path.as_std_path()).await {
+                    let existing_hash = fs::hash_file(&path).await?;
+                    if existing_hash == file.object_key {
+                        trace!(?path, "file already exists with correct hash, skipping");
+                        return Ok(None);
+                    }
                 }
-            }
 
-            if let Err(error) = tx.send_async((file, path)).await {
-                panic!("invariant violated: no restore workers are alive: {error:?}");
-            }
-        }
-        Ok(())
+                Result::<Option<_>>::Ok(Some((file, path)))
+            })
+            .buffer_unordered(num_cpus::get())
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .flatten()
+            .collect_vec()
+            .pipe(Ok)
     }
 
     /// Reconstruct file contents after retrieving from CAS.
