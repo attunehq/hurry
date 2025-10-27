@@ -1,28 +1,13 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, hash_map::Entry},
     fmt::Debug,
     io::Write,
     path::PathBuf,
     time::{Duration, UNIX_EPOCH},
 };
 
-use cargo_metadata::TargetKind;
-use color_eyre::{
-    Result,
-    eyre::{Context as _, OptionExt, bail, eyre},
-};
-use dashmap::DashSet;
-use futures::{StreamExt, TryStreamExt as _, stream};
-use itertools::Itertools;
-
 use crate::progress::TransferBar;
-use scopeguard::defer;
-use serde::Serialize;
-use tap::Pipe as _;
-use tokio::task::JoinSet;
-use tracing::{debug, instrument, trace, warn};
-use uuid::Uuid;
-
+use cargo_metadata::TargetKind;
 use clients::{
     Courier,
     courier::v1::{
@@ -30,6 +15,20 @@ use clients::{
         cache::{ArtifactFile, CargoBulkRestoreHit, CargoRestoreRequest, CargoSaveRequest},
     },
 };
+use color_eyre::{
+    Result,
+    eyre::{Context as _, OptionExt, bail, eyre},
+};
+use dashmap::DashSet;
+use futures::{StreamExt, TryStreamExt, stream};
+use itertools::Itertools;
+use rayon::prelude::*;
+use scopeguard::defer;
+use serde::Serialize;
+use tap::Pipe as _;
+use tokio::task::JoinSet;
+use tracing::{debug, instrument, trace, warn};
+use uuid::Uuid;
 
 use crate::{
     cargo::{
@@ -481,11 +480,6 @@ impl CargoCache {
         artifact_plan: &ArtifactPlan,
         progress: &TransferBar,
     ) -> Result<RestoreState> {
-        let worker_count = num_cpus::get();
-        let restored = RestoreState::default();
-        let (tx, rx) = flume::bounded::<(ArtifactFile, AbsFilePath)>(0);
-
-        let mut workers = self.spawn_restore_workers(worker_count, rx.clone(), progress, &restored);
         let (artifacts, requests) = build_restore_requests(artifact_plan);
         let restore_result = self
             .courier
@@ -497,14 +491,21 @@ impl CargoCache {
             debug!(artifact = ?miss, "no matching library unit build found");
             progress.dec_length(1);
         }
+        let files_to_restore = self
+            .filter_files_need_restored(restore_result.hits, &artifacts)
+            .await?;
 
-        for hit in restore_result.hits {
-            let Some(artifact) = artifacts.get(&hit.request.hash()) else {
-                bail!("artifact was not requested but was restored: {hit:?}");
-            };
-
-            self.process_restore_hit(hit, &tx).await?;
-            restored.record_artifact(artifact);
+        let restored = RestoreState::default();
+        let worker_count = num_cpus::get();
+        let (tx, rx) = flume::bounded::<(ArtifactFile, AbsFilePath)>(0);
+        let mut workers = self.spawn_restore_workers(worker_count, rx.clone(), progress, &restored);
+        for (artifact, files) in files_to_restore {
+            for (file, path) in files {
+                if let Err(error) = tx.send_async((file, path)).await {
+                    panic!("invariant violated: no restore workers are alive: {error:?}");
+                }
+            }
+            restored.record_artifact(&artifact);
             progress.inc(1);
         }
 
@@ -519,6 +520,61 @@ impl CargoCache {
             files: progress.files(),
             bytes: progress.bytes(),
         }))
+    }
+
+    /// Filter the set to only the files which need to be restored, either
+    /// because they don't exist locally or their hashes don't match.
+    async fn filter_files_need_restored(
+        &self,
+        hits: Vec<CargoBulkRestoreHit>,
+        artifacts: &HashMap<Vec<u8>, &ArtifactKey>,
+    ) -> Result<HashMap<ArtifactKey, Vec<(ArtifactFile, AbsFilePath)>>> {
+        let ws_profile_dir = self.ws.profile_dir.clone();
+        let ws_cargo_home = self.ws.cargo_home.clone();
+        let artifacts = artifacts
+            .iter()
+            .map(|(k, &v)| (k.clone(), v.clone()))
+            .collect::<HashMap<_, _>>();
+
+        tokio::task::spawn_blocking(move || {
+            hits.into_iter()
+                .flat_map(|hit| {
+                    let request_hash = hit.request.hash();
+                    hit.artifacts
+                        .into_iter()
+                        .map(move |file| (request_hash.clone(), file))
+                })
+                .par_bridge()
+                .filter_map(|(request_hash, file)| {
+                    let artifact = artifacts.get(&request_hash)?;
+                    let path = serde_json::from_str::<QualifiedPath>(&file.path)
+                        .ok()?
+                        .reconstruct_raw(&ws_profile_dir, &ws_cargo_home)
+                        .pipe(AbsFilePath::try_from)
+                        .ok()?;
+
+                    // We use `metadata` instead of `exists` so that we validate permissions too.
+                    if std::fs::metadata(path.as_std_path()).is_ok() {
+                        let existing_hash = fs::hash_file_sync(&path).ok()?;
+                        if existing_hash == file.object_key {
+                            trace!(?path, "file already exists with correct hash, skipping");
+                            return None;
+                        }
+                    }
+
+                    Some((artifact, (file, path)))
+                })
+                .fold(HashMap::<_, Vec<_>>::new, |mut acc, (artifact, entry)| {
+                    acc.entry(artifact.clone()).or_default().push(entry);
+                    acc
+                })
+                .reduce(HashMap::new, |mut acc, item| {
+                    acc.extend(item);
+                    acc
+                })
+        })
+        .await
+        .context("file validation task")
     }
 
     /// Rewrite file contents before storing in CAS to normalize paths.
@@ -849,33 +905,6 @@ impl CargoCache {
         metadata.set_file(path).await?;
         restored.record_object(&file.object_key);
         Ok(data.len() as u64)
-    }
-
-    /// Process a single restore hit by queuing files for restoration.
-    async fn process_restore_hit(
-        &self,
-        hit: CargoBulkRestoreHit,
-        tx: &flume::Sender<(ArtifactFile, AbsFilePath)>,
-    ) -> Result<()> {
-        for file in hit.artifacts {
-            let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
-            let path = qualified
-                .reconstruct_raw(&self.ws.profile_dir, &self.ws.cargo_home)
-                .pipe(AbsFilePath::try_from)?;
-
-            if fs::exists(path.as_std_path()).await {
-                let existing_hash = fs::hash_file(&path).await?;
-                if existing_hash == file.object_key {
-                    trace!(?path, "file already exists with correct hash, skipping");
-                    continue;
-                }
-            }
-
-            if let Err(error) = tx.send_async((file, path)).await {
-                panic!("invariant violated: no restore workers are alive: {error:?}");
-            }
-        }
-        Ok(())
     }
 
     /// Reconstruct file contents after retrieving from CAS.
