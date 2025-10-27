@@ -7,6 +7,7 @@ use tracing::instrument;
 //
 // Hurry options are prefixed with `hurry-` to disambiguate from `cargo` args.
 #[derive(Clone, Args, Debug)]
+#[command(disable_help_flag = true)]
 pub struct Options {
     /// These arguments are passed directly to `cargo run` as provided.
     #[arg(

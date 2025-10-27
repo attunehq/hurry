@@ -56,8 +56,11 @@ enum WhenColor {
 #[derive(Clone, Subcommand)]
 enum Command {
     /// Fast `cargo` builds
-    #[clap(subcommand)]
-    Cargo(cmd::cargo::Command),
+    Cargo {
+        /// Arguments to pass to cargo
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 
     // TODO: /// Manage remote authentication
     // Auth,
@@ -117,53 +120,7 @@ async fn main() -> Result<()> {
         Command::Cache(cmd) => match cmd {
             cmd::cache::Command::Reset(opts) => cmd::cache::reset::exec(opts).await,
         },
-        Command::Cargo(cmd) => match cmd {
-            cmd::cargo::Command::Build(opts) => cmd::cargo::build::exec(opts).await,
-            cmd::cargo::Command::Run(opts) => cmd::cargo::run::exec(opts).await,
-            cmd::cargo::Command::Check(opts) => cmd::cargo::passthrough::exec("check", opts).await,
-            cmd::cargo::Command::Clean(opts) => cmd::cargo::passthrough::exec("clean", opts).await,
-            cmd::cargo::Command::Doc(opts) => cmd::cargo::passthrough::exec("doc", opts).await,
-            cmd::cargo::Command::Test(opts) => cmd::cargo::passthrough::exec("test", opts).await,
-            cmd::cargo::Command::Bench(opts) => cmd::cargo::passthrough::exec("bench", opts).await,
-            cmd::cargo::Command::Add(opts) => cmd::cargo::passthrough::exec("add", opts).await,
-            cmd::cargo::Command::Remove(opts) => cmd::cargo::passthrough::exec("remove", opts).await,
-            cmd::cargo::Command::New(opts) => cmd::cargo::passthrough::exec("new", opts).await,
-            cmd::cargo::Command::Init(opts) => cmd::cargo::passthrough::exec("init", opts).await,
-            cmd::cargo::Command::Update(opts) => cmd::cargo::passthrough::exec("update", opts).await,
-            cmd::cargo::Command::Search(opts) => cmd::cargo::passthrough::exec("search", opts).await,
-            cmd::cargo::Command::Publish(opts) => cmd::cargo::passthrough::exec("publish", opts).await,
-            cmd::cargo::Command::Install(opts) => cmd::cargo::passthrough::exec("install", opts).await,
-            cmd::cargo::Command::Uninstall(opts) => cmd::cargo::passthrough::exec("uninstall", opts).await,
-            cmd::cargo::Command::Fetch(opts) => cmd::cargo::passthrough::exec("fetch", opts).await,
-            cmd::cargo::Command::Fix(opts) => cmd::cargo::passthrough::exec("fix", opts).await,
-            cmd::cargo::Command::Rustc(opts) => cmd::cargo::passthrough::exec("rustc", opts).await,
-            cmd::cargo::Command::Rustdoc(opts) => cmd::cargo::passthrough::exec("rustdoc", opts).await,
-            cmd::cargo::Command::Tree(opts) => cmd::cargo::passthrough::exec("tree", opts).await,
-            cmd::cargo::Command::Vendor(opts) => cmd::cargo::passthrough::exec("vendor", opts).await,
-            cmd::cargo::Command::Package(opts) => cmd::cargo::passthrough::exec("package", opts).await,
-            cmd::cargo::Command::Pkgid(opts) => cmd::cargo::passthrough::exec("pkgid", opts).await,
-            cmd::cargo::Command::Metadata(opts) => cmd::cargo::passthrough::exec("metadata", opts).await,
-            cmd::cargo::Command::LocateProject(opts) => cmd::cargo::passthrough::exec("locate-project", opts).await,
-            cmd::cargo::Command::Config(opts) => cmd::cargo::passthrough::exec("config", opts).await,
-            cmd::cargo::Command::Owner(opts) => cmd::cargo::passthrough::exec("owner", opts).await,
-            cmd::cargo::Command::Login(opts) => cmd::cargo::passthrough::exec("login", opts).await,
-            cmd::cargo::Command::Logout(opts) => cmd::cargo::passthrough::exec("logout", opts).await,
-            cmd::cargo::Command::Yank(opts) => cmd::cargo::passthrough::exec("yank", opts).await,
-            cmd::cargo::Command::Version(opts) => cmd::cargo::passthrough::exec("version", opts).await,
-            cmd::cargo::Command::Report(opts) => cmd::cargo::passthrough::exec("report", opts).await,
-            cmd::cargo::Command::GenerateLockfile(opts) => cmd::cargo::passthrough::exec("generate-lockfile", opts).await,
-            cmd::cargo::Command::Info(opts) => cmd::cargo::passthrough::exec("info", opts).await,
-            cmd::cargo::Command::Help(opts) => cmd::cargo::passthrough::exec("help", opts).await,
-            cmd::cargo::Command::External(args) => {
-                // External subcommands are only matched when there's at least one argument
-                // (the subcommand itself). If args is somehow empty, clap would have already
-                // shown help before we reach here.
-                let subcommand = &args[0];
-                let rest = args[1..].to_vec();
-                let opts = cmd::cargo::passthrough::Options::new(rest);
-                cmd::cargo::passthrough::exec(subcommand, opts).await
-            }
-        },
+        Command::Cargo { args } => cmd::cargo::exec(args).await,
         Command::Debug(cmd) => match cmd {
             cmd::debug::Command::Metadata(opts) => cmd::debug::metadata::exec(opts).await,
             cmd::debug::Command::Copy(opts) => cmd::debug::copy::exec(opts).await,

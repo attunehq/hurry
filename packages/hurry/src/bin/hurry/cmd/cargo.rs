@@ -1,8 +1,52 @@
 use clap::Subcommand;
+use color_eyre::Result;
 
 pub mod build;
 pub mod passthrough;
 pub mod run;
+
+/// Execute a cargo command by dispatching based on the first argument.
+pub async fn exec(args: Vec<String>) -> Result<()> {
+    use hurry::cargo;
+
+    // If no args, passthrough to cargo (shows help)
+    if args.is_empty() {
+        return cargo::invoke("", Vec::<String>::new()).await;
+    }
+
+    let first = &args[0];
+
+    // Check if it's a flag (starts with -)
+    if first.starts_with('-') {
+        // Flags like --version, --help, etc. - passthrough everything
+        return cargo::invoke(&args[0], &args[1..]).await;
+    }
+
+    // It's a subcommand - check if we have special handling
+    let subcommand = first;
+    let rest = args[1..].to_vec();
+
+    match subcommand.as_str() {
+        "build" => {
+            // Use hurry's optimized build with caching
+            // Parse args using a temporary Command wrapper
+            use clap::{Command as ClapCommand, Parser};
+
+            #[derive(Parser)]
+            struct BuildCommand {
+                #[clap(flatten)]
+                opts: build::Options,
+            }
+
+            let cmd = BuildCommand::try_parse_from(
+                std::iter::once("build".to_string()).chain(rest.into_iter()),
+            )?;
+            build::exec(cmd.opts).await
+        }
+        // All other commands: passthrough to cargo
+        _ => cargo::invoke(subcommand, rest).await,
+    }
+}
 
 /// Supported cargo subcommands.
 #[derive(Clone, Subcommand)]
