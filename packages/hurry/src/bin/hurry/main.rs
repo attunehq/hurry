@@ -56,6 +56,7 @@ enum WhenColor {
 #[derive(Clone, Subcommand)]
 enum Command {
     /// Fast `cargo` builds
+    #[command(disable_help_flag = true, disable_version_flag = true)]
     Cargo {
         /// Arguments to pass to cargo
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
