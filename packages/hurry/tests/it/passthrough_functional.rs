@@ -1,8 +1,9 @@
 //! Functional tests for cargo command passthrough.
 //!
-//! These tests verify that hurry correctly executes cargo commands with the same
-//! side effects and output as running cargo directly. Tests use temporary
-//! directories and validate both command output and resulting file system state.
+//! These tests verify that hurry correctly executes cargo commands with the
+//! same side effects and output as running cargo directly. Tests use temporary
+//! directories and validate both command output and resulting file system
+//! state.
 //!
 //! ## Test Coverage
 //!
@@ -21,7 +22,8 @@
 //! - `new`: `--vcs`, `--edition`, `--lib`, `--bin`
 //! - `add`: `--features`, `--no-default-features`, `--optional`, `--rename`
 //! - `remove`: `--dev`, `--build`
-//! - `check`: `--all-targets`, `--release`, `--lib`, `--all-features`, `--no-default-features`
+//! - `check`: `--all-targets`, `--release`, `--lib`, `--all-features`,
+//!   `--no-default-features`
 //! - `tree`: `--depth`, `--prefix`, `--edges`, `--charset`
 //! - `metadata`: `--format-version`, `--no-deps`
 //! - `run`: `--release`, `--quiet`
@@ -29,7 +31,8 @@
 //!
 //! ### Advanced Scenario Tests (15 tests)
 //! Tests for complex real-world scenarios:
-//! - **Manifest path**: Running commands with `--manifest-path` from different directories
+//! - **Manifest path**: Running commands with `--manifest-path` from different
+//!   directories
 //! - **Lockfile modes**: `--locked`, `--frozen` flags
 //! - **Feature combinations**: Multiple features specified together
 //! - **Version constraints**: Version specifications like `@1.0`
@@ -212,7 +215,11 @@ fn new_creates_same_project_structure() {
     let hurry_dir = TempDir::new().expect("failed to create temp dir");
     let cargo_dir = TempDir::new().expect("failed to create temp dir");
 
-    let hurry_result = run_in_dir(hurry_dir.path(), "hurry", &["cargo", "new", "mylib", "--lib"]);
+    let hurry_result = run_in_dir(
+        hurry_dir.path(),
+        "hurry",
+        &["cargo", "new", "mylib", "--lib"],
+    );
     let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["new", "mylib", "--lib"]);
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
@@ -411,8 +418,14 @@ fn check_detects_same_errors() {
     let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check"]);
 
     // Both should fail (exit code non-zero)
-    assert_ne!(hurry_result.exit_code, 0, "hurry should fail for invalid code");
-    assert_ne!(cargo_result.exit_code, 0, "cargo should fail for invalid code");
+    assert_ne!(
+        hurry_result.exit_code, 0,
+        "hurry should fail for invalid code"
+    );
+    assert_ne!(
+        cargo_result.exit_code, 0,
+        "cargo should fail for invalid code"
+    );
 
     // Both should report errors in stderr
     assert!(
@@ -482,14 +495,8 @@ fn locate_project_finds_cargo_toml() {
     let cargo_json: serde_json::Value = serde_json::from_str(&cargo_result.stdout).unwrap();
 
     // Both should point to Cargo.toml (exact path will differ)
-    assert!(hurry_json["root"]
-        .as_str()
-        .unwrap()
-        .ends_with("Cargo.toml"));
-    assert!(cargo_json["root"]
-        .as_str()
-        .unwrap()
-        .ends_with("Cargo.toml"));
+    assert!(hurry_json["root"].as_str().unwrap().ends_with("Cargo.toml"));
+    assert!(cargo_json["root"].as_str().unwrap().ends_with("Cargo.toml"));
 }
 
 // Tests for `cargo run`
@@ -652,10 +659,8 @@ fn new_with_edition_2021() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    let hurry_toml =
-        fs::read_to_string(hurry_dir.path().join("myproject/Cargo.toml")).unwrap();
-    let cargo_toml =
-        fs::read_to_string(cargo_dir.path().join("myproject/Cargo.toml")).unwrap();
+    let hurry_toml = fs::read_to_string(hurry_dir.path().join("myproject/Cargo.toml")).unwrap();
+    let cargo_toml = fs::read_to_string(cargo_dir.path().join("myproject/Cargo.toml")).unwrap();
 
     assert!(hurry_toml.contains("edition = \"2021\""));
     pretty_assert_eq!(hurry_toml, cargo_toml);
@@ -705,11 +710,7 @@ fn add_with_optional_flag() {
         "hurry",
         &["cargo", "add", "serde", "--optional"],
     );
-    let cargo_result = run_in_dir(
-        cargo_dir.path(),
-        "cargo",
-        &["add", "serde", "--optional"],
-    );
+    let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["add", "serde", "--optional"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -769,11 +770,7 @@ fn remove_with_dev_flag() {
         "hurry",
         &["cargo", "remove", "--dev", "serde"],
     );
-    let cargo_result = run_in_dir(
-        cargo_dir.path(),
-        "cargo",
-        &["remove", "--dev", "serde"],
-    );
+    let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["remove", "--dev", "serde"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -802,11 +799,7 @@ fn remove_with_build_flag() {
         "hurry",
         &["cargo", "remove", "--build", "cc"],
     );
-    let cargo_result = run_in_dir(
-        cargo_dir.path(),
-        "cargo",
-        &["remove", "--build", "cc"],
-    );
+    let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["remove", "--build", "cc"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -949,11 +942,7 @@ fn tree_with_edges_no_dev() {
         "hurry",
         &["cargo", "tree", "--edges", "no-dev"],
     );
-    let cargo_result = run_in_dir(
-        test_dir.path(),
-        "cargo",
-        &["tree", "--edges", "no-dev"],
-    );
+    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["tree", "--edges", "no-dev"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -970,11 +959,7 @@ fn tree_with_charset_ascii() {
         "hurry",
         &["cargo", "tree", "--charset", "ascii"],
     );
-    let cargo_result = run_in_dir(
-        test_dir.path(),
-        "cargo",
-        &["tree", "--charset", "ascii"],
-    );
+    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["tree", "--charset", "ascii"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -1080,11 +1065,7 @@ fn clean_with_release_only() {
     assert!(test_dir.path().join("target/release").exists());
 
     // Clean only release
-    let result = run_in_dir(
-        test_dir.path(),
-        "hurry",
-        &["cargo", "clean", "--release"],
-    );
+    let result = run_in_dir(test_dir.path(), "hurry", &["cargo", "clean", "--release"]);
     pretty_assert_eq!(result.exit_code, 0);
 
     // Debug should still exist, release should be gone
@@ -1205,11 +1186,7 @@ fn add_with_version_constraint() {
     create_minimal_project(hurry_dir.path(), "test-project");
     create_minimal_project(cargo_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(
-        hurry_dir.path(),
-        "hurry",
-        &["cargo", "add", "serde@1.0"],
-    );
+    let hurry_result = run_in_dir(hurry_dir.path(), "hurry", &["cargo", "add", "serde@1.0"]);
     let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["add", "serde@1.0"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
@@ -1297,11 +1274,7 @@ fn check_with_verbose() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(
-        test_dir.path(),
-        "hurry",
-        &["cargo", "check", "--verbose"],
-    );
+    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "check", "--verbose"]);
     let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check", "--verbose"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
@@ -1347,7 +1320,11 @@ fn add_nonexistent_package() {
     let hurry_result = run_in_dir(
         test_dir.path(),
         "hurry",
-        &["cargo", "add", "this-package-definitely-does-not-exist-xyz123"],
+        &[
+            "cargo",
+            "add",
+            "this-package-definitely-does-not-exist-xyz123",
+        ],
     );
     let cargo_result = run_in_dir(
         test_dir.path(),
@@ -1375,11 +1352,7 @@ fn update_specific_package() {
         "hurry",
         &["cargo", "update", "--package", "serde"],
     );
-    let cargo_result = run_in_dir(
-        test_dir.path(),
-        "cargo",
-        &["update", "--package", "serde"],
-    );
+    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["update", "--package", "serde"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);

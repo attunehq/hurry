@@ -62,7 +62,9 @@ impl Options {
 
     /// Check if help is requested in the arguments.
     pub fn is_help_request(&self) -> bool {
-        self.argv.iter().any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+        self.argv
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
     }
 }
 
