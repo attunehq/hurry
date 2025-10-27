@@ -1,4 +1,5 @@
 .env
 .scratch
-target
 .vscode
+.hurrydata
+target
