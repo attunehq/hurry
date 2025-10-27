@@ -58,7 +58,9 @@ enum Command {
     /// Fast `cargo` builds
     #[command(disable_help_flag = true, disable_version_flag = true)]
     Cargo {
-        /// Arguments to pass to cargo
+        // We do it this way instead of constructing subcommands "the clap way" because
+        // we want to passthrough things like `help` and `version` to cargo instead of
+        // having clap intercept them.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
