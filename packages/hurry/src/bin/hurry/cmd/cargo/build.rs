@@ -19,6 +19,13 @@ use url::Url;
 /// Options for `cargo build`.
 //
 // Hurry options are prefixed with `hurry-` to disambiguate from `cargo` args.
+//
+// TODO: When we implemented passthrough support for subcommands, we hid the `hurry` help
+// documentation in favor of showing users Cargo's documentation; this was done in order to make it
+// easier to use `hurry cargo` as an alias for `cargo` in onboarding teams. However, this might be
+// confusing as teams onboard or as our set of options grows. We probably want to implement a custom
+// help function that extracts the current help output from `cargo` and then blends it with `hurry`
+// specific help so that users get both sets of options.
 #[derive(Clone, Args, Debug)]
 #[command(disable_help_flag = true)]
 pub struct Options {
