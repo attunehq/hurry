@@ -21,7 +21,6 @@ use futures::StreamExt;
 use indicatif::ProgressBar;
 use scopeguard::defer;
 use serde::{Deserialize, Serialize};
-use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tap::Pipe as _;
 use tokio::{io::AsyncBufReadExt as _, task::JoinSet};
 use tracing::{debug, error, instrument, trace, warn};
@@ -41,6 +40,7 @@ use crate::{
         Profile, QualifiedPath, RootOutput, RustcMetadata, Workspace,
     },
     cas::CourierCas,
+    daemon::{self, DaemonReadyMessage, daemon_is_running, daemon_paths},
     fs, mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith},
     progress::{format_size, format_transfer_rate},
@@ -421,28 +421,10 @@ impl CargoCache {
 
     #[instrument(name = "CargoCache::save")]
     pub async fn save(&self, artifact_plan: ArtifactPlan, restored: RestoreState) -> Result<()> {
-        let hurry_cache_dir = fs::user_global_cache_path().await?;
-        let pid_file_path = hurry_cache_dir.join(mk_rel_file!("hurryd.pid"));
+        let daemon_paths = daemon_paths().await?;
 
         // Start daemon if it's not already running.
-        let is_running = if pid_file_path.exists().await {
-            let pid = fs::must_read_buffered_utf8(&pid_file_path).await?;
-            match pid.trim().parse::<u32>() {
-                Ok(pid) => {
-                    let system = System::new_with_specifics(
-                        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
-                    );
-                    let process = system.process(Pid::from_u32(pid));
-                    if process.is_some() { true } else { false }
-                }
-                Err(err) => {
-                    warn!(?err, "could not parse pid-file");
-                    false
-                }
-            }
-        } else {
-            false
-        };
+        let is_running = daemon_is_running(&daemon_paths.pid_file_path).await?;
         if !is_running {
             // Spawn a child and wait for the ready message on STDOUT.
             let mut cmd = tokio::process::Command::new("hurry");
@@ -492,15 +474,14 @@ impl CargoCache {
         }
 
         // Connect to daemon HTTP server.
-        let hurryd_sock_path = hurry_cache_dir.join(mk_rel_file!("hurryd.sock"));
         let client = reqwest::Client::builder()
-            .unix_socket(hurryd_sock_path.as_std_path())
+            .unix_socket(daemon_paths.socket_path.as_std_path())
             .build()?;
 
         // Send upload request.
         let response = client
             .post("http://localhost/api/v0/cargo/upload")
-            .json(&CargoUploadRequest {
+            .json(&daemon::CargoUploadRequest {
                 ws: self.ws.clone(),
                 artifact_plan,
                 skip_artifacts: restored.artifacts.into_iter().collect(),
@@ -768,21 +749,6 @@ impl CargoCache {
             }
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DaemonReadyMessage {
-    pid: u32,
-    socket_path: AbsFilePath,
-    log_file_path: AbsFilePath,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CargoUploadRequest {
-    ws: Workspace,
-    artifact_plan: ArtifactPlan,
-    skip_artifacts: Vec<ArtifactKey>,
-    skip_objects: Vec<Key>,
 }
 
 /// An ArtifactPlan represents the collection of information known about the

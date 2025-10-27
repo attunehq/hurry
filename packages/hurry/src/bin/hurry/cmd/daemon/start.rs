@@ -17,16 +17,15 @@ use derive_more::Debug;
 use futures::{TryStreamExt as _, stream};
 use hurry::{
     cargo::{
-        ArtifactKey, ArtifactPlan, BuildScriptOutput, BuiltArtifact, DepInfo, LibraryUnitHash,
-        QualifiedPath, RootOutput, Workspace,
+        ArtifactKey, BuildScriptOutput, BuiltArtifact, DepInfo, LibraryUnitHash, QualifiedPath,
+        RootOutput, Workspace,
     },
     cas::CourierCas,
-    fs, mk_rel_file,
-    path::{AbsFilePath, JoinWith, TryJoinWith},
+    daemon::{self, DaemonReadyMessage, daemon_is_running},
+    fs,
+    path::{AbsFilePath, TryJoinWith},
 };
 use itertools::Itertools as _;
-use serde::{Deserialize, Serialize};
-use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tap::Pipe as _;
 use tokio::net::UnixListener;
 use tower_http::trace::TraceLayer;
@@ -58,9 +57,8 @@ pub async fn exec(
     let cache_dir = hurry::fs::user_global_cache_path().await?;
     hurry::fs::create_dir_all(&cache_dir).await?;
 
+    let daemon_paths = daemon::daemon_paths().await?;
     let pid = std::process::id();
-    let socket_path = cache_dir.join(mk_rel_file!("hurryd.sock"));
-    let pid_file_path = cache_dir.join(mk_rel_file!("hurryd.pid"));
     let log_file_path = cache_dir.try_join_file(format!("hurryd.{}.log", pid))?;
 
     // Redirect logging into file (for daemon mode). We need to redirect the
@@ -70,7 +68,7 @@ pub async fn exec(
     // which means the process crashes with a SIGPIPE if it attempts to write to
     // them.
     let (file_logger, flame_guard) = dispatcher::with_default(&cli_logger.into(), || {
-        debug!(?socket_path, ?pid_file_path, ?log_file_path, "file paths");
+        debug!(?daemon_paths, ?log_file_path, "file paths");
         info!(?log_file_path, "logging to file");
 
         log::make_logger(
@@ -83,26 +81,12 @@ pub async fn exec(
 
     // If a pid-file exists, read it and check if the process is running. Exit
     // if another instance is running.
-    if pid_file_path.exists().await {
-        let pid = hurry::fs::must_read_buffered_utf8(&pid_file_path).await?;
-        match pid.trim().parse::<u32>() {
-            Ok(pid) => {
-                let system = System::new_with_specifics(
-                    RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
-                );
-                let process = system.process(Pid::from_u32(pid));
-                if process.is_some() {
-                    bail!("hurryd is already running at pid {pid}");
-                }
-            }
-            Err(err) => {
-                warn!(?err, "could not parse pid-file");
-            }
-        };
+    if daemon_is_running(&daemon_paths.pid_file_path).await? {
+        bail!("hurryd is already running");
     }
 
     // Write and lock a pid-file.
-    let mut pid_file = fslock::LockFile::open(pid_file_path.as_os_str())?;
+    let mut pid_file = fslock::LockFile::open(daemon_paths.pid_file_path.as_os_str())?;
     let locked = pid_file.try_lock_with_pid()?;
     if !locked {
         bail!("hurryd is already running");
@@ -118,7 +102,7 @@ pub async fn exec(
     }
 
     // Open the socket and start the server.
-    match std::fs::remove_file(&socket_path.as_std_path()) {
+    match std::fs::remove_file(&daemon_paths.socket_path.as_std_path()) {
         Ok(_) => {}
         Err(err) => {
             if err.kind() != std::io::ErrorKind::NotFound {
@@ -127,8 +111,8 @@ pub async fn exec(
             }
         }
     }
-    let listener = UnixListener::bind(socket_path.as_std_path())?;
-    info!(?socket_path, "server listening");
+    let listener = UnixListener::bind(daemon_paths.socket_path.as_std_path())?;
+    info!(addr = ?daemon_paths.socket_path, "server listening");
 
     let courier = Courier::new(options.courier_url)?;
     let cas = CourierCas::new(courier.clone());
@@ -149,7 +133,7 @@ pub async fn exec(
         "{}",
         serde_json::to_string(&DaemonReadyMessage {
             pid,
-            socket_path,
+            socket_path: daemon_paths.socket_path,
             log_file_path,
         })?
     );
@@ -164,36 +148,16 @@ pub async fn exec(
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DaemonReadyMessage {
-    pid: u32,
-    socket_path: AbsFilePath,
-    log_file_path: AbsFilePath,
-}
-
 #[derive(Debug, Clone)]
 struct ServerState {
     cas: CourierCas,
     courier: Courier,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CargoUploadRequest {
-    ws: Workspace,
-    artifact_plan: ArtifactPlan,
-    skip_artifacts: Vec<ArtifactKey>,
-    skip_objects: Vec<Key>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CargoUploadResponse {
-    ok: bool,
-}
-
 async fn upload(
     State(state): State<ServerState>,
-    Json(req): Json<CargoUploadRequest>,
-) -> Json<CargoUploadResponse> {
+    Json(req): Json<daemon::CargoUploadRequest>,
+) -> Json<daemon::CargoUploadResponse> {
     let state = state.clone();
     tokio::spawn(async move {
         let restored_artifacts: HashSet<ArtifactKey, RandomState> =
@@ -388,7 +352,7 @@ async fn upload(
         }
         Ok::<(), Error>(())
     });
-    Json(CargoUploadResponse { ok: true })
+    Json(daemon::CargoUploadResponse { ok: true })
 }
 
 #[instrument(skip(content))]
