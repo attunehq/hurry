@@ -20,6 +20,7 @@ use url::Url;
 //
 // Hurry options are prefixed with `hurry-` to disambiguate from `cargo` args.
 #[derive(Clone, Args, Debug)]
+#[command(disable_help_flag = true)]
 pub struct Options {
     /// Base URL for the Courier instance.
     #[arg(
@@ -58,10 +59,20 @@ impl Options {
     pub fn parsed_args(&self) -> CargoBuildArguments {
         CargoBuildArguments::from_iter(&self.argv)
     }
+
+    /// Check if help is requested in the arguments.
+    pub fn is_help_request(&self) -> bool {
+        self.argv.iter().any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    }
 }
 
 #[instrument]
 pub async fn exec(options: Options) -> Result<()> {
+    // If help is requested, passthrough directly to cargo to show cargo's help
+    if options.is_help_request() {
+        return cargo::invoke("build", &options.argv).await;
+    }
+
     info!("Starting");
 
     // Parse and validate cargo build arguments.
