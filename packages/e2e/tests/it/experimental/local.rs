@@ -17,7 +17,7 @@ use itertools::Itertools;
 // figure out the right one and use it.
 #[tokio::test]
 async fn shotgun_restore() -> Result<()> {
-    let _ = color_eyre::install()?;
+    color_eyre::install()?;
 
     // This will contain a unified view of `target/` across all builds.
     let shotgun_target = temporary_directory()?;

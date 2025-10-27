@@ -19,7 +19,7 @@ use simple_test_case::test_case;
 #[cfg_attr(feature = "ci", test_case("attunehq", "hurry", "main"; "attunehq/hurry:main"))]
 #[test_log::test(tokio::test)]
 async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
-    let _ = color_eyre::install()?;
+    color_eyre::install()?;
 
     let pwd = PathBuf::from("/");
     let container = Container::debian_rust()
@@ -430,7 +430,7 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
 #[cfg_attr(feature = "ci", test_case("attunehq", "hurry", "main"; "attunehq/hurry:main"))]
 #[test_log::test(tokio::test)]
 async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()> {
-    let _ = color_eyre::install()?;
+    color_eyre::install()?;
 
     // This temporary directory holds the hurry cache, which in this test will
     // be shared across containers.
@@ -555,7 +555,7 @@ async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()>
 #[cfg_attr(feature = "ci", test_case("attunehq", "hurry", "main"; "attunehq/hurry:main"))]
 #[test_log::test(tokio::test)]
 async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) -> Result<()> {
-    let _ = color_eyre::install()?;
+    color_eyre::install()?;
 
     // This temporary directory holds the hurry cache, which in this test will
     // be shared across containers that build concurrently.
