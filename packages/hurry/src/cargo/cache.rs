@@ -120,7 +120,9 @@ impl CargoCache {
         defer! {
             if renamed {
                 let target = self.ws.target.as_std_path();
+                #[allow(clippy::disallowed_methods, reason = "cannot use async in defer")]
                 let _ = std::fs::remove_dir_all(target);
+                #[allow(clippy::disallowed_methods, reason = "cannot use async in defer")]
                 let _ = std::fs::rename(&temp, target);
             }
         }
