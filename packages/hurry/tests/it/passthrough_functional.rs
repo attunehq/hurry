@@ -330,10 +330,10 @@ fn metadata_produces_identical_json() {
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
-    let mut hurry_json = serde_json::from_str(&hurry_result.stdout)
-        .expect("hurry output is not valid JSON");
-    let mut cargo_json = serde_json::from_str(&cargo_result.stdout)
-        .expect("cargo output is not valid JSON");
+    let mut hurry_json =
+        serde_json::from_str(&hurry_result.stdout).expect("hurry output is not valid JSON");
+    let mut cargo_json =
+        serde_json::from_str(&cargo_result.stdout).expect("cargo output is not valid JSON");
 
     normalize_metadata_json(&mut hurry_json);
     normalize_metadata_json(&mut cargo_json);
