@@ -442,7 +442,14 @@ impl CargoCache {
             let mut child = cmd.spawn()?;
             let stdout = child.stdout.take().ok_or_eyre("daemon has no stdout")?;
             let mut stdout = tokio::io::BufReader::new(stdout).lines();
-            match tokio::time::timeout(Duration::from_secs(5), stdout.next_line()).await {
+            // This value was chosen arbitrarily. Adjust as needed.
+            const DAEMON_STARTUP_TIMEOUT_SECS: u64 = 5;
+            match tokio::time::timeout(
+                Duration::from_secs(DAEMON_STARTUP_TIMEOUT_SECS),
+                stdout.next_line(),
+            )
+            .await
+            {
                 Ok(Ok(Some(line))) => {
                     debug!(?line, "received daemon output line");
                     match serde_json::from_str::<DaemonReadyMessage>(&line) {
