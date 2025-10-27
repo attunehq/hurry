@@ -144,7 +144,21 @@ fn normalize_output(output: &str) -> String {
         .join("\n")
 }
 
-// Tests for `cargo init`
+/// Normalize JSON metadata by removing path-specific fields that will differ.
+fn normalize_metadata_json(json: &mut serde_json::Value) {
+    if let Some(packages) = json["packages"].as_array_mut() {
+        for package in packages {
+            if let Some(obj) = package.as_object_mut() {
+                obj.remove("manifest_path");
+                obj.remove("id");
+            }
+        }
+    }
+    if let Some(obj) = json.as_object_mut() {
+        obj.remove("workspace_root");
+        obj.remove("target_directory");
+    }
+}
 
 #[test]
 fn init_creates_same_project_structure() {
@@ -162,19 +176,15 @@ fn init_creates_same_project_structure() {
         &["init", "--lib", "--name", "test-lib"],
     );
 
-    // Both should succeed
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    // Both should create Cargo.toml
     assert!(hurry_dir.path().join("Cargo.toml").exists());
     assert!(cargo_dir.path().join("Cargo.toml").exists());
 
-    // Both should create src/lib.rs
     assert!(hurry_dir.path().join("src/lib.rs").exists());
     assert!(cargo_dir.path().join("src/lib.rs").exists());
 
-    // The lib.rs files should be identical
     let hurry_lib = fs::read_to_string(hurry_dir.path().join("src/lib.rs")).unwrap();
     let cargo_lib = fs::read_to_string(cargo_dir.path().join("src/lib.rs")).unwrap();
     pretty_assert_eq!(hurry_lib, cargo_lib);
@@ -199,7 +209,6 @@ fn init_bin_creates_same_project_structure() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    // Both should create src/main.rs
     assert!(hurry_dir.path().join("src/main.rs").exists());
     assert!(cargo_dir.path().join("src/main.rs").exists());
 
@@ -207,8 +216,6 @@ fn init_bin_creates_same_project_structure() {
     let cargo_main = fs::read_to_string(cargo_dir.path().join("src/main.rs")).unwrap();
     pretty_assert_eq!(hurry_main, cargo_main);
 }
-
-// Tests for `cargo new`
 
 #[test]
 fn new_creates_same_project_structure() {
@@ -224,7 +231,6 @@ fn new_creates_same_project_structure() {
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
-    // Compare the created projects
     let hurry_project = hurry_dir.path().join("mylib");
     let cargo_project = cargo_dir.path().join("mylib");
 
@@ -236,32 +242,22 @@ fn new_creates_same_project_structure() {
     pretty_assert_eq!(hurry_lib, cargo_lib);
 }
 
-// Tests for `cargo add`
-
 #[test]
 fn add_modifies_cargo_toml_identically() {
     let hurry_dir = TempDir::new().expect("failed to create temp dir");
     let cargo_dir = TempDir::new().expect("failed to create temp dir");
 
-    // Set up identical projects
     create_minimal_project(hurry_dir.path(), "test-project");
     create_minimal_project(cargo_dir.path(), "test-project");
 
-    // Add the same dependency to both
     let hurry_result = run_in_dir(hurry_dir.path(), "hurry", &["cargo", "add", "serde"]);
     let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["add", "serde"]);
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
-    // Read and compare Cargo.toml files
     let hurry_toml = fs::read_to_string(hurry_dir.path().join("Cargo.toml")).unwrap();
     let cargo_toml = fs::read_to_string(cargo_dir.path().join("Cargo.toml")).unwrap();
 
-    // Both should have serde in dependencies
-    assert!(hurry_toml.contains("serde"));
-    assert!(cargo_toml.contains("serde"));
-
-    // The dependency declarations should be identical
     pretty_assert_eq!(hurry_toml, cargo_toml);
 }
 
@@ -289,13 +285,8 @@ fn add_with_features_modifies_cargo_toml_identically() {
     let hurry_toml = fs::read_to_string(hurry_dir.path().join("Cargo.toml")).unwrap();
     let cargo_toml = fs::read_to_string(cargo_dir.path().join("Cargo.toml")).unwrap();
 
-    // Both should have serde with derive feature
-    assert!(hurry_toml.contains("serde"));
-    assert!(hurry_toml.contains("derive") || hurry_toml.contains("features"));
     pretty_assert_eq!(hurry_toml, cargo_toml);
 }
-
-// Tests for `cargo remove`
 
 #[test]
 fn remove_modifies_cargo_toml_identically() {
@@ -309,7 +300,6 @@ fn remove_modifies_cargo_toml_identically() {
     run_in_dir(hurry_dir.path(), "cargo", &["add", "serde"]);
     run_in_dir(cargo_dir.path(), "cargo", &["add", "serde"]);
 
-    // Now remove it via different methods
     let hurry_result = run_in_dir(hurry_dir.path(), "hurry", &["cargo", "remove", "serde"]);
     let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["remove", "serde"]);
 
@@ -318,14 +308,8 @@ fn remove_modifies_cargo_toml_identically() {
     let hurry_toml = fs::read_to_string(hurry_dir.path().join("Cargo.toml")).unwrap();
     let cargo_toml = fs::read_to_string(cargo_dir.path().join("Cargo.toml")).unwrap();
 
-    // Both should not have serde
-    assert!(!hurry_toml.contains("serde"));
-    assert!(!cargo_toml.contains("serde"));
-
     pretty_assert_eq!(hurry_toml, cargo_toml);
 }
-
-// Tests for `cargo metadata`
 
 #[test]
 fn metadata_produces_identical_json() {
@@ -345,24 +329,16 @@ fn metadata_produces_identical_json() {
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
-    // Parse both as JSON and compare structure
-    let hurry_json: serde_json::Value =
+    let mut hurry_json =
         serde_json::from_str(&hurry_result.stdout).expect("hurry output is not valid JSON");
-    let cargo_json: serde_json::Value =
+    let mut cargo_json =
         serde_json::from_str(&cargo_result.stdout).expect("cargo output is not valid JSON");
 
-    // Compare the package names (paths will differ)
-    pretty_assert_eq!(
-        hurry_json["packages"][0]["name"],
-        cargo_json["packages"][0]["name"]
-    );
-    pretty_assert_eq!(
-        hurry_json["packages"][0]["version"],
-        cargo_json["packages"][0]["version"]
-    );
-}
+    normalize_metadata_json(&mut hurry_json);
+    normalize_metadata_json(&mut cargo_json);
 
-// Tests for `cargo tree`
+    pretty_assert_eq!(hurry_json, cargo_json);
+}
 
 #[test]
 fn tree_produces_same_dependency_structure() {
@@ -377,16 +353,11 @@ fn tree_produces_same_dependency_structure() {
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
-    // Normalize outputs to remove path-specific information
     let hurry_normalized = normalize_output(&hurry_result.stdout);
     let cargo_normalized = normalize_output(&cargo_result.stdout);
 
-    // The dependency trees should be structurally the same
-    assert!(hurry_normalized.contains("serde"));
-    assert!(cargo_normalized.contains("serde"));
+    pretty_assert_eq!(hurry_normalized, cargo_normalized);
 }
-
-// Tests for `cargo check`
 
 #[test]
 fn check_produces_same_validation_output() {
@@ -398,7 +369,6 @@ fn check_produces_same_validation_output() {
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
-    // Both should succeed for a valid empty project
     pretty_assert_eq!(hurry_result.exit_code, 0);
 }
 
@@ -407,7 +377,6 @@ fn check_detects_same_errors() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    // Write invalid Rust code
     fs::write(
         test_dir.path().join("src/lib.rs"),
         "fn broken() { this is not valid rust }",
@@ -438,8 +407,6 @@ fn check_detects_same_errors() {
     );
 }
 
-// Tests for `cargo clean`
-
 #[test]
 fn clean_removes_target_directory() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
@@ -457,8 +424,6 @@ fn clean_removes_target_directory() {
     assert!(!test_dir.path().join("target").exists());
 }
 
-// Tests for `cargo pkgid`
-
 #[test]
 fn pkgid_produces_same_package_id() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
@@ -473,12 +438,8 @@ fn pkgid_produces_same_package_id() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    // Both should contain the package name
-    assert!(hurry_result.stdout.contains("test-project"));
-    assert!(cargo_result.stdout.contains("test-project"));
+    pretty_assert_eq!(hurry_result.stdout, cargo_result.stdout);
 }
-
-// Tests for `cargo locate-project`
 
 #[test]
 fn locate_project_finds_cargo_toml() {
@@ -490,16 +451,11 @@ fn locate_project_finds_cargo_toml() {
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
-    // Both should output JSON with the Cargo.toml path
     let hurry_json: serde_json::Value = serde_json::from_str(&hurry_result.stdout).unwrap();
     let cargo_json: serde_json::Value = serde_json::from_str(&cargo_result.stdout).unwrap();
 
-    // Both should point to Cargo.toml (exact path will differ)
-    assert!(hurry_json["root"].as_str().unwrap().ends_with("Cargo.toml"));
-    assert!(cargo_json["root"].as_str().unwrap().ends_with("Cargo.toml"));
+    pretty_assert_eq!(hurry_json, cargo_json);
 }
-
-// Tests for `cargo run`
 
 #[test]
 fn run_executes_binary_with_same_output() {
@@ -509,16 +465,12 @@ fn run_executes_binary_with_same_output() {
     let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "run"]);
     let cargo_result = run_in_dir(test_dir.path(), "cargo", &["run"]);
 
-    // Both should succeed
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    // Both should output "Hello, world!"
     assert!(hurry_result.stdout.contains("Hello, world!"));
     assert!(cargo_result.stdout.contains("Hello, world!"));
 }
-
-// Tests for `cargo update`
 
 #[test]
 fn update_creates_same_lockfile() {
@@ -539,8 +491,6 @@ fn update_creates_same_lockfile() {
     assert!(test_dir.path().join("Cargo.lock").exists());
 }
 
-// Tests for `cargo fetch`
-
 #[test]
 fn fetch_downloads_dependencies() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
@@ -555,12 +505,6 @@ fn fetch_downloads_dependencies() {
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
     pretty_assert_eq!(hurry_result.exit_code, 0);
 }
-
-// ============================================================================
-// Argument variation tests for each command
-// ============================================================================
-
-// Tests for `cargo init` arguments
 
 #[test]
 fn init_with_vcs_none() {
@@ -581,7 +525,6 @@ fn init_with_vcs_none() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    // Both should not create .git directory
     assert!(!hurry_dir.path().join(".git").exists());
     assert!(!cargo_dir.path().join(".git").exists());
 }
@@ -605,16 +548,11 @@ fn init_with_edition() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    // Both Cargo.toml files should specify edition 2021
     let hurry_toml = fs::read_to_string(hurry_dir.path().join("Cargo.toml")).unwrap();
     let cargo_toml = fs::read_to_string(cargo_dir.path().join("Cargo.toml")).unwrap();
 
-    assert!(hurry_toml.contains("edition = \"2021\""));
-    assert!(cargo_toml.contains("edition = \"2021\""));
     pretty_assert_eq!(hurry_toml, cargo_toml);
 }
-
-// Tests for `cargo new` arguments
 
 #[test]
 fn new_with_vcs_none() {
@@ -635,7 +573,6 @@ fn new_with_vcs_none() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    // Neither should create .git directory
     assert!(!hurry_dir.path().join("myproject/.git").exists());
     assert!(!cargo_dir.path().join("myproject/.git").exists());
 }
@@ -662,11 +599,8 @@ fn new_with_edition_2021() {
     let hurry_toml = fs::read_to_string(hurry_dir.path().join("myproject/Cargo.toml")).unwrap();
     let cargo_toml = fs::read_to_string(cargo_dir.path().join("myproject/Cargo.toml")).unwrap();
 
-    assert!(hurry_toml.contains("edition = \"2021\""));
     pretty_assert_eq!(hurry_toml, cargo_toml);
 }
-
-// Tests for `cargo add` arguments
 
 #[test]
 fn add_with_no_default_features() {
@@ -693,7 +627,6 @@ fn add_with_no_default_features() {
     let hurry_toml = fs::read_to_string(hurry_dir.path().join("Cargo.toml")).unwrap();
     let cargo_toml = fs::read_to_string(cargo_dir.path().join("Cargo.toml")).unwrap();
 
-    assert!(hurry_toml.contains("default-features = false"));
     pretty_assert_eq!(hurry_toml, cargo_toml);
 }
 
@@ -718,7 +651,6 @@ fn add_with_optional_flag() {
     let hurry_toml = fs::read_to_string(hurry_dir.path().join("Cargo.toml")).unwrap();
     let cargo_toml = fs::read_to_string(cargo_dir.path().join("Cargo.toml")).unwrap();
 
-    assert!(hurry_toml.contains("optional = true"));
     pretty_assert_eq!(hurry_toml, cargo_toml);
 }
 
@@ -747,11 +679,8 @@ fn add_with_rename() {
     let hurry_toml = fs::read_to_string(hurry_dir.path().join("Cargo.toml")).unwrap();
     let cargo_toml = fs::read_to_string(cargo_dir.path().join("Cargo.toml")).unwrap();
 
-    assert!(hurry_toml.contains("serde_crate"));
     pretty_assert_eq!(hurry_toml, cargo_toml);
 }
-
-// Tests for `cargo remove` arguments
 
 #[test]
 fn remove_with_dev_flag() {
@@ -778,7 +707,6 @@ fn remove_with_dev_flag() {
     let hurry_toml = fs::read_to_string(hurry_dir.path().join("Cargo.toml")).unwrap();
     let cargo_toml = fs::read_to_string(cargo_dir.path().join("Cargo.toml")).unwrap();
 
-    assert!(!hurry_toml.contains("[dev-dependencies]\nserde"));
     pretty_assert_eq!(hurry_toml, cargo_toml);
 }
 
@@ -809,8 +737,6 @@ fn remove_with_build_flag() {
 
     pretty_assert_eq!(hurry_toml, cargo_toml);
 }
-
-// Tests for `cargo check` arguments
 
 #[test]
 fn check_with_all_targets() {
@@ -895,8 +821,6 @@ fn check_with_no_default_features() {
     pretty_assert_eq!(cargo_result.exit_code, 0);
 }
 
-// Tests for `cargo tree` arguments
-
 #[test]
 fn tree_with_depth() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
@@ -909,9 +833,10 @@ fn tree_with_depth() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    // Both should show limited depth
-    assert!(hurry_result.stdout.contains("test-project"));
-    assert!(cargo_result.stdout.contains("test-project"));
+    let hurry_normalized = normalize_output(&hurry_result.stdout);
+    let cargo_normalized = normalize_output(&cargo_result.stdout);
+
+    pretty_assert_eq!(hurry_normalized, cargo_normalized);
 }
 
 #[test]
@@ -965,8 +890,6 @@ fn tree_with_charset_ascii() {
     pretty_assert_eq!(cargo_result.exit_code, 0);
 }
 
-// Tests for `cargo metadata` arguments
-
 #[test]
 fn metadata_with_format_version() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
@@ -986,9 +909,13 @@ fn metadata_with_format_version() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    // Both should output valid JSON
-    let _hurry_json: serde_json::Value = serde_json::from_str(&hurry_result.stdout).unwrap();
-    let _cargo_json: serde_json::Value = serde_json::from_str(&cargo_result.stdout).unwrap();
+    let mut hurry_json = serde_json::from_str(&hurry_result.stdout).unwrap();
+    let mut cargo_json = serde_json::from_str(&cargo_result.stdout).unwrap();
+
+    normalize_metadata_json(&mut hurry_json);
+    normalize_metadata_json(&mut cargo_json);
+
+    pretty_assert_eq!(hurry_json, cargo_json);
 }
 
 #[test]
@@ -1007,17 +934,14 @@ fn metadata_with_no_deps() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    let hurry_json: serde_json::Value = serde_json::from_str(&hurry_result.stdout).unwrap();
-    let cargo_json: serde_json::Value = serde_json::from_str(&cargo_result.stdout).unwrap();
+    let mut hurry_json = serde_json::from_str(&hurry_result.stdout).unwrap();
+    let mut cargo_json = serde_json::from_str(&cargo_result.stdout).unwrap();
 
-    // Both should have packages array with only the root package
-    pretty_assert_eq!(
-        hurry_json["packages"].as_array().unwrap().len(),
-        cargo_json["packages"].as_array().unwrap().len()
-    );
+    normalize_metadata_json(&mut hurry_json);
+    normalize_metadata_json(&mut cargo_json);
+
+    pretty_assert_eq!(hurry_json, cargo_json);
 }
-
-// Tests for `cargo run` arguments
 
 #[test]
 fn run_with_release() {
@@ -1050,8 +974,6 @@ fn run_with_quiet_flag() {
     assert!(cargo_result.stdout.contains("Hello, world!"));
 }
 
-// Tests for `cargo clean` arguments
-
 #[test]
 fn clean_with_release_only() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
@@ -1072,12 +994,6 @@ fn clean_with_release_only() {
     assert!(test_dir.path().join("target/debug").exists());
     assert!(!test_dir.path().join("target/release").exists());
 }
-
-// ============================================================================
-// Advanced scenario tests
-// ============================================================================
-
-// Tests for manifest path
 
 #[test]
 fn check_with_manifest_path() {
@@ -1108,8 +1024,6 @@ fn check_with_manifest_path() {
     pretty_assert_eq!(cargo_result.exit_code, 0);
 }
 
-// Tests for locked/offline flags
-
 #[test]
 fn check_with_locked_flag() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
@@ -1139,8 +1053,6 @@ fn check_with_frozen_flag() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 }
-
-// Tests for feature combinations
 
 #[test]
 fn check_with_specific_features() {
@@ -1176,8 +1088,6 @@ feature2 = []
     pretty_assert_eq!(cargo_result.exit_code, 0);
 }
 
-// Tests for version constraints
-
 #[test]
 fn add_with_version_constraint() {
     let hurry_dir = TempDir::new().expect("failed to create temp dir");
@@ -1195,13 +1105,8 @@ fn add_with_version_constraint() {
     let hurry_toml = fs::read_to_string(hurry_dir.path().join("Cargo.toml")).unwrap();
     let cargo_toml = fs::read_to_string(cargo_dir.path().join("Cargo.toml")).unwrap();
 
-    // Both should have serde with version 1.0
-    assert!(hurry_toml.contains("serde"));
-    assert!(hurry_toml.contains("1.0"));
     pretty_assert_eq!(hurry_toml, cargo_toml);
 }
-
-// Tests for binary selection
 
 #[test]
 fn run_specific_binary() {
@@ -1245,8 +1150,6 @@ path = "src/bin2.rs"
     assert!(cargo_result.stdout.contains("bin1"));
 }
 
-// Tests for color output control
-
 #[test]
 fn check_with_color_never() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
@@ -1266,8 +1169,6 @@ fn check_with_color_never() {
     assert!(!hurry_result.stderr.contains("\x1b["));
     assert!(!cargo_result.stderr.contains("\x1b["));
 }
-
-// Tests for quiet/verbose flags
 
 #[test]
 fn check_with_verbose() {
@@ -1293,8 +1194,6 @@ fn check_with_quiet() {
     pretty_assert_eq!(cargo_result.exit_code, 0);
 }
 
-// Tests for error cases
-
 #[test]
 fn check_in_non_cargo_directory() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
@@ -1303,7 +1202,6 @@ fn check_in_non_cargo_directory() {
     let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "check"]);
     let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check"]);
 
-    // Both should fail
     assert_ne!(hurry_result.exit_code, 0);
     assert_ne!(cargo_result.exit_code, 0);
 
@@ -1332,12 +1230,9 @@ fn add_nonexistent_package() {
         &["add", "this-package-definitely-does-not-exist-xyz123"],
     );
 
-    // Both should fail
     assert_ne!(hurry_result.exit_code, 0);
     assert_ne!(cargo_result.exit_code, 0);
 }
-
-// Tests for update with specific package
 
 #[test]
 fn update_specific_package() {
@@ -1357,8 +1252,6 @@ fn update_specific_package() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 }
-
-// Tests for tree with package selection
 
 #[test]
 fn tree_with_package_filter() {
@@ -1381,27 +1274,33 @@ fn tree_with_package_filter() {
     pretty_assert_eq!(cargo_result.exit_code, 0);
 }
 
-// Tests for path dependencies
-
 #[test]
 fn add_path_dependency() {
-    let test_dir = TempDir::new().expect("failed to create temp dir");
-    let main_project = test_dir.path().join("main");
-    let dep_project = test_dir.path().join("dep");
+    let hurry_dir = TempDir::new().expect("failed to create temp dir");
+    let cargo_dir = TempDir::new().expect("failed to create temp dir");
 
-    fs::create_dir(&main_project).unwrap();
-    fs::create_dir(&dep_project).unwrap();
+    let hurry_main = hurry_dir.path().join("main");
+    let hurry_dep = hurry_dir.path().join("dep");
+    let cargo_main = cargo_dir.path().join("main");
+    let cargo_dep = cargo_dir.path().join("dep");
 
-    create_minimal_project(&main_project, "main-project");
-    create_minimal_project(&dep_project, "dep-project");
+    fs::create_dir(&hurry_main).unwrap();
+    fs::create_dir(&hurry_dep).unwrap();
+    fs::create_dir(&cargo_main).unwrap();
+    fs::create_dir(&cargo_dep).unwrap();
+
+    create_minimal_project(&hurry_main, "main-project");
+    create_minimal_project(&hurry_dep, "dep-project");
+    create_minimal_project(&cargo_main, "main-project");
+    create_minimal_project(&cargo_dep, "dep-project");
 
     let hurry_result = run_in_dir(
-        &main_project,
+        &hurry_main,
         "hurry",
         &["cargo", "add", "dep-project", "--path", "../dep"],
     );
     let cargo_result = run_in_dir(
-        &main_project,
+        &cargo_main,
         "cargo",
         &["add", "dep-project", "--path", "../dep"],
     );
@@ -1409,7 +1308,8 @@ fn add_path_dependency() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    let toml_content = fs::read_to_string(main_project.join("Cargo.toml")).unwrap();
-    assert!(toml_content.contains("dep-project"));
-    assert!(toml_content.contains("path"));
+    let hurry_toml = fs::read_to_string(hurry_main.join("Cargo.toml")).unwrap();
+    let cargo_toml = fs::read_to_string(cargo_main.join("Cargo.toml")).unwrap();
+
+    pretty_assert_eq!(hurry_toml, cargo_toml);
 }

@@ -230,10 +230,23 @@ s3://hurry-releases/releases/
 - Use `String::new()` instead of `"".to_string()`
 
 ### Type Annotations
-- Always use postfix types (turbofish syntax)
-- ❌ `let foo: Vec<_> = items.collect()`
-- ✅ `let foo = items.collect::<Vec<_>>()`
-- ✅ `let foo = items.collect_vec()` (with itertools)
+**CRITICAL**: Left-hand-side type annotations are FORBIDDEN. Never use `let foo: Type = ...` syntax.
+- Always prefer type inference when possible
+- Use turbofish syntax (postfix types) when explicit types are needed
+- ❌ NEVER: `let foo: Vec<_> = items.collect()`
+- ❌ NEVER: `let mut data: serde_json::Value = parse(input)`
+- ✅ ALWAYS: `let foo = items.collect::<Vec<_>>()`
+- ✅ ALWAYS: `let foo = items.collect_vec()` (with itertools)
+- ✅ ALWAYS: `let mut data = parse(input)` (type inference)
+
+This rule applies to ALL variable declarations including:
+- Function bodies
+- Match arms
+- Closures
+- Struct fields (use turbofish on constructor, not field types)
+- Test code
+
+Only exception: function signatures and struct/enum definitions where type annotations are syntactically required.
 
 ### Control Flow
 Prefer `let Some(value) = option else { ... }` over checking `.is_none()` and using `.unwrap()`:
