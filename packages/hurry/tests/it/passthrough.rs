@@ -9,6 +9,7 @@ use simple_test_case::test_case;
 use std::process::{Command, Stdio};
 
 /// Run a command and capture its output (both stdout and stderr).
+#[track_caller]
 fn run_command(name: &str, args: &[&str]) -> (String, String) {
     let output = Command::new(name)
         .args(args)
@@ -24,6 +25,7 @@ fn run_command(name: &str, args: &[&str]) -> (String, String) {
 }
 
 /// Compare hurry output with cargo output for given args.
+#[track_caller]
 fn assert_passthrough(args: &[&str]) {
     let mut hurry_args = vec!["cargo"];
     hurry_args.extend_from_slice(args);
@@ -34,8 +36,6 @@ fn assert_passthrough(args: &[&str]) {
     pretty_assert_eq!(hurry_stdout, cargo_stdout, "stdout should match");
     pretty_assert_eq!(hurry_stderr, cargo_stderr, "stderr should match");
 }
-
-// Top-level cargo commands
 
 #[test_case(&["--version"]; "version_flag")]
 #[test_case(&["-V"]; "version_short")]
@@ -49,8 +49,6 @@ fn top_level_commands(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Build command variations
-
 #[test_case(&["build", "--help"]; "long_help")]
 #[test_case(&["build", "-h"]; "short_help")]
 #[test_case(&["help", "build"]; "help_command")]
@@ -59,8 +57,6 @@ fn top_level_commands(args: &[&str]) {
 fn build_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Check command variations
 
 #[test_case(&["check", "--help"]; "long_help")]
 #[test_case(&["check", "-h"]; "short_help")]
@@ -71,8 +67,6 @@ fn check_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Test command variations
-
 #[test_case(&["test", "--help"]; "long_help")]
 #[test_case(&["test", "-h"]; "short_help")]
 #[test_case(&["help", "test"]; "help_command")]
@@ -81,8 +75,6 @@ fn check_help(args: &[&str]) {
 fn test_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Run command variations
 
 #[test_case(&["run", "--help"]; "long_help")]
 #[test_case(&["run", "-h"]; "short_help")]
@@ -93,8 +85,6 @@ fn run_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Doc command variations
-
 #[test_case(&["doc", "--help"]; "long_help")]
 #[test_case(&["doc", "-h"]; "short_help")]
 #[test_case(&["help", "doc"]; "help_command")]
@@ -104,8 +94,6 @@ fn doc_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Clean command variations
-
 #[test_case(&["clean", "--help"]; "long_help")]
 #[test_case(&["clean", "-h"]; "short_help")]
 #[test_case(&["help", "clean"]; "help_command")]
@@ -113,8 +101,6 @@ fn doc_help(args: &[&str]) {
 fn clean_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Bench command variations
 
 #[test_case(&["bench", "--help"]; "long_help")]
 #[test_case(&["bench", "-h"]; "short_help")]
@@ -124,8 +110,6 @@ fn bench_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Update command variations
-
 #[test_case(&["update", "--help"]; "long_help")]
 #[test_case(&["update", "-h"]; "short_help")]
 #[test_case(&["help", "update"]; "help_command")]
@@ -133,8 +117,6 @@ fn bench_help(args: &[&str]) {
 fn update_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Search command variations
 
 #[test_case(&["search", "--help"]; "long_help")]
 #[test_case(&["search", "-h"]; "short_help")]
@@ -144,8 +126,6 @@ fn search_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Publish command variations
-
 #[test_case(&["publish", "--help"]; "long_help")]
 #[test_case(&["publish", "-h"]; "short_help")]
 #[test_case(&["help", "publish"]; "help_command")]
@@ -153,8 +133,6 @@ fn search_help(args: &[&str]) {
 fn publish_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Install command variations
 
 #[test_case(&["install", "--help"]; "long_help")]
 #[test_case(&["install", "-h"]; "short_help")]
@@ -164,8 +142,6 @@ fn install_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Uninstall command variations
-
 #[test_case(&["uninstall", "--help"]; "long_help")]
 #[test_case(&["uninstall", "-h"]; "short_help")]
 #[test_case(&["help", "uninstall"]; "help_command")]
@@ -173,8 +149,6 @@ fn install_help(args: &[&str]) {
 fn uninstall_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// New command variations
 
 #[test_case(&["new", "--help"]; "long_help")]
 #[test_case(&["new", "-h"]; "short_help")]
@@ -184,8 +158,6 @@ fn new_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Init command variations
-
 #[test_case(&["init", "--help"]; "long_help")]
 #[test_case(&["init", "-h"]; "short_help")]
 #[test_case(&["help", "init"]; "help_command")]
@@ -194,8 +166,6 @@ fn init_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Add command variations
-
 #[test_case(&["add", "--help"]; "long_help")]
 #[test_case(&["add", "-h"]; "short_help")]
 #[test_case(&["help", "add"]; "help_command")]
@@ -203,8 +173,6 @@ fn init_help(args: &[&str]) {
 fn add_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Remove command variations
 
 #[test_case(&["remove", "--help"]; "long_help")]
 #[test_case(&["remove", "-h"]; "short_help")]
@@ -215,8 +183,6 @@ fn remove_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Tree command variations
-
 #[test_case(&["tree", "--help"]; "long_help")]
 #[test_case(&["tree", "-h"]; "short_help")]
 #[test_case(&["help", "tree"]; "help_command")]
@@ -224,8 +190,6 @@ fn remove_help(args: &[&str]) {
 fn tree_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Metadata command variations
 
 #[test_case(&["metadata", "--help"]; "long_help")]
 #[test_case(&["metadata", "-h"]; "short_help")]
@@ -235,8 +199,6 @@ fn metadata_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Fetch command variations
-
 #[test_case(&["fetch", "--help"]; "long_help")]
 #[test_case(&["fetch", "-h"]; "short_help")]
 #[test_case(&["help", "fetch"]; "help_command")]
@@ -244,8 +206,6 @@ fn metadata_help(args: &[&str]) {
 fn fetch_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Fix command variations
 
 #[test_case(&["fix", "--help"]; "long_help")]
 #[test_case(&["fix", "-h"]; "short_help")]
@@ -255,8 +215,6 @@ fn fix_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Rustc command variations
-
 #[test_case(&["rustc", "--help"]; "long_help")]
 #[test_case(&["rustc", "-h"]; "short_help")]
 #[test_case(&["help", "rustc"]; "help_command")]
@@ -264,8 +222,6 @@ fn fix_help(args: &[&str]) {
 fn rustc_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Rustdoc command variations
 
 #[test_case(&["rustdoc", "--help"]; "long_help")]
 #[test_case(&["rustdoc", "-h"]; "short_help")]
@@ -275,8 +231,6 @@ fn rustdoc_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Package command variations
-
 #[test_case(&["package", "--help"]; "long_help")]
 #[test_case(&["package", "-h"]; "short_help")]
 #[test_case(&["help", "package"]; "help_command")]
@@ -284,8 +238,6 @@ fn rustdoc_help(args: &[&str]) {
 fn package_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Vendor command variations
 
 #[test_case(&["vendor", "--help"]; "long_help")]
 #[test_case(&["vendor", "-h"]; "short_help")]
@@ -295,8 +247,6 @@ fn vendor_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Login command variations
-
 #[test_case(&["login", "--help"]; "long_help")]
 #[test_case(&["login", "-h"]; "short_help")]
 #[test_case(&["help", "login"]; "help_command")]
@@ -304,8 +254,6 @@ fn vendor_help(args: &[&str]) {
 fn login_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Logout command variations
 
 #[test_case(&["logout", "--help"]; "long_help")]
 #[test_case(&["logout", "-h"]; "short_help")]
@@ -315,8 +263,6 @@ fn logout_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Owner command variations
-
 #[test_case(&["owner", "--help"]; "long_help")]
 #[test_case(&["owner", "-h"]; "short_help")]
 #[test_case(&["help", "owner"]; "help_command")]
@@ -324,8 +270,6 @@ fn logout_help(args: &[&str]) {
 fn owner_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Yank command variations
 
 #[test_case(&["yank", "--help"]; "long_help")]
 #[test_case(&["yank", "-h"]; "short_help")]
@@ -335,8 +279,6 @@ fn yank_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Pkgid command variations
-
 #[test_case(&["pkgid", "--help"]; "long_help")]
 #[test_case(&["pkgid", "-h"]; "short_help")]
 #[test_case(&["help", "pkgid"]; "help_command")]
@@ -344,8 +286,6 @@ fn yank_help(args: &[&str]) {
 fn pkgid_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Locate-project command variations
 
 #[test_case(&["locate-project", "--help"]; "long_help")]
 #[test_case(&["locate-project", "-h"]; "short_help")]
@@ -355,8 +295,6 @@ fn locate_project_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Generate-lockfile command variations
-
 #[test_case(&["generate-lockfile", "--help"]; "long_help")]
 #[test_case(&["generate-lockfile", "-h"]; "short_help")]
 #[test_case(&["help", "generate-lockfile"]; "help_command")]
@@ -364,8 +302,6 @@ fn locate_project_help(args: &[&str]) {
 fn generate_lockfile_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Config command variations
 
 #[test_case(&["config", "--help"]; "long_help")]
 #[test_case(&["config", "-h"]; "short_help")]
@@ -375,8 +311,6 @@ fn config_help(args: &[&str]) {
     assert_passthrough(args);
 }
 
-// Report command variations
-
 #[test_case(&["report", "--help"]; "long_help")]
 #[test_case(&["report", "-h"]; "short_help")]
 #[test_case(&["help", "report"]; "help_command")]
@@ -384,8 +318,6 @@ fn config_help(args: &[&str]) {
 fn report_help(args: &[&str]) {
     assert_passthrough(args);
 }
-
-// Info command variations
 
 #[test_case(&["info", "--help"]; "long_help")]
 #[test_case(&["info", "-h"]; "short_help")]
