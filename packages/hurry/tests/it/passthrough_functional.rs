@@ -51,6 +51,7 @@
 //! - `search` (requires network and may have non-deterministic results)
 
 use pretty_assertions::assert_eq as pretty_assert_eq;
+use serde_json::Value;
 use std::{
     fs,
     path::Path,
@@ -145,7 +146,7 @@ fn normalize_output(output: &str) -> String {
 }
 
 /// Normalize JSON metadata by removing path-specific fields that will differ.
-fn normalize_metadata_json(json: &mut serde_json::Value) {
+fn normalize_metadata_json(json: &mut Value) {
     if let Some(packages) = json["packages"].as_array_mut() {
         for package in packages {
             if let Some(obj) = package.as_object_mut() {
@@ -329,10 +330,10 @@ fn metadata_produces_identical_json() {
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
-    let mut hurry_json =
-        serde_json::from_str(&hurry_result.stdout).expect("hurry output is not valid JSON");
-    let mut cargo_json =
-        serde_json::from_str(&cargo_result.stdout).expect("cargo output is not valid JSON");
+    let mut hurry_json = serde_json::from_str::<Value>(&hurry_result.stdout)
+        .expect("hurry output is not valid JSON");
+    let mut cargo_json = serde_json::from_str::<Value>(&cargo_result.stdout)
+        .expect("cargo output is not valid JSON");
 
     normalize_metadata_json(&mut hurry_json);
     normalize_metadata_json(&mut cargo_json);
@@ -451,8 +452,8 @@ fn locate_project_finds_cargo_toml() {
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
-    let hurry_json: serde_json::Value = serde_json::from_str(&hurry_result.stdout).unwrap();
-    let cargo_json: serde_json::Value = serde_json::from_str(&cargo_result.stdout).unwrap();
+    let hurry_json = serde_json::from_str::<Value>(&hurry_result.stdout).unwrap();
+    let cargo_json = serde_json::from_str::<Value>(&cargo_result.stdout).unwrap();
 
     pretty_assert_eq!(hurry_json, cargo_json);
 }
@@ -909,8 +910,8 @@ fn metadata_with_format_version() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    let mut hurry_json = serde_json::from_str(&hurry_result.stdout).unwrap();
-    let mut cargo_json = serde_json::from_str(&cargo_result.stdout).unwrap();
+    let mut hurry_json = serde_json::from_str::<Value>(&hurry_result.stdout).unwrap();
+    let mut cargo_json = serde_json::from_str::<Value>(&cargo_result.stdout).unwrap();
 
     normalize_metadata_json(&mut hurry_json);
     normalize_metadata_json(&mut cargo_json);
@@ -934,8 +935,8 @@ fn metadata_with_no_deps() {
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
 
-    let mut hurry_json = serde_json::from_str(&hurry_result.stdout).unwrap();
-    let mut cargo_json = serde_json::from_str(&cargo_result.stdout).unwrap();
+    let mut hurry_json = serde_json::from_str::<Value>(&hurry_result.stdout).unwrap();
+    let mut cargo_json = serde_json::from_str::<Value>(&cargo_result.stdout).unwrap();
 
     normalize_metadata_json(&mut hurry_json);
     normalize_metadata_json(&mut cargo_json);
