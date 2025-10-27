@@ -72,6 +72,7 @@ pub async fn exec(
         info!(?log_file_path, "logging to file");
 
         log::make_logger(
+            #[allow(clippy::disallowed_methods, reason = "sync in main thread is OK")]
             std::fs::File::create(log_file_path.as_std_path())?,
             top_level_flags.profile,
             top_level_flags.color,
@@ -102,7 +103,8 @@ pub async fn exec(
     }
 
     // Open the socket and start the server.
-    match std::fs::remove_file(&daemon_paths.socket_path.as_std_path()) {
+    #[allow(clippy::disallowed_methods, reason = "sync in main thread is OK")]
+    match std::fs::remove_file(daemon_paths.socket_path.as_std_path()) {
         Ok(_) => {}
         Err(err) => {
             if err.kind() != std::io::ErrorKind::NotFound {

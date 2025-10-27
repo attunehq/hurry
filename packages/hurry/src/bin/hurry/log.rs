@@ -33,7 +33,7 @@ where
 {
     let (flame_layer, flame_guard) = if let Some(profile) = profile {
         let profile = profile.as_ref();
-        FlameLayer::with_file(&profile)
+        FlameLayer::with_file(profile)
             .with_context(|| format!("set up profiling to {profile:?}"))
             .map(|(layer, guard)| (Some(layer), Some(guard)))?
     } else {
