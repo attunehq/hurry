@@ -274,7 +274,7 @@ mod tests {
             .await
             .context("create test server")?;
 
-        let targets = vec![
+        let targets = [
             "x86_64-unknown-linux-gnu",
             "x86_64-apple-darwin",
             "aarch64-apple-darwin",
@@ -487,7 +487,7 @@ mod tests {
             .await
             .context("create test server")?;
 
-        let versions = vec!["1.0.0", "1.0.1", "2.0.0"];
+        let versions = ["1.0.0", "1.0.1", "2.0.0"];
 
         let mut keys = vec![];
         for (i, version) in versions.iter().enumerate() {

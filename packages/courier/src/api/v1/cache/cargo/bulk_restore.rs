@@ -122,7 +122,7 @@ mod tests {
             .context("create test server")?;
 
         // Save 3 different packages
-        let packages = vec![
+        let packages = [
             ("serde", "1.0.0", "abc123"),
             ("tokio", "1.28.0", "def456"),
             ("axum", "0.6.0", "ghi789"),
@@ -245,7 +245,7 @@ mod tests {
         }
 
         // Request 4 packages (2 exist, 2 don't)
-        let all_packages = vec![
+        let all_packages = [
             ("serde", "1.0.0", "abc123"),
             ("tokio", "1.28.0", "def456"),
             ("axum", "0.6.0", "missing1"),

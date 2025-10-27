@@ -24,7 +24,7 @@ use simple_test_case::test_case;
 #[cfg_attr(feature = "ci", test_case("attunehq", "hurry", "main"; "attunehq/hurry:main"))]
 #[test_log::test]
 fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
-    let _ = color_eyre::install()?;
+    color_eyre::install()?;
     Command::install_hurry(workspace_dir!())
         .run_local()
         .context("install hurry")?;
@@ -103,7 +103,7 @@ fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 #[cfg_attr(feature = "ci", test_case("attunehq", "hurry", "main"; "attunehq/hurry:main"))]
 #[test_log::test]
 fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
-    let _ = color_eyre::install()?;
+    color_eyre::install()?;
     Command::install_hurry(workspace_dir!())
         .run_local()
         .context("install hurry")?;
@@ -189,7 +189,7 @@ fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 #[cfg_attr(feature = "ci", test_case("attunehq", "attune", "main", "attune", "attune"; "attunehq/attune:main"))]
 #[test_log::test]
 fn native(username: &str, repo: &str, branch: &str, package: &str, bin: &str) -> Result<()> {
-    let _ = color_eyre::install()?;
+    color_eyre::install()?;
     Command::install_hurry(workspace_dir!())
         .run_local()
         .context("install hurry")?;
@@ -317,7 +317,7 @@ fn native_changed_breaks_build(
     package: &str,
     bin: &str,
 ) -> Result<()> {
-    let _ = color_eyre::install()?;
+    color_eyre::install()?;
     Command::install_hurry(workspace_dir!())
         .run_local()
         .context("install hurry")?;

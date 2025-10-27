@@ -712,7 +712,7 @@ mod tests {
         let (storage, _temp) = Disk::new_temp().await.expect("temp dir");
 
         for content in &blobs {
-            let key = key_for(&content);
+            let key = key_for(content);
             storage.write_buffered(&key, &content).await.expect("write");
         }
 
