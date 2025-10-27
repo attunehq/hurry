@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, hash_map::Entry},
+    collections::HashMap,
     fmt::Debug,
     io::Write,
     path::PathBuf,
@@ -423,13 +423,14 @@ impl CargoCache {
         })
     }
 
-    #[instrument(name = "CargoCache::save", skip(progress))]
+    #[instrument(name = "CargoCache::save", skip(artifact_plan, progress))]
     pub async fn save(
         &self,
         artifact_plan: ArtifactPlan,
         progress: &TransferBar,
         restored: &RestoreState,
     ) -> Result<CacheStats> {
+        trace!(?artifact_plan, "artifact plan");
         for artifact in artifact_plan.artifacts {
             let artifact = BuiltArtifact::from_key(&self.ws, artifact).await?;
             debug!(?artifact, "caching artifact");
@@ -474,12 +475,13 @@ impl CargoCache {
         })
     }
 
-    #[instrument(name = "CargoCache::restore", skip(progress))]
+    #[instrument(name = "CargoCache::restore", skip(artifact_plan, progress))]
     pub async fn restore(
         &self,
         artifact_plan: &ArtifactPlan,
         progress: &TransferBar,
     ) -> Result<RestoreState> {
+        trace!(?artifact_plan, "artifact plan");
         let (artifacts, requests) = build_restore_requests(artifact_plan);
         let restore_result = self
             .courier
@@ -515,7 +517,6 @@ impl CargoCache {
             worker.context("cas restore worker")?;
         }
 
-        debug!("done restoring");
         Ok(restored.with_stats(CacheStats {
             files: progress.files(),
             bytes: progress.bytes(),
