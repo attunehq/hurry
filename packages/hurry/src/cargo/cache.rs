@@ -428,13 +428,14 @@ impl CargoCache {
         })
     }
 
-    #[instrument(name = "CargoCache::save", skip(progress))]
+    #[instrument(name = "CargoCache::save", skip(artifact_plan, progress))]
     pub async fn save(
         &self,
         artifact_plan: ArtifactPlan,
         progress: &ProgressBar,
         restored: &RestoreState,
     ) -> Result<CacheStats> {
+        trace!(?artifact_plan, "artifact plan");
         let start_time = std::time::Instant::now();
         let target_path = &self.ws.profile_dir;
 
@@ -651,13 +652,13 @@ impl CargoCache {
         })
     }
 
-    #[instrument(name = "CargoCache::restore", skip(progress))]
+    #[instrument(name = "CargoCache::restore", skip(artifact_plan, progress))]
     pub async fn restore(
         &self,
         artifact_plan: &ArtifactPlan,
         progress: &ProgressBar,
     ) -> Result<RestoreState> {
-        debug!("start restoring");
+        trace!(?artifact_plan, "artifact plan");
         let start_time = Instant::now();
 
         // TODO: We should probably make this concurrent on something else since this is
@@ -843,7 +844,6 @@ impl CargoCache {
             worker.context("cas restore worker")?;
         }
 
-        debug!("done restoring");
         Ok(restored.with_stats(CacheStats {
             files: transferred_files.load(Ordering::Relaxed),
             bytes: transferred_bytes.load(Ordering::Relaxed),
