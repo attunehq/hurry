@@ -553,6 +553,7 @@ impl CargoCache {
                         .pipe(AbsFilePath::try_from)
                         .ok()?;
 
+                    // We use `metadata` instead of `exists` so that we validate permissions too.
                     if std::fs::metadata(path.as_std_path()).is_ok() {
                         let existing_hash = fs::hash_file_sync(&path).ok()?;
                         if existing_hash == file.object_key {
@@ -564,14 +565,7 @@ impl CargoCache {
                     Some((artifact, (file, path)))
                 })
                 .fold(HashMap::<_, Vec<_>>::new, |mut acc, (artifact, entry)| {
-                    match acc.entry(artifact.clone()) {
-                        Entry::Occupied(mut e) => {
-                            e.get_mut().push(entry);
-                        }
-                        Entry::Vacant(e) => {
-                            e.insert(vec![entry]);
-                        }
-                    }
+                    acc.entry(artifact.clone()).or_default().push(entry);
                     acc
                 })
                 .reduce(HashMap::new, |mut acc, item| {
