@@ -27,7 +27,7 @@ use clients::{
     },
 };
 use color_eyre::{
-    Result,
+    Result, Section, SectionExt,
     eyre::{Context as _, OptionExt, bail, eyre},
 };
 use dashmap::DashSet;
@@ -421,9 +421,17 @@ impl CargoCache {
         trace!(?artifact_plan, "artifact plan");
         let daemon_paths = daemon_paths().await?;
 
-        // Start daemon if it's not already running.
-        let is_running = daemon_is_running(&daemon_paths.pid_file_path).await?;
-        if !is_running {
+        // Start daemon if it's not already running. If it is, try to read its context
+        // file to get its url, which we need to know in order to communicate with it.
+        let daemon = if daemon_is_running(&daemon_paths.pid_file_path).await? {
+            let context = fs::read_buffered_utf8(&daemon_paths.context_path)
+                .await
+                .context("read daemon context file")?
+                .ok_or_eyre("no daemon context file")?;
+            serde_json::from_str::<DaemonReadyMessage>(&context)
+                .context("parse daemon context")
+                .with_section(|| context.header("Daemon context file:"))?
+        } else {
             // TODO: Ideally we'd replace this with proper double-fork daemonization to
             // avoid the security and compatibility concerns here: someone could replace the
             // binary at this path in the time between when this binary launches and when it
@@ -446,19 +454,16 @@ impl CargoCache {
             let mut child = cmd.spawn()?;
             let stdout = child.stdout.take().ok_or_eyre("daemon has no stdout")?;
             let mut stdout = tokio::io::BufReader::new(stdout).lines();
+
             // This value was chosen arbitrarily. Adjust as needed.
-            const DAEMON_STARTUP_TIMEOUT_SECS: u64 = 5;
-            match tokio::time::timeout(
-                Duration::from_secs(DAEMON_STARTUP_TIMEOUT_SECS),
-                stdout.next_line(),
-            )
-            .await
-            {
+            const DAEMON_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+            match tokio::time::timeout(DAEMON_STARTUP_TIMEOUT, stdout.next_line()).await {
                 Ok(Ok(Some(line))) => {
                     debug!(?line, "received daemon output line");
                     match serde_json::from_str::<DaemonReadyMessage>(&line) {
                         Ok(msg) => {
                             debug!(?msg, "received daemon ready message");
+                            msg
                         }
                         Err(err) => {
                             error!(?err, "could not parse daemon output");
@@ -479,16 +484,13 @@ impl CargoCache {
                     bail!("could not start daemon");
                 }
             }
-        }
+        };
 
-        // Connect to daemon HTTP server.
-        let client = reqwest::Client::builder()
-            .unix_socket(daemon_paths.socket_path.as_std_path())
-            .build()?;
-
-        // Send upload request.
+        // Connect to daemon HTTP server and send the request.
+        let client = reqwest::Client::default();
+        let endpoint = format!("http://{}/api/v0/cargo/upload", daemon.url);
         let response = client
-            .post("http://localhost/api/v0/cargo/upload")
+            .post(&endpoint)
             .json(&daemon::CargoUploadRequest {
                 ws: self.ws.clone(),
                 artifact_plan,
@@ -496,7 +498,9 @@ impl CargoCache {
                 skip_objects: restored.objects.into_iter().collect(),
             })
             .send()
-            .await?;
+            .await
+            .with_context(|| format!("send upload request to daemon at: {endpoint}"))
+            .with_section(|| format!("{daemon:?}").header("Daemon context:"))?;
         debug!(?response, "submitted upload request");
 
         Ok(())

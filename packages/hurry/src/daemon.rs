@@ -15,23 +15,23 @@ use tracing::warn;
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct DaemonReadyMessage {
     pub pid: u32,
-    pub socket_path: AbsFilePath,
+    pub url: String,
     pub log_file_path: AbsFilePath,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct DaemonPaths {
     pub pid_file_path: AbsFilePath,
-    pub socket_path: AbsFilePath,
+    pub context_path: AbsFilePath,
 }
 
 pub async fn daemon_paths() -> Result<DaemonPaths> {
     let hurry_cache_dir = fs::user_global_cache_path().await?;
     let pid_file_path = hurry_cache_dir.join(mk_rel_file!("hurryd.pid"));
-    let socket_path = hurry_cache_dir.join(mk_rel_file!("hurryd.sock"));
+    let context_path = hurry_cache_dir.join(mk_rel_file!("hurryd.json"));
     Ok(DaemonPaths {
         pid_file_path,
-        socket_path,
+        context_path,
     })
 }
 

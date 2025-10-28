@@ -10,7 +10,7 @@ use clients::{
     },
 };
 use color_eyre::{
-    Result,
+    Result, Section, SectionExt,
     eyre::{Context as _, Error, OptionExt as _, bail},
 };
 use derive_more::Debug;
@@ -27,7 +27,6 @@ use hurry::{
 };
 use itertools::Itertools as _;
 use tap::Pipe as _;
-use tokio::net::UnixListener;
 use tower_http::trace::TraceLayer;
 use tracing::{Subscriber, debug, dispatcher, error, info, instrument, trace, warn};
 use tracing_subscriber::util::SubscriberInitExt as _;
@@ -105,7 +104,7 @@ pub async fn exec(
     }
 
     // Open the socket and start the server.
-    match fs::remove_file(&daemon_paths.socket_path).await {
+    match fs::remove_file(&daemon_paths.context_path).await {
         Ok(_) => {}
         Err(err) => {
             let err = err.downcast::<std::io::Error>()?;
@@ -115,8 +114,14 @@ pub async fn exec(
             }
         }
     }
-    let listener = UnixListener::bind(daemon_paths.socket_path.as_std_path())?;
-    info!(addr = ?daemon_paths.socket_path, "server listening");
+
+    let listener = tokio::net::TcpListener::bind("localhost:0")
+        .await
+        .context("open local server")?;
+    let addr = listener
+        .local_addr()
+        .context("read listen address for socket")?;
+    info!(?addr, "server listening");
 
     let courier = Courier::new(options.courier_url)?;
     let cas = CourierCas::new(courier.clone());
@@ -133,14 +138,18 @@ pub async fn exec(
     // Print ready message to STDOUT for parent processes. This uses `println!`
     // instead of the tracing macros because it emits a special sentinel value
     // on STDOUT.
-    println!(
-        "{}",
-        serde_json::to_string(&DaemonReadyMessage {
-            pid,
-            socket_path: daemon_paths.socket_path,
-            log_file_path,
-        })?
-    );
+    let message = DaemonReadyMessage {
+        pid,
+        url: format!("{addr}"),
+        log_file_path,
+    };
+    let encoded = serde_json::to_string(&message)
+        .context("encode ready message")
+        .with_section(|| format!("{message:?}").header("Message:"))?;
+    fs::write(&daemon_paths.context_path, &encoded)
+        .await
+        .with_context(|| format!("write daemon context to {:?}", daemon_paths.context_path))?;
+    println!("{encoded}");
 
     axum::serve(listener, app).await?;
 
