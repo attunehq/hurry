@@ -1,5 +1,7 @@
 # Workflows that run on pull requests. These are primarily CI checks for
 # linting, formatting, testing, etc.
+#
+# TODO: Swap to hurry for caching!
 name: PR
 
 on:
@@ -21,13 +23,13 @@ env:
     COURIER_DATABASE_URL: postgres://postgres:postgres@localhost:5432/courier_test
 
 jobs:
-    build-hurry:
-        uses: ./.github/workflows/build-hurry.yml
+    hurry-build:
+        uses: ./.github/workflows/hurry.yml
 
     rust:
         name: Build, check, and test Rust
         runs-on: ubuntu-latest
-        needs: [build-hurry]
+        needs: [hurry-build]
 
         services:
             postgres:
@@ -52,7 +54,6 @@ jobs:
             - uses: taiki-e/install-action@nextest
             - uses: actions/checkout@v4
 
-            # TODO: Swap to `hurry`!
             - uses: Swatinem/rust-cache@v2
 
             - name: Check format
