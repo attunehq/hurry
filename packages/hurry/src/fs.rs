@@ -203,7 +203,7 @@ impl IndexEntry {
 /// conventions of the operating system in which hurry is running.
 ///
 /// - Linux: `$XDG_CACHE_HOME/hurry/v2`
-/// - macOS: `$HOME/Library/Caches/hurry/v2`
+/// - macOS: `$HOME/Library/Caches/com.attunehq.hurry/v2`
 /// - Windows: `%LOCALAPPDATA%\hurry\v2`
 ///
 /// If unable to find those directories, falls back to:
