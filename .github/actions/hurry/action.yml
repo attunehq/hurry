@@ -1,3 +1,5 @@
+# TODO: swap to using hurry to cache itself!
+
 name: hurry
 description: Install and use hurry
 
