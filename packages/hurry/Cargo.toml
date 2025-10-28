@@ -3,9 +3,6 @@ name = "hurry"
 version = "0.0.0"
 edition = "2024"
 
-[features]
-default = []
-
 [[bench]]
 name = "cargo_copy_target"
 harness = false
@@ -80,3 +77,6 @@ pretty_assertions = { workspace = true }
 simple_test_case.workspace = true
 test-log = { workspace = true, features = ["trace"] }
 xshell = { workspace = true }
+
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = "0.1.48"
