@@ -26,13 +26,19 @@
 //! Juggling all these different path types has turned into a nightmare
 //! almost immediately, so we've created this module for our own path types
 //! that provide all the needs above and any others we find later.
+//!
+//! ## Cross-Platform Support
+//!
+//! This module supports both Unix and Windows paths. On Windows, paths are
+//! normalized to use forward slashes (`/`) internally for consistent hashing
+//! and comparison. This ensures cache keys remain stable regardless of which
+//! separator style is used in the source code.
 
 use std::{
     any::type_name,
     borrow::Cow,
     ffi::{OsStr, OsString},
     marker::PhantomData,
-    os::unix::ffi::OsStrExt,
     path::{Component, Path, PathBuf},
     str::FromStr,
 };
@@ -93,18 +99,37 @@ macro_rules! mk_rel_dir {
 }
 
 /// Assert that the string provided indicates a relative path.
-///
-/// TODO: make this work on Windows too.
-#[cfg(not(target_os = "windows"))]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! assert_relative {
     ($path:literal) => {{
-        const _: () = assert!(
-            !const_str::starts_with!($path, '/'),
-            "{}",
-            const_str::format!("path is not relative: {:?}", $path),
-        );
+        #[cfg(unix)]
+        const _: () = {
+            assert!(!const_str::starts_with!($path, '/'), "path is not relative",);
+        };
+
+        #[cfg(windows)]
+        const _: () = {
+            // Reject drive letters: C:, D:, etc.
+            assert!(
+                !($path.len() >= 2
+                    && ($path.as_bytes()[0] as char).is_ascii_alphabetic()
+                    && $path.as_bytes()[1] == b':'),
+                "path has drive letter"
+            );
+
+            // Reject UNC paths: \\server or //server
+            assert!(
+                !const_str::starts_with!($path, "\\\\") && !const_str::starts_with!($path, "//"),
+                "path is UNC"
+            );
+
+            // Reject paths starting with separator
+            assert!(
+                !const_str::starts_with!($path, '/') && !const_str::starts_with!($path, '\\'),
+                "path starts with separator"
+            );
+        };
     }};
 }
 
@@ -180,11 +205,12 @@ pub struct File;
 /// effectively just slot in (although we currently generate most methods
 /// using macros, not generics, so if we want plugin types to be supported
 /// we'll need to revisit that).
-//
-// TODO: This currently is not fully cross-platform as it does not attempt to
-// normalize components in the path; when we decide to add Windows support
-// we will need to handle this.
-#[cfg(not(target_os = "windows"))]
+///
+/// ## Path Normalization
+///
+/// On Windows, paths are normalized to use forward slashes (`/`) internally
+/// for consistent hashing and comparison across platforms. This ensures that
+/// cache keys remain stable regardless of which separator style is used.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Display)]
 #[display("{}", self.inner.display())]
 pub struct TypedPath<Base, Type> {
@@ -196,6 +222,30 @@ pub struct TypedPath<Base, Type> {
 
     /// The inner path.
     inner: PathBuf,
+}
+
+/// Normalize a path for consistent hashing and comparison.
+///
+/// On Windows, converts all backslashes to forward slashes for internal
+/// representation. This ensures that cache keys remain stable regardless of
+/// which separator style is used.
+///
+/// On Unix, no transformation is needed.
+fn normalize_path(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = path.to_string_lossy();
+        if s.contains('\\') {
+            PathBuf::from(s.replace('\\', "/"))
+        } else {
+            path
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        path
+    }
 }
 
 impl<B, T> TypedPath<B, T> {
@@ -215,11 +265,6 @@ impl<B, T> TypedPath<B, T> {
     /// View the path as an OS string.
     pub fn as_os_str(&self) -> &OsStr {
         self.inner.as_os_str()
-    }
-
-    /// View the path as a plain byte slice.
-    pub fn as_bytes(&self) -> &[u8] {
-        self.inner.as_os_str().as_bytes()
     }
 
     /// Get the parent of the provided path, if one exists.
@@ -317,6 +362,7 @@ impl<B: Validator, T: Validator> TryFrom<ty_from> for TypedPath<B, T> {
             reason = "This is only useless for one branch of the macro (i.e. PathBuf)"
         )]
         let value = PathBuf::from(value);
+        let value = normalize_path(value);
         B::validate(&value).with_context(|| format!("validate base {:?}", B::type_name()))?;
         T::validate(&value).with_context(|| format!("validate type {:?}", T::type_name()))?;
         Ok(Self::new_unchecked(value))
