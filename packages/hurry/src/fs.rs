@@ -476,7 +476,7 @@ impl Metadata {
     ///
     /// This function does not attempt to set whether a file is executable on
     /// Windows: in Windows files do not have "executable bits" and
-    /// therefore whether they are executable is an intrisic property of either
+    /// therefore whether they are executable is an intrinsic property of either
     /// the path extension or the file itself.
     #[instrument]
     pub async fn set_file(&self, path: &AbsFilePath) -> Result<()> {
