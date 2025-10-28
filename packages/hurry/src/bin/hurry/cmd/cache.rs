@@ -8,6 +8,6 @@ pub enum Command {
     /// Reset the cache.
     Reset(reset::Options),
 
-    /// Print the cache directory for the user.
+    /// Print the location of the local cache directory for the user.
     Show,
 }
