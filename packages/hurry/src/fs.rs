@@ -208,7 +208,7 @@ impl IndexEntry {
 ///
 /// If unable to find those directories, falls back to:
 /// - Linux/macOS: `$HOME/.cache/hurry/v2`
-/// - Windows: `%USERPROFILE%\hurry\v2`
+/// - Windows: `%USERPROFILE%\.cache\hurry\v2`
 ///
 /// ## Errors
 ///
