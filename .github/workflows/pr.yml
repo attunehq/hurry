@@ -21,9 +21,13 @@ env:
     COURIER_DATABASE_URL: postgres://postgres:postgres@localhost:5432/courier_test
 
 jobs:
+    build-hurry:
+        uses: ./.github/workflows/build-hurry.yml
+
     rust:
         name: Build, check, and test Rust
         runs-on: ubuntu-latest
+        needs: [build-hurry]
 
         services:
             postgres:
@@ -56,6 +60,17 @@ jobs:
 
             - name: Check clippy
               run: cargo clippy -p hurry -p courier
+
+            - name: Download hurry binary
+              uses: actions/download-artifact@v4
+              with:
+                  name: hurry-binary
+                  path: /tmp/hurry
+
+            - name: Install hurry
+              run: |
+                  chmod +x /tmp/hurry/hurry
+                  echo "/tmp/hurry" >> $GITHUB_PATH
 
             - name: Run tests
               run: cargo nextest run -p hurry -p courier

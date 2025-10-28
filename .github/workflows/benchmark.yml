@@ -7,21 +7,7 @@ on:
 
 jobs:
   build-hurry:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-      - run: |
-          rustup toolchain install stable
-          rustup show
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: benchmark-build-hurry
-      - run: cargo build --release --package hurry
-      - uses: actions/upload-artifact@v4
-        with:
-          name: hurry-binary
-          path: target/release/hurry
+    uses: ./.github/workflows/build-hurry.yml
 
   clean:
     runs-on: ubuntu-latest
