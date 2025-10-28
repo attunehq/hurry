@@ -123,7 +123,9 @@ macro_rules! assert_relative {
                 "path is UNC"
             );
 
-            // Reject paths starting with separator
+            // Reject paths starting with separator.
+            // Note: While Windows paths do not naturally start with '/', cross-platform code or user input
+            // may provide such paths. This check is intentionally defensive to catch both cases.
             assert!(
                 !const_str::starts_with!($path, '/') && !const_str::starts_with!($path, '\\'),
                 "path starts with separator"
