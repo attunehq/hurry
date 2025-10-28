@@ -58,8 +58,8 @@ jobs:
             - name: Check clippy
               run: cargo clippy -p hurry -p courier
 
-            - name: Setup hurry
-              uses: ./.github/actions/hurry
+            - name: Setup hurry-dev
+              uses: ./.github/actions/hurry-dev
 
             - name: Run tests
               run: cargo nextest run -p hurry -p courier

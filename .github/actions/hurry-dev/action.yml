@@ -1,7 +1,11 @@
+# hurry-dev is the local development version of hurry, installed from the current
+# repository state rather than from a release. This allows CI tests to run against
+# the version being tested without conflicting with any production hurry installation.
+#
 # TODO: swap to using hurry to cache itself!
 
-name: hurry
-description: Install and use hurry
+name: hurry-dev
+description: Install and use hurry-dev (local development version)
 
 inputs:
     cache-key:
@@ -12,11 +16,11 @@ inputs:
 runs:
     using: composite
     steps:
-        - name: Check if hurry already in PATH
+        - name: Check if hurry-dev already in PATH
           id: check-path
           shell: bash
           run: |
-              if command -v hurry &> /dev/null; then
+              if command -v hurry-dev &> /dev/null; then
                 echo "found=true" >> $GITHUB_OUTPUT
               else
                 echo "found=false" >> $GITHUB_OUTPUT
@@ -27,7 +31,7 @@ runs:
           id: download-artifact
           uses: actions/download-artifact@v4
           with:
-              name: hurry-binary
+              name: hurry-dev-binary
               path: /tmp/hurry
           continue-on-error: true
 
@@ -36,7 +40,7 @@ runs:
           id: check-download
           shell: bash
           run: |
-              if [ -f /tmp/hurry/hurry ]; then
+              if [ -f /tmp/hurry/hurry-dev ]; then
                 echo "found=true" >> $GITHUB_OUTPUT
               else
                 echo "found=false" >> $GITHUB_OUTPUT
@@ -65,18 +69,18 @@ runs:
           shell: bash
           run: |
               mkdir -p /tmp/hurry
-              cp target/release/hurry /tmp/hurry/hurry
+              cp target/release/hurry /tmp/hurry/hurry-dev
 
         - name: Upload artifact
           if: steps.check-path.outputs.found != 'true' && steps.check-download.outputs.found != 'true'
           uses: actions/upload-artifact@v4
           with:
-              name: hurry-binary
-              path: /tmp/hurry/hurry
+              name: hurry-dev-binary
+              path: /tmp/hurry/hurry-dev
 
-        - name: Add hurry to PATH
+        - name: Add hurry-dev to PATH
           if: steps.check-path.outputs.found != 'true'
           shell: bash
           run: |
-              chmod +x /tmp/hurry/hurry
+              chmod +x /tmp/hurry/hurry-dev
               echo "/tmp/hurry" >> $GITHUB_PATH

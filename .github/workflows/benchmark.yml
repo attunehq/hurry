@@ -34,11 +34,11 @@ jobs:
             - run: |
                   rustup toolchain install stable
                   rustup show
-            - uses: ./.github/actions/hurry
+            - uses: ./.github/actions/hurry-dev
             - id: build
               run: |
                   START=$(date +%s)
-                  hurry cargo build
+                  hurry-dev cargo build
                   END=$(date +%s)
                   DURATION=$((END - START))
                   echo "duration=$DURATION" >> $GITHUB_OUTPUT
