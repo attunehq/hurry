@@ -72,7 +72,10 @@ pub async fn exec(
         info!(?log_file_path, "logging to file");
 
         log::make_logger(
-            #[allow(clippy::disallowed_methods, reason = "sync in main thread is OK")]
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "sync in main thread is OK, dispatcher closure is sync"
+            )]
             std::fs::File::create(log_file_path.as_std_path())?,
             top_level_flags.profile,
             top_level_flags.color,
@@ -88,8 +91,7 @@ pub async fn exec(
 
     // Write and lock a pid-file.
     let mut pid_file = fslock::LockFile::open(daemon_paths.pid_file_path.as_os_str())?;
-    let locked = pid_file.try_lock_with_pid()?;
-    if !locked {
+    if !pid_file.try_lock_with_pid()? {
         bail!("hurryd is already running");
     }
 
@@ -103,10 +105,10 @@ pub async fn exec(
     }
 
     // Open the socket and start the server.
-    #[allow(clippy::disallowed_methods, reason = "sync in main thread is OK")]
-    match std::fs::remove_file(daemon_paths.socket_path.as_std_path()) {
+    match fs::remove_file(&daemon_paths.socket_path).await {
         Ok(_) => {}
         Err(err) => {
+            let err = err.downcast::<std::io::Error>()?;
             if err.kind() != std::io::ErrorKind::NotFound {
                 error!(?err, "could not remove socket file");
                 bail!("could not remove socket file");

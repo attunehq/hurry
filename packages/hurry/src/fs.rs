@@ -401,6 +401,24 @@ pub async fn open_file(path: &AbsFilePath) -> Result<tokio::fs::File> {
         .tap_ok(|_| trace!(?path, "open file"))
 }
 
+/// Open a file for writing.
+#[instrument]
+pub async fn create_file(path: &AbsFilePath) -> Result<tokio::fs::File> {
+    tokio::fs::File::create(path.as_std_path())
+        .await
+        .with_context(|| format!("create file: {path:?}"))
+        .tap_ok(|_| trace!(?path, "create file"))
+}
+
+/// Remove a file.
+#[instrument]
+pub async fn remove_file(path: &AbsFilePath) -> Result<()> {
+    tokio::fs::remove_file(path.as_std_path())
+        .await
+        .with_context(|| format!("remove file: {path:?}"))
+        .tap_ok(|_| trace!(?path, "remove file"))
+}
+
 /// Read directory entries.
 #[instrument]
 pub async fn read_dir(path: &AbsDirPath) -> Result<ReadDir> {
