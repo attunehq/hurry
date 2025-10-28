@@ -3,9 +3,6 @@ name = "hurry"
 version = "0.0.0"
 edition = "2024"
 
-[features]
-default = []
-
 [[bench]]
 name = "cargo_copy_target"
 harness = false
@@ -70,8 +67,8 @@ axum = { workspace = true }
 tower-http = { workspace = true, features = ["trace"] }
 signal-hook = { workspace = true }
 reqwest.workspace = true
-is_executable = "1.0.5"
-directories = "6.0.0"
+is_executable = { workspace = true }
+directories = { workspace = true }
 
 [dev-dependencies]
 async-walkdir.workspace = true
@@ -81,3 +78,6 @@ pretty_assertions = { workspace = true }
 simple_test_case.workspace = true
 test-log = { workspace = true, features = ["trace"] }
 xshell = { workspace = true }
+
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = "0.1.48"

@@ -16,6 +16,12 @@ use tracing_subscriber::util::SubscriberInitExt;
 mod cmd;
 mod log;
 
+// Avoid musl's default allocator due to performance issues.
+// https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 // We use `cargo set-version` in CI to update the version in `Cargo.toml` to
 // match the tag provided at release time; this means officially built releases
 // are always "dirty" so we modify the `git_version!` macro to account for that.
