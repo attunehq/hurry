@@ -424,8 +424,14 @@ impl CargoCache {
         // Start daemon if it's not already running.
         let is_running = daemon_is_running(&daemon_paths.pid_file_path).await?;
         if !is_running {
-            // Spawn a child and wait for the ready message on STDOUT.
-            let mut cmd = tokio::process::Command::new("hurry");
+            // TODO: Ideally we'd replace this with proper double-fork daemonization to
+            // avoid the security and compatibility concerns here: someone could replace the
+            // binary at this path in the time between when this binary launches and when it
+            // re-launches itself as a daemon.
+            let hurry_binary = std::env::current_exe().context("read current binary path")?;
+
+            // Spawn self as a child and wait for the ready message on STDOUT.
+            let mut cmd = tokio::process::Command::new(hurry_binary);
             cmd.arg("daemon")
                 .arg("start")
                 .stdout(Stdio::piped())
