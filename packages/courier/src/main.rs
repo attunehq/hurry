@@ -21,7 +21,7 @@ mod api;
 mod db;
 mod storage;
 
-// Avoid musl's default allocator due to lackluster performance
+// Avoid musl's default allocator due to performance issues.
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
 #[cfg(target_env = "musl")]
 #[global_allocator]
