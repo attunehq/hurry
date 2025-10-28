@@ -74,20 +74,37 @@ struct CommandResult {
 
 /// Run a command in the given directory and capture its output.
 #[track_caller]
-fn run_in_dir(dir: &Path, name: &str, args: &[&str]) -> CommandResult {
+fn run_in_dir(dir: &Path, name: &str, args: &[&str]) -> std::io::Result<CommandResult> {
     let output = Command::new(name)
         .current_dir(dir)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
-        .expect("failed to execute command");
+        .output()?;
 
-    CommandResult {
+    Ok(CommandResult {
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         exit_code: output.status.code().unwrap_or(-1),
+    })
+}
+
+/// Run hurry-dev in the given directory and capture its output.
+#[track_caller]
+fn run_hurry(dir: &Path, args: &[&str]) -> CommandResult {
+    match run_in_dir(dir, "hurry-dev", args) {
+        Ok(output) => output,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            panic!("run `make install-dev` to install hurry-dev")
+        }
+        Err(e) => panic!("failed to execute 'hurry-dev': {e}"),
     }
+}
+
+/// Run cargo in the given directory and capture its output.
+#[track_caller]
+fn run_cargo(dir: &Path, args: &[&str]) -> CommandResult {
+    run_in_dir(dir, "cargo", args).unwrap_or_else(|e| panic!("failed to execute 'cargo': {e}"))
 }
 
 /// Create a minimal Cargo.toml for testing.
@@ -171,16 +188,11 @@ fn init_creates_same_project_structure() {
     let hurry_dir = TempDir::new().expect("failed to create temp dir");
     let cargo_dir = TempDir::new().expect("failed to create temp dir");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         hurry_dir.path(),
-        "hurry",
         &["cargo", "init", "--lib", "--name", "test-lib"],
     );
-    let cargo_result = run_in_dir(
-        cargo_dir.path(),
-        "cargo",
-        &["init", "--lib", "--name", "test-lib"],
-    );
+    let cargo_result = run_cargo(cargo_dir.path(), &["init", "--lib", "--name", "test-lib"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -201,16 +213,11 @@ fn init_bin_creates_same_project_structure() {
     let hurry_dir = TempDir::new().expect("failed to create temp dir");
     let cargo_dir = TempDir::new().expect("failed to create temp dir");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         hurry_dir.path(),
-        "hurry",
         &["cargo", "init", "--bin", "--name", "test-bin"],
     );
-    let cargo_result = run_in_dir(
-        cargo_dir.path(),
-        "cargo",
-        &["init", "--bin", "--name", "test-bin"],
-    );
+    let cargo_result = run_cargo(cargo_dir.path(), &["init", "--bin", "--name", "test-bin"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -228,12 +235,8 @@ fn new_creates_same_project_structure() {
     let hurry_dir = TempDir::new().expect("failed to create temp dir");
     let cargo_dir = TempDir::new().expect("failed to create temp dir");
 
-    let hurry_result = run_in_dir(
-        hurry_dir.path(),
-        "hurry",
-        &["cargo", "new", "mylib", "--lib"],
-    );
-    let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["new", "mylib", "--lib"]);
+    let hurry_result = run_hurry(hurry_dir.path(), &["cargo", "new", "mylib", "--lib"]);
+    let cargo_result = run_cargo(cargo_dir.path(), &["new", "mylib", "--lib"]);
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
@@ -256,8 +259,8 @@ fn add_modifies_cargo_toml_identically() {
     create_minimal_project(hurry_dir.path(), "test-project");
     create_minimal_project(cargo_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(hurry_dir.path(), "hurry", &["cargo", "add", "serde"]);
-    let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["add", "serde"]);
+    let hurry_result = run_hurry(hurry_dir.path(), &["cargo", "add", "serde"]);
+    let cargo_result = run_cargo(cargo_dir.path(), &["add", "serde"]);
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
@@ -275,16 +278,11 @@ fn add_with_features_modifies_cargo_toml_identically() {
     create_minimal_project(hurry_dir.path(), "test-project");
     create_minimal_project(cargo_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         hurry_dir.path(),
-        "hurry",
         &["cargo", "add", "serde", "--features", "derive"],
     );
-    let cargo_result = run_in_dir(
-        cargo_dir.path(),
-        "cargo",
-        &["add", "serde", "--features", "derive"],
-    );
+    let cargo_result = run_cargo(cargo_dir.path(), &["add", "serde", "--features", "derive"]);
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
@@ -303,11 +301,11 @@ fn remove_modifies_cargo_toml_identically() {
     create_minimal_project(cargo_dir.path(), "test-project");
 
     // First add a dependency
-    run_in_dir(hurry_dir.path(), "cargo", &["add", "serde"]);
-    run_in_dir(cargo_dir.path(), "cargo", &["add", "serde"]);
+    run_cargo(hurry_dir.path(), &["add", "serde"]);
+    run_cargo(cargo_dir.path(), &["add", "serde"]);
 
-    let hurry_result = run_in_dir(hurry_dir.path(), "hurry", &["cargo", "remove", "serde"]);
-    let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["remove", "serde"]);
+    let hurry_result = run_hurry(hurry_dir.path(), &["cargo", "remove", "serde"]);
+    let cargo_result = run_cargo(cargo_dir.path(), &["remove", "serde"]);
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
@@ -322,14 +320,12 @@ fn metadata_produces_identical_json() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         test_dir.path(),
-        "hurry",
         &["cargo", "metadata", "--format-version=1", "--no-deps"],
     );
-    let cargo_result = run_in_dir(
+    let cargo_result = run_cargo(
         test_dir.path(),
-        "cargo",
         &["metadata", "--format-version=1", "--no-deps"],
     );
 
@@ -352,10 +348,10 @@ fn tree_produces_same_dependency_structure() {
     create_minimal_project(test_dir.path(), "test-project");
 
     // Add a dependency so we have something to show in the tree
-    run_in_dir(test_dir.path(), "cargo", &["add", "serde"]);
+    run_cargo(test_dir.path(), &["add", "serde"]);
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "tree"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["tree"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "tree"]);
+    let cargo_result = run_cargo(test_dir.path(), &["tree"]);
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
@@ -370,8 +366,8 @@ fn check_produces_same_validation_output() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "check"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "check"]);
+    let cargo_result = run_cargo(test_dir.path(), &["check"]);
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
@@ -389,8 +385,8 @@ fn check_detects_same_errors() {
     )
     .unwrap();
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "check"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "check"]);
+    let cargo_result = run_cargo(test_dir.path(), &["check"]);
 
     // Both should fail (exit code non-zero)
     assert_ne!(
@@ -419,11 +415,11 @@ fn clean_removes_target_directory() {
     create_minimal_project(test_dir.path(), "test-project");
 
     // Build first to create target directory
-    run_in_dir(test_dir.path(), "cargo", &["build"]);
+    run_cargo(test_dir.path(), &["build"]);
     assert!(test_dir.path().join("target").exists());
 
     // Clean via hurry
-    let result = run_in_dir(test_dir.path(), "hurry", &["cargo", "clean"]);
+    let result = run_hurry(test_dir.path(), &["cargo", "clean"]);
     pretty_assert_eq!(result.exit_code, 0);
 
     // Target directory should be removed
@@ -436,10 +432,10 @@ fn pkgid_produces_same_package_id() {
     create_minimal_project(test_dir.path(), "test-project");
 
     // Generate Cargo.lock (required for pkgid)
-    run_in_dir(test_dir.path(), "cargo", &["generate-lockfile"]);
+    run_cargo(test_dir.path(), &["generate-lockfile"]);
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "pkgid"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["pkgid"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "pkgid"]);
+    let cargo_result = run_cargo(test_dir.path(), &["pkgid"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -452,8 +448,8 @@ fn locate_project_finds_cargo_toml() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "locate-project"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["locate-project"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "locate-project"]);
+    let cargo_result = run_cargo(test_dir.path(), &["locate-project"]);
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
 
@@ -468,8 +464,8 @@ fn run_executes_binary_with_same_output() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_binary_project(test_dir.path(), "test-bin");
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "run"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["run"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "run"]);
+    let cargo_result = run_cargo(test_dir.path(), &["run"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -484,12 +480,12 @@ fn update_creates_same_lockfile() {
     create_minimal_project(test_dir.path(), "test-project");
 
     // Add a dependency so update has something to do
-    run_in_dir(test_dir.path(), "cargo", &["add", "serde"]);
+    run_cargo(test_dir.path(), &["add", "serde"]);
 
     // Remove Cargo.lock if it exists
     let _ = fs::remove_file(test_dir.path().join("Cargo.lock"));
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "update"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "update"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
 
@@ -503,10 +499,10 @@ fn fetch_downloads_dependencies() {
     create_minimal_project(test_dir.path(), "test-project");
 
     // Add a dependency
-    run_in_dir(test_dir.path(), "cargo", &["add", "serde", "--vers", "1.0"]);
+    run_cargo(test_dir.path(), &["add", "serde", "--vers", "1.0"]);
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "fetch"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["fetch"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "fetch"]);
+    let cargo_result = run_cargo(test_dir.path(), &["fetch"]);
 
     pretty_assert_eq!(hurry_result.exit_code, cargo_result.exit_code);
     pretty_assert_eq!(hurry_result.exit_code, 0);
@@ -517,14 +513,12 @@ fn init_with_vcs_none() {
     let hurry_dir = TempDir::new().expect("failed to create temp dir");
     let cargo_dir = TempDir::new().expect("failed to create temp dir");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         hurry_dir.path(),
-        "hurry",
         &["cargo", "init", "--vcs", "none", "--name", "test-lib"],
     );
-    let cargo_result = run_in_dir(
+    let cargo_result = run_cargo(
         cargo_dir.path(),
-        "cargo",
         &["init", "--vcs", "none", "--name", "test-lib"],
     );
 
@@ -540,14 +534,12 @@ fn init_with_edition() {
     let hurry_dir = TempDir::new().expect("failed to create temp dir");
     let cargo_dir = TempDir::new().expect("failed to create temp dir");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         hurry_dir.path(),
-        "hurry",
         &["cargo", "init", "--edition", "2021", "--name", "test-lib"],
     );
-    let cargo_result = run_in_dir(
+    let cargo_result = run_cargo(
         cargo_dir.path(),
-        "cargo",
         &["init", "--edition", "2021", "--name", "test-lib"],
     );
 
@@ -565,16 +557,11 @@ fn new_with_vcs_none() {
     let hurry_dir = TempDir::new().expect("failed to create temp dir");
     let cargo_dir = TempDir::new().expect("failed to create temp dir");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         hurry_dir.path(),
-        "hurry",
         &["cargo", "new", "myproject", "--vcs", "none"],
     );
-    let cargo_result = run_in_dir(
-        cargo_dir.path(),
-        "cargo",
-        &["new", "myproject", "--vcs", "none"],
-    );
+    let cargo_result = run_cargo(cargo_dir.path(), &["new", "myproject", "--vcs", "none"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -588,16 +575,11 @@ fn new_with_edition_2021() {
     let hurry_dir = TempDir::new().expect("failed to create temp dir");
     let cargo_dir = TempDir::new().expect("failed to create temp dir");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         hurry_dir.path(),
-        "hurry",
         &["cargo", "new", "myproject", "--edition", "2021"],
     );
-    let cargo_result = run_in_dir(
-        cargo_dir.path(),
-        "cargo",
-        &["new", "myproject", "--edition", "2021"],
-    );
+    let cargo_result = run_cargo(cargo_dir.path(), &["new", "myproject", "--edition", "2021"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -616,16 +598,11 @@ fn add_with_no_default_features() {
     create_minimal_project(hurry_dir.path(), "test-project");
     create_minimal_project(cargo_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         hurry_dir.path(),
-        "hurry",
         &["cargo", "add", "serde", "--no-default-features"],
     );
-    let cargo_result = run_in_dir(
-        cargo_dir.path(),
-        "cargo",
-        &["add", "serde", "--no-default-features"],
-    );
+    let cargo_result = run_cargo(cargo_dir.path(), &["add", "serde", "--no-default-features"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -644,12 +621,8 @@ fn add_with_optional_flag() {
     create_minimal_project(hurry_dir.path(), "test-project");
     create_minimal_project(cargo_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(
-        hurry_dir.path(),
-        "hurry",
-        &["cargo", "add", "serde", "--optional"],
-    );
-    let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["add", "serde", "--optional"]);
+    let hurry_result = run_hurry(hurry_dir.path(), &["cargo", "add", "serde", "--optional"]);
+    let cargo_result = run_cargo(cargo_dir.path(), &["add", "serde", "--optional"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -668,14 +641,12 @@ fn add_with_rename() {
     create_minimal_project(hurry_dir.path(), "test-project");
     create_minimal_project(cargo_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         hurry_dir.path(),
-        "hurry",
         &["cargo", "add", "serde", "--rename", "serde_crate"],
     );
-    let cargo_result = run_in_dir(
+    let cargo_result = run_cargo(
         cargo_dir.path(),
-        "cargo",
         &["add", "serde", "--rename", "serde_crate"],
     );
 
@@ -697,15 +668,11 @@ fn remove_with_dev_flag() {
     create_minimal_project(cargo_dir.path(), "test-project");
 
     // Add dev dependency first
-    run_in_dir(hurry_dir.path(), "cargo", &["add", "--dev", "serde"]);
-    run_in_dir(cargo_dir.path(), "cargo", &["add", "--dev", "serde"]);
+    run_cargo(hurry_dir.path(), &["add", "--dev", "serde"]);
+    run_cargo(cargo_dir.path(), &["add", "--dev", "serde"]);
 
-    let hurry_result = run_in_dir(
-        hurry_dir.path(),
-        "hurry",
-        &["cargo", "remove", "--dev", "serde"],
-    );
-    let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["remove", "--dev", "serde"]);
+    let hurry_result = run_hurry(hurry_dir.path(), &["cargo", "remove", "--dev", "serde"]);
+    let cargo_result = run_cargo(cargo_dir.path(), &["remove", "--dev", "serde"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -725,15 +692,11 @@ fn remove_with_build_flag() {
     create_minimal_project(cargo_dir.path(), "test-project");
 
     // Add build dependency first
-    run_in_dir(hurry_dir.path(), "cargo", &["add", "--build", "cc"]);
-    run_in_dir(cargo_dir.path(), "cargo", &["add", "--build", "cc"]);
+    run_cargo(hurry_dir.path(), &["add", "--build", "cc"]);
+    run_cargo(cargo_dir.path(), &["add", "--build", "cc"]);
 
-    let hurry_result = run_in_dir(
-        hurry_dir.path(),
-        "hurry",
-        &["cargo", "remove", "--build", "cc"],
-    );
-    let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["remove", "--build", "cc"]);
+    let hurry_result = run_hurry(hurry_dir.path(), &["cargo", "remove", "--build", "cc"]);
+    let cargo_result = run_cargo(cargo_dir.path(), &["remove", "--build", "cc"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -756,12 +719,8 @@ fn check_with_all_targets() {
     )
     .unwrap();
 
-    let hurry_result = run_in_dir(
-        test_dir.path(),
-        "hurry",
-        &["cargo", "check", "--all-targets"],
-    );
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check", "--all-targets"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "check", "--all-targets"]);
+    let cargo_result = run_cargo(test_dir.path(), &["check", "--all-targets"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -772,8 +731,8 @@ fn check_with_release() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "check", "--release"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check", "--release"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "check", "--release"]);
+    let cargo_result = run_cargo(test_dir.path(), &["check", "--release"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -784,8 +743,8 @@ fn check_with_lib_only() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "check", "--lib"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check", "--lib"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "check", "--lib"]);
+    let cargo_result = run_cargo(test_dir.path(), &["check", "--lib"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -796,12 +755,8 @@ fn check_with_all_features() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(
-        test_dir.path(),
-        "hurry",
-        &["cargo", "check", "--all-features"],
-    );
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check", "--all-features"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "check", "--all-features"]);
+    let cargo_result = run_cargo(test_dir.path(), &["check", "--all-features"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -812,16 +767,11 @@ fn check_with_no_default_features() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         test_dir.path(),
-        "hurry",
         &["cargo", "check", "--no-default-features"],
     );
-    let cargo_result = run_in_dir(
-        test_dir.path(),
-        "cargo",
-        &["check", "--no-default-features"],
-    );
+    let cargo_result = run_cargo(test_dir.path(), &["check", "--no-default-features"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -831,10 +781,10 @@ fn check_with_no_default_features() {
 fn tree_with_depth() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
-    run_in_dir(test_dir.path(), "cargo", &["add", "serde"]);
+    run_cargo(test_dir.path(), &["add", "serde"]);
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "tree", "--depth", "1"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["tree", "--depth", "1"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "tree", "--depth", "1"]);
+    let cargo_result = run_cargo(test_dir.path(), &["tree", "--depth", "1"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -849,14 +799,10 @@ fn tree_with_depth() {
 fn tree_with_prefix_none() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
-    run_in_dir(test_dir.path(), "cargo", &["add", "serde"]);
+    run_cargo(test_dir.path(), &["add", "serde"]);
 
-    let hurry_result = run_in_dir(
-        test_dir.path(),
-        "hurry",
-        &["cargo", "tree", "--prefix", "none"],
-    );
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["tree", "--prefix", "none"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "tree", "--prefix", "none"]);
+    let cargo_result = run_cargo(test_dir.path(), &["tree", "--prefix", "none"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -866,14 +812,10 @@ fn tree_with_prefix_none() {
 fn tree_with_edges_no_dev() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
-    run_in_dir(test_dir.path(), "cargo", &["add", "serde"]);
+    run_cargo(test_dir.path(), &["add", "serde"]);
 
-    let hurry_result = run_in_dir(
-        test_dir.path(),
-        "hurry",
-        &["cargo", "tree", "--edges", "no-dev"],
-    );
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["tree", "--edges", "no-dev"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "tree", "--edges", "no-dev"]);
+    let cargo_result = run_cargo(test_dir.path(), &["tree", "--edges", "no-dev"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -883,14 +825,10 @@ fn tree_with_edges_no_dev() {
 fn tree_with_charset_ascii() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
-    run_in_dir(test_dir.path(), "cargo", &["add", "serde"]);
+    run_cargo(test_dir.path(), &["add", "serde"]);
 
-    let hurry_result = run_in_dir(
-        test_dir.path(),
-        "hurry",
-        &["cargo", "tree", "--charset", "ascii"],
-    );
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["tree", "--charset", "ascii"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "tree", "--charset", "ascii"]);
+    let cargo_result = run_cargo(test_dir.path(), &["tree", "--charset", "ascii"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -901,16 +839,11 @@ fn metadata_with_format_version() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         test_dir.path(),
-        "hurry",
         &["cargo", "metadata", "--format-version=1"],
     );
-    let cargo_result = run_in_dir(
-        test_dir.path(),
-        "cargo",
-        &["metadata", "--format-version=1"],
-    );
+    let cargo_result = run_cargo(test_dir.path(), &["metadata", "--format-version=1"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -928,14 +861,10 @@ fn metadata_with_format_version() {
 fn metadata_with_no_deps() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
-    run_in_dir(test_dir.path(), "cargo", &["add", "serde"]);
+    run_cargo(test_dir.path(), &["add", "serde"]);
 
-    let hurry_result = run_in_dir(
-        test_dir.path(),
-        "hurry",
-        &["cargo", "metadata", "--no-deps"],
-    );
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["metadata", "--no-deps"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "metadata", "--no-deps"]);
+    let cargo_result = run_cargo(test_dir.path(), &["metadata", "--no-deps"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -954,8 +883,8 @@ fn run_with_release() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_binary_project(test_dir.path(), "test-bin");
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "run", "--release"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["run", "--release"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "run", "--release"]);
+    let cargo_result = run_cargo(test_dir.path(), &["run", "--release"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -969,8 +898,8 @@ fn run_with_quiet_flag() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_binary_project(test_dir.path(), "test-bin");
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "run", "--quiet"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["run", "--quiet"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "run", "--quiet"]);
+    let cargo_result = run_cargo(test_dir.path(), &["run", "--quiet"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -986,14 +915,14 @@ fn clean_with_release_only() {
     create_minimal_project(test_dir.path(), "test-project");
 
     // Build both debug and release
-    run_in_dir(test_dir.path(), "cargo", &["build"]);
-    run_in_dir(test_dir.path(), "cargo", &["build", "--release"]);
+    run_cargo(test_dir.path(), &["build"]);
+    run_cargo(test_dir.path(), &["build", "--release"]);
 
     assert!(test_dir.path().join("target/debug").exists());
     assert!(test_dir.path().join("target/release").exists());
 
     // Clean only release
-    let result = run_in_dir(test_dir.path(), "hurry", &["cargo", "clean", "--release"]);
+    let result = run_hurry(test_dir.path(), &["cargo", "clean", "--release"]);
     pretty_assert_eq!(result.exit_code, 0);
 
     // Debug should still exist, release should be gone
@@ -1010,9 +939,8 @@ fn check_with_manifest_path() {
 
     // Run from parent directory with manifest path
     let manifest_path = project_dir.join("Cargo.toml");
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         test_dir.path(),
-        "hurry",
         &[
             "cargo",
             "check",
@@ -1020,9 +948,8 @@ fn check_with_manifest_path() {
             manifest_path.to_str().unwrap(),
         ],
     );
-    let cargo_result = run_in_dir(
+    let cargo_result = run_cargo(
         test_dir.path(),
-        "cargo",
         &["check", "--manifest-path", manifest_path.to_str().unwrap()],
     );
 
@@ -1036,10 +963,10 @@ fn check_with_locked_flag() {
     create_minimal_project(test_dir.path(), "test-project");
 
     // Generate lockfile first
-    run_in_dir(test_dir.path(), "cargo", &["generate-lockfile"]);
+    run_cargo(test_dir.path(), &["generate-lockfile"]);
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "check", "--locked"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check", "--locked"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "check", "--locked"]);
+    let cargo_result = run_cargo(test_dir.path(), &["check", "--locked"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -1051,10 +978,10 @@ fn check_with_frozen_flag() {
     create_minimal_project(test_dir.path(), "test-project");
 
     // Generate lockfile first
-    run_in_dir(test_dir.path(), "cargo", &["generate-lockfile"]);
+    run_cargo(test_dir.path(), &["generate-lockfile"]);
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "check", "--frozen"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check", "--frozen"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "check", "--frozen"]);
+    let cargo_result = run_cargo(test_dir.path(), &["check", "--frozen"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -1079,14 +1006,12 @@ feature2 = []
 "#;
     fs::write(test_dir.path().join("Cargo.toml"), cargo_toml).unwrap();
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         test_dir.path(),
-        "hurry",
         &["cargo", "check", "--features", "feature1,feature2"],
     );
-    let cargo_result = run_in_dir(
+    let cargo_result = run_cargo(
         test_dir.path(),
-        "cargo",
         &["check", "--features", "feature1,feature2"],
     );
 
@@ -1102,8 +1027,8 @@ fn add_with_version_constraint() {
     create_minimal_project(hurry_dir.path(), "test-project");
     create_minimal_project(cargo_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(hurry_dir.path(), "hurry", &["cargo", "add", "serde@1.0"]);
-    let cargo_result = run_in_dir(cargo_dir.path(), "cargo", &["add", "serde@1.0"]);
+    let hurry_result = run_hurry(hurry_dir.path(), &["cargo", "add", "serde@1.0"]);
+    let cargo_result = run_cargo(cargo_dir.path(), &["add", "serde@1.0"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -1146,8 +1071,8 @@ path = "src/bin2.rs"
     )
     .unwrap();
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "run", "--bin", "bin1"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["run", "--bin", "bin1"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "run", "--bin", "bin1"]);
+    let cargo_result = run_cargo(test_dir.path(), &["run", "--bin", "bin1"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -1161,12 +1086,8 @@ fn check_with_color_never() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(
-        test_dir.path(),
-        "hurry",
-        &["cargo", "check", "--color", "never"],
-    );
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check", "--color", "never"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "check", "--color", "never"]);
+    let cargo_result = run_cargo(test_dir.path(), &["check", "--color", "never"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -1181,8 +1102,8 @@ fn check_with_verbose() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "check", "--verbose"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check", "--verbose"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "check", "--verbose"]);
+    let cargo_result = run_cargo(test_dir.path(), &["check", "--verbose"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -1193,8 +1114,8 @@ fn check_with_quiet() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "check", "--quiet"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check", "--quiet"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "check", "--quiet"]);
+    let cargo_result = run_cargo(test_dir.path(), &["check", "--quiet"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -1205,8 +1126,8 @@ fn check_in_non_cargo_directory() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     // Don't create any Cargo.toml
 
-    let hurry_result = run_in_dir(test_dir.path(), "hurry", &["cargo", "check"]);
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["check"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "check"]);
+    let cargo_result = run_cargo(test_dir.path(), &["check"]);
 
     assert_ne!(hurry_result.exit_code, 0);
     assert_ne!(cargo_result.exit_code, 0);
@@ -1221,18 +1142,16 @@ fn add_nonexistent_package() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         test_dir.path(),
-        "hurry",
         &[
             "cargo",
             "add",
             "this-package-definitely-does-not-exist-xyz123",
         ],
     );
-    let cargo_result = run_in_dir(
+    let cargo_result = run_cargo(
         test_dir.path(),
-        "cargo",
         &["add", "this-package-definitely-does-not-exist-xyz123"],
     );
 
@@ -1246,14 +1165,10 @@ fn update_specific_package() {
     create_minimal_project(test_dir.path(), "test-project");
 
     // Add a dependency
-    run_in_dir(test_dir.path(), "cargo", &["add", "serde"]);
+    run_cargo(test_dir.path(), &["add", "serde"]);
 
-    let hurry_result = run_in_dir(
-        test_dir.path(),
-        "hurry",
-        &["cargo", "update", "--package", "serde"],
-    );
-    let cargo_result = run_in_dir(test_dir.path(), "cargo", &["update", "--package", "serde"]);
+    let hurry_result = run_hurry(test_dir.path(), &["cargo", "update", "--package", "serde"]);
+    let cargo_result = run_cargo(test_dir.path(), &["update", "--package", "serde"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -1263,18 +1178,13 @@ fn update_specific_package() {
 fn tree_with_package_filter() {
     let test_dir = TempDir::new().expect("failed to create temp dir");
     create_minimal_project(test_dir.path(), "test-project");
-    run_in_dir(test_dir.path(), "cargo", &["add", "serde"]);
+    run_cargo(test_dir.path(), &["add", "serde"]);
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         test_dir.path(),
-        "hurry",
         &["cargo", "tree", "--package", "test-project"],
     );
-    let cargo_result = run_in_dir(
-        test_dir.path(),
-        "cargo",
-        &["tree", "--package", "test-project"],
-    );
+    let cargo_result = run_cargo(test_dir.path(), &["tree", "--package", "test-project"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);
@@ -1300,16 +1210,11 @@ fn add_path_dependency() {
     create_minimal_project(&cargo_main, "main-project");
     create_minimal_project(&cargo_dep, "dep-project");
 
-    let hurry_result = run_in_dir(
+    let hurry_result = run_hurry(
         &hurry_main,
-        "hurry",
         &["cargo", "add", "dep-project", "--path", "../dep"],
     );
-    let cargo_result = run_in_dir(
-        &cargo_main,
-        "cargo",
-        &["add", "dep-project", "--path", "../dep"],
-    );
+    let cargo_result = run_cargo(&cargo_main, &["add", "dep-project", "--path", "../dep"]);
 
     pretty_assert_eq!(hurry_result.exit_code, 0);
     pretty_assert_eq!(cargo_result.exit_code, 0);

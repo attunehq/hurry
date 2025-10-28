@@ -9,19 +9,34 @@ use simple_test_case::test_case;
 use std::process::{Command, Stdio};
 
 /// Run a command and capture its output (both stdout and stderr).
-#[track_caller]
-fn run_command(name: &str, args: &[&str]) -> (String, String) {
+fn run_command(name: &str, args: &[&str]) -> std::io::Result<(String, String)> {
     let output = Command::new(name)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
-        .expect("failed to execute command");
+        .output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    Ok((stdout, stderr))
+}
 
-    (stdout, stderr)
+/// Run hurry-dev with the given arguments.
+#[track_caller]
+fn run_hurry(args: &[&str]) -> (String, String) {
+    match run_command("hurry-dev", args) {
+        Ok(output) => output,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            panic!("run `make install-dev` to install hurry-dev")
+        }
+        Err(e) => panic!("failed to execute 'hurry-dev': {e}"),
+    }
+}
+
+/// Run cargo with the given arguments.
+#[track_caller]
+fn run_cargo(args: &[&str]) -> (String, String) {
+    run_command("cargo", args).unwrap_or_else(|e| panic!("failed to execute 'cargo': {e}"))
 }
 
 /// Compare hurry output with cargo output for given args.
@@ -30,8 +45,8 @@ fn assert_passthrough(args: &[&str]) {
     let mut hurry_args = vec!["cargo"];
     hurry_args.extend_from_slice(args);
 
-    let (hurry_stdout, hurry_stderr) = run_command("hurry", &hurry_args);
-    let (cargo_stdout, cargo_stderr) = run_command("cargo", args);
+    let (hurry_stdout, hurry_stderr) = run_hurry(&hurry_args);
+    let (cargo_stdout, cargo_stderr) = run_cargo(args);
 
     pretty_assert_eq!(hurry_stdout, cargo_stdout, "stdout should match");
     pretty_assert_eq!(hurry_stderr, cargo_stderr, "stderr should match");
