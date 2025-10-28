@@ -179,12 +179,7 @@ EOF
 
         # Get commits and format them
         local commits
-        if [[ $i -eq 0 ]]; then
-            # For the first tag, show all commits
-            commits=$(git log "$commit_range" --pretty=format:"- %s" --reverse 2>/dev/null)
-        else
-            commits=$(git log "$commit_range" --pretty=format:"- %s" --reverse 2>/dev/null)
-        fi
+        commits=$(git log "$commit_range" --pretty=format:"- %s" --reverse 2>/dev/null)
 
         if [[ -n "$commits" ]]; then
             echo "$commits" >> "$output_file"
