@@ -26,13 +26,18 @@
 //! Juggling all these different path types has turned into a nightmare
 //! almost immediately, so we've created this module for our own path types
 //! that provide all the needs above and any others we find later.
+//!
+//! ## Cross-Platform Support
+//!
+//! This module supports both Unix and Windows paths. Paths are stored as-is
+//! without normalization, preserving the exact separators and format provided
+//! by the caller.
 
 use std::{
     any::type_name,
     borrow::Cow,
     ffi::{OsStr, OsString},
     marker::PhantomData,
-    os::unix::ffi::OsStrExt,
     path::{Component, Path, PathBuf},
     str::FromStr,
 };
@@ -93,18 +98,40 @@ macro_rules! mk_rel_dir {
 }
 
 /// Assert that the string provided indicates a relative path.
-///
-/// TODO: make this work on Windows too.
-#[cfg(not(target_os = "windows"))]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! assert_relative {
     ($path:literal) => {{
-        const _: () = assert!(
-            !const_str::starts_with!($path, '/'),
-            "{}",
-            const_str::format!("path is not relative: {:?}", $path),
-        );
+        #[cfg(unix)]
+        const _: () = {
+            assert!(!const_str::starts_with!($path, '/'), "path is not relative",);
+        };
+
+        #[cfg(windows)]
+        const _: () = {
+            // Reject drive letters: C:, D:, etc.
+            assert!(
+                !($path.len() >= 2
+                    && ($path.as_bytes()[0] as char).is_ascii_alphabetic()
+                    && $path.as_bytes()[1] == b':'),
+                "path has drive letter"
+            );
+
+            // Reject UNC paths: \\server or //server
+            assert!(
+                !const_str::starts_with!($path, "\\\\") && !const_str::starts_with!($path, "//"),
+                "path is UNC"
+            );
+
+            // Reject paths starting with separator.
+            // Note: While Windows paths do not naturally start with '/', cross-platform
+            // code or user input may provide such paths. This check is
+            // intentionally defensive to catch both cases.
+            assert!(
+                !const_str::starts_with!($path, '/') && !const_str::starts_with!($path, '\\'),
+                "path starts with separator"
+            );
+        };
     }};
 }
 
@@ -180,11 +207,23 @@ pub struct File;
 /// effectively just slot in (although we currently generate most methods
 /// using macros, not generics, so if we want plugin types to be supported
 /// we'll need to revisit that).
-//
-// TODO: This currently is not fully cross-platform as it does not attempt to
-// normalize components in the path; when we decide to add Windows support
-// we will need to handle this.
-#[cfg(not(target_os = "windows"))]
+///
+/// ## Path Normalization
+///
+/// This type does NOT perform path normalization. Paths are stored exactly as
+/// provided by the caller. In particular this means:
+/// - `some/path` and `some/path/` are NOT considered equivalent.
+/// - `some/path/../other` and `some/other` are NOT considered equivalent.
+/// - `SOME/path` and `some/path` are NOT considered equivalent, even on case
+///   insensitive file systems.
+/// - On Windows, `some\path` and `some/path` are NOT considered equivalent
+///   (though the OS treats them the same).
+///
+/// The reason for this is twofold: first, normalization would require lossy
+/// conversions (e.g., `to_string_lossy()`) that could lose information for
+/// non-UTF-8 paths. Second, we run into the validation issues noted earlier
+/// in the docs for this type. If the caller cares about true normalization,
+/// make sure to normalize before passing into this function.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Display)]
 #[display("{}", self.inner.display())]
 pub struct TypedPath<Base, Type> {
@@ -215,11 +254,6 @@ impl<B, T> TypedPath<B, T> {
     /// View the path as an OS string.
     pub fn as_os_str(&self) -> &OsStr {
         self.inner.as_os_str()
-    }
-
-    /// View the path as a plain byte slice.
-    pub fn as_bytes(&self) -> &[u8] {
-        self.inner.as_os_str().as_bytes()
     }
 
     /// Get the parent of the provided path, if one exists.
