@@ -29,10 +29,9 @@
 //!
 //! ## Cross-Platform Support
 //!
-//! This module supports both Unix and Windows paths. On Windows, paths are
-//! normalized to use forward slashes (`/`) internally for consistent hashing
-//! and comparison. This ensures cache keys remain stable regardless of which
-//! separator style is used in the source code.
+//! This module supports both Unix and Windows paths. Paths are stored as-is
+//! without normalization, preserving the exact separators and format provided
+//! by the caller.
 
 use std::{
     any::type_name,
@@ -208,9 +207,20 @@ pub struct File;
 ///
 /// ## Path Normalization
 ///
-/// On Windows, paths are normalized to use forward slashes (`/`) internally
-/// for consistent hashing and comparison across platforms. This ensures that
-/// cache keys remain stable regardless of which separator style is used.
+/// This type does NOT perform path normalization. Paths are stored exactly as
+/// provided by the caller. In particular this means:
+/// - `some/path` and `some/path/` are NOT considered equivalent.
+/// - `some/path/../other` and `some/other` are NOT considered equivalent.
+/// - `SOME/path` and `some/path` are NOT considered equivalent, even on case
+///   insensitive file systems.
+/// - On Windows, `some\path` and `some/path` are NOT considered equivalent
+///   (though the OS treats them the same).
+///
+/// The reason for this is twofold: first, normalization would require lossy
+/// conversions (e.g., `to_string_lossy()`) that could lose information for
+/// non-UTF-8 paths. Second, we run into the validation issues noted earlier
+/// in the docs for this type. If the caller cares about true normalization,
+/// make sure to normalize before passing into this function.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Display)]
 #[display("{}", self.inner.display())]
 pub struct TypedPath<Base, Type> {
@@ -222,30 +232,6 @@ pub struct TypedPath<Base, Type> {
 
     /// The inner path.
     inner: PathBuf,
-}
-
-/// Normalize a path for consistent hashing and comparison.
-///
-/// On Windows, converts all backslashes to forward slashes for internal
-/// representation. This ensures that cache keys remain stable regardless of
-/// which separator style is used.
-///
-/// On Unix, no transformation is needed.
-fn normalize_path(path: PathBuf) -> PathBuf {
-    #[cfg(windows)]
-    {
-        let s = path.to_string_lossy();
-        if s.contains('\\') {
-            PathBuf::from(s.replace('\\', "/"))
-        } else {
-            path
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        path
-    }
 }
 
 impl<B, T> TypedPath<B, T> {
@@ -362,7 +348,6 @@ impl<B: Validator, T: Validator> TryFrom<ty_from> for TypedPath<B, T> {
             reason = "This is only useless for one branch of the macro (i.e. PathBuf)"
         )]
         let value = PathBuf::from(value);
-        let value = normalize_path(value);
         B::validate(&value).with_context(|| format!("validate base {:?}", B::type_name()))?;
         T::validate(&value).with_context(|| format!("validate type {:?}", T::type_name()))?;
         Ok(Self::new_unchecked(value))
