@@ -71,6 +71,7 @@ tower-http = { workspace = true, features = ["trace"] }
 signal-hook = { workspace = true }
 reqwest.workspace = true
 is_executable = "1.0.5"
+directories = "6.0.0"
 
 [dev-dependencies]
 async-walkdir.workspace = true

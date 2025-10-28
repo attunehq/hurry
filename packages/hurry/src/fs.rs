@@ -197,18 +197,41 @@ impl IndexEntry {
 
 /// Determine the canonical cache path for the current user, if possible.
 ///
-/// This can fail if the user has no home directory,
-/// or if the home directory cannot be accessed.
+/// ## Strategy
+///
+/// Attempts to put the cache directory in the correct place depending on the
+/// conventions of the operating system in which hurry is running.
+///
+/// - Linux: `$XDG_CACHE_HOME/hurry/v2`
+/// - macOS: `$HOME/Library/Caches/com.attunehq.hurry/v2`
+/// - Windows: `%LOCALAPPDATA%\hurry\v2`
+///
+/// If unable to find those directories, falls back to:
+/// - Linux/macOS: `$HOME/.cache/hurry/v2`
+/// - Windows: `%USERPROFILE%\.cache\hurry\v2`
+///
+/// ## Errors
+///
+/// This can fail if the user has no home directory or if it cannot be accessed.
 #[instrument]
 pub async fn user_global_cache_path() -> Result<AbsDirPath> {
-    homedir::my_home()
-        .context("get user home directory")?
-        .ok_or_eyre("user has no home directory")?
-        .join(".cache")
-        .join("hurry")
-        .join("v2")
+    let dirs = spawn_blocking(|| directories::ProjectDirs::from("com", "attunehq", "hurry"))
+        .await
+        .expect("join task");
+
+    let base = if let Some(dirs) = dirs {
+        dirs.cache_dir().to_path_buf()
+    } else {
+        homedir::my_home()
+            .context("get user home directory")?
+            .ok_or_eyre("user has no home directory")?
+            .join(".cache")
+            .join("hurry")
+    };
+
+    base.join("v2")
         .pipe(AbsDirPath::try_from)
-        .tap_ok(|dir| trace!(?dir, "read user global cache path"))
+        .tap_ok(|dir| debug!(?dir, "user global cache path"))
 }
 
 /// Create the directory and all its parents, if they don't already exist.
