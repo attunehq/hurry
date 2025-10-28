@@ -19,7 +19,7 @@ jobs:
             - id: build
               run: |
                   START=$(date +%s)
-                  cargo build
+                  cargo build --verbose
                   END=$(date +%s)
                   DURATION=$((END - START))
                   echo "duration=$DURATION" >> $GITHUB_OUTPUT
@@ -38,7 +38,7 @@ jobs:
             - id: build
               run: |
                   START=$(date +%s)
-                  hurry-dev cargo build
+                  hurry-dev cargo build --verbose
                   END=$(date +%s)
                   DURATION=$((END - START))
                   echo "duration=$DURATION" >> $GITHUB_OUTPUT
@@ -59,7 +59,7 @@ jobs:
             - id: build
               run: |
                   START=$(date +%s)
-                  cargo build
+                  cargo build --verbose
                   END=$(date +%s)
                   DURATION=$((END - START))
                   echo "duration=$DURATION" >> $GITHUB_OUTPUT
@@ -83,7 +83,7 @@ jobs:
                   RUSTC_WRAPPER: sccache
               run: |
                   START=$(date +%s)
-                  cargo build
+                  cargo build --verbose
                   END=$(date +%s)
                   DURATION=$((END - START))
                   echo "duration=$DURATION" >> $GITHUB_OUTPUT

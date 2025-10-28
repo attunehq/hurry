@@ -62,7 +62,7 @@ runs:
         - name: Build hurry binary
           if: steps.check-path.outputs.found != 'true' && steps.check-download.outputs.found != 'true'
           shell: bash
-          run: cargo build --release --package hurry
+          run: cargo build --release --package hurry --verbose
 
         - name: Copy built binary to /tmp/hurry
           if: steps.check-path.outputs.found != 'true' && steps.check-download.outputs.found != 'true'
