@@ -72,10 +72,7 @@ check_requirements() {
         missing+=("aws")
     fi
 
-    # Check for gh cli
-    if ! command -v gh > /dev/null; then
-        missing+=("gh")
-    fi
+# (gh CLI check removed; not used in script)
 
     # Check for tar
     if ! command -v tar > /dev/null; then
