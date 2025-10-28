@@ -82,6 +82,10 @@ async fn main() -> Result<()> {
                 logger.init();
                 cmd::cache::reset::exec(opts).await
             }
+            cmd::cache::Command::Show => {
+                logger.init();
+                cmd::cache::show::exec().await
+            }
         },
         Command::Cargo { args } => {
             logger.init();
