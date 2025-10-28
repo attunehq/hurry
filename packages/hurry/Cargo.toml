@@ -80,3 +80,4 @@ pretty_assertions = { workspace = true }
 simple_test_case.workspace = true
 test-log = { workspace = true, features = ["trace"] }
 xshell = { workspace = true }
+workspace_root = { workspace = true }
