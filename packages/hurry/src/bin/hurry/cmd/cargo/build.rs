@@ -7,13 +7,12 @@
 use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use derive_more::Debug;
-use tap::Tap;
 use tracing::{debug, info, instrument, warn};
 
 use clients::Courier;
 use hurry::{
     cargo::{self, CargoBuildArguments, CargoCache, Profile, Workspace},
-    progress::{TransferBar, format_size, format_transfer_rate},
+    progress::TransferBar,
 };
 use url::Url;
 
@@ -93,21 +92,9 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Restore artifacts.
     let restored = if !options.skip_restore {
-        let start_time = std::time::Instant::now();
         let count = artifact_plan.artifacts.len() as u64;
         let progress = TransferBar::new(count, "Restoring cache");
-
-        cache
-            .restore(&artifact_plan, &progress)
-            .await?
-            .tap(|restored| {
-                progress.finish_with_message(format!(
-                    "Cache restored ({} files, {} at {})",
-                    restored.stats.files,
-                    format_size(restored.stats.bytes),
-                    format_transfer_rate(restored.stats.bytes, start_time)
-                ))
-            })
+        cache.restore(&artifact_plan, &progress).await?
     } else {
         Default::default()
     };

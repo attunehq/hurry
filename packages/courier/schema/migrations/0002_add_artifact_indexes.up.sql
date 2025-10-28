@@ -1,0 +1,2 @@
+CREATE INDEX idx_cargo_library_unit_build_artifact_build_id ON cargo_library_unit_build_artifact(library_unit_build_id);
+CREATE INDEX idx_cargo_library_unit_build_artifact_object_id ON cargo_library_unit_build_artifact(object_id);

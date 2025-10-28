@@ -36,51 +36,6 @@ impl CargoBuildArguments {
         Self(Vec::new())
     }
 
-    /// Parse from an iterator of strings.
-    pub fn from_iter(args: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
-        let mut raw = args.into_iter().map(|s| s.as_ref().to_string()).peekable();
-        let mut parsed = Vec::new();
-
-        while let Some(arg) = raw.next() {
-            // Handle verbose flag specially since -vv is a single argument
-            if arg.starts_with("-v") {
-                let count = arg.chars().filter(|c| *c == 'v').count();
-                parsed.push(CargoBuildArgument::Verbose(count as u8));
-                continue;
-            }
-
-            // Apply aliases to normalize short flags to long form
-            let arg = CargoBuildArgument::alias(&arg);
-
-            if !CargoBuildArgument::is_flag(arg) {
-                parsed.push(CargoBuildArgument::Positional(arg.to_string()));
-                continue;
-            }
-
-            if !CargoBuildArgument::flag_accepts_value(arg) {
-                parsed.push(CargoBuildArgument::parse(arg, None));
-                continue;
-            }
-
-            if let Some((flag, value)) = CargoBuildArgument::split_equals(arg) {
-                let flag = CargoBuildArgument::alias(flag);
-                parsed.push(CargoBuildArgument::parse(flag, Some(value)));
-                continue;
-            }
-
-            match raw.peeking_next(|upcoming| !CargoBuildArgument::is_flag(upcoming)) {
-                Some(upcoming) => {
-                    parsed.push(CargoBuildArgument::parse(arg, Some(&upcoming)));
-                }
-                None => {
-                    parsed.push(CargoBuildArgument::parse(arg, None));
-                }
-            }
-        }
-
-        Self(parsed)
-    }
-
     /// Convert to argv format for passing to `cargo build`.
     pub fn to_argv(&self) -> Vec<String> {
         self.0.iter().flat_map(|arg| arg.to_argv()).collect()
@@ -177,6 +132,56 @@ impl IntoIterator for CargoBuildArguments {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
+    }
+}
+
+/// Parse from an iterator of strings.
+impl<I> FromIterator<I> for CargoBuildArguments
+where
+    I: AsRef<str>,
+{
+    fn from_iter<T: IntoIterator<Item = I>>(iter: T) -> Self {
+        let mut raw = iter.into_iter().map(|s| s.as_ref().to_string()).peekable();
+        let mut parsed = Vec::new();
+
+        while let Some(arg) = raw.next() {
+            // Handle verbose flag specially since -vv is a single argument
+            if arg.starts_with("-v") {
+                let count = arg.chars().filter(|c| *c == 'v').count();
+                parsed.push(CargoBuildArgument::Verbose(count as u8));
+                continue;
+            }
+
+            // Apply aliases to normalize short flags to long form
+            let arg = CargoBuildArgument::alias(&arg);
+
+            if !CargoBuildArgument::is_flag(arg) {
+                parsed.push(CargoBuildArgument::Positional(arg.to_string()));
+                continue;
+            }
+
+            if !CargoBuildArgument::flag_accepts_value(arg) {
+                parsed.push(CargoBuildArgument::parse(arg, None));
+                continue;
+            }
+
+            if let Some((flag, value)) = CargoBuildArgument::split_equals(arg) {
+                let flag = CargoBuildArgument::alias(flag);
+                parsed.push(CargoBuildArgument::parse(flag, Some(value)));
+                continue;
+            }
+
+            match raw.peeking_next(|upcoming| !CargoBuildArgument::is_flag(upcoming)) {
+                Some(upcoming) => {
+                    parsed.push(CargoBuildArgument::parse(arg, Some(&upcoming)));
+                }
+                None => {
+                    parsed.push(CargoBuildArgument::parse(arg, None));
+                }
+            }
+        }
+
+        Self(parsed)
     }
 }
 

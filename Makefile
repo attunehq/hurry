@@ -29,7 +29,7 @@ machete:
 	cargo machete
 
 machete-fix:
-	cargo machete --fix
+	cargo machete --fix || true
 
 precommit: machete-fix autoinherit check-fix format sqlx-prepare
 

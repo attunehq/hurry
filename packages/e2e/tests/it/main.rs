@@ -9,7 +9,7 @@ pub mod thirdparty;
 
 #[test_log::test(tokio::test)]
 async fn run_docker() -> Result<()> {
-    let _ = color_eyre::install()?;
+    color_eyre::install()?;
 
     let container = Container::new()
         .repo("docker.io/library/ubuntu")
@@ -32,7 +32,7 @@ async fn run_docker() -> Result<()> {
 
 #[test_log::test(tokio::test)]
 async fn build_in_docker() -> Result<()> {
-    let _ = color_eyre::install()?;
+    color_eyre::install()?;
 
     let pwd = PathBuf::from("/");
     let hurry_root = pwd.join("hurry");

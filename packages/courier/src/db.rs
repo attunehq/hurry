@@ -7,6 +7,8 @@
 //! serialize or deserialize these types, create public-facing types that do so
 //! and are able to convert back and forth with the internal types.
 
+use std::collections::HashMap;
+
 use clients::courier::v1::{
     Key,
     cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest},
@@ -326,6 +328,163 @@ impl Postgres {
         );
 
         Ok(artifacts)
+    }
+
+    /// Restore multiple cargo cache entries in bulk using a single query.
+    ///
+    /// This is significantly faster than calling `cargo_cache_restore` in a
+    /// loop because it issues a single database query instead of N queries.
+    ///
+    /// The result maps resulting artifact files by the index of the request
+    /// that caused them, exactly as if the caller had invoked
+    /// [`Postgres::cargo_cache_restore`] for each item in the index.
+    #[tracing::instrument(name = "Postgres::cargo_cache_restore_bulk", skip(requests))]
+    pub async fn cargo_cache_restore_bulk(
+        &self,
+        requests: &[CargoRestoreRequest],
+    ) -> Result<HashMap<usize, Vec<ArtifactFile>>, Report> {
+        if requests.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mut tx = self.pool.begin().await?;
+
+        let mut request_indices = Vec::new();
+        let mut package_names = Vec::new();
+        let mut package_versions = Vec::new();
+        let mut targets = Vec::new();
+        let mut lib_hashes = Vec::new();
+        let mut build_comp_hashes = Vec::new();
+        let mut build_exec_hashes = Vec::new();
+        for (i, request) in requests.iter().enumerate() {
+            request_indices.push(i as i32);
+            package_names.push(request.package_name.as_str());
+            package_versions.push(request.package_version.as_str());
+            targets.push(request.target.as_str());
+            lib_hashes.push(request.library_crate_compilation_unit_hash.as_str());
+            build_comp_hashes.push(request.build_script_compilation_unit_hash.as_deref());
+            build_exec_hashes.push(request.build_script_execution_unit_hash.as_deref());
+        }
+
+        // Find all matching builds
+        let mut build_rows = sqlx::query!(
+            r#"
+            WITH request_data AS (
+                SELECT
+                    unnest($1::integer[]) as request_idx,
+                    unnest($2::text[]) as package_name,
+                    unnest($3::text[]) as package_version,
+                    unnest($4::text[]) as target,
+                    unnest($5::text[]) as lib_hash,
+                    unnest($6::text[]) as build_comp_hash,
+                    unnest($7::text[]) as build_exec_hash
+            )
+            SELECT
+                rd.request_idx,
+                clb.id as build_id,
+                clb.content_hash
+            FROM request_data rd
+            JOIN cargo_package cp ON cp.name = rd.package_name AND cp.version = rd.package_version
+            JOIN cargo_library_unit_build clb ON
+                clb.package_id = cp.id
+                AND clb.target = rd.target
+                AND clb.library_crate_compilation_unit_hash = rd.lib_hash
+                AND COALESCE(clb.build_script_compilation_unit_hash, '') = COALESCE(rd.build_comp_hash, '')
+                AND COALESCE(clb.build_script_execution_unit_hash, '') = COALESCE(rd.build_exec_hash, '')
+            "#,
+            &request_indices,
+            &package_names as &[&str],
+            &package_versions as &[&str],
+            &targets as &[&str],
+            &lib_hashes as &[&str],
+            &build_comp_hashes as &[Option<&str>],
+            &build_exec_hashes as &[Option<&str>]
+        )
+        .fetch(&mut *tx);
+
+        let mut build_id_to_request_idx = HashMap::new();
+        let mut request_idx_to_content_hash = HashMap::new();
+        while let Some(row) = build_rows.next().await {
+            let row = row.context("read row")?;
+            let Some(request_idx) = row.request_idx.map(|idx| idx as usize) else {
+                bail!("Missing request index for build row: {row:?}");
+            };
+
+            match request_idx_to_content_hash.get(&request_idx) {
+                None => {
+                    request_idx_to_content_hash.insert(request_idx, row.content_hash.clone());
+                    build_id_to_request_idx.insert(row.build_id, request_idx);
+                }
+                Some(existing_hash) if existing_hash != &row.content_hash => {
+                    let request = &requests[request_idx];
+                    warn!(
+                        existing_content_hash = ?existing_hash,
+                        new_content_hash = ?row.content_hash,
+                        package_name = %request.package_name,
+                        package_version = %request.package_version,
+                        "cache.restore.content_hash_mismatch"
+                    );
+                    // Remove this request_idx from consideration
+                    build_id_to_request_idx.retain(|_, idx| *idx != request_idx);
+                    request_idx_to_content_hash.remove(&request_idx);
+                }
+                Some(_) => {
+                    // Same content hash, just use first build_id
+                }
+            }
+        }
+
+        if build_id_to_request_idx.is_empty() {
+            debug!("cache.restore_bulk.all_misses");
+            return Ok(HashMap::new());
+        }
+
+        drop(build_rows);
+        let build_ids = build_id_to_request_idx.keys().copied().collect::<Vec<_>>();
+        let mut artifact_rows = sqlx::query!(
+            r#"
+            SELECT
+                clba.library_unit_build_id as build_id,
+                co.key as object_key,
+                clba.path,
+                clba.mtime,
+                clba.executable
+            FROM cargo_library_unit_build_artifact clba
+            JOIN cargo_object co ON clba.object_id = co.id
+            WHERE clba.library_unit_build_id = ANY($1)
+            "#,
+            &build_ids
+        )
+        .fetch(&mut *tx);
+
+        let mut results_by_request_idx = HashMap::<usize, Vec<ArtifactFile>>::new();
+        while let Some(row) = artifact_rows.next().await {
+            let row = row.context("read row")?;
+            let Some(&request_idx) = build_id_to_request_idx.get(&row.build_id) else {
+                bail!("Missing request index for build row: {row:?}");
+            };
+
+            let object_key = Key::from_hex(&row.object_key).context("parse object key")?;
+            let artifact = ArtifactFile::builder()
+                .object_key(object_key)
+                .path(row.path)
+                .mtime_nanos(row.mtime.to_u128().unwrap_or_default())
+                .executable(row.executable)
+                .build();
+
+            results_by_request_idx
+                .entry(request_idx)
+                .or_default()
+                .push(artifact);
+        }
+
+        debug!(
+            hits = results_by_request_idx.len(),
+            misses = requests.len() - results_by_request_idx.len(),
+            "cache.restore_bulk.complete"
+        );
+
+        Ok(results_by_request_idx)
     }
 }
 

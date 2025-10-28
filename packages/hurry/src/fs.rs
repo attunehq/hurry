@@ -564,6 +564,19 @@ pub async fn is_file(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
         .is_ok_and(|m| m.is_some_and(|m| m.is_file()))
 }
 
+/// Synchronously hash the contents of the file at the specified path.
+#[instrument]
+pub fn hash_file_sync(path: &AbsFilePath) -> Result<Key> {
+    let mut file =
+        std::fs::File::open(path.as_std_path()).with_context(|| format!("open file: {path}"))?;
+    let mut hasher = blake3::Hasher::new();
+    let bytes = std::io::copy(&mut file, &mut hasher).context("hash file")?;
+    let hash = hasher.finalize();
+    let key = Key::from_blake3(hash);
+    trace!(?path, hash = %key, ?bytes, "hash file");
+    Ok(key)
+}
+
 /// Hash the contents of the file at the specified path.
 #[instrument]
 pub async fn hash_file(path: &AbsFilePath) -> Result<Key> {
