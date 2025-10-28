@@ -45,7 +45,6 @@ walkdir = { workspace = true }
 rayon = { workspace = true }
 inquire = {workspace = true }
 colored = {workspace = true }
-location-macros = {workspace = true }
 futures = { workspace = true }
 tempfile = { workspace = true }
 home = { workspace = true }
