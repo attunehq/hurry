@@ -72,6 +72,11 @@ check_requirements() {
         missing+=("aws")
     fi
 
+    # Check for gh cli
+    if ! command -v gh > /dev/null; then
+        missing+=("gh")
+    fi
+
     # Check for tar
     if ! command -v tar > /dev/null; then
         missing+=("tar")
@@ -92,6 +97,7 @@ Please install the missing commands:
   cargo-set-version:  cargo install cargo-set-version
   jq:                 https://jqlang.github.io/jq/download/ (or: brew install jq, apt install jq)
   aws:                https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+  gh:                 https://cli.github.com/ (or: brew install gh, apt install gh)
   git:                https://git-scm.com/downloads
   tar/sha256sum:      (should be pre-installed on Unix systems)"
     fi
@@ -121,6 +127,75 @@ Environment:
   BUCKET           S3 bucket name (default: $BUCKET)
 EOF
     exit 0
+}
+
+generate_changelog() {
+    local output_file="$1"
+
+    info "Generating changelog from commit history"
+
+    # Get list of all tags sorted by version
+    local tags
+    tags=$(git tag -l 'v*' | sort -V)
+
+    # Start the changelog
+    cat > "$output_file" <<EOF
+# Hurry Changelog
+
+All notable changes to this project are documented here.
+
+EOF
+
+    # Process all releases and their commits
+    # Convert tags to array for easier indexing
+    local tags_array=()
+    while IFS= read -r tag; do
+        tags_array+=("$tag")
+    done <<< "$tags"
+
+    # Process tags in reverse order (newest first)
+    for ((i=${#tags_array[@]}-1; i>=0; i--)); do
+        local tag="${tags_array[$i]}"
+        local version="${tag#v}"
+
+        # Get the tag date
+        local tag_date
+        tag_date=$(git log -1 --format=%ai "$tag" 2>/dev/null | cut -d' ' -f1)
+
+        # Generate the version header
+        echo "## [$version] - $tag_date" >> "$output_file"
+        echo "" >> "$output_file"
+
+        # Get commits for this version
+        local commit_range
+        if [[ $i -eq 0 ]]; then
+            # First tag: get all commits up to and including this tag
+            commit_range="$tag"
+        else
+            # Get commits between previous tag and this tag
+            local prev_tag="${tags_array[$((i-1))]}"
+            commit_range="$prev_tag..$tag"
+        fi
+
+        # Get commits and format them
+        local commits
+        if [[ $i -eq 0 ]]; then
+            # For the first tag, show all commits
+            commits=$(git log "$commit_range" --pretty=format:"- %s" --reverse 2>/dev/null)
+        else
+            commits=$(git log "$commit_range" --pretty=format:"- %s" --reverse 2>/dev/null)
+        fi
+
+        if [[ -n "$commits" ]]; then
+            echo "$commits" >> "$output_file"
+        else
+            echo "- Initial release" >> "$output_file"
+        fi
+
+        echo "" >> "$output_file"
+    done
+
+    info "✓ Generated changelog with $(git tag -l 'v*' | wc -l | xargs) releases"
 }
 
 # Parse arguments
@@ -355,6 +430,14 @@ if [[ "$SKIP_UPLOAD" == "false" ]]; then
             --cache-control "no-cache, must-revalidate" \
             --profile "$AWS_PROFILE" || fail "Failed to upload versions.json"
 
+        # Generate and upload changelog
+        step "Generating and uploading changelog"
+        CHANGELOG_FILE="$ARTIFACT_DIR/CHANGELOG.md"
+        generate_changelog "$CHANGELOG_FILE"
+        aws s3 cp "$CHANGELOG_FILE" "s3://$BUCKET/releases/CHANGELOG.md" \
+            --cache-control "no-cache, must-revalidate" \
+            --profile "$AWS_PROFILE" || fail "Failed to upload CHANGELOG.md"
+
         # Upload install.sh to bucket root
         step "Uploading install.sh"
         aws s3 cp "$REPO_ROOT/scripts/install.sh" "s3://$BUCKET/install.sh" \
@@ -380,6 +463,9 @@ if [[ "$SKIP_UPLOAD" == "false" ]]; then
         echo ""
         echo "Versions manifest:"
         echo "  https://$BUCKET.s3.amazonaws.com/releases/versions.json"
+        echo ""
+        echo "Changelog:"
+        echo "  https://$BUCKET.s3.amazonaws.com/releases/CHANGELOG.md"
 
     else
         step "Skipping S3 upload (dry run)"
