@@ -1,9 +1,9 @@
 use clap::Subcommand;
 
-pub mod reset;
+pub mod start;
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum Command {
-    /// Reset the cache.
-    Reset(reset::Options),
+    /// Start the Hurry daemon.
+    Start(start::Options),
 }

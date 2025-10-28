@@ -198,9 +198,7 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Cache the built artifacts.
     if !options.skip_backup {
-        let count = artifact_plan.artifacts.len() as u64;
-        let progress = TransferBar::new(count, "Backing up cache");
-        cache.save(artifact_plan, &progress, &restored).await?;
+        cache.save(artifact_plan, restored).await?;
     }
 
     Ok(())

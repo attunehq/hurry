@@ -65,6 +65,11 @@ humansize = { workspace = true }
 scopeguard = { workspace = true }
 dashmap = { workspace = true }
 console = { workspace = true }
+sysinfo = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true, features = ["trace"] }
+signal-hook = { workspace = true }
+reqwest.workspace = true
 
 [dev-dependencies]
 async-walkdir.workspace = true

@@ -6,6 +6,7 @@
 
 pub mod cargo;
 pub mod cas;
+pub mod daemon;
 pub mod ext;
 pub mod fs;
 pub mod path;
