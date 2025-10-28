@@ -452,42 +452,44 @@ pub struct Metadata {
     pub mtime: SystemTime,
 
     /// Whether the file is executable.
-    ///
-    /// On unix, this is set according to the executable bit.
-    /// On windows, this is set according to file extension.
     pub executable: bool,
 }
 
 impl Metadata {
     /// Read the metadata from the provided file.
     #[instrument]
-    #[cfg(not(target_os = "windows"))]
     pub async fn from_file(path: &AbsFilePath) -> Result<Option<Self>> {
-        use std::os::unix::fs::PermissionsExt;
-        let metadata = match metadata(path.as_std_path()).await? {
-            Some(metadata) => metadata,
+        let path = path.as_std_path();
+        let (executable, metadata) = tokio::join!(is_executable(path), metadata(path));
+        let mtime = match metadata? {
+            Some(metadata) => metadata
+                .modified()
+                .with_context(|| format!("read file {path:?} mtime"))?,
             None => return Ok(None),
         };
-        let mtime = metadata
-            .modified()
-            .with_context(|| format!("read file {path:?} mtime"))?;
-        let executable = metadata.permissions().mode() & 0o111 != 0;
         Ok(Some(Self { mtime, executable }))
     }
 
     /// Set the metadata on the provided file.
+    ///
+    /// ## Windows
+    ///
+    /// This function does not attempt to set whether a file is executable on
+    /// Windows: in Windows files do not have "executable bits" and
+    /// therefore whether they are executable is an intrisic property of either
+    /// the path extension or the file itself.
     #[instrument]
-    #[cfg(not(target_os = "windows"))]
     pub async fn set_file(&self, path: &AbsFilePath) -> Result<()> {
-        use std::os::unix::fs::PermissionsExt;
-
         // We read the current metadata for the file so that we don't
         // accidentally clobber other fields (although it's not clear
         // that this is necessary- we mostly do this out of an abundance
         // of caution as we want to avoid breaking things).
         // If this ends up being too much of a performance hit we should
         // revisit.
+        #[cfg(not(target_os = "windows"))]
         if self.executable {
+            use std::os::unix::fs::PermissionsExt;
+
             let metadata = tokio::fs::metadata(path.as_std_path())
                 .await
                 .context("get metadata")?;
@@ -556,6 +558,20 @@ pub async fn metadata(
 #[instrument]
 pub async fn exists(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
     tokio::fs::try_exists(path).await.is_ok_and(identity)
+}
+
+/// Check whether the file is executable.
+///
+/// Returns false if there is an error checking whether the file is executable.
+/// Note that this sort of check is prone to race conditions- if you plan
+/// to do anything with the file after checking, you should probably
+/// just try to do the operation and handle the case of the file not existing.
+#[instrument]
+pub async fn is_executable(path: impl AsRef<std::path::Path> + StdDebug) -> bool {
+    let path = path.as_ref().to_path_buf();
+    spawn_blocking(move || is_executable::is_executable(path))
+        .await
+        .expect("join task")
 }
 
 /// Return whether the path represents a directory.

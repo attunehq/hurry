@@ -70,6 +70,7 @@ axum = { workspace = true }
 tower-http = { workspace = true, features = ["trace"] }
 signal-hook = { workspace = true }
 reqwest.workspace = true
+is_executable = "1.0.5"
 
 [dev-dependencies]
 async-walkdir.workspace = true
