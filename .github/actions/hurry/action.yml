@@ -1,0 +1,80 @@
+name: hurry
+description: Install and use hurry
+
+inputs:
+    cache-key:
+        description: "Cache key when building hurry"
+        required: false
+        default: "hurry-build"
+
+runs:
+    using: composite
+    steps:
+        - name: Check if hurry already in PATH
+          id: check-path
+          shell: bash
+          run: |
+              if command -v hurry &> /dev/null; then
+                echo "found=true" >> $GITHUB_OUTPUT
+              else
+                echo "found=false" >> $GITHUB_OUTPUT
+              fi
+
+        - name: Try to download artifact
+          if: steps.check-path.outputs.found != 'true'
+          id: download-artifact
+          uses: actions/download-artifact@v4
+          with:
+              name: hurry-binary
+              path: /tmp/hurry
+          continue-on-error: true
+
+        - name: Check if download succeeded
+          if: steps.check-path.outputs.found != 'true'
+          id: check-download
+          shell: bash
+          run: |
+              if [ -f /tmp/hurry/hurry ]; then
+                echo "found=true" >> $GITHUB_OUTPUT
+              else
+                echo "found=false" >> $GITHUB_OUTPUT
+              fi
+
+        - name: Install Rust toolchain
+          if: steps.check-path.outputs.found != 'true' && steps.check-download.outputs.found != 'true'
+          shell: bash
+          run: |
+              rustup toolchain install stable
+              rustup show
+
+        - name: Setup Rust cache
+          if: steps.check-path.outputs.found != 'true' && steps.check-download.outputs.found != 'true'
+          uses: Swatinem/rust-cache@v2
+          with:
+              shared-key: ${{ inputs.cache-key }}
+
+        - name: Build hurry binary
+          if: steps.check-path.outputs.found != 'true' && steps.check-download.outputs.found != 'true'
+          shell: bash
+          run: cargo build --release --package hurry
+
+        - name: Copy built binary to /tmp/hurry
+          if: steps.check-path.outputs.found != 'true' && steps.check-download.outputs.found != 'true'
+          shell: bash
+          run: |
+              mkdir -p /tmp/hurry
+              cp target/release/hurry /tmp/hurry/hurry
+
+        - name: Upload artifact
+          if: steps.check-path.outputs.found != 'true' && steps.check-download.outputs.found != 'true'
+          uses: actions/upload-artifact@v4
+          with:
+              name: hurry-binary
+              path: /tmp/hurry/hurry
+
+        - name: Add hurry to PATH
+          if: steps.check-path.outputs.found != 'true'
+          shell: bash
+          run: |
+              chmod +x /tmp/hurry/hurry
+              echo "/tmp/hurry" >> $GITHUB_PATH

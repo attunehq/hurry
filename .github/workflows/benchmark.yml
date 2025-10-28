@@ -6,9 +6,6 @@ on:
     workflow_dispatch:
 
 jobs:
-    hurry-build:
-        uses: ./.github/workflows/hurry.yml
-
     clean:
         runs-on: ubuntu-latest
         outputs:
@@ -29,7 +26,6 @@ jobs:
 
     hurry:
         runs-on: ubuntu-latest
-        needs: [hurry-build]
         outputs:
             duration: ${{ steps.build.outputs.duration }}
 
@@ -38,13 +34,7 @@ jobs:
             - run: |
                   rustup toolchain install stable
                   rustup show
-            - uses: actions/download-artifact@v4
-              with:
-                  name: hurry-binary
-                  path: /tmp/hurry
-            - run: |
-                  chmod +x /tmp/hurry/hurry
-                  echo "/tmp/hurry" >> $GITHUB_PATH
+            - uses: ./.github/actions/hurry
             - id: build
               run: |
                   START=$(date +%s)
