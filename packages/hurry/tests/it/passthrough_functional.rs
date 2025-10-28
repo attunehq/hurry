@@ -31,24 +31,29 @@
 //!
 //! ### Advanced Scenario Tests (15 tests)
 //! Tests for complex real-world scenarios:
-//! - **Manifest path**: Running commands with `--manifest-path` from different
+//! - Manifest path: Running commands with `--manifest-path` from different
 //!   directories
-//! - **Lockfile modes**: `--locked`, `--frozen` flags
-//! - **Feature combinations**: Multiple features specified together
-//! - **Version constraints**: Version specifications like `@1.0`
-//! - **Binary selection**: Running specific binaries with `--bin`
-//! - **Color control**: `--color never/always/auto`
-//! - **Verbosity control**: `--verbose`, `--quiet`
-//! - **Error cases**: Invalid directories, nonexistent packages
-//! - **Selective updates**: `--package` for specific dependency updates
-//! - **Package filtering**: `--package` in tree command
-//! - **Path dependencies**: Local path dependencies with `--path`
+//! - Lockfile modes: `--locked`, `--frozen` flags
+//! - Feature combinations: Multiple features specified together
+//! - Version constraints: Version specifications like `@1.0`
+//! - Binary selection: Running specific binaries with `--bin`
+//! - Color control: `--color never/always/auto`
+//! - Verbosity control: `--verbose`, `--quiet`
+//! - Error cases: Invalid directories, nonexistent packages
+//! - Selective updates: `--package` for specific dependency updates
+//! - Package filtering: `--package` in tree command
+//! - Path dependencies: Local path dependencies with `--path`
 //!
 //! ### Commands Not Tested
 //! These commands require external state/authentication:
 //! - `publish`, `login`, `logout`, `yank` (require registry authentication)
 //! - `install`, `uninstall` (modify global cargo state)
 //! - `search` (requires network and may have non-deterministic results)
+//!
+//! Even though they're not tested, we've built up enough validation through the
+//! other tests that these should be safe (we do the same thing for all
+//! passthrough commands). If necessary we can add tests for these specifically
+//! in the future.
 
 use pretty_assertions::assert_eq as pretty_assert_eq;
 use serde_json::Value;
