@@ -1,4 +1,4 @@
-.PHONY: help format check check-fix autoinherit machete machete-fix precommit dev release sqlx-prepare install
+.PHONY: help format check check-fix autoinherit machete machete-fix precommit dev release sqlx-prepare install install-dev
 
 .DEFAULT_GOAL := help
 
@@ -12,6 +12,7 @@ help:
 	@echo "  make release      - Build in release mode"
 	@echo "  make sqlx-prepare - Prepare sqlx metadata for courier and hurry"
 	@echo "  make install      - Install hurry locally"
+	@echo "  make install-dev  - Install hurry locally, renaming to 'hurry-dev'"
 
 format:
 	cargo +nightly fmt
@@ -43,4 +44,23 @@ sqlx-prepare:
 	cd packages/courier && cargo sqlx prepare --database-url $(COURIER_DATABASE_URL)
 
 install:
-	cargo install --path packages/hurry --locked
+	@CARGO_HOME=$${CARGO_HOME:-$$HOME/.cargo} && \
+		EXISTING_HURRY=$$(which hurry 2>/dev/null || echo "") && \
+		if [ -n "$$EXISTING_HURRY" ] && [ "$$EXISTING_HURRY" != "$$CARGO_HOME/bin/hurry" ]; then \
+			EXISTING_VERSION=$$($$EXISTING_HURRY --version 2>/dev/null || echo "unknown version"); \
+			echo "WARNING: Found existing '$$EXISTING_VERSION' at $$EXISTING_HURRY"; \
+			echo "This may conflict with the cargo-installed version at $$CARGO_HOME/bin/hurry"; \
+			echo "Consider using 'make install-dev' instead to install as hurry-dev"; \
+			echo ""; \
+		fi
+	@cargo install --path packages/hurry --locked --force
+	@CARGO_HOME=$${CARGO_HOME:-$$HOME/.cargo} && \
+		VERSION=$$($$CARGO_HOME/bin/hurry --version) && \
+		echo "Installed '$$VERSION' to $$CARGO_HOME/bin/hurry"
+
+install-dev:
+	@cargo install --path packages/hurry --locked --force
+	@CARGO_HOME=$${CARGO_HOME:-$$HOME/.cargo} && \
+		mv "$$CARGO_HOME/bin/hurry" "$$CARGO_HOME/bin/hurry-dev" && \
+		VERSION=$$($$CARGO_HOME/bin/hurry-dev --version) && \
+		echo "Installed '$$VERSION' to $$CARGO_HOME/bin/hurry-dev"
