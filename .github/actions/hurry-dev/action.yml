@@ -11,7 +11,7 @@ inputs:
     cache-key:
         description: "Cache key when building hurry"
         required: false
-        default: "hurry-build"
+        default: "build-hurry-dev"
 
 runs:
     using: composite
