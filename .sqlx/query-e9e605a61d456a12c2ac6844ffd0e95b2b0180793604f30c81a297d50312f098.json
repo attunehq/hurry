@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO cargo_library_unit_build_artifact (\n                    library_unit_build_id,\n                    object_id,\n                    path,\n                    mtime,\n                    executable\n                ) VALUES ($1, $2, $3, $4, $5)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Text",
+        "Numeric",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e9e605a61d456a12c2ac6844ffd0e95b2b0180793604f30c81a297d50312f098"
+}

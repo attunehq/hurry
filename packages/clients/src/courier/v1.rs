@@ -2,6 +2,7 @@
 
 use derive_more::{Debug, Display};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use tracing::{instrument, trace};
 
 pub mod cache;
 pub mod cas;
@@ -24,10 +25,13 @@ impl Key {
     }
 
     /// Attempt to parse the key from a hex string.
+    #[instrument(fields(hex = hex.as_ref()))]
     pub fn from_hex(hex: impl AsRef<str>) -> color_eyre::Result<Self> {
         use color_eyre::eyre::{Context, bail};
         let bytes = hex::decode(hex.as_ref()).context("decode hex")?;
-        if bytes.len() != 32 {
+        let len = bytes.len();
+        trace!(?bytes, ?len, "decoded hex");
+        if len != 32 {
             bail!("invalid hash length");
         }
         Ok(Self(bytes))
