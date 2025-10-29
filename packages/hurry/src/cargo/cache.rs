@@ -713,6 +713,7 @@ impl CargoCache {
         let metadata = fs::Metadata::builder()
             .mtime(mtime)
             .executable(file.executable)
+            .len(data.len() as u64)
             .build();
         fs::write(path, &data).await?;
         metadata.set_file(path).await?;

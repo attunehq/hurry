@@ -476,6 +476,9 @@ pub struct Metadata {
 
     /// Whether the file is executable.
     pub executable: bool,
+
+    /// The size of the file in bytes.
+    pub len: u64,
 }
 
 impl Metadata {
@@ -484,13 +487,18 @@ impl Metadata {
     pub async fn from_file(path: &AbsFilePath) -> Result<Option<Self>> {
         let path = path.as_std_path();
         let (executable, metadata) = tokio::join!(is_executable(path), metadata(path));
-        let mtime = match metadata? {
-            Some(metadata) => metadata
-                .modified()
-                .with_context(|| format!("read file {path:?} mtime"))?,
+        let metadata = match metadata? {
+            Some(metadata) => metadata,
             None => return Ok(None),
         };
-        Ok(Some(Self { mtime, executable }))
+        let mtime = metadata
+            .modified()
+            .with_context(|| format!("read file {path:?} mtime"))?;
+        Ok(Some(Self {
+            mtime,
+            executable,
+            len: metadata.len(),
+        }))
     }
 
     /// Set the metadata on the provided file.
