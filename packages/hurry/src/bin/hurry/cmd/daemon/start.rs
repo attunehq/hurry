@@ -130,13 +130,22 @@ pub async fn exec(
     // an ephemeral port, this does not conflict with typical userspace ports (3000,
     // 8000, 8080, etc) or service ports.
     //
-    // From ip(7): "An ephemeral port is allocated to a socket in the following
+    // Linux ip(7): "An ephemeral port is allocated to a socket in the following
     // circumstances: [...] the port number in a socket address is specified as 0
-    // when calling bind(2)".
+    // when calling bind(2)". I can't find macOS developer docs that explicitly
+    // document this, but from observed behavior it appears to act the same;
+    // it's also relatively rare for core functionality like this to diverge
+    // between Linux and macOS.
+    //
+    // Windows bind(): "For TCP/IP, if the port is specified as zero, the service
+    // provider assigns a unique port to the application from the dynamic client
+    // port range. On Windows Vista and later, the dynamic client port range is a
+    // value between 49152 and 65535."
     //
     // References:
     // - https://man7.org/linux/man-pages/man7/ip.7.html (see ip_local_port_range)
-    // - https://stackoverflow.com/questions/5895751 (portability discussion)
+    // - https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-bind
+    // - https://stackoverflow.com/questions/5895751 (portability/macOS discussion)
     let listener = tokio::net::TcpListener::bind("localhost:0")
         .await
         .context("open local server")?;
