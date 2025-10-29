@@ -97,6 +97,13 @@ pub async fn exec(
     // Install a handler that ignores SIGHUP so that terminal exits don't kill
     // the daemon. I can't get anything to work with proper double-fork
     // daemonization so we'll just do this for now.
+    //
+    // In Windows, processes are not automatically signaled to exit when their
+    // parent exits, so I don't think there's a need to do anything special here.
+    //
+    // TODO: Validate whether the daemon actually works in Windows or if we need
+    // additional setup when launching it.
+    #[cfg(unix)]
     unsafe {
         signal_hook::low_level::register(signal_hook::consts::SIGHUP, || {
             warn!("ignoring SIGHUP");
