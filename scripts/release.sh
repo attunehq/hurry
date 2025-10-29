@@ -431,13 +431,17 @@ if [[ "$SKIP_UPLOAD" == "false" ]]; then
             --cache-control "no-cache, must-revalidate" \
             --profile "$AWS_PROFILE" || fail "Failed to upload versions.json"
 
-        # Generate and upload changelog
-        step "Generating and uploading changelog"
-        CHANGELOG_FILE="$ARTIFACT_DIR/CHANGELOG.md"
-        generate_changelog "$CHANGELOG_FILE"
-        aws s3 cp "$CHANGELOG_FILE" "s3://$BUCKET/releases/CHANGELOG.md" \
-            --cache-control "no-cache, must-revalidate" \
-            --profile "$AWS_PROFILE" || fail "Failed to upload CHANGELOG.md"
+        # Generate and upload changelog (only for stable releases)
+        if [[ "$PRERELEASE" == "false" ]]; then
+            step "Generating and uploading changelog"
+            CHANGELOG_FILE="$ARTIFACT_DIR/CHANGELOG.md"
+            generate_changelog "$CHANGELOG_FILE"
+            aws s3 cp "$CHANGELOG_FILE" "s3://$BUCKET/releases/CHANGELOG.md" \
+                --cache-control "no-cache, must-revalidate" \
+                --profile "$AWS_PROFILE" || fail "Failed to upload CHANGELOG.md"
+        else
+            info "Skipping changelog update (prerelease version)"
+        fi
 
         # Upload install.sh to bucket root
         step "Uploading install.sh"
