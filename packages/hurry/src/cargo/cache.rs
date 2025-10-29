@@ -1,13 +1,6 @@
 use cargo_metadata::TargetKind;
-use clients::{
-    Courier,
-    courier::v1::{
-        Key,
-        cache::{ArtifactFile, CargoBulkRestoreHit, CargoRestoreRequest},
-    },
-};
 use color_eyre::{
-    Result,
+    Result, Section, SectionExt,
     eyre::{Context as _, OptionExt, bail, eyre},
 };
 use dashmap::DashSet;
@@ -26,7 +19,7 @@ use std::{
 };
 use tap::Pipe as _;
 use tokio::{io::AsyncBufReadExt as _, task::JoinSet};
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, instrument, trace, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -36,10 +29,20 @@ use crate::{
         Profile, QualifiedPath, RootOutput, RustcMetadata, Workspace,
     },
     cas::CourierCas,
-    daemon::{self, CargoUploadStatus, DaemonReadyMessage, daemon_is_running, daemon_paths},
+    daemon::{
+        CargoUploadRequest, CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse,
+        DaemonPaths, DaemonReadyMessage,
+    },
     fs, mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith},
     progress::TransferBar,
+};
+use clients::{
+    Courier,
+    courier::v1::{
+        Key,
+        cache::{ArtifactFile, CargoBulkRestoreHit, CargoRestoreRequest},
+    },
 };
 
 /// Statistics about cache operations.
@@ -428,11 +431,19 @@ impl CargoCache {
     #[instrument(name = "CargoCache::save", skip(artifact_plan, restored))]
     pub async fn save(&self, artifact_plan: ArtifactPlan, restored: RestoreState) -> Result<Uuid> {
         trace!(?artifact_plan, "artifact plan");
-        let daemon_paths = daemon_paths().await?;
+        let paths = DaemonPaths::initialize().await?;
 
-        // Start daemon if it's not already running.
-        let is_running = daemon_is_running(&daemon_paths.pid_file_path).await?;
-        if !is_running {
+        // Start daemon if it's not already running. If it is, try to read its context
+        // file to get its url, which we need to know in order to communicate with it.
+        let daemon = if paths.daemon_running().await? {
+            let context = fs::read_buffered_utf8(&paths.context_path)
+                .await
+                .context("read daemon context file")?
+                .ok_or_eyre("no daemon context file")?;
+            serde_json::from_str::<DaemonReadyMessage>(&context)
+                .context("parse daemon context")
+                .with_section(|| context.header("Daemon context file:"))?
+        } else {
             // TODO: Ideally we'd replace this with proper double-fork daemonization to
             // avoid the security and compatibility concerns here: someone could replace the
             // binary at this path in the time between when this binary launches and when it
@@ -455,49 +466,26 @@ impl CargoCache {
             let mut child = cmd.spawn()?;
             let stdout = child.stdout.take().ok_or_eyre("daemon has no stdout")?;
             let mut stdout = tokio::io::BufReader::new(stdout).lines();
+
             // This value was chosen arbitrarily. Adjust as needed.
-            const DAEMON_STARTUP_TIMEOUT_SECS: u64 = 5;
-            match tokio::time::timeout(
-                Duration::from_secs(DAEMON_STARTUP_TIMEOUT_SECS),
-                stdout.next_line(),
-            )
-            .await
-            {
-                Ok(Ok(Some(line))) => {
-                    debug!(?line, "received daemon output line");
-                    match serde_json::from_str::<DaemonReadyMessage>(&line) {
-                        Ok(msg) => {
-                            debug!(?msg, "received daemon ready message");
-                        }
-                        Err(err) => {
-                            error!(?err, "could not parse daemon output");
-                            bail!("could not parse daemon output");
-                        }
-                    }
-                }
-                Ok(Ok(None)) => {
-                    error!("daemon closed pipe unexpectedly");
-                    bail!("daemon crashed on startup");
-                }
-                Ok(Err(err)) => {
-                    error!(?err, "could not read daemon output");
-                    bail!("daemon not ready");
-                }
-                Err(elapsed) => {
-                    error!(?elapsed, "daemon timed out while starting");
-                    bail!("could not start daemon");
-                }
-            }
-        }
+            const DAEMON_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+            let line = tokio::time::timeout(DAEMON_STARTUP_TIMEOUT, stdout.next_line())
+                .await
+                .map_err(|elapsed| eyre!("daemon startup timed out after {elapsed:?}"))?
+                .context("read daemon output")?
+                .ok_or_eyre("daemon crashed on startup")?;
+            serde_json::from_str::<DaemonReadyMessage>(&line)
+                .context("parse daemon ready message")
+                .with_section(|| line.header("Daemon output:"))?
+        };
 
         // Connect to daemon HTTP server.
-        let client = reqwest::Client::builder()
-            .unix_socket(daemon_paths.socket_path.as_std_path())
-            .build()?;
+        let client = reqwest::Client::default();
+        let endpoint = format!("http://{}/api/v0/cargo/upload", daemon.url);
 
         // Send upload request.
         let request_id = Uuid::new_v4();
-        let request = daemon::CargoUploadRequest {
+        let request = CargoUploadRequest {
             request_id,
             courier_url: self.courier_url.clone(),
             ws: self.ws.clone(),
@@ -507,10 +495,12 @@ impl CargoCache {
         };
         trace!(?request, "submitting upload request");
         let response = client
-            .post("http://localhost/api/v0/cargo/upload")
+            .post(&endpoint)
             .json(&request)
             .send()
-            .await?;
+            .await
+            .with_context(|| format!("send upload request to daemon at: {endpoint}"))
+            .with_section(|| format!("{daemon:?}").header("Daemon context:"))?;
         trace!(?response, "got upload response");
 
         Ok(request_id)
@@ -518,23 +508,36 @@ impl CargoCache {
 
     #[instrument(name = "CargoCache::wait_for_upload")]
     pub async fn wait_for_upload(&self, request_id: &Uuid) -> Result<()> {
-        let daemon_paths = daemon_paths().await?;
-        let client = reqwest::Client::builder()
-            .unix_socket(daemon_paths.socket_path.as_std_path())
-            .build()?;
-        let request = daemon::CargoUploadStatusRequest {
+        let paths = DaemonPaths::initialize().await?;
+        let daemon = if paths.daemon_running().await? {
+            let context = fs::read_buffered_utf8(&paths.context_path)
+                .await
+                .context("read daemon context file")?
+                .ok_or_eyre("no daemon context file")?;
+            serde_json::from_str::<DaemonReadyMessage>(&context)
+                .context("parse daemon context")
+                .with_section(|| context.header("Daemon context file:"))?
+        } else {
+            bail!("daemon is not running");
+        };
+
+        let client = reqwest::Client::default();
+        let endpoint = format!("http://{}/api/v0/cargo/status", daemon.url);
+        let request = CargoUploadStatusRequest {
             request_id: *request_id,
         };
 
         loop {
             trace!(?request, "submitting upload status request");
             let response = client
-                .post("http://localhost/api/v0/cargo/status")
+                .post(&endpoint)
                 .json(&request)
                 .send()
-                .await?;
+                .await
+                .with_context(|| format!("send upload status request to daemon at: {endpoint}"))
+                .with_section(|| format!("{daemon:?}").header("Daemon context:"))?;
             trace!(?response, "got upload status response");
-            let response = response.json::<daemon::CargoUploadStatusResponse>().await?;
+            let response = response.json::<CargoUploadStatusResponse>().await?;
             trace!(?response, "parsed upload status response");
             if matches!(response.status, Some(CargoUploadStatus::Complete)) {
                 break;
