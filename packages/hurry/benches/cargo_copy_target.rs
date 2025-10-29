@@ -14,8 +14,8 @@ use hurry::{
     mk_rel_dir,
     path::{AbsDirPath, JoinWith},
 };
-use location_macros::workspace_dir;
 use tempfile::TempDir;
+use workspace_root::get_workspace_root;
 
 fn main() {
     divan::main();
@@ -382,8 +382,8 @@ mod using_tokio {
 
 #[track_caller]
 pub fn current_workspace() -> AbsDirPath {
-    let ws = workspace_dir!();
-    AbsDirPath::try_from(ws).unwrap_or_else(|err| panic!("parse {ws:?} as abs dir: {err:?}"))
+    let ws = get_workspace_root();
+    AbsDirPath::try_from(&ws).unwrap_or_else(|err| panic!("parse {ws:?} as abs dir: {err:?}"))
 }
 
 #[track_caller]

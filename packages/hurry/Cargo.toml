@@ -45,7 +45,6 @@ walkdir = { workspace = true }
 rayon = { workspace = true }
 inquire = {workspace = true }
 colored = {workspace = true }
-location-macros = {workspace = true }
 futures = { workspace = true }
 tempfile = { workspace = true }
 home = { workspace = true }
@@ -70,8 +69,8 @@ axum = { workspace = true }
 tower-http = { workspace = true, features = ["trace"] }
 signal-hook = { workspace = true }
 reqwest.workspace = true
-is_executable = "1.0.5"
-directories = "6.0.0"
+is_executable = { workspace = true }
+directories = { workspace = true }
 
 [dev-dependencies]
 async-walkdir.workspace = true
@@ -81,3 +80,4 @@ pretty_assertions = { workspace = true }
 simple_test_case.workspace = true
 test-log = { workspace = true, features = ["trace"] }
 xshell = { workspace = true }
+workspace_root = { workspace = true }

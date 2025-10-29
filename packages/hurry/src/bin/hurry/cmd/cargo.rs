@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use clap::{Args, Parser};
 use color_eyre::{Result, eyre::Context};
 use hurry::cargo;
+use tracing::debug;
 
 pub mod build;
 
@@ -28,6 +29,18 @@ pub async fn exec(arguments: Vec<String>) -> Result<()> {
     let Some((command, options)) = arguments.split_first() else {
         return cargo::invoke("", Vec::<String>::new()).await;
     };
+
+    // If this is Windows, just pass through to `cargo` unconditionally.
+    //
+    // Note: we don't use `#[cfg]` on this whole function because we want to have a
+    // bunch of conditional modules/functions/etc. We also want to make sure
+    // that we're at least _compiling_ properly for Windows moving forward; we're
+    // doing this though because we're not sure that we're _working_ properly
+    // for Windows yet. For more context, see issue #153.
+    if cfg!(target_os = "windows") {
+        debug!("windows currently unconditionally passes through all commands");
+        return cargo::invoke(command, options).await;
+    }
 
     // The first argument being a flag means we're running against `cargo` directly.
     if command.starts_with('-') {
