@@ -98,8 +98,12 @@ pub async fn exec(
     // the daemon. I can't get anything to work with proper double-fork
     // daemonization so we'll just do this for now.
     //
-    // In Windows, processes are not automatically signaled to exit when their
-    // parent exits, so I don't think there's a need to do anything special here.
+    // The intention of registering this hook is to prevent hurry from closing if
+    // the parent shell that launched it is closed. In Windows however, processes
+    // are not automatically signaled to exit when their parent exits: launching
+    // a program inside a CMD or Powershell instance and then closing that session
+    // does not make the program close. Given this I don't think there's a need to
+    // do anything special here in Windows.
     //
     // TODO: Validate whether the daemon actually works in Windows or if we need
     // additional setup when launching it.
