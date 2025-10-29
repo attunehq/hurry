@@ -31,15 +31,12 @@ pub async fn exec(options: Options) -> Result<()> {
 
     for path in files.into_iter().sorted() {
         let rel = path.relative_to(&root)?;
-        let name = path
-            .file_name()
-            .ok_or_else(|| eyre!("file has no name: {path:?}"))?
-            .to_string_lossy()
+        let name = rel
+            .to_string()
             .blue();
 
-        let indent = "  ".repeat(rel.components().count().saturating_sub(1));
         let metadata = Metadata::from_file(&path).await.context("read metadata")?;
-        println!("{indent}{name} -> {metadata:?}");
+        println!("{name} -> {metadata:?}");
     }
 
     Ok(())
