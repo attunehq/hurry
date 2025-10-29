@@ -11,12 +11,11 @@ $ hurry cargo build
 
 # Installation
 
-Hurry provides easy-to-use installation scripts for macOS and Linux.
-
-> [!NOTE]
-> Windows is not yet supported, but is planned.
+Hurry provides easy-to-use installation scripts for all major platforms.
 
 ## Quick Install
+
+### Unix (macOS/Linux)
 
 Install the latest version with:
 
@@ -30,7 +29,7 @@ The installer will:
 - Verify checksums for security
 - Install to `~/.local/bin` by default
 
-### Installation Options
+#### Installation Options
 
 ```shell
 # Install to a specific directory
@@ -41,6 +40,34 @@ curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash -s -- -v 0.
 
 # Get help
 curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash -s -- -h
+```
+
+### Windows
+
+Install the latest version with PowerShell:
+
+```powershell
+irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
+```
+
+The installer will:
+- Detect your architecture automatically
+- Download the appropriate binary from S3
+- Verify checksums for security
+- Install to `$env:LOCALAPPDATA\Programs\hurry` by default
+- Automatically add to your PATH
+
+#### Installation Options
+
+```powershell
+# Install a specific version
+$env:Version="0.2.0"; irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
+
+# Install to a custom directory
+$env:BinDir="C:\Tools"; irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
+
+# Show help
+$env:Help="true"; irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
 ```
 
 ## Supported Platforms
@@ -55,6 +82,7 @@ Pre-compiled binaries are available for:
 | Linux | ARM64 (glibc) | `aarch64-unknown-linux-gnu` |
 | Linux | x86_64 (musl) | `x86_64-unknown-linux-musl` |
 | Linux | ARM64 (musl) | `aarch64-unknown-linux-musl` |
+| Windows | x86_64 | `x86_64-pc-windows-gnu` |
 
 ## Manual Installation
 
