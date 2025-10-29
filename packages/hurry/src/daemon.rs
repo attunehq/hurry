@@ -1,10 +1,7 @@
 mod cargo;
 
 pub use cargo::{
-    CargoUploadRequest,
-    CargoUploadResponse,
-    CargoUploadStatus,
-    CargoUploadStatusRequest,
+    CargoUploadRequest, CargoUploadResponse, CargoUploadStatus, CargoUploadStatusRequest,
     CargoUploadStatusResponse,
 };
 
