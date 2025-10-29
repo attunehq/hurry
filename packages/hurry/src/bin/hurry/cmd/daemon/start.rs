@@ -122,6 +122,17 @@ pub async fn exec(
         }
     }
 
+    // Bind to port 0 to get a random ephemeral port from the OS. Since this binds
+    // an ephemeral port, this does not conflict with typical userspace ports (3000,
+    // 8000, 8080, etc) or service ports.
+    //
+    // From ip(7): "An ephemeral port is allocated to a socket in the following
+    // circumstances: [...] the port number in a socket address is specified as 0
+    // when calling bind(2)".
+    //
+    // References:
+    // - https://man7.org/linux/man-pages/man7/ip.7.html (see ip_local_port_range)
+    // - https://stackoverflow.com/questions/5895751 (portability discussion)
     let listener = tokio::net::TcpListener::bind("localhost:0")
         .await
         .context("open local server")?;
