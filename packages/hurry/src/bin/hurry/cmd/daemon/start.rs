@@ -56,7 +56,7 @@ pub async fn exec(
     let cache_dir = hurry::fs::user_global_cache_path().await?;
     hurry::fs::create_dir_all(&cache_dir).await?;
 
-    let paths = DaemonPaths::new().await?;
+    let paths = DaemonPaths::initialize().await?;
     let pid = std::process::id();
     let log_file_path = cache_dir.try_join_file(format!("hurryd.{}.log", pid))?;
 

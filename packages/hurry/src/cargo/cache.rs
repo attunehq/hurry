@@ -419,7 +419,7 @@ impl CargoCache {
     #[instrument(name = "CargoCache::save", skip(artifact_plan, restored))]
     pub async fn save(&self, artifact_plan: ArtifactPlan, restored: RestoreState) -> Result<()> {
         trace!(?artifact_plan, "artifact plan");
-        let paths = DaemonPaths::new().await?;
+        let paths = DaemonPaths::initialize().await?;
 
         // Start daemon if it's not already running. If it is, try to read its context
         // file to get its url, which we need to know in order to communicate with it.

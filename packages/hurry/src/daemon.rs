@@ -26,7 +26,7 @@ pub struct DaemonPaths {
 }
 
 impl DaemonPaths {
-    pub async fn new() -> Result<DaemonPaths> {
+    pub async fn initialize() -> Result<DaemonPaths> {
         let hurry_cache_dir = fs::user_global_cache_path().await?;
         let pid_file_path = hurry_cache_dir.join(mk_rel_file!("hurryd.pid"));
         let context_path = hurry_cache_dir.join(mk_rel_file!("hurryd.json"));
