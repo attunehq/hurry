@@ -10,8 +10,8 @@ use e2e::{
     temporary_directory,
 };
 use itertools::Itertools;
-use location_macros::workspace_dir;
 use simple_test_case::test_case;
+use workspace_root::get_workspace_root;
 
 /// Exercises building and caching the project in a single directory.
 #[test_case("attunehq", "hurry-tests", "test/tiny"; "attunehq/hurry-tests:test/tiny")]
@@ -23,7 +23,7 @@ async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 
     let pwd = PathBuf::from("/");
     let container = Container::debian_rust()
-        .volume_bind(workspace_dir!(), "/hurry-workspace")
+        .volume_bind(get_workspace_root(), "/hurry-workspace")
         .command(Command::install_hurry("/hurry-workspace"))
         .start()
         .await?;
@@ -105,7 +105,7 @@ async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 async fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
     let pwd = PathBuf::from("/");
     let container = Container::debian_rust()
-        .volume_bind(workspace_dir!(), "/hurry-workspace")
+        .volume_bind(get_workspace_root(), "/hurry-workspace")
         .command(Command::install_hurry("/hurry-workspace"))
         .start()
         .await?;
@@ -209,7 +209,7 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
                 .arg("pkg-config")
                 .finish(),
         )
-        .volume_bind(workspace_dir!(), "/hurry-workspace")
+        .volume_bind(get_workspace_root(), "/hurry-workspace")
         .command(Command::install_hurry("/hurry-workspace"))
         .start()
         .await?;
@@ -335,7 +335,7 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
                 .arg("pkg-config")
                 .finish(),
         )
-        .volume_bind(workspace_dir!(), "/hurry-workspace")
+        .volume_bind(get_workspace_root(), "/hurry-workspace")
         .command(Command::install_hurry("/hurry-workspace"))
         .start()
         .await?;
@@ -453,7 +453,7 @@ async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()>
     // real cost.
     let (container_a, container_b) = tokio::try_join!(
         Container::debian_rust()
-            .volume_bind(workspace_dir!(), "/hurry-workspace")
+            .volume_bind(get_workspace_root(), "/hurry-workspace")
             .command(Command::install_hurry("/hurry-workspace"))
             .command(
                 Command::clone_github()
@@ -467,7 +467,7 @@ async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()>
             .volume_bind(&cache_host_path, &cache_container_path)
             .start(),
         Container::debian_rust()
-            .volume_bind(workspace_dir!(), "/hurry-workspace")
+            .volume_bind(get_workspace_root(), "/hurry-workspace")
             .command(Command::install_hurry("/hurry-workspace"))
             .command(
                 Command::clone_github()
@@ -571,7 +571,7 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
     let pwd_repo_b = pwd.join(format!("{repo}-concurrent-b"));
     let (container_a, container_b) = tokio::try_join!(
         Container::debian_rust()
-            .volume_bind(workspace_dir!(), "/hurry-workspace")
+            .volume_bind(get_workspace_root(), "/hurry-workspace")
             .command(Command::install_hurry("/hurry-workspace"))
             .command(
                 Command::clone_github()
@@ -585,7 +585,7 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
             .volume_bind(&cache_host_path, &cache_container_path)
             .start(),
         Container::debian_rust()
-            .volume_bind(workspace_dir!(), "/hurry-workspace")
+            .volume_bind(get_workspace_root(), "/hurry-workspace")
             .command(Command::install_hurry("/hurry-workspace"))
             .command(
                 Command::clone_github()

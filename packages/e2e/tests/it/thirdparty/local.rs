@@ -15,8 +15,8 @@ use e2e::{
 };
 use escargot::CargoBuild;
 use itertools::Itertools;
-use location_macros::workspace_dir;
 use simple_test_case::test_case;
+use workspace_root::get_workspace_root;
 
 /// Exercises building and caching the project in a single directory.
 #[test_case("attunehq", "hurry-tests", "test/tiny"; "attunehq/hurry-tests:test/tiny")]
@@ -25,7 +25,7 @@ use simple_test_case::test_case;
 #[test_log::test]
 fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
     color_eyre::install()?;
-    Command::install_hurry(workspace_dir!())
+    Command::install_hurry(get_workspace_root())
         .run_local()
         .context("install hurry")?;
 
@@ -104,7 +104,7 @@ fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 #[test_log::test]
 fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
     color_eyre::install()?;
-    Command::install_hurry(workspace_dir!())
+    Command::install_hurry(get_workspace_root())
         .run_local()
         .context("install hurry")?;
 
@@ -190,7 +190,7 @@ fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 #[test_log::test]
 fn native(username: &str, repo: &str, branch: &str, package: &str, bin: &str) -> Result<()> {
     color_eyre::install()?;
-    Command::install_hurry(workspace_dir!())
+    Command::install_hurry(get_workspace_root())
         .run_local()
         .context("install hurry")?;
 
@@ -318,7 +318,7 @@ fn native_changed_breaks_build(
     bin: &str,
 ) -> Result<()> {
     color_eyre::install()?;
-    Command::install_hurry(workspace_dir!())
+    Command::install_hurry(get_workspace_root())
         .run_local()
         .context("install hurry")?;
 

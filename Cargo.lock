@@ -1527,7 +1527,6 @@ dependencies = [
  "filetime",
  "futures",
  "itertools",
- "location-macros",
  "pretty_assertions",
  "simple_test_case",
  "tempfile",
@@ -1535,6 +1534,7 @@ dependencies = [
  "tokio",
  "tracing",
  "walkdir",
+ "workspace_root",
 ]
 
 [[package]]
@@ -2000,6 +2000,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "get_dir"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7be53a543a609b266f8ed4237af223fa96bdaa54d69fd6845c71a421a4a4748"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2305,7 +2314,6 @@ dependencies = [
  "jiff",
  "jwalk",
  "lazy-regex",
- "location-macros",
  "num_cpus",
  "parse-display",
  "paste",
@@ -2333,6 +2341,7 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "workspace_root",
  "xshell",
 ]
 
@@ -2880,16 +2889,6 @@ name = "litrs"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5e54036fe321fd421e10d732f155734c4e4afd610dd556d9a82833ab3ee0bed"
-
-[[package]]
-name = "location-macros"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e01cc93c35479eaa65adbf8b9aa933aa3f400d9e4e2fc553f516d4f822c8b13"
-dependencies = [
- "syn 2.0.106",
- "thiserror 1.0.69",
-]
 
 [[package]]
 name = "lock_api"
@@ -6185,6 +6184,16 @@ name = "wit-bindgen"
 version = "0.45.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c573471f125075647d03df72e026074b7203790d41351cd6edc96f46bcccd36"
+
+[[package]]
+name = "workspace_root"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70d804157714956faa87af2ccf3ea2917a7e588c84c6e0a473311c1fca161818"
+dependencies = [
+ "get_dir",
+ "tokio",
+]
 
 [[package]]
 name = "writeable"
