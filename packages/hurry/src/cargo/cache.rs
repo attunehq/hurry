@@ -526,8 +526,10 @@ impl CargoCache {
         let request = CargoUploadStatusRequest {
             request_id: *request_id,
         };
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
 
         loop {
+            interval.tick().await;
             trace!(?request, "submitting upload status request");
             let response = client
                 .post(&endpoint)
@@ -542,7 +544,6 @@ impl CargoCache {
             if matches!(response.status, Some(CargoUploadStatus::Complete)) {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(1000)).await;
         }
 
         Ok(())
