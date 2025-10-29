@@ -7,9 +7,10 @@ use tap::{Pipe as _, Tap as _, TapFallible as _};
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument};
 
-use crate::path::{AbsDirPath, TryJoinWith as _};
-
-use super::{CargoBuildArguments, Profile};
+use crate::{
+    cargo::{CargoBuildArguments, Profile},
+    path::{AbsDirPath, TryJoinWith as _},
+};
 
 /// The Cargo workspace of a build.
 ///
