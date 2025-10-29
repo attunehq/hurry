@@ -21,7 +21,7 @@ use hurry::{
         Workspace,
     },
     cas::CourierCas,
-    daemon::{self, DaemonReadyMessage, daemon_is_running},
+    daemon::{CargoUploadRequest, CargoUploadResponse, DaemonPaths, DaemonReadyMessage},
     fs,
     path::{AbsFilePath, TryJoinWith},
 };
@@ -56,7 +56,7 @@ pub async fn exec(
     let cache_dir = hurry::fs::user_global_cache_path().await?;
     hurry::fs::create_dir_all(&cache_dir).await?;
 
-    let daemon_paths = daemon::daemon_paths().await?;
+    let paths = DaemonPaths::new().await?;
     let pid = std::process::id();
     let log_file_path = cache_dir.try_join_file(format!("hurryd.{}.log", pid))?;
 
@@ -67,7 +67,7 @@ pub async fn exec(
     // which means the process crashes with a SIGPIPE if it attempts to write to
     // them.
     let (file_logger, flame_guard) = dispatcher::with_default(&cli_logger.into(), || {
-        debug!(?daemon_paths, ?log_file_path, "file paths");
+        debug!(?paths, ?log_file_path, "file paths");
         info!(?log_file_path, "logging to file");
 
         log::make_logger(
@@ -84,12 +84,12 @@ pub async fn exec(
 
     // If a pid-file exists, read it and check if the process is running. Exit
     // if another instance is running.
-    if daemon_is_running(&daemon_paths.pid_file_path).await? {
+    if paths.daemon_running().await? {
         bail!("hurryd is already running");
     }
 
     // Write and lock a pid-file.
-    let mut pid_file = fslock::LockFile::open(daemon_paths.pid_file_path.as_os_str())?;
+    let mut pid_file = fslock::LockFile::open(paths.pid_file_path.as_os_str())?;
     if !pid_file.try_lock_with_pid()? {
         bail!("hurryd is already running");
     }
@@ -104,7 +104,7 @@ pub async fn exec(
     }
 
     // Open the socket and start the server.
-    match fs::remove_file(&daemon_paths.context_path).await {
+    match fs::remove_file(&paths.context_path).await {
         Ok(_) => {}
         Err(err) => {
             let err = err.downcast::<std::io::Error>()?;
@@ -146,9 +146,9 @@ pub async fn exec(
     let encoded = serde_json::to_string(&message)
         .context("encode ready message")
         .with_section(|| format!("{message:?}").header("Message:"))?;
-    fs::write(&daemon_paths.context_path, &encoded)
+    fs::write(&paths.context_path, &encoded)
         .await
-        .with_context(|| format!("write daemon context to {:?}", daemon_paths.context_path))?;
+        .with_context(|| format!("write daemon context to {:?}", paths.context_path))?;
     println!("{encoded}");
 
     axum::serve(listener, app).await?;
@@ -169,8 +169,8 @@ struct ServerState {
 
 async fn upload(
     State(state): State<ServerState>,
-    Json(req): Json<daemon::CargoUploadRequest>,
-) -> Json<daemon::CargoUploadResponse> {
+    Json(req): Json<CargoUploadRequest>,
+) -> Json<CargoUploadResponse> {
     let state = state.clone();
     tokio::spawn(async move {
         trace!(artifact_plan = ?req.artifact_plan, "artifact plan");
@@ -212,7 +212,7 @@ async fn upload(
 
         Ok::<(), Error>(())
     });
-    Json(daemon::CargoUploadResponse { ok: true })
+    Json(CargoUploadResponse { ok: true })
 }
 
 #[instrument(skip(content))]

@@ -13,7 +13,7 @@ use crate::{
         Profile, QualifiedPath, RootOutput, RustcMetadata, Workspace,
     },
     cas::CourierCas,
-    daemon::{self, DaemonReadyMessage, daemon_is_running, daemon_paths},
+    daemon::{CargoUploadRequest, DaemonPaths, DaemonReadyMessage},
     fs, mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith},
     progress::TransferBar,
@@ -38,7 +38,7 @@ use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use tap::Pipe as _;
 use tokio::{io::AsyncBufReadExt as _, task::JoinSet};
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, instrument, trace, warn};
 use uuid::Uuid;
 
 /// Statistics about cache operations.
@@ -419,12 +419,12 @@ impl CargoCache {
     #[instrument(name = "CargoCache::save", skip(artifact_plan, restored))]
     pub async fn save(&self, artifact_plan: ArtifactPlan, restored: RestoreState) -> Result<()> {
         trace!(?artifact_plan, "artifact plan");
-        let daemon_paths = daemon_paths().await?;
+        let paths = DaemonPaths::new().await?;
 
         // Start daemon if it's not already running. If it is, try to read its context
         // file to get its url, which we need to know in order to communicate with it.
-        let daemon = if daemon_is_running(&daemon_paths.pid_file_path).await? {
-            let context = fs::read_buffered_utf8(&daemon_paths.context_path)
+        let daemon = if paths.daemon_running().await? {
+            let context = fs::read_buffered_utf8(&paths.context_path)
                 .await
                 .context("read daemon context file")?
                 .ok_or_eyre("no daemon context file")?;
@@ -457,33 +457,14 @@ impl CargoCache {
 
             // This value was chosen arbitrarily. Adjust as needed.
             const DAEMON_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
-            match tokio::time::timeout(DAEMON_STARTUP_TIMEOUT, stdout.next_line()).await {
-                Ok(Ok(Some(line))) => {
-                    debug!(?line, "received daemon output line");
-                    match serde_json::from_str::<DaemonReadyMessage>(&line) {
-                        Ok(msg) => {
-                            debug!(?msg, "received daemon ready message");
-                            msg
-                        }
-                        Err(err) => {
-                            error!(?err, "could not parse daemon output");
-                            bail!("could not parse daemon output");
-                        }
-                    }
-                }
-                Ok(Ok(None)) => {
-                    error!("daemon closed pipe unexpectedly");
-                    bail!("daemon crashed on startup");
-                }
-                Ok(Err(err)) => {
-                    error!(?err, "could not read daemon output");
-                    bail!("daemon not ready");
-                }
-                Err(elapsed) => {
-                    error!(?elapsed, "daemon timed out while starting");
-                    bail!("could not start daemon");
-                }
-            }
+            let line = tokio::time::timeout(DAEMON_STARTUP_TIMEOUT, stdout.next_line())
+                .await
+                .map_err(|elapsed| eyre!("daemon startup timed out after {elapsed:?}"))?
+                .context("read daemon output")?
+                .ok_or_eyre("daemon crashed on startup")?;
+            serde_json::from_str::<DaemonReadyMessage>(&line)
+                .context("parse daemon ready message")
+                .with_section(|| line.header("Daemon output:"))?
         };
 
         // Connect to daemon HTTP server and send the request.
@@ -491,7 +472,7 @@ impl CargoCache {
         let endpoint = format!("http://{}/api/v0/cargo/upload", daemon.url);
         let response = client
             .post(&endpoint)
-            .json(&daemon::CargoUploadRequest {
+            .json(&CargoUploadRequest {
                 ws: self.ws.clone(),
                 artifact_plan,
                 skip_artifacts: restored.artifacts.into_iter().collect(),

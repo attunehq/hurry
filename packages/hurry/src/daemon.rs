@@ -25,34 +25,36 @@ pub struct DaemonPaths {
     pub context_path: AbsFilePath,
 }
 
-pub async fn daemon_paths() -> Result<DaemonPaths> {
-    let hurry_cache_dir = fs::user_global_cache_path().await?;
-    let pid_file_path = hurry_cache_dir.join(mk_rel_file!("hurryd.pid"));
-    let context_path = hurry_cache_dir.join(mk_rel_file!("hurryd.json"));
-    Ok(DaemonPaths {
-        pid_file_path,
-        context_path,
-    })
-}
-
-pub async fn daemon_is_running(pid_file_path: &AbsFilePath) -> Result<bool> {
-    if pid_file_path.exists().await {
-        let pid = fs::must_read_buffered_utf8(pid_file_path).await?;
-        match pid.trim().parse::<u32>() {
-            Ok(pid) => {
-                let system = System::new_with_specifics(
-                    RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
-                );
-                let process = system.process(Pid::from_u32(pid));
-                process.is_some()
-            }
-            Err(err) => {
-                warn!(?err, "could not parse pid-file");
-                false
-            }
-        }
-    } else {
-        false
+impl DaemonPaths {
+    pub async fn new() -> Result<DaemonPaths> {
+        let hurry_cache_dir = fs::user_global_cache_path().await?;
+        let pid_file_path = hurry_cache_dir.join(mk_rel_file!("hurryd.pid"));
+        let context_path = hurry_cache_dir.join(mk_rel_file!("hurryd.json"));
+        Ok(DaemonPaths {
+            pid_file_path,
+            context_path,
+        })
     }
-    .pipe(Ok)
+
+    pub async fn daemon_running(&self) -> Result<bool> {
+        if self.pid_file_path.exists().await {
+            let pid = fs::must_read_buffered_utf8(&self.pid_file_path).await?;
+            match pid.trim().parse::<u32>() {
+                Ok(pid) => {
+                    let system = System::new_with_specifics(
+                        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+                    );
+                    let process = system.process(Pid::from_u32(pid));
+                    process.is_some()
+                }
+                Err(err) => {
+                    warn!(?err, "could not parse pid-file");
+                    false
+                }
+            }
+        } else {
+            false
+        }
+        .pipe(Ok)
+    }
 }
