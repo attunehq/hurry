@@ -36,7 +36,7 @@ use crate::{
         Profile, QualifiedPath, RootOutput, RustcMetadata, Workspace,
     },
     cas::CourierCas,
-    daemon::{self, DaemonReadyMessage, daemon_is_running, daemon_paths},
+    daemon::{self, CargoUploadStatus, DaemonReadyMessage, daemon_is_running, daemon_paths},
     fs, mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith},
     progress::TransferBar,
@@ -426,7 +426,7 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::save", skip(artifact_plan, restored))]
-    pub async fn save(&self, artifact_plan: ArtifactPlan, restored: RestoreState) -> Result<()> {
+    pub async fn save(&self, artifact_plan: ArtifactPlan, restored: RestoreState) -> Result<Uuid> {
         trace!(?artifact_plan, "artifact plan");
         let daemon_paths = daemon_paths().await?;
 
@@ -496,18 +496,50 @@ impl CargoCache {
             .build()?;
 
         // Send upload request.
+        let request_id = Uuid::new_v4();
+        let request = daemon::CargoUploadRequest {
+            request_id,
+            courier_url: self.courier_url.clone(),
+            ws: self.ws.clone(),
+            artifact_plan,
+            skip_artifacts: restored.artifacts.into_iter().collect(),
+            skip_objects: restored.objects.into_iter().collect(),
+        };
+        trace!(?request, "submitting upload request");
         let response = client
             .post("http://localhost/api/v0/cargo/upload")
-            .json(&daemon::CargoUploadRequest {
-                courier_url: self.courier_url.clone(),
-                ws: self.ws.clone(),
-                artifact_plan,
-                skip_artifacts: restored.artifacts.into_iter().collect(),
-                skip_objects: restored.objects.into_iter().collect(),
-            })
+            .json(&request)
             .send()
             .await?;
-        debug!(?response, "submitted upload request");
+        trace!(?response, "got upload response");
+
+        Ok(request_id)
+    }
+
+    #[instrument(name = "CargoCache::wait_for_upload")]
+    pub async fn wait_for_upload(&self, request_id: &Uuid) -> Result<()> {
+        let daemon_paths = daemon_paths().await?;
+        let client = reqwest::Client::builder()
+            .unix_socket(daemon_paths.socket_path.as_std_path())
+            .build()?;
+        let request = daemon::CargoUploadStatusRequest {
+            request_id: *request_id,
+        };
+
+        loop {
+            trace!(?request, "submitting upload status request");
+            let response = client
+                .post("http://localhost/api/v0/cargo/status")
+                .json(&request)
+                .send()
+                .await?;
+            trace!(?response, "got upload status response");
+            let response = response.json::<daemon::CargoUploadStatusResponse>().await?;
+            trace!(?response, "parsed upload status response");
+            if matches!(response.status, Some(CargoUploadStatus::Complete)) {
+                break;
+            }
+        }
 
         Ok(())
     }

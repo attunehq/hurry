@@ -1,6 +1,6 @@
 use std::{collections::HashSet, io::Write, time::UNIX_EPOCH};
 
-use axum::{Json, Router, routing::post};
+use axum::{Json, Router, extract::State, routing::post};
 use clap::Args;
 use clients::{
     Courier,
@@ -13,6 +13,7 @@ use color_eyre::{
     Result,
     eyre::{Context as _, Error, OptionExt as _, bail},
 };
+use dashmap::DashMap;
 use derive_more::Debug;
 use futures::{TryStreamExt as _, stream};
 use hurry::{
@@ -21,7 +22,10 @@ use hurry::{
         Workspace,
     },
     cas::CourierCas,
-    daemon::{self, DaemonReadyMessage, daemon_is_running},
+    daemon::{
+        CargoUploadRequest, CargoUploadResponse, CargoUploadStatus, CargoUploadStatusRequest,
+        CargoUploadStatusResponse, DaemonReadyMessage, daemon_is_running, daemon_paths,
+    },
     fs,
     path::{AbsFilePath, TryJoinWith},
 };
@@ -32,6 +36,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{Subscriber, debug, dispatcher, error, info, instrument, trace, warn};
 use tracing_subscriber::util::SubscriberInitExt as _;
 use url::Url;
+use uuid::Uuid;
 
 use crate::{TopLevelFlags, log};
 
@@ -57,7 +62,7 @@ pub async fn exec(
     let cache_dir = hurry::fs::user_global_cache_path().await?;
     hurry::fs::create_dir_all(&cache_dir).await?;
 
-    let daemon_paths = daemon::daemon_paths().await?;
+    let daemon_paths = daemon_paths().await?;
     let pid = std::process::id();
     let log_file_path = cache_dir.try_join_file(format!("hurryd.{}.log", pid))?;
 
@@ -118,7 +123,12 @@ pub async fn exec(
     let listener = UnixListener::bind(daemon_paths.socket_path.as_std_path())?;
     info!(addr = ?daemon_paths.socket_path, "server listening");
 
-    let cargo = Router::new().route("/upload", post(upload));
+    let cargo = Router::new()
+        .route("/upload", post(upload))
+        .route("/status", post(status))
+        .with_state(ServerState {
+            uploads: DashMap::new(),
+        });
 
     let app = Router::new()
         .nest("/api/v0/cargo", cargo)
@@ -146,7 +156,32 @@ pub async fn exec(
     Ok(())
 }
 
-async fn upload(Json(req): Json<daemon::CargoUploadRequest>) -> Json<daemon::CargoUploadResponse> {
+#[derive(Debug, Clone)]
+struct ServerState {
+    uploads: DashMap<Uuid, CargoUploadStatus>,
+}
+
+#[instrument]
+async fn status(
+    State(state): State<ServerState>,
+    Json(req): Json<CargoUploadStatusRequest>,
+) -> Json<CargoUploadStatusResponse> {
+    let status = state
+        .uploads
+        .get(&req.request_id)
+        .map(|r| r.value().to_owned());
+    Json(CargoUploadStatusResponse { status })
+}
+
+#[instrument]
+async fn upload(
+    State(state): State<ServerState>,
+    Json(req): Json<CargoUploadRequest>,
+) -> Json<CargoUploadResponse> {
+    let request_id = req.request_id;
+    state
+        .uploads
+        .insert(request_id, CargoUploadStatus::InProgress);
     tokio::spawn(async move {
         trace!(artifact_plan = ?req.artifact_plan, "artifact plan");
         let courier = Courier::new(req.courier_url)?;
@@ -187,9 +222,12 @@ async fn upload(Json(req): Json<daemon::CargoUploadRequest>) -> Json<daemon::Car
             courier.cargo_cache_save(request).await?;
         }
 
+        state
+            .uploads
+            .insert(request_id, CargoUploadStatus::Complete);
         Ok::<(), Error>(())
     });
-    Json(daemon::CargoUploadResponse { ok: true })
+    Json(CargoUploadResponse { ok: true })
 }
 
 #[instrument(skip(content))]

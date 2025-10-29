@@ -49,6 +49,10 @@ pub struct Options {
     #[arg(long = "hurry-skip-restore", default_value_t = false)]
     skip_restore: bool,
 
+    /// Wait for all new artifacts to upload to cache to finish before exiting.
+    #[arg(long = "hurry-wait-for-upload", default_value_t = false)]
+    wait_for_upload: bool,
+
     /// These arguments are passed directly to `cargo build` as provided.
     #[arg(
         num_args = ..,
@@ -194,7 +198,10 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Cache the built artifacts.
     if !options.skip_backup {
-        cache.save(artifact_plan, restored).await?;
+        let upload_id = cache.save(artifact_plan, restored).await?;
+        if options.wait_for_upload {
+            cache.wait_for_upload(&upload_id).await?;
+        }
     }
 
     Ok(())

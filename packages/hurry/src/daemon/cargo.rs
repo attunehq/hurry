@@ -2,19 +2,39 @@ use serde::{Deserialize, Serialize};
 
 use clients::courier::v1::Key;
 use url::Url;
+use uuid::Uuid;
+use derive_more::Debug;
 
 use crate::cargo::{ArtifactKey, ArtifactPlan, Workspace};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct CargoUploadRequest {
+    pub request_id: Uuid,
     pub courier_url: Url,
     pub ws: Workspace,
+    #[debug(skip)]
     pub artifact_plan: ArtifactPlan,
     pub skip_artifacts: Vec<ArtifactKey>,
     pub skip_objects: Vec<Key>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct CargoUploadResponse {
     pub ok: bool,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+pub enum CargoUploadStatus {
+    InProgress,
+    Complete,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct CargoUploadStatusRequest {
+    pub request_id: Uuid,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct CargoUploadStatusResponse {
+    pub status: Option<CargoUploadStatus>,
 }
