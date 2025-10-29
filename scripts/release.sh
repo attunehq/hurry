@@ -28,13 +28,13 @@ AWS_PROFILE="PowerUserAccess/jess@attunehq.com"
 # still very small, and users can either build from source or use x64 emulation (which works well
 # on Windows ARM64). If this becomes important, we will need to revisit.
 BUILD_TARGETS=(
+    "x86_64-pc-windows-gnu"
     "x86_64-apple-darwin"
     "aarch64-apple-darwin"
     "x86_64-unknown-linux-gnu"
     "aarch64-unknown-linux-gnu"
     "x86_64-unknown-linux-musl"
     "aarch64-unknown-linux-musl"
-    "x86_64-pc-windows-gnu"
 )
 
 fail() {
@@ -62,9 +62,9 @@ check_requirements() {
         missing+=("cargo")
     fi
 
-    # Check for cross (only if we're not skipping build)
-    if [[ "$SKIP_BUILD" == "false" ]] && ! command -v cross > /dev/null; then
-        missing+=("cross")
+    # Check for cargo-cross (only if we're not skipping build)
+    if [[ "$SKIP_BUILD" == "false" ]] && ! command -v cargo-cross > /dev/null; then
+        missing+=("cargo-cross")
     fi
 
     # Check for cargo-set-version
@@ -105,7 +105,7 @@ check_requirements() {
 Please install the missing commands:
 
   cargo:              https://rustup.rs/
-  cross:              cargo install cross
+  cargo-cross:        cargo install cargo-cross
   cargo-set-version:  cargo install cargo-set-version
   jq:                 https://jqlang.github.io/jq/download/ (or: brew install jq, apt install jq)
   aws:                https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
@@ -268,6 +268,19 @@ TAG="v$VERSION"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Set up cleanup trap to restore Cargo.toml files on exit (success or failure)
+cleanup() {
+    if git diff --quiet "**/Cargo.toml" 2>/dev/null; then
+        # No changes to Cargo.toml files, nothing to restore
+        return
+    fi
+
+    step "Restoring Cargo.toml files"
+    git checkout -- "**/Cargo.toml" 2>/dev/null || true
+    info "✓ Restored Cargo.toml files"
+}
+trap cleanup EXIT
+
 # Check that we're on main branch
 CURRENT_BRANCH="$(git branch --show-current)"
 if [[ "$CURRENT_BRANCH" != "main" ]]; then
@@ -305,38 +318,21 @@ if [[ "$SKIP_BUILD" == "false" ]]; then
     for target in "${BUILD_TARGETS[@]}"; do
         info "Building for $target"
 
-        # Determine whether to use cross or cargo
-        HOST_ARCH="$(uname -m)"
-        HOST_OS="$(uname -s)"
-        USE_CROSS=false
-
-        # Use cross for non-native targets
-        if [[ "$HOST_OS" == "Darwin" ]]; then
-            # On macOS, use cross for all Linux targets
-            if [[ "$target" == *"linux"* ]]; then
-                USE_CROSS=true
-            fi
-            # Use cross for x86_64 macOS if we're on ARM
-            if [[ "$HOST_ARCH" == "arm64" ]] && [[ "$target" == "x86_64-apple-darwin" ]]; then
-                USE_CROSS=false  # Actually, cargo can cross-compile between macOS architectures
-            fi
-        else
-            # On Linux, use cross for all non-native targets
-            USE_CROSS=true
-        fi
-
-        if [[ "$USE_CROSS" == "true" ]]; then
-            cross build --release --target "$target" --package hurry || fail "Build failed for $target"
-        else
-            cargo build --release --target "$target" --package hurry || fail "Build failed for $target"
-        fi
+        # Use cargo-cross for all cross-compilation (it's faster than Docker-based cross)
+        # cargo-cross automatically manages cross-compilers and works for all our targets
+        cargo cross build --targets "$target" --package hurry --profile release || fail "Build failed for $target"
 
         # Package the binary
         ARCHIVE_NAME="hurry-${target}"
         ARCHIVE_DIR="$ARTIFACT_DIR/$ARCHIVE_NAME"
         mkdir -p "$ARCHIVE_DIR"
 
-        cp "target/$target/release/hurry" "$ARCHIVE_DIR/" || fail "Failed to copy binary for $target"
+        # Windows binaries have .exe extension
+        if [[ "$target" == *"windows"* ]]; then
+            cp "target/$target/release/hurry.exe" "$ARCHIVE_DIR/" || fail "Failed to copy binary for $target"
+        else
+            cp "target/$target/release/hurry" "$ARCHIVE_DIR/" || fail "Failed to copy binary for $target"
+        fi
         cp README.md "$ARCHIVE_DIR/" || fail "Failed to copy README"
 
         # Create tarball
@@ -364,10 +360,6 @@ info "✓ Generated checksums"
 
 # Display checksums
 cat "$ARTIFACT_DIR/checksums.txt"
-
-# Restore Cargo.toml files to avoid committing version changes
-step "Restoring Cargo.toml files"
-git checkout -- "**/Cargo.toml" 2>/dev/null || true
 
 # Create git tag
 if [[ "$DRY_RUN" == "false" ]]; then
