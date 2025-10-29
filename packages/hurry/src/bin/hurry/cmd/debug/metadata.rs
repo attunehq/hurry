@@ -1,8 +1,5 @@
 use clap::Args;
-use color_eyre::{
-    Result,
-    eyre::{Context, eyre},
-};
+use color_eyre::{Result, eyre::Context};
 use colored::Colorize;
 use futures::TryStreamExt;
 use hurry::{
@@ -31,9 +28,7 @@ pub async fn exec(options: Options) -> Result<()> {
 
     for path in files.into_iter().sorted() {
         let rel = path.relative_to(&root)?;
-        let name = rel
-            .to_string()
-            .blue();
+        let name = rel.to_string().blue();
 
         let metadata = Metadata::from_file(&path).await.context("read metadata")?;
         println!("{name} -> {metadata:?}");
