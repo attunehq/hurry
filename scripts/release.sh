@@ -13,6 +13,20 @@ NC='\033[0m' # No Color
 # Configuration
 BUCKET="hurry-releases"
 AWS_PROFILE="PowerUserAccess/jess@attunehq.com"
+
+# Windows target choice: GNU vs MSVC
+# We use x86_64-pc-windows-gnu instead of x86_64-pc-windows-msvc because:
+# 1. GNU binaries work on Windows without requiring MSYS2/MinGW for end users
+# 2. GNU cross-compiles cleanly from macOS/Linux using cross
+# 3. MSVC cross-compilation via Wine fails with "command line too long" errors for large projects
+# 4. Hurry is a standalone CLI tool that doesn't need MSVC-specific features or Visual Studio interop
+# 5. MSVC would require building on actual Windows machines or Windows CI runners
+#
+# Windows ARM64 (aarch64-pc-windows-*):
+# Not included because cross doesn't provide Docker images for Windows ARM64 targets, and native
+# cross-compilation requires toolchains not available on macOS/Linux. The Windows ARM64 market is
+# still very small, and users can either build from source or use x64 emulation (which works well
+# on Windows ARM64). If this becomes important, we will need to revisit.
 BUILD_TARGETS=(
     "x86_64-apple-darwin"
     "aarch64-apple-darwin"
@@ -20,6 +34,7 @@ BUILD_TARGETS=(
     "aarch64-unknown-linux-gnu"
     "x86_64-unknown-linux-musl"
     "aarch64-unknown-linux-musl"
+    "x86_64-pc-windows-gnu"
 )
 
 fail() {
@@ -422,13 +437,17 @@ if [[ "$SKIP_UPLOAD" == "false" ]]; then
             --cache-control "no-cache, must-revalidate" \
             --profile "$AWS_PROFILE" || fail "Failed to upload versions.json"
 
-        # Generate and upload changelog
-        step "Generating and uploading changelog"
-        CHANGELOG_FILE="$ARTIFACT_DIR/CHANGELOG.md"
-        generate_changelog "$CHANGELOG_FILE"
-        aws s3 cp "$CHANGELOG_FILE" "s3://$BUCKET/releases/CHANGELOG.md" \
-            --cache-control "no-cache, must-revalidate" \
-            --profile "$AWS_PROFILE" || fail "Failed to upload CHANGELOG.md"
+        # Generate and upload changelog (only for stable releases)
+        if [[ "$PRERELEASE" == "false" ]]; then
+            step "Generating and uploading changelog"
+            CHANGELOG_FILE="$ARTIFACT_DIR/CHANGELOG.md"
+            generate_changelog "$CHANGELOG_FILE"
+            aws s3 cp "$CHANGELOG_FILE" "s3://$BUCKET/releases/CHANGELOG.md" \
+                --cache-control "no-cache, must-revalidate" \
+                --profile "$AWS_PROFILE" || fail "Failed to upload CHANGELOG.md"
+        else
+            info "Skipping changelog update (prerelease version)"
+        fi
 
         # Upload install.sh to bucket root
         step "Uploading install.sh"
