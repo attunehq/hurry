@@ -22,7 +22,8 @@ pub async fn handle(Dep(db): Dep<Postgres>, Dep(storage): Dep<Disk>) -> StatusCo
 /// Reset all cache data: delete all database records and CAS blobs.
 #[instrument]
 async fn reset_all(db: &Postgres, storage: &Disk) -> Result<()> {
-    sqlx::query!(r#"
+    sqlx::query!(
+        r#"
         TRUNCATE TABLE
             cargo_library_unit_build_artifact,
             cargo_library_unit_build,
@@ -30,9 +31,10 @@ async fn reset_all(db: &Postgres, storage: &Disk) -> Result<()> {
             cargo_object
         RESTART IDENTITY
         CASCADE
-    "#)
-        .execute(&db.pool)
-        .await?;
+    "#
+    )
+    .execute(&db.pool)
+    .await?;
 
     tokio::fs::remove_dir_all(storage.root())
         .await
