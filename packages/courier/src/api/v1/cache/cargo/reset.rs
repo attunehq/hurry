@@ -22,16 +22,15 @@ pub async fn handle(Dep(db): Dep<Postgres>, Dep(storage): Dep<Disk>) -> StatusCo
 /// Reset all cache data: delete all database records and CAS blobs.
 #[instrument]
 async fn reset_all(db: &Postgres, storage: &Disk) -> Result<()> {
-    sqlx::query!("DELETE FROM cargo_library_unit_build_artifact")
-        .execute(&db.pool)
-        .await?;
-    sqlx::query!("DELETE FROM cargo_library_unit_build")
-        .execute(&db.pool)
-        .await?;
-    sqlx::query!("DELETE FROM cargo_package")
-        .execute(&db.pool)
-        .await?;
-    sqlx::query!("DELETE FROM cargo_object")
+    sqlx::query!(r#"
+        TRUNCATE TABLE
+            cargo_library_unit_build_artifact,
+            cargo_library_unit_build,
+            cargo_package,
+            cargo_object
+        RESTART IDENTITY
+        CASCADE
+    "#)
         .execute(&db.pool)
         .await?;
 
