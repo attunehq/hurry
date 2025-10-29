@@ -81,7 +81,7 @@ function Get-Platform {
 
     switch ($arch) {
         "AMD64" { return "x86_64-pc-windows-gnu" }
-        "ARM64" { return "aarch64-pc-windows-gnu" }
+        "ARM64" { Write-Error-Message "Windows ARM64 is not currently supported. Please build from source or use x64 emulation." }
         default { Write-Error-Message "Unsupported architecture: $arch" }
     }
 }

@@ -28,13 +28,13 @@ AWS_PROFILE="PowerUserAccess/jess@attunehq.com"
 # still very small, and users can either build from source or use x64 emulation (which works well
 # on Windows ARM64). If this becomes important, we will need to revisit.
 BUILD_TARGETS=(
-    "x86_64-pc-windows-gnu"
     "x86_64-apple-darwin"
     "aarch64-apple-darwin"
     "x86_64-unknown-linux-gnu"
     "aarch64-unknown-linux-gnu"
     "x86_64-unknown-linux-musl"
     "aarch64-unknown-linux-musl"
+    "x86_64-pc-windows-gnu"
 )
 
 fail() {
@@ -320,7 +320,7 @@ if [[ "$SKIP_BUILD" == "false" ]]; then
 
         # Use cargo-cross for all cross-compilation (it's faster than Docker-based cross)
         # cargo-cross automatically manages cross-compilers and works for all our targets
-        cargo cross build --targets "$target" --package hurry --profile release || fail "Build failed for $target"
+        cargo cross build --target "$target" --package hurry --release || fail "Build failed for $target"
 
         # Package the binary
         ARCHIVE_NAME="hurry-${target}"
