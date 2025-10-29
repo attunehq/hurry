@@ -13,6 +13,14 @@ NC='\033[0m' # No Color
 # Configuration
 BUCKET="hurry-releases"
 AWS_PROFILE="PowerUserAccess/jess@attunehq.com"
+
+# Windows target choice: GNU vs MSVC
+# We use x86_64-pc-windows-gnu instead of x86_64-pc-windows-msvc because:
+# 1. GNU binaries work on Windows without requiring MSYS2/MinGW for end users
+# 2. GNU cross-compiles cleanly from macOS/Linux using cross
+# 3. MSVC cross-compilation via Wine fails with "command line too long" errors for large projects
+# 4. Hurry is a standalone CLI tool that doesn't need MSVC-specific features or Visual Studio interop
+# 5. MSVC would require building on actual Windows machines or Windows CI runners
 BUILD_TARGETS=(
     "x86_64-apple-darwin"
     "aarch64-apple-darwin"
@@ -20,6 +28,7 @@ BUILD_TARGETS=(
     "aarch64-unknown-linux-gnu"
     "x86_64-unknown-linux-musl"
     "aarch64-unknown-linux-musl"
+    "x86_64-pc-windows-gnu"
 )
 
 fail() {
