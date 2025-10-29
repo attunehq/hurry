@@ -8,13 +8,12 @@ use clap::Args;
 use color_eyre::{Result, eyre::Context};
 use derive_more::Debug;
 use tracing::{debug, info, instrument, warn};
+use url::Url;
 
-use clients::Courier;
 use hurry::{
     cargo::{self, CargoBuildArguments, CargoCache, Profile, Workspace},
     progress::TransferBar,
 };
-use url::Url;
 
 /// Options for `cargo build`.
 //
@@ -94,11 +93,8 @@ pub async fn exec(options: Options) -> Result<()> {
         .context("opening workspace")?;
     let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
 
-    let courier = Courier::new(options.courier_url).context("create courier client")?;
-    courier.ping().await.context("ping courier service")?;
-
     // Open cache.
-    let cache = CargoCache::open(courier, workspace)
+    let cache = CargoCache::open(options.courier_url, workspace)
         .await
         .context("opening cache")?;
 

@@ -1,6 +1,6 @@
 use std::{collections::HashSet, io::Write, time::UNIX_EPOCH};
 
-use axum::{Json, Router, extract::State, routing::post};
+use axum::{Json, Router, routing::post};
 use clap::Args;
 use clients::{
     Courier,
@@ -130,13 +130,7 @@ pub async fn exec(
         .context("read listen address for socket")?;
     info!(?addr, "server listening");
 
-    let courier = Courier::new(options.courier_url)?;
-    let cas = CourierCas::new(courier.clone());
-    let state = ServerState { cas, courier };
-
-    let cargo = Router::new()
-        .route("/upload", post(upload))
-        .with_state(state);
+    let cargo = Router::new().route("/upload", post(upload));
 
     let app = Router::new()
         .nest("/api/v0/cargo", cargo)
@@ -168,19 +162,11 @@ pub async fn exec(
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-struct ServerState {
-    cas: CourierCas,
-    courier: Courier,
-}
-
-async fn upload(
-    State(state): State<ServerState>,
-    Json(req): Json<CargoUploadRequest>,
-) -> Json<CargoUploadResponse> {
-    let state = state.clone();
+async fn upload(Json(req): Json<CargoUploadRequest>) -> Json<CargoUploadResponse> {
     tokio::spawn(async move {
         trace!(artifact_plan = ?req.artifact_plan, "artifact plan");
+        let courier = Courier::new(req.courier_url)?;
+        let cas = CourierCas::new(courier.clone());
         let restored_artifacts = HashSet::<_>::from_iter(req.skip_artifacts);
         let restored_objects = HashSet::from_iter(req.skip_objects);
 
@@ -202,7 +188,7 @@ async fn upload(
             let (library_unit_files, artifact_files, bulk_entries) =
                 process_files_for_upload(&req.ws, files_to_save, &restored_objects).await?;
 
-            upload_files_bulk(&state.cas, bulk_entries).await?;
+            upload_files_bulk(&cas, bulk_entries).await?;
 
             let content_hash = calculate_content_hash(library_unit_files)?;
             debug!(?content_hash, "calculated content hash");
@@ -214,7 +200,7 @@ async fn upload(
                 artifact_files,
             );
 
-            state.courier.cargo_cache_save(request).await?;
+            courier.cargo_cache_save(request).await?;
         }
 
         Ok::<(), Error>(())
