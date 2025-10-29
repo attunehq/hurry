@@ -21,6 +21,12 @@ AWS_PROFILE="PowerUserAccess/jess@attunehq.com"
 # 3. MSVC cross-compilation via Wine fails with "command line too long" errors for large projects
 # 4. Hurry is a standalone CLI tool that doesn't need MSVC-specific features or Visual Studio interop
 # 5. MSVC would require building on actual Windows machines or Windows CI runners
+#
+# Windows ARM64 (aarch64-pc-windows-*):
+# Not included because cross doesn't provide Docker images for Windows ARM64 targets, and native
+# cross-compilation requires toolchains not available on macOS/Linux. The Windows ARM64 market is
+# still very small, and users can either build from source or use x64 emulation (which works well
+# on Windows ARM64). If this becomes important, we will need to revisit.
 BUILD_TARGETS=(
     "x86_64-apple-darwin"
     "aarch64-apple-darwin"
