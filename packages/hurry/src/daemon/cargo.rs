@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use clients::courier::v1::Key;
+use derive_more::Debug;
 use url::Url;
 use uuid::Uuid;
-use derive_more::Debug;
 
 use crate::cargo::{ArtifactKey, ArtifactPlan, Workspace};
 
