@@ -10,7 +10,7 @@ use clients::{
     },
 };
 use color_eyre::{
-    Result,
+    Result, Section, SectionExt,
     eyre::{Context as _, Error, OptionExt as _, bail},
 };
 use derive_more::Debug;
@@ -21,13 +21,12 @@ use hurry::{
         Workspace,
     },
     cas::CourierCas,
-    daemon::{self, DaemonReadyMessage, daemon_is_running},
+    daemon::{CargoUploadRequest, CargoUploadResponse, DaemonPaths, DaemonReadyMessage},
     fs,
     path::{AbsFilePath, TryJoinWith},
 };
 use itertools::Itertools as _;
 use tap::Pipe as _;
-use tokio::net::UnixListener;
 use tower_http::trace::TraceLayer;
 use tracing::{Subscriber, debug, dispatcher, error, info, instrument, trace, warn};
 use tracing_subscriber::util::SubscriberInitExt as _;
@@ -57,7 +56,7 @@ pub async fn exec(
     let cache_dir = hurry::fs::user_global_cache_path().await?;
     hurry::fs::create_dir_all(&cache_dir).await?;
 
-    let daemon_paths = daemon::daemon_paths().await?;
+    let paths = DaemonPaths::initialize().await?;
     let pid = std::process::id();
     let log_file_path = cache_dir.try_join_file(format!("hurryd.{}.log", pid))?;
 
@@ -68,7 +67,7 @@ pub async fn exec(
     // which means the process crashes with a SIGPIPE if it attempts to write to
     // them.
     let (file_logger, flame_guard) = dispatcher::with_default(&cli_logger.into(), || {
-        debug!(?daemon_paths, ?log_file_path, "file paths");
+        debug!(?paths, ?log_file_path, "file paths");
         info!(?log_file_path, "logging to file");
 
         log::make_logger(
@@ -85,12 +84,12 @@ pub async fn exec(
 
     // If a pid-file exists, read it and check if the process is running. Exit
     // if another instance is running.
-    if daemon_is_running(&daemon_paths.pid_file_path).await? {
+    if paths.daemon_running().await? {
         bail!("hurryd is already running");
     }
 
     // Write and lock a pid-file.
-    let mut pid_file = fslock::LockFile::open(daemon_paths.pid_file_path.as_os_str())?;
+    let mut pid_file = fslock::LockFile::open(paths.pid_file_path.as_os_str())?;
     if !pid_file.try_lock_with_pid()? {
         bail!("hurryd is already running");
     }
@@ -98,6 +97,17 @@ pub async fn exec(
     // Install a handler that ignores SIGHUP so that terminal exits don't kill
     // the daemon. I can't get anything to work with proper double-fork
     // daemonization so we'll just do this for now.
+    //
+    // The intention of registering this hook is to prevent hurry from closing if
+    // the parent shell that launched it is closed. In Windows however, processes
+    // are not automatically signaled to exit when their parent exits: launching
+    // a program inside a CMD or Powershell instance and then closing that session
+    // does not make the program close. Given this I don't think there's a need to
+    // do anything special here in Windows.
+    //
+    // TODO: Validate whether the daemon actually works in Windows or if we need
+    // additional setup when launching it.
+    #[cfg(unix)]
     unsafe {
         signal_hook::low_level::register(signal_hook::consts::SIGHUP, || {
             warn!("ignoring SIGHUP");
@@ -105,7 +115,7 @@ pub async fn exec(
     }
 
     // Open the socket and start the server.
-    match fs::remove_file(&daemon_paths.socket_path).await {
+    match fs::remove_file(&paths.context_path).await {
         Ok(_) => {}
         Err(err) => {
             let err = err.downcast::<std::io::Error>()?;
@@ -115,8 +125,34 @@ pub async fn exec(
             }
         }
     }
-    let listener = UnixListener::bind(daemon_paths.socket_path.as_std_path())?;
-    info!(addr = ?daemon_paths.socket_path, "server listening");
+
+    // Bind to port 0 to get a random ephemeral port from the OS. Since this binds
+    // an ephemeral port, this does not conflict with typical userspace ports (3000,
+    // 8000, 8080, etc) or service ports.
+    //
+    // Linux ip(7): "An ephemeral port is allocated to a socket in the following
+    // circumstances: [...] the port number in a socket address is specified as 0
+    // when calling bind(2)". I can't find macOS developer docs that explicitly
+    // document this, but from observed behavior it appears to act the same;
+    // it's also relatively rare for core functionality like this to diverge
+    // between Linux and macOS.
+    //
+    // Windows bind(): "For TCP/IP, if the port is specified as zero, the service
+    // provider assigns a unique port to the application from the dynamic client
+    // port range. On Windows Vista and later, the dynamic client port range is a
+    // value between 49152 and 65535."
+    //
+    // References:
+    // - https://man7.org/linux/man-pages/man7/ip.7.html (see ip_local_port_range)
+    // - https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-bind
+    // - https://stackoverflow.com/questions/5895751 (portability/macOS discussion)
+    let listener = tokio::net::TcpListener::bind("localhost:0")
+        .await
+        .context("open local server")?;
+    let addr = listener
+        .local_addr()
+        .context("read listen address for socket")?;
+    info!(?addr, "server listening");
 
     let cargo = Router::new().route("/upload", post(upload));
 
@@ -127,14 +163,18 @@ pub async fn exec(
     // Print ready message to STDOUT for parent processes. This uses `println!`
     // instead of the tracing macros because it emits a special sentinel value
     // on STDOUT.
-    println!(
-        "{}",
-        serde_json::to_string(&DaemonReadyMessage {
-            pid,
-            socket_path: daemon_paths.socket_path,
-            log_file_path,
-        })?
-    );
+    let message = DaemonReadyMessage {
+        pid,
+        url: format!("{addr}"),
+        log_file_path,
+    };
+    let encoded = serde_json::to_string(&message)
+        .context("encode ready message")
+        .with_section(|| format!("{message:?}").header("Message:"))?;
+    fs::write(&paths.context_path, &encoded)
+        .await
+        .with_context(|| format!("write daemon context to {:?}", paths.context_path))?;
+    println!("{encoded}");
 
     axum::serve(listener, app).await?;
 
@@ -146,7 +186,7 @@ pub async fn exec(
     Ok(())
 }
 
-async fn upload(Json(req): Json<daemon::CargoUploadRequest>) -> Json<daemon::CargoUploadResponse> {
+async fn upload(Json(req): Json<CargoUploadRequest>) -> Json<CargoUploadResponse> {
     tokio::spawn(async move {
         trace!(artifact_plan = ?req.artifact_plan, "artifact plan");
         let courier = Courier::new(req.courier_url)?;
@@ -189,7 +229,7 @@ async fn upload(Json(req): Json<daemon::CargoUploadRequest>) -> Json<daemon::Car
 
         Ok::<(), Error>(())
     });
-    Json(daemon::CargoUploadResponse { ok: true })
+    Json(CargoUploadResponse { ok: true })
 }
 
 #[instrument(skip(content))]
