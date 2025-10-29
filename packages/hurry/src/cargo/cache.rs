@@ -1,23 +1,3 @@
-use std::{
-    collections::HashMap,
-    env::VarError,
-    fmt::Debug,
-    path::PathBuf,
-    process::Stdio,
-    time::{Duration, UNIX_EPOCH},
-};
-
-use crate::{
-    cargo::{
-        self, BuildPlan, BuildScriptOutput, CargoBuildArguments, CargoCompileMode, DepInfo,
-        Profile, QualifiedPath, RootOutput, RustcMetadata, Workspace,
-    },
-    cas::CourierCas,
-    daemon::{self, DaemonReadyMessage, daemon_is_running, daemon_paths},
-    fs, mk_rel_file,
-    path::{AbsDirPath, AbsFilePath, JoinWith},
-    progress::TransferBar,
-};
 use cargo_metadata::TargetKind;
 use clients::{
     Courier,
@@ -36,10 +16,31 @@ use itertools::Itertools;
 use rayon::prelude::*;
 use scopeguard::defer;
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    env::VarError,
+    fmt::Debug,
+    path::PathBuf,
+    process::Stdio,
+    time::{Duration, UNIX_EPOCH},
+};
 use tap::Pipe as _;
 use tokio::{io::AsyncBufReadExt as _, task::JoinSet};
 use tracing::{debug, error, instrument, trace, warn};
+use url::Url;
 use uuid::Uuid;
+
+use crate::{
+    cargo::{
+        self, BuildPlan, BuildScriptOutput, CargoBuildArguments, CargoCompileMode, DepInfo,
+        Profile, QualifiedPath, RootOutput, RustcMetadata, Workspace,
+    },
+    cas::CourierCas,
+    daemon::{self, DaemonReadyMessage, daemon_is_running, daemon_paths},
+    fs, mk_rel_file,
+    path::{AbsDirPath, AbsFilePath, JoinWith},
+    progress::TransferBar,
+};
 
 /// Statistics about cache operations.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -78,6 +79,7 @@ impl RestoreState {
 
 #[derive(Debug, Clone)]
 pub struct CargoCache {
+    courier_url: Url,
     courier: Courier,
     cas: CourierCas,
     ws: Workspace,
@@ -85,9 +87,16 @@ pub struct CargoCache {
 
 impl CargoCache {
     #[instrument(name = "CargoCache::open")]
-    pub async fn open(courier: Courier, ws: Workspace) -> Result<Self> {
+    pub async fn open(courier_url: Url, ws: Workspace) -> Result<Self> {
+        let courier = Courier::new(courier_url.clone())?;
+        courier.ping().await.context("ping courier service")?;
         let cas = CourierCas::new(courier.clone());
-        Ok(Self { cas, courier, ws })
+        Ok(Self {
+            courier_url,
+            courier,
+            cas,
+            ws,
+        })
     }
 
     /// Get the build plan by running `cargo build --build-plan` with the
@@ -490,6 +499,7 @@ impl CargoCache {
         let response = client
             .post("http://localhost/api/v0/cargo/upload")
             .json(&daemon::CargoUploadRequest {
+                courier_url: self.courier_url.clone(),
                 ws: self.ws.clone(),
                 artifact_plan,
                 skip_artifacts: restored.artifacts.into_iter().collect(),
