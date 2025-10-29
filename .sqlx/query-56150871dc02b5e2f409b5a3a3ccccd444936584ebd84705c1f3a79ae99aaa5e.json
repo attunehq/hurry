@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                WITH inserted AS (\n                    INSERT INTO cargo_object (key)\n                    VALUES ($1)\n                    ON CONFLICT (key) DO NOTHING\n                    RETURNING id\n                )\n                SELECT id FROM inserted\n                UNION ALL\n                SELECT id FROM cargo_object WHERE key = $1\n                LIMIT 1\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "56150871dc02b5e2f409b5a3a3ccccd444936584ebd84705c1f3a79ae99aaa5e"
+}

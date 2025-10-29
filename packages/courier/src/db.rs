@@ -486,6 +486,25 @@ impl Postgres {
 
         Ok(results_by_request_idx)
     }
+
+    #[tracing::instrument(name = "Postgres::cargo_cache_reset")]
+    pub async fn cargo_cache_reset(&self) -> Result<()> {
+        sqlx::query!(
+            r#"
+            TRUNCATE TABLE
+                cargo_library_unit_build_artifact,
+                cargo_library_unit_build,
+                cargo_package,
+                cargo_object
+            RESTART IDENTITY
+            CASCADE
+        "#
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

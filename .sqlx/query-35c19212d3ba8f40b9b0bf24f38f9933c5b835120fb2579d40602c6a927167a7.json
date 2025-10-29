@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT\n                    cargo_library_unit_build.id,\n                    cargo_library_unit_build.content_hash\n                FROM cargo_package\n                JOIN cargo_library_unit_build ON cargo_package.id = cargo_library_unit_build.package_id\n                WHERE\n                    cargo_package.name = $1\n                    AND cargo_package.version = $2\n                    AND target = $3\n                    AND library_crate_compilation_unit_hash = $4\n                    AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($5, '')\n                    AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($6, '')\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "content_hash",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "35c19212d3ba8f40b9b0bf24f38f9933c5b835120fb2579d40602c6a927167a7"
+}

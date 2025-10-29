@@ -464,6 +464,23 @@ impl Client {
 
         rx.into_stream().pipe(Ok)
     }
+
+    /// Reset all cache data: delete all database records and CAS blobs.
+    #[instrument(skip(self))]
+    pub async fn cache_reset(&self) -> Result<()> {
+        let url = self.base.join("api/v1/cache/cargo/reset")?;
+        let response = self.http.post(url).send().await.context("send")?;
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(()),
+            status => {
+                let url = response.url().to_string();
+                let body = response.text().await.unwrap_or_default();
+                Err(eyre!("unexpected status code: {status}"))
+                    .with_section(|| url.header("Url:"))
+                    .with_section(|| body.header("Body:"))
+            }
+        }
+    }
 }
 
 /// Extract the request ID from a response header.

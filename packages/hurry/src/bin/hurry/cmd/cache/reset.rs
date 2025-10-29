@@ -1,23 +1,48 @@
 use clap::Args;
 use color_eyre::{Result, eyre::Context as _};
 use colored::Colorize as _;
-use hurry::fs::{self, user_global_cache_path};
+use derive_more::Debug;
 use inquire::Confirm;
-use tracing::{instrument, warn};
+use tracing::instrument;
+use url::Url;
+
+use clients::Courier;
 
 #[derive(Clone, Args, Debug)]
 pub struct Options {
-    /// Skip confirmation prompt.
+    /// Skip all confirmation prompts.
     #[arg(short, long)]
     yes: bool,
+
+    /// Base URL for the Courier instance.
+    #[arg(
+        long = "courier-url",
+        env = "HURRY_COURIER_URL",
+        default_value = "https://courier.staging.corp.attunehq.com"
+    )]
+    #[debug("{courier_url}")]
+    courier_url: Url,
+
+    /// Delete remote cache.
+    // TODO: Once we have a tiered local cache, add a `--local` option.
+    //
+    // TODO: Once we support multiple languages, maybe this should migrate to
+    // `hurry cache reset cargo`?
+    #[arg(long)]
+    remote: bool,
 }
 
 #[instrument]
 pub async fn exec(options: Options) -> Result<()> {
+    if !options.remote {
+        println!("You must specify which caches to delete with `--remote`");
+        return Ok(());
+    }
+
     if !options.yes {
         println!(
             "{}",
-            "WARNING: This will delete all cached data across all Hurry projects".on_red()
+            "WARNING: This will delete all cached data across your entire organization".on_red()
         );
         let confirmed = Confirm::new("Are you sure you want to proceed?")
             .with_default(false)
@@ -26,31 +51,14 @@ pub async fn exec(options: Options) -> Result<()> {
             return Ok(());
         }
     }
+    if options.remote {
+        let courier = Courier::new(options.courier_url)?;
+        courier.ping().await.context("ping courier service")?;
 
-    let cache_path = user_global_cache_path()
-        .await
-        .context("get user global cache path")?;
-    println!("Clearing cache directory at {cache_path}");
-    match fs::metadata(cache_path.as_std_path()).await {
-        Ok(Some(metadata)) => {
-            if !metadata.is_dir() {
-                warn!("Cache directory is not a directory: {metadata:?}");
-            }
-        }
-        // If the directory already doesn't exist, then we're done. We
-        // short-circuit here because `remove_dir_all` will fail if the
-        // directory doesn't exist.
-        Ok(None) => {
-            println!("Done!");
-            return Ok(());
-        }
-        Err(err) => {
-            warn!("Failed to stat cache directory: {err}");
-        }
+        println!("Resetting remote cache...");
+        courier.cache_reset().await.context("reset remote cache")?;
     }
-    fs::remove_dir_all(&cache_path)
-        .await
-        .with_context(|| format!("remove cache directory: {cache_path}"))?;
+
     println!("Done!");
     Ok(())
 }
