@@ -6,6 +6,8 @@ use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tokio::time::{Duration, sleep};
 use tracing::instrument;
 
+// TODO: We should probably support a `--wait` option or similar that allows
+// shutting down the daemon only once all current uploads finish.
 #[derive(Clone, Args, Debug)]
 pub struct Options {}
 
@@ -13,12 +15,12 @@ pub struct Options {}
 pub async fn exec(_options: Options) -> Result<()> {
     let paths = DaemonPaths::initialize().await?;
 
-    let Some(daemon_context) = paths.read_context().await? else {
+    let Some(context) = paths.read_context().await? else {
         println!("Daemon not running");
         return Ok(());
     };
 
-    let url = format!("http://{}/api/v0/shutdown", daemon_context.url);
+    let url = format!("http://{}/api/v0/shutdown", context.url);
     let client = Client::new();
 
     match client.post(&url).send().await {
@@ -30,7 +32,7 @@ pub async fn exec(_options: Options) -> Result<()> {
         }
     }
 
-    let pid = Pid::from_u32(daemon_context.pid);
+    let pid = Pid::from_u32(context.pid);
     let timeout = Duration::from_secs(5);
     let start = tokio::time::Instant::now();
 
