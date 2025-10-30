@@ -1,4 +1,5 @@
 use clap::Subcommand;
+use color_eyre::Result;
 
 pub mod copy;
 pub mod daemon;
@@ -16,18 +17,13 @@ pub enum Command {
 
     /// Daemon-related debugging commands.
     #[clap(subcommand)]
-    Daemon(DaemonCommand),
+    Daemon(daemon::Command),
 }
 
-/// Daemon debugging subcommands.
-#[derive(Clone, Debug, Subcommand)]
-pub enum DaemonCommand {
-    /// Print or follow the daemon log file.
-    Log(daemon::log::Options),
-
-    /// Show the daemon context file or a specific field.
-    Context(daemon::context::Options),
-
-    /// Report whether the daemon is running or stopped.
-    State(daemon::state::Options),
+pub async fn exec(cmd: Command) -> Result<()> {
+    match cmd {
+        Command::Metadata(opts) => metadata::exec(opts).await,
+        Command::Copy(opts) => copy::exec(opts).await,
+        Command::Daemon(subcmd) => daemon::exec(subcmd).await,
+    }
 }
