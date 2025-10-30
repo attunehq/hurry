@@ -195,10 +195,12 @@ pub async fn exec(
         .with_context(|| format!("write daemon context to {:?}", paths.context_path))?;
     println!("{encoded}");
 
-    axum::serve(listener, app)
+    // We don't immediately handle the error with `?` here so that we can perform
+    // the cleanup operations regardless of whether an error occurred.
+    let served = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(shutdown_rx))
         .await
-        .context("start server")?;
+        .context("start server");
 
     info!(?paths, "exiting; cleaning up context files");
     if let Err(err) = fs::remove_file(&paths.pid_file_path).await {
@@ -214,7 +216,7 @@ pub async fn exec(
         flame_guard.flush().context("flush flame_guard")?;
     }
 
-    Ok(())
+    served
 }
 
 /// Wait for a shutdown signal from either OS signals (SIGINT/SIGTERM) or the
