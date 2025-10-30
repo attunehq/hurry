@@ -118,13 +118,14 @@ Hurry uses a background daemon for async cache uploads. The daemon starts automa
 - **Extract specific field**: `hurry debug daemon context pid` (or `url`, `log_file_path`)
 - **View daemon logs**: `hurry debug daemon log`
 - **Follow daemon logs**: `hurry debug daemon log --follow` (like `tail -f`)
-- **Stop daemon**: `pkill $(hurry debug daemon context pid)`
+- **Stop daemon**: `pkill -TERM $(hurry debug daemon context pid) 2>/dev/null || true`
+  > Note: This command suppresses errors if the daemon is not running or if `hurry` is not in PATH. If you want to see errors, remove `2>/dev/null || true`.
 
 **IMPORTANT for development:**
 When testing daemon changes, you MUST stop the existing daemon before running `hurry-dev`:
 ```bash
-# Stop the old daemon
-pkill $(hurry-dev debug daemon context pid)
+# Stop the old daemon (suppress errors if not running)
+pkill -TERM $(hurry-dev debug daemon context pid) 2>/dev/null || true
 
 # Now run hurry-dev with your changes
 hurry-dev cargo build
