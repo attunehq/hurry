@@ -10,12 +10,13 @@ pub enum Command {
     Reset(reset::Options),
 
     /// Print the location of the local cache directory for the user.
-    Show,
+    #[clap(subcommand)]
+    Show(show::Command),
 }
 
 pub async fn exec(cmd: Command) -> Result<()> {
     match cmd {
         Command::Reset(opts) => reset::exec(opts).await,
-        Command::Show => show::exec().await,
+        Command::Show(cmd) => show::exec(cmd).await,
     }
 }
