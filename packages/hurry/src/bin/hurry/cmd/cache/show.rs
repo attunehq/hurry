@@ -1,6 +1,7 @@
-use color_eyre::{Result, eyre::Context as _};
-use hurry::fs::user_global_cache_path;
+use color_eyre::{Result, eyre::WrapErr};
 use tracing::instrument;
+
+use hurry::fs::user_global_cache_path;
 
 #[instrument]
 pub async fn exec() -> Result<()> {

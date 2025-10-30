@@ -77,44 +77,18 @@ async fn main() -> Result<()> {
 
     let (logger, flame_guard) = log::make_logger(std::io::stderr, top.profile.clone(), top.color)?;
     let result = match top.command {
-        Command::Cache(cmd) => match cmd {
-            cmd::cache::Command::Reset(opts) => {
-                logger.init();
-                cmd::cache::reset::exec(opts).await
-            }
-            cmd::cache::Command::Show => {
-                logger.init();
-                cmd::cache::show::exec().await
-            }
-        },
+        Command::Cache(cmd) => {
+            logger.init();
+            cmd::cache::exec(cmd).await
+        }
         Command::Cargo { args } => {
             logger.init();
             cmd::cargo::exec(args).await
         }
-        Command::Debug(cmd) => match cmd {
-            cmd::debug::Command::Metadata(opts) => {
-                logger.init();
-                cmd::debug::metadata::exec(opts).await
-            }
-            cmd::debug::Command::Copy(opts) => {
-                logger.init();
-                cmd::debug::copy::exec(opts).await
-            }
-            cmd::debug::Command::Daemon(subcmd) => match subcmd {
-                cmd::debug::DaemonCommand::Log(opts) => {
-                    logger.init();
-                    cmd::debug::daemon::log::exec(opts).await
-                }
-                cmd::debug::DaemonCommand::Context(opts) => {
-                    logger.init();
-                    cmd::debug::daemon::context::exec(opts).await
-                }
-                cmd::debug::DaemonCommand::State(opts) => {
-                    logger.init();
-                    cmd::debug::daemon::state::exec(opts).await
-                }
-            },
-        },
+        Command::Debug(cmd) => {
+            logger.init();
+            cmd::debug::exec(cmd).await
+        }
         Command::Daemon(cmd) => match cmd {
             cmd::daemon::Command::Start(opts) => {
                 // Note that in daemon mode we do not initialize the logger!
