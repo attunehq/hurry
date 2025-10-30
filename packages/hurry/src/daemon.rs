@@ -71,8 +71,8 @@ impl DaemonPaths {
             .context("read daemon context file")?
             .ok_or_eyre("no daemon context file")?;
 
-        let daemon_context = serde_json::from_str::<DaemonReadyMessage>(&context)
-            .context("parse daemon context")?;
+        let daemon_context =
+            serde_json::from_str::<DaemonReadyMessage>(&context).context("parse daemon context")?;
 
         Ok(Some(daemon_context))
     }
