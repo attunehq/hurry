@@ -100,6 +100,20 @@ async fn main() -> Result<()> {
                 logger.init();
                 cmd::debug::copy::exec(opts).await
             }
+            cmd::debug::Command::Daemon(subcmd) => match subcmd {
+                cmd::debug::DaemonCommand::Log(opts) => {
+                    logger.init();
+                    cmd::debug::daemon::log::exec(opts).await
+                }
+                cmd::debug::DaemonCommand::Context(opts) => {
+                    logger.init();
+                    cmd::debug::daemon::context::exec(opts).await
+                }
+                cmd::debug::DaemonCommand::State(opts) => {
+                    logger.init();
+                    cmd::debug::daemon::state::exec(opts).await
+                }
+            },
         },
         Command::Daemon(cmd) => match cmd {
             cmd::daemon::Command::Start(opts) => {
