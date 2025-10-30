@@ -11,6 +11,7 @@ use derive_more::Debug;
 use futures::{TryStreamExt as _, stream};
 use itertools::Itertools as _;
 use tap::Pipe as _;
+use tokio::sync::watch;
 use tower_http::trace::TraceLayer;
 use tracing::{Subscriber, debug, dispatcher, error, info, instrument, trace, warn};
 use tracing_subscriber::util::SubscriberInitExt as _;
@@ -159,15 +160,22 @@ pub async fn exec(
         .context("read listen address for socket")?;
     info!(?addr, "server listening");
 
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    let state = ServerState {
+        uploads: DashMap::new().into(),
+        shutdown_tx,
+    };
+
     let cargo = Router::new()
         .route("/upload", post(upload))
         .route("/status", post(status))
-        .with_state(ServerState {
-            uploads: DashMap::new().into(),
-        });
+        .with_state(state.clone());
 
     let app = Router::new()
         .nest("/api/v0/cargo", cargo)
+        .route("/api/v0/shutdown", post(shutdown))
+        .with_state(state)
         .layer(TraceLayer::new_for_http());
 
     // Print ready message to STDOUT for parent processes. This uses `println!`
@@ -186,7 +194,9 @@ pub async fn exec(
         .with_context(|| format!("write daemon context to {:?}", paths.context_path))?;
     println!("{encoded}");
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(shutdown_rx, paths))
+        .await?;
 
     // TODO: Unsure if we need to keep this, the guard _should_ flush on drop.
     if let Some(flame_guard) = flame_guard {
@@ -196,9 +206,64 @@ pub async fn exec(
     Ok(())
 }
 
+/// Wait for a shutdown signal from either OS signals (SIGINT/SIGTERM) or the
+/// explicit shutdown channel.
+async fn shutdown_signal(mut shutdown_rx: watch::Receiver<bool>, paths: DaemonPaths) {
+    use tokio::signal;
+
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    let explicit_shutdown = async {
+        let _ = shutdown_rx.changed().await;
+    };
+
+    tokio::select! {
+        _ = ctrl_c => {
+            info!("received SIGINT (Ctrl+C), starting graceful shutdown");
+        },
+        _ = terminate => {
+            info!("received SIGTERM, starting graceful shutdown");
+        },
+        _ = explicit_shutdown => {
+            info!("received explicit shutdown request, starting graceful shutdown");
+        },
+    }
+
+    cleanup_daemon_files(paths).await;
+}
+
+/// Clean up daemon PID and context files.
+async fn cleanup_daemon_files(paths: DaemonPaths) {
+    if let Err(err) = fs::remove_file(&paths.pid_file_path).await {
+        warn!(?err, path = ?paths.pid_file_path, "failed to remove pid file");
+    }
+
+    if let Err(err) = fs::remove_file(&paths.context_path).await {
+        warn!(?err, path = ?paths.context_path, "failed to remove context file");
+    }
+
+    info!("daemon files cleaned up");
+}
+
 #[derive(Debug, Clone)]
 struct ServerState {
     uploads: Arc<DashMap<Uuid, CargoUploadStatus>>,
+    shutdown_tx: watch::Sender<bool>,
 }
 
 #[instrument]
@@ -211,6 +276,15 @@ async fn status(
         .get(&req.request_id)
         .map(|r| r.value().to_owned());
     Json(CargoUploadStatusResponse { status })
+}
+
+#[instrument]
+async fn shutdown(State(state): State<ServerState>) -> Json<serde_json::Value> {
+    info!("shutdown request received");
+
+    let _ = state.shutdown_tx.send(true);
+
+    Json(serde_json::json!({ "ok": true }))
 }
 
 #[instrument]
