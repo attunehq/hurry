@@ -431,12 +431,9 @@ impl CargoCache {
             .invocations
             .iter()
             .find_map(|invocation| {
-                invocation.args.iter().find_map(|arg| {
-                    if let RustcInvocationArgument::Target(target) = arg {
-                        Some(target.clone())
-                    } else {
-                        None
-                    }
+                invocation.args.iter().find_map(|arg| match arg {
+                    RustcInvocationArgument::Target(target) => Some(target.clone()),
+                    _ => None,
                 })
             })
             .unwrap_or_else(|| rustc.host_target.clone());
