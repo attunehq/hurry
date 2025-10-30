@@ -47,7 +47,7 @@ impl RustcMetadata {
     #[instrument(name = "RustcMetadata::from_argv")]
     pub async fn from_argv(
         workspace_root: &AbsDirPath,
-        _args: impl AsRef<CargoBuildArguments> + Debug,
+        args: impl AsRef<CargoBuildArguments> + Debug,
     ) -> Result<Self> {
         // TODO: Is this the correct `rustc` to use? Do we need to specially
         // handle interactions with `rustup` and `rust-toolchain.toml`?
@@ -56,9 +56,12 @@ impl RustcMetadata {
         // Bypasses the check that disallows using unstable commands on stable.
         cmd.env("RUSTC_BOOTSTRAP", "1");
 
-        // TODO: What args, if any, should we be forwarding from the ones the
-        // user passed in? Today we don't forward anything.
+        // Forward the user's --target flag to rustc to get metadata for the
+        // correct target, not just the host.
         cmd.args(["-Z", "unstable-options", "--print", "target-spec-json"]);
+        if let Some(target) = args.as_ref().target() {
+            cmd.args(["--target", target]);
+        }
         cmd.current_dir(workspace_root.as_std_path());
         let output = cmd.output().await.context("run rustc")?;
         if !output.status.success() {
