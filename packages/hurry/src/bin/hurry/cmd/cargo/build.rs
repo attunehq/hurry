@@ -53,6 +53,10 @@ pub struct Options {
     #[arg(long = "hurry-wait-for-upload", default_value_t = false)]
     wait_for_upload: bool,
 
+    /// Show help for `hurry cargo build`.
+    #[arg(long = "hurry-help", default_value_t = false)]
+    pub help: bool,
+
     /// These arguments are passed directly to `cargo build` as provided.
     #[arg(
         num_args = ..,
@@ -201,6 +205,7 @@ pub async fn exec(options: Options) -> Result<()> {
         let upload_id = cache.save(artifact_plan, restored).await?;
         if options.wait_for_upload {
             cache.wait_for_upload(&upload_id).await?;
+            // TODO: Show progress indicator while upload is running.
         }
     }
 

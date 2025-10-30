@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use clap::{Args, Parser};
+use clap::{Args, CommandFactory, Parser};
 use color_eyre::{Result, eyre::Context};
 use hurry::cargo;
 use tracing::debug;
@@ -57,7 +57,16 @@ pub async fn exec(arguments: Vec<String>) -> Result<()> {
     // statement with other functions similar to the one we use for `build`.
     match command.as_str() {
         "build" => {
-            let opts = CommandOptions::parse(&arguments)?;
+            let opts: CommandOptions<build::Options> = CommandOptions::parse(&arguments)?;
+            if opts.opts.help {
+                // Help flag handling happens here because `build --help` passes
+                // through to `cargo build --help`, and we need the `Command`
+                // struct in order to print the generated help text.
+                let mut cmd = CommandOptions::<build::Options>::command();
+                cmd = cmd.about("Run `cargo build` with Hurry build acceleration");
+                cmd.print_help()?;
+                return Ok(());
+            }
             build::exec(opts.into_inner()).await
         }
         _ => cargo::invoke(command, options).await,
