@@ -1,9 +1,6 @@
 use clap::Args;
-use color_eyre::{
-    Result,
-    eyre::{Context as _, OptionExt as _},
-};
-use hurry::{daemon::DaemonPaths, fs};
+use color_eyre::Result;
+use hurry::daemon::DaemonPaths;
 use tracing::instrument;
 
 #[derive(Clone, Args, Debug)]
@@ -16,20 +13,12 @@ pub struct Options {
 pub async fn exec(options: Options) -> Result<()> {
     let paths = DaemonPaths::initialize().await?;
 
-    if !paths.context_path.exists().await {
+    let Some(daemon_context) = paths.read_context().await? else {
         eprintln!("Daemon not running (no context file found)");
         return Ok(());
-    }
-
-    let context = fs::read_buffered_utf8(&paths.context_path)
-        .await
-        .context("read daemon context file")?
-        .ok_or_eyre("no daemon context file")?;
+    };
 
     if let Some(field) = options.field {
-        let daemon_context = serde_json::from_str::<hurry::daemon::DaemonReadyMessage>(&context)
-            .context("parse daemon context")?;
-
         let value = match field.as_str() {
             "pid" => daemon_context.pid.to_string(),
             "url" => daemon_context.url,
@@ -43,6 +32,7 @@ pub async fn exec(options: Options) -> Result<()> {
 
         println!("{value}");
     } else {
+        let context = serde_json::to_string_pretty(&daemon_context)?;
         print!("{context}");
     }
 

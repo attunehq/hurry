@@ -1,9 +1,6 @@
 use clap::Args;
-use color_eyre::{
-    Result,
-    eyre::{Context as _, OptionExt as _},
-};
-use hurry::{daemon::DaemonPaths, fs};
+use color_eyre::{Result, eyre::Context as _};
+use hurry::{daemon::DaemonPaths, fs, path::AbsFilePath};
 use std::io::Write as _;
 use tokio::{
     fs::File,
@@ -22,18 +19,10 @@ pub struct Options {
 pub async fn exec(options: Options) -> Result<()> {
     let paths = DaemonPaths::initialize().await?;
 
-    if !paths.context_path.exists().await {
+    let Some(daemon_context) = paths.read_context().await? else {
         eprintln!("Daemon not running (no context file found)");
         return Ok(());
-    }
-
-    let context = fs::read_buffered_utf8(&paths.context_path)
-        .await
-        .context("read daemon context file")?
-        .ok_or_eyre("no daemon context file")?;
-
-    let daemon_context = serde_json::from_str::<hurry::daemon::DaemonReadyMessage>(&context)
-        .context("parse daemon context")?;
+    };
 
     let log_path = &daemon_context.log_file_path;
 
@@ -49,7 +38,7 @@ pub async fn exec(options: Options) -> Result<()> {
     }
 }
 
-async fn print_log(log_path: &hurry::path::AbsFilePath) -> Result<()> {
+async fn print_log(log_path: &AbsFilePath) -> Result<()> {
     let content = fs::read_buffered_utf8(log_path)
         .await
         .context("read log file")?
@@ -59,7 +48,7 @@ async fn print_log(log_path: &hurry::path::AbsFilePath) -> Result<()> {
     Ok(())
 }
 
-async fn follow_log(log_path: &hurry::path::AbsFilePath) -> Result<()> {
+async fn follow_log(log_path: &AbsFilePath) -> Result<()> {
     let content = fs::read_buffered_utf8(log_path)
         .await
         .context("read existing log content")?
