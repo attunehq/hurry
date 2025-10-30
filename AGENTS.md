@@ -112,20 +112,21 @@ This is a monorepo containing two main projects:
 #### Daemon Management
 Hurry uses a background daemon for async cache uploads. The daemon starts automatically on first use.
 
+**Daemon commands:**
+- **Stop daemon**: `hurry daemon stop` (graceful shutdown with cleanup)
+
 **Daemon debugging commands:**
 - **Check daemon status**: `hurry debug daemon status` (prints "running" or "stopped")
 - **View daemon context**: `hurry debug daemon context` (shows PID, URL, and log file path as JSON)
 - **Extract specific field**: `hurry debug daemon context pid` (or `url`, `log_file_path`)
 - **View daemon logs**: `hurry debug daemon log`
 - **Follow daemon logs**: `hurry debug daemon log --follow` (like `tail -f`)
-- **Stop daemon**: `pkill -TERM $(hurry debug daemon context pid) 2>/dev/null || true`
-  > Note: This command suppresses errors if the daemon is not running or if `hurry` is not in PATH. If you want to see errors, remove `2>/dev/null || true`.
 
 **IMPORTANT for development:**
 When testing daemon changes, you MUST stop the existing daemon before running `hurry-dev`:
 ```bash
-# Stop the old daemon (suppress errors if not running)
-pkill -TERM $(hurry-dev debug daemon context pid) 2>/dev/null || true
+# Stop the old daemon
+hurry-dev daemon stop
 
 # Now run hurry-dev with your changes
 hurry-dev cargo build
@@ -141,6 +142,9 @@ tail -f $(hurry debug daemon context log_file_path)
 
 # Or use built-in follow mode
 hurry debug daemon log --follow
+
+# Stop the daemon when done
+hurry daemon stop
 ```
 
 **Daemon context structure:**
