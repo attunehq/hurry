@@ -45,6 +45,33 @@ pub use unit_graph::{
 };
 pub use workspace::*;
 
+/// Execute Cargo without a subcommand with specified arguments.
+#[instrument]
+pub async fn invoke_plain(
+    args: impl IntoIterator<Item = impl AsRef<str>> + fmt::Debug,
+) -> Result<()> {
+    let args = args.into_iter().collect::<Vec<_>>();
+    let args = args.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+
+    trace!(?args, "invoke cargo");
+    let mut cmd = tokio::process::Command::new("cargo");
+    cmd.args(args.iter().copied());
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+
+    let status = cmd
+        .spawn()
+        .context("could not spawn cargo")?
+        .wait()
+        .await
+        .context("could not complete cargo execution")?;
+    if status.success() {
+        Ok(())
+    } else {
+        bail!("cargo exited with status: {}", status);
+    }
+}
+
 /// Execute a Cargo subcommand with specified arguments.
 #[instrument]
 pub async fn invoke(
