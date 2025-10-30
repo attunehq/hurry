@@ -440,13 +440,10 @@ impl CargoCache {
         // Start daemon if it's not already running. If it is, try to read its context
         // file to get its url, which we need to know in order to communicate with it.
         let daemon = if paths.daemon_running().await? {
-            let context = fs::read_buffered_utf8(&paths.context_path)
-                .await
-                .context("read daemon context file")?
-                .ok_or_eyre("no daemon context file")?;
-            serde_json::from_str::<DaemonReadyMessage>(&context)
-                .context("parse daemon context")
-                .with_section(|| context.header("Daemon context file:"))?
+            paths
+                .read_context()
+                .await?
+                .ok_or_eyre("daemon running but no context file")?
         } else {
             // TODO: Ideally we'd replace this with proper double-fork daemonization to
             // avoid the security and compatibility concerns here: someone could replace the

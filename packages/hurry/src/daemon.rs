@@ -9,7 +9,10 @@ use crate::{
     fs, mk_rel_file,
     path::{AbsFilePath, JoinWith as _},
 };
-use color_eyre::Result;
+use color_eyre::{
+    Result,
+    eyre::{Context as _, OptionExt as _},
+};
 use serde::{Deserialize, Serialize};
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tap::Pipe as _;
@@ -59,5 +62,21 @@ impl DaemonPaths {
             false
         }
         .pipe(Ok)
+    }
+
+    pub async fn read_context(&self) -> Result<Option<DaemonReadyMessage>> {
+        if !self.context_path.exists().await {
+            return Ok(None);
+        }
+
+        let context = fs::read_buffered_utf8(&self.context_path)
+            .await
+            .context("read daemon context file")?
+            .ok_or_eyre("no daemon context file")?;
+
+        let daemon_context =
+            serde_json::from_str::<DaemonReadyMessage>(&context).context("parse daemon context")?;
+
+        Ok(Some(daemon_context))
     }
 }
