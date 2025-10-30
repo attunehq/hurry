@@ -33,7 +33,8 @@ This is a monorepo containing two main projects:
 
 ## Workspace Structure
 
-- `packages/hurry/`: Core hurry implementation with CLI (`src/bin/hurry/main.rs` and command implementations in `src/bin/hurry/cmd/`), caching (`src/cache/`), cargo integration (`src/cargo/`), filesystem operations (`src/fs.rs`), hashing (`src/hash.rs`), and CAS client (`src/cas.rs`)
+- `packages/hurry/`: Core hurry implementation with CLI (`src/bin/hurry/main.rs` and command implementations in `src/bin/hurry/cmd/`), caching (`src/cache/`), cargo integration (`src/cargo/`), filesystem operations (`src/fs.rs`), hashing (`src/hash.rs`), daemon (`src/daemon.rs`), and cross integration (`src/cross.rs`)
+- `packages/clients/`: Shared client library providing Courier API types and HTTP client implementations
 - `packages/courier/`: API service with API routes (`src/api/`), database (`src/db.rs`), and storage (`src/storage.rs`)
 - `packages/e2e/`: End-to-end integration tests package that simulates real-world usage scenarios across git operations, branch switches, and cache restore workflows
 - `static/cargo/`: Contains cache markers and metadata for build artifact management
@@ -44,7 +45,8 @@ This is a monorepo containing two main projects:
 - Cache system (`packages/hurry/src/cache/`): Manages build artifact caching across different git states
 - Cargo integration (`packages/hurry/src/cargo/`): Handles workspace metadata, dependencies, and build profiles
 - File operations (`packages/hurry/src/fs.rs`): Optimized filesystem operations with mtime preservation
-- CAS client (`packages/hurry/src/cas.rs`): Content-addressed storage client backed by Courier
+- Daemon (`packages/hurry/src/daemon.rs`): Background service for async cache uploads and status tracking
+- Cargo/Cross integration (`packages/hurry/src/cargo.rs`, `packages/hurry/src/cross.rs`): Command passthrough and build acceleration
 
 ### Courier Components
 - API routes (`packages/courier/src/api/`): Versioned HTTP handlers using Axum
@@ -72,7 +74,12 @@ This is a monorepo containing two main projects:
 
 ### Building and Testing
 - **Build the project**: `cargo build` for local development
-- **Install hurry locally**: `cargo install --path ./packages/hurry --locked`
+- **Install hurry locally**: `cargo install --path ./packages/hurry --locked` (installs as `hurry`)
+- **Install hurry for testing**: `make install-dev` (installs as `hurry-dev`)
+  - **IMPORTANT**: When developing and testing local changes to hurry, you MUST use `hurry-dev` instead of `hurry`
+  - Run `make install-dev` after making changes to propagate them to the `hurry-dev` binary
+  - This avoids conflicts with your production `hurry` installation
+  - Use `hurry-dev cargo build`, `hurry-dev cache reset`, etc. for testing
 - **Run tests for a package**: `cargo nextest run -p {PACKAGE_NAME}`
 - **Run benchmarks**: `cargo bench --package hurry`
 - **Makefile shortcuts**: Common development commands are available via `make`:
@@ -82,13 +89,54 @@ This is a monorepo containing two main projects:
   - `make check-fix`: Run clippy with automatic fixes
   - `make sqlx-prepare`: Prepare sqlx metadata after making changes to SQL queries or database schemas
   - `make precommit`: Run all pre-commit checks and tasks
+  - `make install`: Install hurry to `$CARGO_HOME/bin/hurry` (warns about conflicts)
+  - `make install-dev`: Install hurry to `$CARGO_HOME/bin/hurry-dev` (recommended for development)
 
 ### Hurry-specific Commands
 
 #### Cache Management
-- **Reset user cache**: `hurry cache reset --yes`
+- **Reset local cache**: `hurry cache reset --yes`
+- **Reset remote cache**: `hurry cache reset --remote --yes` (deletes all cached data across entire organization)
 - **View cache debug info**: `hurry debug metadata <directory>`
 - **Copy directories with metadata**: `hurry debug copy <src> <dest>`
+
+#### Daemon Management
+Hurry uses a background daemon for async cache uploads. The daemon starts automatically on first use.
+
+**Daemon debugging commands:**
+- **Check daemon status**: `hurry debug daemon status` (prints "running" or "stopped")
+- **View daemon context**: `hurry debug daemon context` (shows PID, URL, and log file path as JSON)
+- **Extract specific field**: `hurry debug daemon context pid` (or `url`, `log_file_path`)
+- **View daemon logs**: `hurry debug daemon log`
+- **Follow daemon logs**: `hurry debug daemon log --follow` (like `tail -f`)
+- **Stop daemon**: `pkill $(hurry debug daemon context pid)`
+
+**IMPORTANT for development:**
+When testing daemon changes, you MUST stop the existing daemon before running `hurry-dev`:
+```bash
+# Stop the old daemon
+pkill $(hurry-dev debug daemon context pid)
+
+# Now run hurry-dev with your changes
+hurry-dev cargo build
+```
+
+**Example workflow for debugging:**
+```bash
+# Check if daemon is running
+hurry debug daemon status
+
+# Get log file path and follow logs
+tail -f $(hurry debug daemon context log_file_path)
+
+# Or use built-in follow mode
+hurry debug daemon log --follow
+```
+
+**Daemon context structure:**
+- `pid`: Process ID of the running daemon
+- `url`: HTTP endpoint the daemon is listening on (localhost)
+- `log_file_path`: Absolute path to daemon log file (in user cache directory)
 
 #### Debugging Scripts
 The `scripts/` directory contains specialized debugging tools:
@@ -130,10 +178,50 @@ These scripts are essential for cache correctness validation and performance ana
 ## Development Workflow
 
 ### Hurry Workflow
-1. Use `hurry cargo build` for all local builds instead of `cargo build`
-2. Use `scripts/ready.sh` to set up a clean testing environment
-3. Use the diff scripts to validate cache correctness when making changes
-4. Run e2e tests to ensure integration works across different scenarios
+1. **For development/testing**: Use `hurry-dev cargo build` after running `make install-dev`
+2. **For production use**: Use `hurry cargo build` for all local builds instead of `cargo build`
+3. **Drop-in cargo replacement**: `hurry cargo <any-command>` works for all cargo commands
+   - Commands with special hurry handling (like `build`) get cache acceleration
+   - All other commands pass through to cargo automatically
+   - Help and version flags are forwarded to cargo: `hurry cargo --help`, `hurry cargo --version`
+4. **Cross compilation support**: `hurry cross <any-command>` passes through to the `cross` tool
+5. Use `scripts/ready.sh` to set up a clean testing environment
+6. Use the diff scripts to validate cache correctness when making changes
+7. Run e2e tests to ensure integration works across different scenarios
+
+### Cargo Command Passthrough
+Hurry acts as a drop-in replacement for cargo, supporting any cargo command:
+
+**Accelerated commands** (special hurry handling):
+- `hurry cargo build`: Cache-accelerated builds with artifact restore/backup
+
+**Passthrough commands** (forwarded to cargo as-is):
+- `hurry cargo check`, `hurry cargo test`, `hurry cargo run`, `hurry cargo clippy`, etc.
+- All cargo flags and options are preserved
+- Toolchain selection works: `hurry cargo +nightly fmt`
+- Cargo plugins work: `hurry cargo machete`, `hurry cargo sqlx prepare`
+
+**Implementation notes:**
+- Help/version interception is disabled: `--help` and `--version` are passed to cargo
+- Arguments are forwarded exactly as provided
+- Only the first argument after `cargo` determines if special handling is needed
+
+### Hurry Cargo Build Flags
+
+`hurry cargo build` accepts all standard `cargo build` flags plus hurry-specific options:
+
+**Hurry-specific flags** (all prefixed with `--hurry-`):
+- `--hurry-courier-url <URL>`: Base URL for Courier instance (env: `HURRY_COURIER_URL`, default: staging)
+- `--hurry-skip-backup`: Skip backing up the cache
+- `--hurry-skip-build`: Skip the cargo build, only perform cache actions
+- `--hurry-skip-restore`: Skip restoring the cache
+- `--hurry-wait-for-upload`: Wait for all new artifacts to upload before exiting (blocks on daemon uploads)
+
+**Important notes:**
+- **Hurry flags MUST come before cargo flags** due to Clap parsing: `hurry cargo build --hurry-wait-for-upload --release` ✅
+- Incorrect order will fail: `hurry cargo build --release --hurry-wait-for-upload` ❌
+- Regular `cargo build --help` shows cargo's help, not hurry's
+- The `--hurry-wait-for-upload` flag is useful for CI/CD to ensure artifacts are fully uploaded
 
 ### Courier Workflow
 1. Set up environment: `cp .env.example .env` and customize as needed
@@ -964,7 +1052,12 @@ Benefits:
 
 - Uses Rust 2024 edition
 - Workspace-based dependency management in root `Cargo.toml`
-- No Windows support (Unix-only scripts and workflows)
+- **Windows support**: Core functionality works on Windows as of PR #163
+  - Cache operations use platform-native directories
+  - File metadata operations (mtime, permissions) are cross-platform
+  - Daemon architecture refactored for Windows compatibility
+  - Some features (like passthrough) fall back to cargo on Windows when needed
+  - Release artifacts include Windows binaries (x86_64-pc-windows-gnu only)
 - Heavy use of async/await patterns with tokio runtime
 - Extensive use of workspace dependencies for consistency
 - Courier uses `build.rs` to set `DATABASE_URL` from `COURIER_DATABASE_URL` for sqlx compatibility
