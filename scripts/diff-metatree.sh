@@ -15,6 +15,7 @@ HURRY_DIR="$(dirname $HURRY_DIR)"
 cd $HURRY_DIR
 cargo install --path ./packages/hurry --locked
 cd $WORK_DIR
+hurry cache reset --yes --remote "$@"
 
 # Create a run ID.
 RUN_ID="$(date +%s)"
@@ -26,12 +27,8 @@ cargo clean
 cargo build
 hurry debug metadata ./target/debug/ > $HURRY_DIR/.scratch/trees/$RUN_ID/cargo-tree.txt
 
-# Upload artifacts to Hurry if needed.
-#
-# TODO: Clear the Hurry remote cache too.
-#
-# TODO: Block until the upload is finished.
-hurry cargo build "$@"
+# Upload artifacts to Hurry.
+hurry cargo build --hurry-wait-for-upload "$@"
 
 # Do a restore and take a snapshot.
 cargo clean
