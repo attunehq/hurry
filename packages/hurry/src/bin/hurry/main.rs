@@ -50,6 +50,16 @@ enum Command {
         args: Vec<String>,
     },
 
+    /// Passthrough to `cross` for cross-compilation
+    #[command(disable_help_flag = true, disable_version_flag = true)]
+    Cross {
+        // We do it this way instead of constructing subcommands "the clap way" because
+        // we want to passthrough things like `help` and `version` to cross instead of
+        // having clap intercept them.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
     // TODO: /// Manage remote authentication
     // Auth,
     /// Manage user cache
@@ -90,6 +100,10 @@ async fn main() -> Result<()> {
         Command::Cargo { args } => {
             logger.init();
             cmd::cargo::exec(args).await
+        }
+        Command::Cross { args } => {
+            logger.init();
+            cmd::cross::exec(args).await
         }
         Command::Debug(cmd) => match cmd {
             cmd::debug::Command::Metadata(opts) => {
