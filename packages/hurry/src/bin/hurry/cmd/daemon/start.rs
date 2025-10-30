@@ -219,15 +219,26 @@ async fn upload(
     Json(req): Json<CargoUploadRequest>,
 ) -> Json<CargoUploadResponse> {
     let request_id = req.request_id;
-    state
-        .uploads
-        .insert(request_id, CargoUploadStatus::InProgress);
+    state.uploads.insert(
+        request_id,
+        CargoUploadStatus::InProgress {
+            uploaded_artifacts: 0,
+            total_artifacts: req.artifact_plan.artifacts.len() as u64,
+            uploaded_files: 0,
+            uploaded_bytes: 0,
+        },
+    );
     tokio::spawn(async move {
         trace!(artifact_plan = ?req.artifact_plan, "artifact plan");
         let courier = Courier::new(req.courier_url)?;
         let cas = CourierCas::new(courier.clone());
         let restored_artifacts = HashSet::<_>::from_iter(req.skip_artifacts);
         let restored_objects = HashSet::from_iter(req.skip_objects);
+
+        let mut uploaded_artifacts = 0;
+        let mut uploaded_files = 0;
+        let mut uploaded_bytes = 0;
+        let mut total_artifacts = req.artifact_plan.artifacts.len() as u64;
 
         for artifact_key in req.artifact_plan.artifacts {
             let artifact = BuiltArtifact::from_key(&req.ws, artifact_key.clone()).await?;
@@ -238,6 +249,7 @@ async fn upload(
                     ?artifact_key,
                     "skipping backup: artifact was restored from cache"
                 );
+                total_artifacts -= 1;
                 continue;
             }
 
@@ -247,7 +259,9 @@ async fn upload(
             let (library_unit_files, artifact_files, bulk_entries) =
                 process_files_for_upload(&req.ws, files_to_save, &restored_objects).await?;
 
-            upload_files_bulk(&cas, bulk_entries).await?;
+            let (bytes, files) = upload_files_bulk(&cas, bulk_entries).await?;
+            uploaded_bytes += bytes;
+            uploaded_files += files;
 
             let content_hash = calculate_content_hash(library_unit_files)?;
             debug!(?content_hash, "calculated content hash");
@@ -260,6 +274,16 @@ async fn upload(
             );
 
             courier.cargo_cache_save(request).await?;
+            uploaded_artifacts += 1;
+            state.uploads.insert(
+                request_id,
+                CargoUploadStatus::InProgress {
+                    uploaded_artifacts,
+                    total_artifacts,
+                    uploaded_files,
+                    uploaded_bytes,
+                },
+            );
         }
 
         state
@@ -448,9 +472,9 @@ async fn process_files_for_upload(
 async fn upload_files_bulk(
     cas: &CourierCas,
     bulk_entries: Vec<(Key, Vec<u8>, AbsFilePath)>,
-) -> Result<u64> {
+) -> Result<(u64, u64)> {
     if bulk_entries.is_empty() {
-        return Ok(0);
+        return Ok((0, 0));
     }
 
     debug!(count = bulk_entries.len(), "uploading files");
@@ -465,12 +489,20 @@ async fn upload_files_bulk(
         .context("upload batch")?;
 
     let mut uploaded_bytes = 0u64;
+    let mut uploaded_files = 0u64;
     for (key, content, path) in &bulk_entries {
         if result.written.contains(key) {
             uploaded_bytes += content.len() as u64;
+            uploaded_files += 1;
             debug!(?path, ?key, "uploaded via bulk");
         } else if result.skipped.contains(key) {
             debug!(?path, ?key, "skipped by server (already exists)");
+        } else {
+            // TODO: Look up the actual error for the key. If a key is not in
+            // written, skipped, or errors, then something has gone seriously
+            // wrong. To make this more ergonomic, we should probably refactor
+            // the errors into a `BTreeMap<Key, String>`.
+            warn!(?path, ?key, "failed to upload file in bulk operation");
         }
     }
 
@@ -482,7 +514,7 @@ async fn upload_files_bulk(
         );
     }
 
-    Ok(uploaded_bytes)
+    Ok((uploaded_bytes, uploaded_files))
 }
 
 /// Calculate content hash for a library unit from its files.

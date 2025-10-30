@@ -511,7 +511,7 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::wait_for_upload")]
-    pub async fn wait_for_upload(&self, request_id: &Uuid) -> Result<()> {
+    pub async fn wait_for_upload(&self, request_id: &Uuid, progress: &TransferBar) -> Result<()> {
         let paths = DaemonPaths::initialize().await?;
         let daemon = if paths.daemon_running().await? {
             let context = fs::read_buffered_utf8(&paths.context_path)
@@ -532,6 +532,10 @@ impl CargoCache {
         };
         let mut interval = tokio::time::interval(Duration::from_secs(1));
 
+        let mut last_uploaded_artifacts = 0u64;
+        let mut last_uploaded_files = 0u64;
+        let mut last_uploaded_bytes = 0u64;
+        let mut last_total_artifacts = 0u64;
         loop {
             interval.tick().await;
             trace!(?request, "submitting upload status request");
@@ -546,8 +550,23 @@ impl CargoCache {
             let response = response.json::<CargoUploadStatusResponse>().await?;
             trace!(?response, "parsed upload status response");
             let status = response.status.ok_or_eyre("no upload status")?;
-            if matches!(status, CargoUploadStatus::Complete) {
-                break;
+            match status {
+                CargoUploadStatus::Complete => break,
+                CargoUploadStatus::InProgress {
+                    uploaded_artifacts,
+                    uploaded_files,
+                    uploaded_bytes,
+                    total_artifacts,
+                } => {
+                    progress.add_bytes(uploaded_bytes.saturating_sub(last_uploaded_bytes));
+                    last_uploaded_bytes = uploaded_bytes;
+                    progress.add_files(uploaded_files.saturating_sub(last_uploaded_files));
+                    last_uploaded_files = uploaded_files;
+                    progress.inc(uploaded_artifacts.saturating_sub(last_uploaded_artifacts));
+                    last_uploaded_artifacts = uploaded_artifacts;
+                    progress.dec_length(last_total_artifacts.saturating_sub(total_artifacts));
+                    last_total_artifacts = total_artifacts;
+                }
             }
         }
 

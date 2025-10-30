@@ -23,9 +23,14 @@ pub struct CargoUploadResponse {
     pub ok: bool,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum CargoUploadStatus {
-    InProgress,
+    InProgress {
+        uploaded_artifacts: u64,
+        total_artifacts: u64,
+        uploaded_files: u64,
+        uploaded_bytes: u64,
+    },
     Complete,
 }
 

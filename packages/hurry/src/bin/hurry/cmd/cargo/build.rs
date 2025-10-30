@@ -115,9 +115,9 @@ pub async fn exec(options: Options) -> Result<()> {
         .context("calculating expected artifacts")?;
 
     // Restore artifacts.
+    let artifact_count = artifact_plan.artifacts.len() as u64;
     let restored = if !options.skip_restore {
-        let count = artifact_plan.artifacts.len() as u64;
-        let progress = TransferBar::new(count, "Restoring cache");
+        let progress = TransferBar::new(artifact_count, "Restoring cache");
         cache.restore(&artifact_plan, &progress).await?
     } else {
         Default::default()
@@ -204,8 +204,8 @@ pub async fn exec(options: Options) -> Result<()> {
     if !options.skip_backup {
         let upload_id = cache.save(artifact_plan, restored).await?;
         if options.wait_for_upload {
-            cache.wait_for_upload(&upload_id).await?;
-            // TODO: Show progress indicator while upload is running.
+            let progress = TransferBar::new(artifact_count, "Uploading cache");
+            cache.wait_for_upload(&upload_id, &progress).await?;
         }
     }
 
