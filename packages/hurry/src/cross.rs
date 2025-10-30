@@ -4,9 +4,17 @@
 //! binary, which is a drop-in replacement for cargo that handles
 //! cross-compilation.
 
-use std::{ffi::OsStr, fmt, iter::once, process::{Output, Stdio}};
+use std::{
+    ffi::OsStr,
+    fmt,
+    iter::once,
+    process::{Output, Stdio},
+};
 
-use color_eyre::{Result, eyre::{Context, bail}};
+use color_eyre::{
+    Result,
+    eyre::{Context, bail},
+};
 use tokio::process::Child;
 use tracing::{instrument, trace};
 
