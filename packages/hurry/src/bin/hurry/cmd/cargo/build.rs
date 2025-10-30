@@ -101,18 +101,18 @@ pub async fn exec(options: Options) -> Result<()> {
         .context("opening workspace")?;
     let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
 
-    // Open cache.
-    let cache = CargoCache::open(options.courier_url, workspace)
-        .await
-        .context("opening cache")?;
-
     // Compute artifact plan, which provides expected artifacts. Note that
     // because we are not actually running build scripts, these "expected
     // artifacts" do not contain fully unambiguous cache key information.
-    let artifact_plan = cache
+    let artifact_plan = workspace
         .artifact_plan(&profile, &args)
         .await
         .context("calculating expected artifacts")?;
+
+    // Initialize cache.
+    let cache = CargoCache::open(options.courier_url, workspace)
+        .await
+        .context("opening cache")?;
 
     // Restore artifacts.
     let artifact_count = artifact_plan.artifacts.len() as u64;
