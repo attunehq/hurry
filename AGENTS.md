@@ -265,6 +265,58 @@ let Some(value) = value else {
 
 This makes the control flow explicit and immune to bugs from forgetting to handle the None case.
 
+### Functional Style Over Mutation
+**CRITICAL**: Prefer functional/immutable patterns over mutation. Treat `mut` as essentially banned unless absolutely necessary.
+
+Use functional iterator methods instead of mutable loops:
+```rust
+// ❌ Avoid: mutable accumulation
+let mut results = Vec::new();
+for item in items {
+    if let Some(value) = process(item) {
+        results.push(value);
+    }
+}
+
+// ✅ Prefer: functional style with filter_map
+let results = items
+    .into_iter()
+    .filter_map(process)
+    .collect::<Vec<_>>();
+```
+
+Use `find_map` for early-exit searches instead of mutable state:
+```rust
+// ❌ Avoid: mutable search
+let mut found = None;
+for outer in items {
+    for inner in outer.children {
+        if matches_condition(&inner) {
+            found = Some(inner);
+            break;
+        }
+    }
+    if found.is_some() {
+        break;
+    }
+}
+
+// ✅ Prefer: functional find_map
+let found = items
+    .iter()
+    .find_map(|outer| {
+        outer.children.iter().find(|inner| matches_condition(inner))
+    });
+```
+
+Acceptable uses of `mut`:
+- Streaming I/O with readers/writers (e.g., `std::io::copy`, `tokio::io::copy`)
+- Performance-critical code where mutation measurably improves performance
+- FFI or unsafe code where mutation is required
+- Building complex data structures where functional style is genuinely awkward
+
+In all other cases, use functional combinators like `map`, `filter`, `filter_map`, `fold`, `find`, `find_map`, etc.
+
 ### Array Indexing
 Avoid array indexing when possible. Use iterator methods instead:
 

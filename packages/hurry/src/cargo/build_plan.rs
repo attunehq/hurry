@@ -66,6 +66,13 @@ pub struct BuildPlanInvocation {
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct RustcInvocationArguments(Vec<RustcInvocationArgument>);
 
+impl RustcInvocationArguments {
+    /// Iterate over the arguments in the invocation.
+    pub fn iter(&self) -> impl Iterator<Item = &RustcInvocationArgument> {
+        self.0.iter()
+    }
+}
+
 impl IntoIterator for RustcInvocationArguments {
     type Item = RustcInvocationArgument;
     type IntoIter = std::vec::IntoIter<Self::Item>;

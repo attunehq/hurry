@@ -34,6 +34,7 @@ use crate::{
     cargo::{
         self, BuildPlan, BuildScriptOutput, CargoBuildArguments, CargoCompileMode, DepInfo,
         Profile, QualifiedPath, RootOutput, RustcMetadata, Workspace,
+        build_plan::RustcInvocationArgument,
     },
     cas::CourierCas,
     daemon::{CargoUploadRequest, DaemonPaths, DaemonReadyMessage},
@@ -413,14 +414,25 @@ impl CargoCache {
             }
         }
 
+        // Extract the target from the rustc invocations. All artifacts in a single
+        // build use the same target, so we just need to find the first one.
+        let target = build_plan
+            .invocations
+            .iter()
+            .find_map(|invocation| {
+                invocation.args.iter().find_map(|arg| {
+                    if let RustcInvocationArgument::Target(target) = arg {
+                        Some(target.clone())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_else(|| rustc.host_target.clone());
+
         Ok(ArtifactPlan {
             artifacts,
-            // TODO: We assume it's the same target as the host, but we really
-            // should be parsing this from the `rustc` invocation.
-            //
-            // TODO: Is it possible for different artifacts in the same build to
-            // have different targets?
-            target: rustc.host_target.clone(),
+            target,
             profile: profile.clone(),
         })
     }
