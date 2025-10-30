@@ -1,7 +1,7 @@
 //! Invocation helpers for the `cross` command.
 //!
 //! This module provides utilities for spawning and interacting with the `cross`
-//! binary, which is a drop-in replacement for cargo that handles
+//! binary, which is a drop-in replacement for Cargo that handles
 //! cross-compilation.
 
 use std::{
