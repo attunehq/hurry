@@ -33,7 +33,16 @@ This is a monorepo containing two main projects:
 
 ## Workspace Structure
 
-- `packages/hurry/`: Core hurry implementation with CLI (`src/bin/hurry/main.rs` and command implementations in `src/bin/hurry/cmd/`), caching (`src/cache/`), cargo integration (`src/cargo/`), filesystem operations (`src/fs.rs`), hashing (`src/hash.rs`), daemon (`src/daemon.rs`), and cross integration (`src/cross.rs`)
+- `packages/hurry/`: Core hurry implementation, organized as follows:
+    - CLI:
+        - `src/bin/hurry/main.rs`
+        - Command implementations in `src/bin/hurry/cmd/`
+    - Caching: `src/cache/`
+    - Cargo integration: `src/cargo/`
+    - Filesystem operations: `src/fs.rs`
+    - Hashing: `src/hash.rs`
+    - Daemon: `src/daemon.rs`
+    - Cross integration: `src/cross.rs`
 - `packages/clients/`: Shared client library providing Courier API types and HTTP client implementations
 - `packages/courier/`: API service with API routes (`src/api/`), database (`src/db.rs`), and storage (`src/storage.rs`)
 - `packages/e2e/`: End-to-end integration tests package that simulates real-world usage scenarios across git operations, branch switches, and cache restore workflows
