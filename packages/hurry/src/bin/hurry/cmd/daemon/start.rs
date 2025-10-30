@@ -1,4 +1,4 @@
-use std::{collections::HashSet, io::Write, time::UNIX_EPOCH};
+use std::{collections::HashSet, io::Write, sync::Arc, time::UNIX_EPOCH};
 
 use axum::{Json, Router, extract::State, routing::post};
 use clap::Args;
@@ -163,7 +163,7 @@ pub async fn exec(
         .route("/upload", post(upload))
         .route("/status", post(status))
         .with_state(ServerState {
-            uploads: DashMap::new(),
+            uploads: DashMap::new().into(),
         });
 
     let app = Router::new()
@@ -198,7 +198,7 @@ pub async fn exec(
 
 #[derive(Debug, Clone)]
 struct ServerState {
-    uploads: DashMap<Uuid, CargoUploadStatus>,
+    uploads: Arc<DashMap<Uuid, CargoUploadStatus>>,
 }
 
 #[instrument]

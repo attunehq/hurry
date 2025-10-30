@@ -4,6 +4,7 @@ use color_eyre::{
     eyre::{Context as _, OptionExt, bail, eyre},
 };
 use dashmap::DashSet;
+use derive_more::Debug;
 use futures::StreamExt;
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -12,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     env::VarError,
-    fmt::Debug,
     path::PathBuf,
     process::Stdio,
     time::{Duration, UNIX_EPOCH},
@@ -82,6 +82,7 @@ impl RestoreState {
 
 #[derive(Debug, Clone)]
 pub struct CargoCache {
+    #[debug("{:?}", courier_url.as_str())]
     courier_url: Url,
     courier: Courier,
     cas: CourierCas,
@@ -104,7 +105,10 @@ impl CargoCache {
 
     /// Get the build plan by running `cargo build --build-plan` with the
     /// provided arguments.
-    async fn build_plan(&self, args: impl AsRef<CargoBuildArguments> + Debug) -> Result<BuildPlan> {
+    async fn build_plan(
+        &self,
+        args: impl AsRef<CargoBuildArguments> + std::fmt::Debug,
+    ) -> Result<BuildPlan> {
         // Running `cargo build --build-plan` deletes a bunch of items in the `target`
         // directory. To work around this we temporarily move `target` -> run
         // the build plan -> move it back. If the rename fails (e.g., permissions,
@@ -146,7 +150,7 @@ impl CargoCache {
     pub async fn artifact_plan(
         &self,
         profile: &Profile,
-        args: impl AsRef<CargoBuildArguments> + Debug,
+        args: impl AsRef<CargoBuildArguments> + std::fmt::Debug,
     ) -> Result<ArtifactPlan> {
         let rustc = RustcMetadata::from_argv(&self.ws.root, &args)
             .await
@@ -541,7 +545,8 @@ impl CargoCache {
             trace!(?response, "got upload status response");
             let response = response.json::<CargoUploadStatusResponse>().await?;
             trace!(?response, "parsed upload status response");
-            if matches!(response.status, Some(CargoUploadStatus::Complete)) {
+            let status = response.status.ok_or_eyre("no upload status")?;
+            if matches!(status, CargoUploadStatus::Complete) {
                 break;
             }
         }
