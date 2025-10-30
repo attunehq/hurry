@@ -58,7 +58,7 @@ url = { workspace = true }
 flume = { workspace = true }
 num_cpus = { workspace = true }
 jwalk.workspace = true
-uuid = { workspace = true, features = ["v4"] }
+uuid = { workspace = true, features = ["serde", "v4"] }
 indicatif = { workspace = true }
 humansize = { workspace = true }
 scopeguard = { workspace = true }

@@ -1,16 +1,10 @@
 use cargo_metadata::TargetKind;
-use clients::{
-    Courier,
-    courier::v1::{
-        Key,
-        cache::{ArtifactFile, CargoBulkRestoreHit, CargoRestoreRequest},
-    },
-};
 use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context as _, OptionExt, bail, eyre},
 };
 use dashmap::DashSet;
+use derive_more::Debug;
 use futures::StreamExt;
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -19,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     env::VarError,
-    fmt::Debug,
     path::PathBuf,
     process::Stdio,
     time::{Duration, UNIX_EPOCH},
@@ -36,10 +29,20 @@ use crate::{
         Profile, QualifiedPath, RootOutput, RustcMetadata, Workspace,
     },
     cas::CourierCas,
-    daemon::{CargoUploadRequest, DaemonPaths, DaemonReadyMessage},
+    daemon::{
+        CargoUploadRequest, CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse,
+        DaemonPaths, DaemonReadyMessage,
+    },
     fs, mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith},
     progress::TransferBar,
+};
+use clients::{
+    Courier,
+    courier::v1::{
+        Key,
+        cache::{ArtifactFile, CargoBulkRestoreHit, CargoRestoreRequest},
+    },
 };
 
 /// Statistics about cache operations.
@@ -79,6 +82,7 @@ impl RestoreState {
 
 #[derive(Debug, Clone)]
 pub struct CargoCache {
+    #[debug("{:?}", courier_url.as_str())]
     courier_url: Url,
     courier: Courier,
     cas: CourierCas,
@@ -101,7 +105,10 @@ impl CargoCache {
 
     /// Get the build plan by running `cargo build --build-plan` with the
     /// provided arguments.
-    async fn build_plan(&self, args: impl AsRef<CargoBuildArguments> + Debug) -> Result<BuildPlan> {
+    async fn build_plan(
+        &self,
+        args: impl AsRef<CargoBuildArguments> + std::fmt::Debug,
+    ) -> Result<BuildPlan> {
         // Running `cargo build --build-plan` deletes a bunch of items in the `target`
         // directory. To work around this we temporarily move `target` -> run
         // the build plan -> move it back. If the rename fails (e.g., permissions,
@@ -143,7 +150,7 @@ impl CargoCache {
     pub async fn artifact_plan(
         &self,
         profile: &Profile,
-        args: impl AsRef<CargoBuildArguments> + Debug,
+        args: impl AsRef<CargoBuildArguments> + std::fmt::Debug,
     ) -> Result<ArtifactPlan> {
         let rustc = RustcMetadata::from_argv(&self.ws.root, &args)
             .await
@@ -426,7 +433,7 @@ impl CargoCache {
     }
 
     #[instrument(name = "CargoCache::save", skip(artifact_plan, restored))]
-    pub async fn save(&self, artifact_plan: ArtifactPlan, restored: RestoreState) -> Result<()> {
+    pub async fn save(&self, artifact_plan: ArtifactPlan, restored: RestoreState) -> Result<Uuid> {
         trace!(?artifact_plan, "artifact plan");
         let paths = DaemonPaths::initialize().await?;
 
@@ -473,23 +480,92 @@ impl CargoCache {
                 .with_section(|| line.header("Daemon output:"))?
         };
 
-        // Connect to daemon HTTP server and send the request.
+        // Connect to daemon HTTP server.
         let client = reqwest::Client::default();
         let endpoint = format!("http://{}/api/v0/cargo/upload", daemon.url);
+
+        // Send upload request.
+        let request_id = Uuid::new_v4();
+        let request = CargoUploadRequest {
+            request_id,
+            courier_url: self.courier_url.clone(),
+            ws: self.ws.clone(),
+            artifact_plan,
+            skip_artifacts: restored.artifacts.into_iter().collect(),
+            skip_objects: restored.objects.into_iter().collect(),
+        };
+        trace!(?request, "submitting upload request");
         let response = client
             .post(&endpoint)
-            .json(&CargoUploadRequest {
-                courier_url: self.courier_url.clone(),
-                ws: self.ws.clone(),
-                artifact_plan,
-                skip_artifacts: restored.artifacts.into_iter().collect(),
-                skip_objects: restored.objects.into_iter().collect(),
-            })
+            .json(&request)
             .send()
             .await
             .with_context(|| format!("send upload request to daemon at: {endpoint}"))
             .with_section(|| format!("{daemon:?}").header("Daemon context:"))?;
-        debug!(?response, "submitted upload request");
+        trace!(?response, "got upload response");
+
+        Ok(request_id)
+    }
+
+    #[instrument(name = "CargoCache::wait_for_upload")]
+    pub async fn wait_for_upload(&self, request_id: &Uuid, progress: &TransferBar) -> Result<()> {
+        let paths = DaemonPaths::initialize().await?;
+        let daemon = if paths.daemon_running().await? {
+            let context = fs::read_buffered_utf8(&paths.context_path)
+                .await
+                .context("read daemon context file")?
+                .ok_or_eyre("no daemon context file")?;
+            serde_json::from_str::<DaemonReadyMessage>(&context)
+                .context("parse daemon context")
+                .with_section(|| context.header("Daemon context file:"))?
+        } else {
+            bail!("daemon is not running");
+        };
+
+        let client = reqwest::Client::default();
+        let endpoint = format!("http://{}/api/v0/cargo/status", daemon.url);
+        let request = CargoUploadStatusRequest {
+            request_id: *request_id,
+        };
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+
+        let mut last_uploaded_artifacts = 0u64;
+        let mut last_uploaded_files = 0u64;
+        let mut last_uploaded_bytes = 0u64;
+        let mut last_total_artifacts = 0u64;
+        loop {
+            interval.tick().await;
+            trace!(?request, "submitting upload status request");
+            let response = client
+                .post(&endpoint)
+                .json(&request)
+                .send()
+                .await
+                .with_context(|| format!("send upload status request to daemon at: {endpoint}"))
+                .with_section(|| format!("{daemon:?}").header("Daemon context:"))?;
+            trace!(?response, "got upload status response");
+            let response = response.json::<CargoUploadStatusResponse>().await?;
+            trace!(?response, "parsed upload status response");
+            let status = response.status.ok_or_eyre("no upload status")?;
+            match status {
+                CargoUploadStatus::Complete => break,
+                CargoUploadStatus::InProgress {
+                    uploaded_artifacts,
+                    uploaded_files,
+                    uploaded_bytes,
+                    total_artifacts,
+                } => {
+                    progress.add_bytes(uploaded_bytes.saturating_sub(last_uploaded_bytes));
+                    last_uploaded_bytes = uploaded_bytes;
+                    progress.add_files(uploaded_files.saturating_sub(last_uploaded_files));
+                    last_uploaded_files = uploaded_files;
+                    progress.inc(uploaded_artifacts.saturating_sub(last_uploaded_artifacts));
+                    last_uploaded_artifacts = uploaded_artifacts;
+                    progress.dec_length(last_total_artifacts.saturating_sub(total_artifacts));
+                    last_total_artifacts = total_artifacts;
+                }
+            }
+        }
 
         Ok(())
     }

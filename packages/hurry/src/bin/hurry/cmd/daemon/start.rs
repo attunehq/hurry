@@ -1,7 +1,23 @@
-use std::{collections::HashSet, io::Write, time::UNIX_EPOCH};
+use std::{collections::HashSet, io::Write, sync::Arc, time::UNIX_EPOCH};
 
-use axum::{Json, Router, routing::post};
+use axum::{Json, Router, extract::State, routing::post};
 use clap::Args;
+use color_eyre::{
+    Result, Section, SectionExt,
+    eyre::{Context as _, Error, OptionExt as _, bail},
+};
+use dashmap::DashMap;
+use derive_more::Debug;
+use futures::{TryStreamExt as _, stream};
+use itertools::Itertools as _;
+use tap::Pipe as _;
+use tower_http::trace::TraceLayer;
+use tracing::{Subscriber, debug, dispatcher, error, info, instrument, trace, warn};
+use tracing_subscriber::util::SubscriberInitExt as _;
+use url::Url;
+use uuid::Uuid;
+
+use crate::{TopLevelFlags, log};
 use clients::{
     Courier,
     courier::v1::{
@@ -9,30 +25,19 @@ use clients::{
         cache::{ArtifactFile, CargoSaveRequest},
     },
 };
-use color_eyre::{
-    Result, Section, SectionExt,
-    eyre::{Context as _, Error, OptionExt as _, bail},
-};
-use derive_more::Debug;
-use futures::{TryStreamExt as _, stream};
 use hurry::{
     cargo::{
         BuildScriptOutput, BuiltArtifact, DepInfo, LibraryUnitHash, QualifiedPath, RootOutput,
         Workspace,
     },
     cas::CourierCas,
-    daemon::{CargoUploadRequest, CargoUploadResponse, DaemonPaths, DaemonReadyMessage},
+    daemon::{
+        CargoUploadRequest, CargoUploadResponse, CargoUploadStatus, CargoUploadStatusRequest,
+        CargoUploadStatusResponse, DaemonPaths, DaemonReadyMessage,
+    },
     fs,
     path::{AbsFilePath, TryJoinWith},
 };
-use itertools::Itertools as _;
-use tap::Pipe as _;
-use tower_http::trace::TraceLayer;
-use tracing::{Subscriber, debug, dispatcher, error, info, instrument, trace, warn};
-use tracing_subscriber::util::SubscriberInitExt as _;
-use url::Url;
-
-use crate::{TopLevelFlags, log};
 
 #[derive(Clone, Args, Debug)]
 pub struct Options {
@@ -154,7 +159,12 @@ pub async fn exec(
         .context("read listen address for socket")?;
     info!(?addr, "server listening");
 
-    let cargo = Router::new().route("/upload", post(upload));
+    let cargo = Router::new()
+        .route("/upload", post(upload))
+        .route("/status", post(status))
+        .with_state(ServerState {
+            uploads: DashMap::new().into(),
+        });
 
     let app = Router::new()
         .nest("/api/v0/cargo", cargo)
@@ -186,13 +196,49 @@ pub async fn exec(
     Ok(())
 }
 
-async fn upload(Json(req): Json<CargoUploadRequest>) -> Json<CargoUploadResponse> {
+#[derive(Debug, Clone)]
+struct ServerState {
+    uploads: Arc<DashMap<Uuid, CargoUploadStatus>>,
+}
+
+#[instrument]
+async fn status(
+    State(state): State<ServerState>,
+    Json(req): Json<CargoUploadStatusRequest>,
+) -> Json<CargoUploadStatusResponse> {
+    let status = state
+        .uploads
+        .get(&req.request_id)
+        .map(|r| r.value().to_owned());
+    Json(CargoUploadStatusResponse { status })
+}
+
+#[instrument]
+async fn upload(
+    State(state): State<ServerState>,
+    Json(req): Json<CargoUploadRequest>,
+) -> Json<CargoUploadResponse> {
+    let request_id = req.request_id;
+    state.uploads.insert(
+        request_id,
+        CargoUploadStatus::InProgress {
+            uploaded_artifacts: 0,
+            total_artifacts: req.artifact_plan.artifacts.len() as u64,
+            uploaded_files: 0,
+            uploaded_bytes: 0,
+        },
+    );
     tokio::spawn(async move {
         trace!(artifact_plan = ?req.artifact_plan, "artifact plan");
         let courier = Courier::new(req.courier_url)?;
         let cas = CourierCas::new(courier.clone());
         let restored_artifacts = HashSet::<_>::from_iter(req.skip_artifacts);
         let restored_objects = HashSet::from_iter(req.skip_objects);
+
+        let mut uploaded_artifacts = 0;
+        let mut uploaded_files = 0;
+        let mut uploaded_bytes = 0;
+        let mut total_artifacts = req.artifact_plan.artifacts.len() as u64;
 
         for artifact_key in req.artifact_plan.artifacts {
             let artifact = BuiltArtifact::from_key(&req.ws, artifact_key.clone()).await?;
@@ -203,6 +249,7 @@ async fn upload(Json(req): Json<CargoUploadRequest>) -> Json<CargoUploadResponse
                     ?artifact_key,
                     "skipping backup: artifact was restored from cache"
                 );
+                total_artifacts -= 1;
                 continue;
             }
 
@@ -212,7 +259,9 @@ async fn upload(Json(req): Json<CargoUploadRequest>) -> Json<CargoUploadResponse
             let (library_unit_files, artifact_files, bulk_entries) =
                 process_files_for_upload(&req.ws, files_to_save, &restored_objects).await?;
 
-            upload_files_bulk(&cas, bulk_entries).await?;
+            let (bytes, files) = upload_files_bulk(&cas, bulk_entries).await?;
+            uploaded_bytes += bytes;
+            uploaded_files += files;
 
             let content_hash = calculate_content_hash(library_unit_files)?;
             debug!(?content_hash, "calculated content hash");
@@ -225,8 +274,21 @@ async fn upload(Json(req): Json<CargoUploadRequest>) -> Json<CargoUploadResponse
             );
 
             courier.cargo_cache_save(request).await?;
+            uploaded_artifacts += 1;
+            state.uploads.insert(
+                request_id,
+                CargoUploadStatus::InProgress {
+                    uploaded_artifacts,
+                    total_artifacts,
+                    uploaded_files,
+                    uploaded_bytes,
+                },
+            );
         }
 
+        state
+            .uploads
+            .insert(request_id, CargoUploadStatus::Complete);
         Ok::<(), Error>(())
     });
     Json(CargoUploadResponse { ok: true })
@@ -410,9 +472,9 @@ async fn process_files_for_upload(
 async fn upload_files_bulk(
     cas: &CourierCas,
     bulk_entries: Vec<(Key, Vec<u8>, AbsFilePath)>,
-) -> Result<u64> {
+) -> Result<(u64, u64)> {
     if bulk_entries.is_empty() {
-        return Ok(0);
+        return Ok((0, 0));
     }
 
     debug!(count = bulk_entries.len(), "uploading files");
@@ -427,12 +489,20 @@ async fn upload_files_bulk(
         .context("upload batch")?;
 
     let mut uploaded_bytes = 0u64;
+    let mut uploaded_files = 0u64;
     for (key, content, path) in &bulk_entries {
         if result.written.contains(key) {
             uploaded_bytes += content.len() as u64;
+            uploaded_files += 1;
             debug!(?path, ?key, "uploaded via bulk");
         } else if result.skipped.contains(key) {
             debug!(?path, ?key, "skipped by server (already exists)");
+        } else {
+            // TODO: Look up the actual error for the key. If a key is not in
+            // written, skipped, or errors, then something has gone seriously
+            // wrong. To make this more ergonomic, we should probably refactor
+            // the errors into a `BTreeMap<Key, String>`.
+            warn!(?path, ?key, "failed to upload file in bulk operation");
         }
     }
 
@@ -444,7 +514,7 @@ async fn upload_files_bulk(
         );
     }
 
-    Ok(uploaded_bytes)
+    Ok((uploaded_bytes, uploaded_files))
 }
 
 /// Calculate content hash for a library unit from its files.

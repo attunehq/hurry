@@ -1,6 +1,9 @@
 mod cargo;
 
-pub use cargo::{CargoUploadRequest, CargoUploadResponse};
+pub use cargo::{
+    CargoUploadRequest, CargoUploadResponse, CargoUploadStatus, CargoUploadStatusRequest,
+    CargoUploadStatusResponse,
+};
 
 use crate::{
     fs, mk_rel_file,
