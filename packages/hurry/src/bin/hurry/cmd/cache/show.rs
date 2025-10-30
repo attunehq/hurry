@@ -1,13 +1,19 @@
-use color_eyre::{Result, eyre::WrapErr};
+use clap::Subcommand;
+use color_eyre::Result;
 use tracing::instrument;
 
-use hurry::fs::user_global_cache_path;
+mod cargo;
+
+/// Display various cache information.
+#[derive(Clone, Debug, Subcommand)]
+pub enum Command {
+    /// Display information about cached Cargo packages.
+    Cargo(cargo::Options),
+}
 
 #[instrument]
-pub async fn exec() -> Result<()> {
-    let cache_path = user_global_cache_path()
-        .await
-        .context("get user global cache path")?;
-    println!("{cache_path}");
-    Ok(())
+pub async fn exec(cmd: Command) -> Result<()> {
+    match cmd {
+        Command::Cargo(opts) => cargo::exec(opts).await,
+    }
 }

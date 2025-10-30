@@ -262,7 +262,7 @@ pub fn walk_files(root: &AbsDirPath) -> impl Stream<Item = Result<AbsFilePath>> 
     let root = root.clone();
 
     spawn_blocking(move || {
-        for entry in jwalk::WalkDir::new(root.as_std_path()) {
+        for entry in jwalk::WalkDir::new(root.as_std_path()).skip_hidden(false) {
             let entry = match entry.with_context(|| format!("walk files in {root:?}")) {
                 Ok(entry) => entry,
                 Err(err) => {
