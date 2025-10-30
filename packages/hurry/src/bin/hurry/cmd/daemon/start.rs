@@ -11,6 +11,7 @@ use derive_more::Debug;
 use futures::{TryStreamExt as _, stream};
 use itertools::Itertools as _;
 use tap::Pipe as _;
+use tokio::signal;
 use tokio::sync::watch;
 use tower_http::trace::TraceLayer;
 use tracing::{Subscriber, debug, dispatcher, error, info, instrument, trace, warn};
@@ -195,8 +196,18 @@ pub async fn exec(
     println!("{encoded}");
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(shutdown_rx, paths))
-        .await?;
+        .with_graceful_shutdown(shutdown_signal(shutdown_rx))
+        .await
+        .context("start server")?;
+
+    info!(?paths, "exiting; cleaning up context files");
+    if let Err(err) = fs::remove_file(&paths.pid_file_path).await {
+        warn!(?err, path = ?paths.pid_file_path, "failed to remove pid file");
+    }
+    if let Err(err) = fs::remove_file(&paths.context_path).await {
+        warn!(?err, path = ?paths.context_path, "failed to remove context file");
+    }
+    info!("context files cleaned up");
 
     // TODO: Unsure if we need to keep this, the guard _should_ flush on drop.
     if let Some(flame_guard) = flame_guard {
@@ -208,9 +219,7 @@ pub async fn exec(
 
 /// Wait for a shutdown signal from either OS signals (SIGINT/SIGTERM) or the
 /// explicit shutdown channel.
-async fn shutdown_signal(mut shutdown_rx: watch::Receiver<bool>, paths: DaemonPaths) {
-    use tokio::signal;
-
+async fn shutdown_signal(mut shutdown_rx: watch::Receiver<bool>) {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
@@ -243,21 +252,6 @@ async fn shutdown_signal(mut shutdown_rx: watch::Receiver<bool>, paths: DaemonPa
             info!("received explicit shutdown request, starting graceful shutdown");
         },
     }
-
-    cleanup_daemon_files(paths).await;
-}
-
-/// Clean up daemon PID and context files.
-async fn cleanup_daemon_files(paths: DaemonPaths) {
-    if let Err(err) = fs::remove_file(&paths.pid_file_path).await {
-        warn!(?err, path = ?paths.pid_file_path, "failed to remove pid file");
-    }
-
-    if let Err(err) = fs::remove_file(&paths.context_path).await {
-        warn!(?err, path = ?paths.context_path, "failed to remove context file");
-    }
-
-    info!("daemon files cleaned up");
 }
 
 #[derive(Debug, Clone)]

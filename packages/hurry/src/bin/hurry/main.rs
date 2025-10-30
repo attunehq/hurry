@@ -110,6 +110,10 @@ async fn main() -> Result<()> {
                 // logger is actually the file logger.
                 cmd::daemon::start::exec(t, logger, opts).await
             }
+            cmd::daemon::Command::Stop(opts) => {
+                logger.init();
+                cmd::daemon::stop::exec(opts).await
+            }
         },
     };
 
