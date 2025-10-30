@@ -27,7 +27,7 @@ impl<T: Args> CommandOptions<T> {
 /// Execute a cargo command by dispatching based on the first argument.
 pub async fn exec(arguments: Vec<String>) -> Result<()> {
     let Some((command, options)) = arguments.split_first() else {
-        return cargo::invoke("", Vec::<String>::new()).await;
+        return cargo::invoke_plain(Vec::<String>::new()).await;
     };
 
     // If this is Windows, just pass through to `cargo` unconditionally.

@@ -24,6 +24,39 @@ pub struct Handles {
     pub stderr: Stdio,
 }
 
+/// Execute cross without a subcommand with specified arguments.
+#[instrument]
+pub async fn invoke_plain(
+    args: impl IntoIterator<Item = impl AsRef<str>> + fmt::Debug,
+) -> Result<()> {
+    let args = args.into_iter().collect::<Vec<_>>();
+    let args = args.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+
+    trace!(?args, "invoke cross");
+    let mut cmd = tokio::process::Command::new("cross");
+    cmd.args(args.iter().copied());
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+
+    let status = cmd
+        .spawn()
+        .with_context(|| {
+            "could not spawn cross\n\n\
+             cross is not installed or not in your PATH.\n\
+             To install cross, run:\n\n\
+             \tcargo install cross\n\n\
+             For more information, see: https://github.com/cross-rs/cross"
+        })?
+        .wait()
+        .await
+        .context("could not complete cross execution")?;
+    if status.success() {
+        Ok(())
+    } else {
+        bail!("cross exited with status: {}", status);
+    }
+}
+
 /// Execute a cross subcommand with specified arguments.
 #[instrument]
 pub async fn invoke(
