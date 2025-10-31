@@ -268,16 +268,23 @@ TAG="v$VERSION"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Set up cleanup trap to restore Cargo.toml files on exit (success or failure)
+# Set up cleanup trap to restore Cargo.toml files and remove tag on failure
 cleanup() {
-    if git diff --quiet "**/Cargo.toml" 2>/dev/null; then
-        # No changes to Cargo.toml files, nothing to restore
-        return
+    local exit_code=$?
+
+    # Restore Cargo.toml files if they were modified
+    if ! git diff --quiet "**/Cargo.toml" 2>/dev/null; then
+        step "Restoring Cargo.toml files"
+        git checkout -- "**/Cargo.toml" 2>/dev/null || true
+        info "✓ Restored Cargo.toml files"
     fi
 
-    step "Restoring Cargo.toml files"
-    git checkout -- "**/Cargo.toml" 2>/dev/null || true
-    info "✓ Restored Cargo.toml files"
+    # If script failed and tag was created, remove it
+    if [[ $exit_code -ne 0 ]] && [[ "$DRY_RUN" == "false" ]] && git rev-parse "$TAG" >/dev/null 2>&1; then
+        step "Removing tag $TAG due to failure"
+        git tag -d "$TAG" 2>/dev/null || true
+        info "✓ Removed tag $TAG"
+    fi
 }
 trap cleanup EXIT
 
@@ -311,6 +318,17 @@ mkdir -p "$ARTIFACT_DIR"
 # Update version in Cargo.toml files
 step "Updating version in Cargo.toml files"
 cargo set-version "$VERSION" || fail "Failed to set version"
+
+# Create git tag before building so git_version! picks it up
+# Note: We create the tag pointing to HEAD (before the Cargo.toml changes)
+# This ensures the built binaries have the correct version string
+if [[ "$DRY_RUN" == "false" ]]; then
+    step "Creating git tag $TAG (before build)"
+    git tag -a "$TAG" -m "Release $VERSION" || fail "Failed to create git tag"
+    info "✓ Created tag $TAG"
+else
+    step "Skipping git tag creation (dry run)"
+fi
 
 # Build for all targets
 if [[ "$SKIP_BUILD" == "false" ]]; then
@@ -360,15 +378,6 @@ info "✓ Generated checksums"
 
 # Display checksums
 cat "$ARTIFACT_DIR/checksums.txt"
-
-# Create git tag
-if [[ "$DRY_RUN" == "false" ]]; then
-    step "Creating git tag $TAG"
-    git tag -a "$TAG" -m "Release $VERSION" || fail "Failed to create git tag"
-    info "✓ Created tag $TAG"
-else
-    step "Skipping git tag creation (dry run)"
-fi
 
 # Upload to S3
 if [[ "$SKIP_UPLOAD" == "false" ]]; then
