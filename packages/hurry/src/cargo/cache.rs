@@ -1,26 +1,15 @@
-use cargo_metadata::TargetKind;
-use clients::{
-    Courier,
-    courier::v1::{
-        Key,
-        cache::{ArtifactFile, CargoBulkRestoreHit, CargoRestoreRequest},
-    },
-};
 use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context as _, OptionExt, bail, eyre},
 };
 use dashmap::DashSet;
+use derive_more::Debug;
 use futures::StreamExt;
 use itertools::Itertools;
-use rayon::prelude::*;
-use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     env::VarError,
-    fmt::Debug,
-    path::PathBuf,
     process::Stdio,
     time::{Duration, UNIX_EPOCH},
 };
@@ -32,15 +21,23 @@ use uuid::Uuid;
 
 use crate::{
     cargo::{
-        self, BuildPlan, BuildScriptOutput, CargoBuildArguments, CargoCompileMode, DepInfo,
-        Profile, QualifiedPath, RootOutput, RustcMetadata, Workspace,
-        build_plan::RustcInvocationArgument,
+        ArtifactKey, ArtifactPlan, BuildScriptOutput, DepInfo, QualifiedPath, RootOutput, Workspace,
     },
     cas::CourierCas,
-    daemon::{CargoUploadRequest, DaemonPaths, DaemonReadyMessage},
-    fs, mk_rel_file,
-    path::{AbsDirPath, AbsFilePath, JoinWith},
+    daemon::{
+        CargoUploadRequest, CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse,
+        DaemonPaths, DaemonReadyMessage,
+    },
+    fs,
+    path::{AbsDirPath, AbsFilePath},
     progress::TransferBar,
+};
+use clients::{
+    Courier,
+    courier::v1::{
+        Key,
+        cache::{ArtifactFile, CargoBulkRestoreHit, CargoRestoreRequest},
+    },
 };
 
 /// Statistics about cache operations.
@@ -80,6 +77,7 @@ impl RestoreState {
 
 #[derive(Debug, Clone)]
 pub struct CargoCache {
+    #[debug("{:?}", courier_url.as_str())]
     courier_url: Url,
     courier: Courier,
     cas: CourierCas,
@@ -100,366 +98,18 @@ impl CargoCache {
         })
     }
 
-    /// Get the build plan by running `cargo build --build-plan` with the
-    /// provided arguments.
-    async fn build_plan(&self, args: impl AsRef<CargoBuildArguments> + Debug) -> Result<BuildPlan> {
-        // Running `cargo build --build-plan` deletes a bunch of items in the `target`
-        // directory. To work around this we temporarily move `target` -> run
-        // the build plan -> move it back. If the rename fails (e.g., permissions,
-        // cross-device), we proceed without it; this will then have the original issue
-        // but at least won't break the build.
-        let temp = self
-            .ws
-            .root
-            .as_std_path()
-            .join(format!("target.backup.{}", Uuid::new_v4()));
-
-        let renamed = tokio::fs::rename(self.ws.target.as_std_path(), &temp)
-            .await
-            .is_ok();
-
-        defer! {
-            if renamed {
-                let target = self.ws.target.as_std_path();
-                #[allow(clippy::disallowed_methods, reason = "cannot use async in defer")]
-                let _ = std::fs::remove_dir_all(target);
-                #[allow(clippy::disallowed_methods, reason = "cannot use async in defer")]
-                let _ = std::fs::rename(&temp, target);
-            }
-        }
-
-        let mut build_args = args.as_ref().to_argv();
-        build_args.extend([
-            String::from("--build-plan"),
-            String::from("-Z"),
-            String::from("unstable-options"),
-        ]);
-        let output = cargo::invoke_output("build", build_args, [("RUSTC_BOOTSTRAP", "1")])
-            .await
-            .context("run cargo command")?;
-        serde_json::from_slice::<BuildPlan>(&output.stdout)
-            .context("parse build plan")
-            .with_section(move || {
-                String::from_utf8_lossy(&output.stdout)
-                    .to_string()
-                    .header("Stdout:")
-            })
-            .with_section(move || {
-                String::from_utf8_lossy(&output.stderr)
-                    .to_string()
-                    .header("Stderr:")
-            })
-    }
-
-    #[instrument(name = "CargoCache::artifacts")]
-    pub async fn artifact_plan(
-        &self,
-        profile: &Profile,
-        args: impl AsRef<CargoBuildArguments> + Debug,
-    ) -> Result<ArtifactPlan> {
-        let rustc = RustcMetadata::from_argv(&self.ws.root, &args)
-            .await
-            .context("parsing rustc metadata")?;
-        trace!(?rustc, "rustc metadata");
-
-        // Note that build plans as a feature are _deprecated_, although their
-        // removal has not occurred in the last 6 years[^1]. If a stable
-        // alternative comes along, we should migrate.
-        //
-        // An alternative is the `--unit-graph` flag, which is unstable but not
-        // deprecated[^2]. Unfortunately, unit graphs do not provide information
-        // about the `rustc` invocation argv or the unit hash of the build
-        // script execution, both of which are necessary to construct the
-        // artifact cache key. We could theoretically reconstruct this
-        // information using the JSON build messages and RUSTC_WRAPPER
-        // invocation recording, but that's way more work for no stronger of a
-        // stability guarantee.
-        //
-        // [^1]: https://github.com/rust-lang/cargo/issues/7614
-        // [^2]: https://doc.rust-lang.org/cargo/reference/unstable.html#unit-graph
-
-        // From testing locally, it doesn't seem to matter in which order we
-        // pass the flags but we pass the user flags first just in case as that
-        // seems like it'd follow the principle of least surprise if ordering
-        // ever does matter.
-        let build_plan = self.build_plan(&args).await?;
-        trace!(?build_plan, "build plan");
-
-        let mut build_script_index_to_dir = HashMap::new();
-        let mut build_script_program_file_to_index = HashMap::new();
-        let mut build_script_executions = HashMap::new();
-        let mut artifacts = Vec::new();
-        for (i, invocation) in build_plan.invocations.iter().cloned().enumerate() {
-            trace!(?invocation, "build plan invocation");
-
-            // For each invocation, figure out what kind it is:
-            // 1. Compiling a build script.
-            // 2. Running a build script.
-            // 3. Compiling a dependency.
-            // 4. Compiling first-party code (which we skip for caching).
-            if invocation.target_kind == [TargetKind::CustomBuild] {
-                match invocation.compile_mode {
-                    CargoCompileMode::Build => {
-                        if let Some(output_file) = invocation.outputs.first() {
-                            // For build script compilation, we need to know the
-                            // directory into which the build script is
-                            // compiled and record the compiled program file.
-
-                            // First, we determine the build script compilation
-                            // directory.
-                            let output_file = PathBuf::from(output_file);
-                            let out_dir = output_file
-                                .parent()
-                                .ok_or_eyre(
-                                    "build script output file should have parent directory",
-                                )?
-                                .to_owned();
-                            build_script_index_to_dir.insert(i, out_dir);
-
-                            // Second, we record the executable program.
-                            for file in invocation.outputs {
-                                build_script_program_file_to_index.insert(file, i);
-                            }
-                            for (fslink, _orig) in invocation.links {
-                                build_script_program_file_to_index.insert(fslink, i);
-                            }
-                        } else {
-                            bail!(
-                                "build script compilation produced no outputs: {:?}",
-                                invocation
-                            );
-                        }
-                    }
-                    CargoCompileMode::RunCustomBuild => {
-                        // For build script execution, we need to know which
-                        // compiled build script is being executed, and where
-                        // its outputs are being written.
-
-                        // First, we need to figure out the build script being
-                        // executed. We can do this using the program file being
-                        // executed.
-                        let build_script_index = *build_script_program_file_to_index
-                            .get(&invocation.program)
-                            .ok_or_eyre("build script should be compiled before execution")?;
-
-                        // Second, we need to determine where its outputs are being written.
-                        let out_dir = invocation
-                            .env
-                            .get("OUT_DIR")
-                            .ok_or_eyre("build script execution should set OUT_DIR")?
-                            .clone();
-
-                        build_script_executions.insert(i, (build_script_index, out_dir));
-                    }
-                    _ => bail!(
-                        "unknown compile mode for build script: {:?}",
-                        invocation.compile_mode
-                    ),
-                }
-            } else if invocation.target_kind == [TargetKind::Bin] {
-                // Binaries are _always_ first-party code. Do nothing for now.
-                continue;
-            } else if invocation.target_kind.contains(&TargetKind::Lib)
-                || invocation.target_kind.contains(&TargetKind::RLib)
-                || invocation.target_kind.contains(&TargetKind::CDyLib)
-                || invocation.target_kind.contains(&TargetKind::ProcMacro)
-            {
-                // Skip first-party workspace members. We only cache third-party dependencies.
-                // `CARGO_PRIMARY_PACKAGE` is set if the user specifically requested the item
-                // to be built; while it's technically possible for the user to do so for a
-                // third-party dependency that's relatively rare (and arguably if they're asking
-                // to compile it specifically, it _should_ probably be exempt from cache).
-                let primary = invocation.env.get("CARGO_PRIMARY_PACKAGE");
-                if primary.map(|v| v.as_str()) == Some("1") {
-                    trace!(?invocation, "skipping: first party workspace member");
-                    continue;
-                }
-
-                // Sanity check: everything here should be a dependency being compiled.
-                if invocation.compile_mode != CargoCompileMode::Build {
-                    bail!(
-                        "unknown compile mode for dependency: {:?}",
-                        invocation.compile_mode
-                    );
-                }
-
-                let mut build_script_execution_index = None;
-                for dep_index in &invocation.deps {
-                    let dep = &build_plan.invocations[*dep_index];
-                    // This should be sufficient to determine which dependency
-                    // is the execution of the build script of the current
-                    // library. There might be other build scripts for the same
-                    // name and version (but different features), but they won't
-                    // be listed as a `dep`.
-                    if dep.target_kind == [TargetKind::CustomBuild]
-                        && dep.compile_mode == CargoCompileMode::RunCustomBuild
-                        && dep.package_name == invocation.package_name
-                        && dep.package_version == invocation.package_version
-                    {
-                        build_script_execution_index = Some(dep_index);
-                        break;
-                    }
-                }
-
-                let lib_files: Vec<AbsFilePath> = invocation
-                    .outputs
-                    .into_iter()
-                    .map(|f| AbsFilePath::try_from(f).context("parsing build plan output file"))
-                    .collect::<Result<Vec<_>>>()?;
-                let library_crate_compilation_unit_hash = {
-                    let compiled_file = lib_files.first().ok_or_eyre("no compiled files")?;
-                    let filename = compiled_file
-                        .file_name()
-                        .ok_or_eyre("no filename")?
-                        .to_string_lossy();
-                    let filename = filename.split_once('.').ok_or_eyre("no extension")?.0;
-
-                    filename
-                        .rsplit_once('-')
-                        .ok_or_else(|| {
-                            eyre!(
-                                "no unit hash suffix in filename: {filename} (all files: {lib_files:?})"
-                            )
-                        })?
-                        .1
-                        .to_string()
-                };
-                let build_script = match build_script_execution_index {
-                    Some(build_script_execution_index) => {
-                        let (build_script_index, build_script_output_dir) = build_script_executions
-                            .get(build_script_execution_index)
-                            .ok_or_eyre(
-                                "build script execution should have recorded output directory",
-                            )?;
-                        // We take the parent because this is always the `/out`
-                        // folder of the build script.
-                        let build_script_output_dir =
-                            AbsDirPath::try_from(build_script_output_dir)?
-                                .parent()
-                                .ok_or_eyre("build script output directory has no parent")?;
-                        let build_script_compiled_dir = build_script_index_to_dir
-                            .get(build_script_index)
-                            .ok_or_eyre(
-                                "build script index should have recorded compilation directory",
-                            )?;
-                        let build_script_compiled_dir =
-                            AbsDirPath::try_from(build_script_compiled_dir)?;
-                        let build_script_compilation_unit_hash = {
-                            let filename = &build_script_compiled_dir
-                                .file_name()
-                                .ok_or_eyre("no filename")?
-                                .to_string_lossy();
-
-                            filename
-                                .rsplit_once('-')
-                                .ok_or_eyre("no unit hash suffix")?
-                                .1
-                                .to_string()
-                        };
-                        let build_script_output_unit_hash = {
-                            let filename = &build_script_output_dir
-                                .file_name()
-                                .ok_or_eyre("out_dir has no filename")?
-                                .to_string_lossy();
-
-                            filename
-                                .rsplit_once('-')
-                                .ok_or_eyre("no unit hash suffix")?
-                                .1
-                                .to_string()
-                        };
-                        Some((
-                            BuildScriptDirs {
-                                compiled_dir: build_script_compiled_dir,
-                                output_dir: build_script_output_dir,
-                            },
-                            build_script_compilation_unit_hash,
-                            build_script_output_unit_hash,
-                        ))
-                    }
-                    None => None,
-                };
-                let (
-                    build_script_files,
-                    build_script_compilation_unit_hash,
-                    build_script_execution_unit_hash,
-                ) = match build_script {
-                    Some((
-                        build_script_files,
-                        build_script_compilation_unit_hash,
-                        build_script_execution_unit_hash,
-                    )) => (
-                        Some(build_script_files),
-                        Some(build_script_compilation_unit_hash),
-                        Some(build_script_execution_unit_hash),
-                    ),
-                    None => (None, None, None),
-                };
-
-                // Given a dependency being compiled, we need to determine the
-                // compiled files, its build script directory, and its build
-                // script outputs directory. These are the files that we're
-                // going to save for this artifact.
-                debug!(
-                    compiled = ?lib_files,
-                    build_script = ?build_script_files,
-                    deps = ?invocation.deps,
-                    "artifacts to save"
-                );
-                artifacts.push(ArtifactKey {
-                    package_name: invocation.package_name,
-                    package_version: invocation.package_version,
-                    lib_files,
-                    build_script_files,
-                    library_crate_compilation_unit_hash,
-                    build_script_compilation_unit_hash,
-                    build_script_execution_unit_hash,
-                });
-
-                // TODO: If needed, we could try to read previous build script
-                // output from the target directory here to try and supplement
-                // information for built crates. I can't imagine why we would
-                // need to do that, though.
-            } else {
-                bail!("unknown target kind: {:?}", invocation.target_kind);
-            }
-        }
-
-        // Extract the target from the rustc invocations. All artifacts in a single
-        // build use the same target, so we just need to find the first one.
-        let target = build_plan
-            .invocations
-            .iter()
-            .find_map(|invocation| {
-                invocation.args.iter().find_map(|arg| match arg {
-                    RustcInvocationArgument::Target(target) => Some(target.clone()),
-                    _ => None,
-                })
-            })
-            .unwrap_or_else(|| rustc.host_target.clone());
-
-        Ok(ArtifactPlan {
-            artifacts,
-            target,
-            profile: profile.clone(),
-        })
-    }
-
     #[instrument(name = "CargoCache::save", skip(artifact_plan, restored))]
-    pub async fn save(&self, artifact_plan: ArtifactPlan, restored: RestoreState) -> Result<()> {
+    pub async fn save(&self, artifact_plan: ArtifactPlan, restored: RestoreState) -> Result<Uuid> {
         trace!(?artifact_plan, "artifact plan");
         let paths = DaemonPaths::initialize().await?;
 
         // Start daemon if it's not already running. If it is, try to read its context
         // file to get its url, which we need to know in order to communicate with it.
         let daemon = if paths.daemon_running().await? {
-            let context = fs::read_buffered_utf8(&paths.context_path)
-                .await
-                .context("read daemon context file")?
-                .ok_or_eyre("no daemon context file")?;
-            serde_json::from_str::<DaemonReadyMessage>(&context)
-                .context("parse daemon context")
-                .with_section(|| context.header("Daemon context file:"))?
+            paths
+                .read_context()
+                .await?
+                .ok_or_eyre("daemon running but no context file")?
         } else {
             // TODO: Ideally we'd replace this with proper double-fork daemonization to
             // avoid the security and compatibility concerns here: someone could replace the
@@ -496,23 +146,92 @@ impl CargoCache {
                 .with_section(|| line.header("Daemon output:"))?
         };
 
-        // Connect to daemon HTTP server and send the request.
+        // Connect to daemon HTTP server.
         let client = reqwest::Client::default();
         let endpoint = format!("http://{}/api/v0/cargo/upload", daemon.url);
+
+        // Send upload request.
+        let request_id = Uuid::new_v4();
+        let request = CargoUploadRequest {
+            request_id,
+            courier_url: self.courier_url.clone(),
+            ws: self.ws.clone(),
+            artifact_plan,
+            skip_artifacts: restored.artifacts.into_iter().collect(),
+            skip_objects: restored.objects.into_iter().collect(),
+        };
+        trace!(?request, "submitting upload request");
         let response = client
             .post(&endpoint)
-            .json(&CargoUploadRequest {
-                courier_url: self.courier_url.clone(),
-                ws: self.ws.clone(),
-                artifact_plan,
-                skip_artifacts: restored.artifacts.into_iter().collect(),
-                skip_objects: restored.objects.into_iter().collect(),
-            })
+            .json(&request)
             .send()
             .await
             .with_context(|| format!("send upload request to daemon at: {endpoint}"))
             .with_section(|| format!("{daemon:?}").header("Daemon context:"))?;
-        debug!(?response, "submitted upload request");
+        trace!(?response, "got upload response");
+
+        Ok(request_id)
+    }
+
+    #[instrument(name = "CargoCache::wait_for_upload")]
+    pub async fn wait_for_upload(&self, request_id: &Uuid, progress: &TransferBar) -> Result<()> {
+        let paths = DaemonPaths::initialize().await?;
+        let daemon = if paths.daemon_running().await? {
+            let context = fs::read_buffered_utf8(&paths.context_path)
+                .await
+                .context("read daemon context file")?
+                .ok_or_eyre("no daemon context file")?;
+            serde_json::from_str::<DaemonReadyMessage>(&context)
+                .context("parse daemon context")
+                .with_section(|| context.header("Daemon context file:"))?
+        } else {
+            bail!("daemon is not running");
+        };
+
+        let client = reqwest::Client::default();
+        let endpoint = format!("http://{}/api/v0/cargo/status", daemon.url);
+        let request = CargoUploadStatusRequest {
+            request_id: *request_id,
+        };
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+
+        let mut last_uploaded_artifacts = 0u64;
+        let mut last_uploaded_files = 0u64;
+        let mut last_uploaded_bytes = 0u64;
+        let mut last_total_artifacts = 0u64;
+        loop {
+            interval.tick().await;
+            trace!(?request, "submitting upload status request");
+            let response = client
+                .post(&endpoint)
+                .json(&request)
+                .send()
+                .await
+                .with_context(|| format!("send upload status request to daemon at: {endpoint}"))
+                .with_section(|| format!("{daemon:?}").header("Daemon context:"))?;
+            trace!(?response, "got upload status response");
+            let response = response.json::<CargoUploadStatusResponse>().await?;
+            trace!(?response, "parsed upload status response");
+            let status = response.status.ok_or_eyre("no upload status")?;
+            match status {
+                CargoUploadStatus::Complete => break,
+                CargoUploadStatus::InProgress {
+                    uploaded_artifacts,
+                    uploaded_files,
+                    uploaded_bytes,
+                    total_artifacts,
+                } => {
+                    progress.add_bytes(uploaded_bytes.saturating_sub(last_uploaded_bytes));
+                    last_uploaded_bytes = uploaded_bytes;
+                    progress.add_files(uploaded_files.saturating_sub(last_uploaded_files));
+                    last_uploaded_files = uploaded_files;
+                    progress.inc(uploaded_artifacts.saturating_sub(last_uploaded_artifacts));
+                    last_uploaded_artifacts = uploaded_artifacts;
+                    progress.dec_length(last_total_artifacts.saturating_sub(total_artifacts));
+                    last_total_artifacts = total_artifacts;
+                }
+            }
+        }
 
         Ok(())
     }
@@ -530,14 +249,16 @@ impl CargoCache {
             .cargo_cache_restore_bulk(requests)
             .await
             .context("cache restore")?;
+        trace!(?restore_result, "cache restore response");
 
         for miss in restore_result.misses {
             debug!(artifact = ?miss, "no matching library unit build found");
             progress.dec_length(1);
         }
         let files_to_restore = self
-            .filter_files_need_restored(restore_result.hits, &artifacts)
+            .filter_files_need_restored(restore_result.hits, artifacts)
             .await?;
+        trace!(?files_to_restore, "files to restore");
 
         let restored = RestoreState::default();
         let worker_count = num_cpus::get();
@@ -545,6 +266,7 @@ impl CargoCache {
         let mut workers = self.spawn_restore_workers(worker_count, rx.clone(), progress, &restored);
         for (artifact, files) in files_to_restore {
             for (file, path) in files {
+                trace!(?artifact, ?file, ?path, "sending file to restore workers");
                 if let Err(error) = tx.send_async((file, path)).await {
                     panic!("invariant violated: no restore workers are alive: {error:?}");
                 }
@@ -567,60 +289,49 @@ impl CargoCache {
 
     /// Filter the set to only the files which need to be restored, either
     /// because they don't exist locally or their hashes don't match.
+    #[instrument(name = "CargoCache::filter_files_need_restored", skip(hits, artifacts))]
     async fn filter_files_need_restored(
         &self,
         hits: Vec<CargoBulkRestoreHit>,
-        artifacts: &HashMap<Vec<u8>, &ArtifactKey>,
+        artifacts: HashMap<Vec<u8>, ArtifactKey>,
     ) -> Result<HashMap<ArtifactKey, Vec<(ArtifactFile, AbsFilePath)>>> {
-        let ws_profile_dir = self.ws.profile_dir.clone();
-        let ws_cargo_home = self.ws.cargo_home.clone();
-        let artifacts = artifacts
-            .iter()
-            .map(|(k, &v)| (k.clone(), v.clone()))
-            .collect::<HashMap<_, _>>();
+        let mut files_to_restore: HashMap<ArtifactKey, Vec<(ArtifactFile, AbsFilePath)>> =
+            HashMap::new();
+        for hit in hits {
+            let Some(artifact) = artifacts.get(&hit.request.hash()) else {
+                bail!("artifact was not requested but was restored: {hit:?}");
+            };
 
-        tokio::task::spawn_blocking(move || {
-            hits.into_iter()
-                .flat_map(|hit| {
-                    let request_hash = hit.request.hash();
-                    hit.artifacts
-                        .into_iter()
-                        .map(move |file| (request_hash.clone(), file))
-                })
-                .par_bridge()
-                .filter_map(|(request_hash, file)| {
-                    let artifact = artifacts.get(&request_hash)?;
-                    let path = serde_json::from_str::<QualifiedPath>(&file.path)
-                        .ok()?
-                        .reconstruct_raw(&ws_profile_dir, &ws_cargo_home)
-                        .pipe(AbsFilePath::try_from)
-                        .ok()?;
+            for file in hit.artifacts {
+                // Convert the artifact file path back to QualifiedPath and reconstruct it to an
+                // absolute path for this machine.
+                let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
+                let path = qualified
+                    .reconstruct_raw(&self.ws.profile_dir, &self.ws.cargo_home)
+                    .pipe(AbsFilePath::try_from)?;
 
-                    // We use `metadata` instead of `exists` so that we validate permissions too.
-                    if std::fs::metadata(path.as_std_path()).is_ok() {
-                        let existing_hash = fs::hash_file_sync(&path).ok()?;
-                        if existing_hash == file.object_key {
-                            trace!(?path, "file already exists with correct hash, skipping");
-                            return None;
-                        }
+                // Check if file already exists with correct content. If so, don't need to
+                // restore it.
+                if fs::exists(path.as_std_path()).await {
+                    let existing_hash = fs::hash_file(&path).await?;
+                    if existing_hash == file.object_key {
+                        trace!(?path, "file already exists with correct hash, skipping");
+                        continue;
                     }
+                }
 
-                    Some((artifact, (file, path)))
-                })
-                .fold(HashMap::<_, Vec<_>>::new, |mut acc, (artifact, entry)| {
-                    acc.entry(artifact.clone()).or_default().push(entry);
-                    acc
-                })
-                .reduce(HashMap::new, |mut acc, item| {
-                    acc.extend(item);
-                    acc
-                })
-        })
-        .await
-        .context("file validation task")
+                files_to_restore
+                    .entry(artifact.to_owned())
+                    .or_default()
+                    .push((file, path));
+            }
+        }
+
+        Ok(files_to_restore)
     }
 
     /// Spawn worker tasks to restore files from CAS in batches.
+    #[instrument(name = "CargoCache::spawn_restore_workers", skip(restored))]
     fn spawn_restore_workers(
         &self,
         worker_count: usize,
@@ -639,6 +350,7 @@ impl CargoCache {
                 let mut batch = Vec::new();
 
                 while let Ok(file) = rx.recv_async().await {
+                    trace!(?file, "worker got file");
                     batch.push(file);
                     if batch.len() < BATCH_SIZE {
                         continue;
@@ -666,6 +378,7 @@ impl CargoCache {
     }
 
     /// Process a batch of files to restore from CAS.
+    #[instrument(name = "CargoCache::process_restore_batch", skip(restored))]
     async fn process_restore_batch(
         &self,
         batch: &[(ArtifactFile, AbsFilePath)],
@@ -715,6 +428,7 @@ impl CargoCache {
     }
 
     /// Restore a single file from CAS data.
+    #[instrument(name = "CargoCache::restore_single_file", skip(data, restored))]
     async fn restore_single_file(
         &self,
         file: &ArtifactFile,
@@ -798,7 +512,7 @@ impl CargoCache {
 /// Build CargoRestoreRequest objects from an artifact plan.
 fn build_restore_requests(
     artifact_plan: &ArtifactPlan,
-) -> (HashMap<Vec<u8>, &ArtifactKey>, Vec<CargoRestoreRequest>) {
+) -> (HashMap<Vec<u8>, ArtifactKey>, Vec<CargoRestoreRequest>) {
     artifact_plan.artifacts.iter().fold(
         (HashMap::new(), Vec::new()),
         |(mut artifacts, mut requests), artifact| {
@@ -814,201 +528,9 @@ fn build_restore_requests(
                     artifact.build_script_execution_unit_hash.as_ref(),
                 )
                 .build();
-            artifacts.insert(req.hash(), artifact);
+            artifacts.insert(req.hash(), artifact.clone());
             requests.push(req);
             (artifacts, requests)
         },
     )
-}
-
-/// An ArtifactPlan represents the collection of information known about the
-/// artifacts for a build statically at compile-time.
-#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
-pub struct ArtifactPlan {
-    pub profile: Profile,
-    pub target: String,
-
-    pub artifacts: Vec<ArtifactKey>,
-}
-
-/// An ArtifactKey represents the information known about a library unit (i.e.
-/// a library crate, its build script, and its build script outputs) statically
-/// at plan-time.
-///
-/// In particular, this information does _not_ include information derived from
-/// compiling and running the build script, such as `rustc` flags from build
-/// script output directives.
-#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
-pub struct ArtifactKey {
-    // Partial artifact key information. Note that this is only derived from the
-    // build plan, and therefore is missing essential information (e.g. `rustc`
-    // flags from build script output directives) that can only be determined
-    // interactively.
-    //
-    // TODO: There are more fields here that we can know from the planning stage
-    // that need to be added (e.g. features).
-    package_name: String,
-    package_version: String,
-
-    // Artifact folders to save and restore.
-    lib_files: Vec<AbsFilePath>,
-    build_script_files: Option<BuildScriptDirs>,
-
-    // Unit hashes.
-    library_crate_compilation_unit_hash: String,
-    build_script_compilation_unit_hash: Option<String>,
-    build_script_execution_unit_hash: Option<String>,
-}
-
-#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
-pub struct BuildScriptDirs {
-    pub compiled_dir: AbsDirPath,
-    pub output_dir: AbsDirPath,
-}
-
-/// A BuiltArtifact represents the information known about a library unit (i.e.
-/// a library crate, its build script, and its build script outputs) after it
-/// has been built.
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
-pub struct BuiltArtifact {
-    pub package_name: String,
-    pub package_version: String,
-
-    pub lib_files: Vec<AbsFilePath>,
-    pub build_script_files: Option<BuildScriptDirs>,
-
-    pub library_crate_compilation_unit_hash: String,
-    pub build_script_compilation_unit_hash: Option<String>,
-    pub build_script_execution_unit_hash: Option<String>,
-
-    // TODO: Should these all be in a larger `BuildScript` struct that includes
-    // the files, unit hashes, and output? It's a little silly to all have them
-    // be separately optional, as if we could have some fields but not others.
-    pub build_script_output: Option<BuildScriptOutput>,
-}
-
-impl BuiltArtifact {
-    /// Given an `ArtifactKey`, read the build script output directories on
-    /// disk and construct a `BuiltArtifact`.
-    #[instrument(name = "BuiltArtifact::from_key")]
-    pub async fn from_key(ws: &Workspace, key: ArtifactKey) -> Result<Self> {
-        // Read the build script output from the build folders, and parse
-        // the output for directives.
-        let build_script_output = match &key.build_script_files {
-            Some(build_script_files) => {
-                let bso = BuildScriptOutput::from_file(
-                    ws,
-                    &build_script_files.output_dir.join(mk_rel_file!("output")),
-                )
-                .await?;
-                Some(bso)
-            }
-            None => None,
-        };
-
-        // TODO: Use this later to reconstruct the rustc invocation, and use all
-        // of this information to fully construct the cache key.
-        Ok(BuiltArtifact {
-            package_name: key.package_name,
-            package_version: key.package_version,
-
-            lib_files: key.lib_files,
-            build_script_files: key.build_script_files,
-
-            library_crate_compilation_unit_hash: key.library_crate_compilation_unit_hash,
-            build_script_compilation_unit_hash: key.build_script_compilation_unit_hash,
-            build_script_execution_unit_hash: key.build_script_execution_unit_hash,
-            build_script_output,
-        })
-    }
-}
-
-/// A content hash of a library unit's artifacts.
-#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize)]
-pub struct LibraryUnitHash {
-    files: Vec<(QualifiedPath, Key)>,
-}
-
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
-struct LibraryUnitHashOrd<'a>(&'a QualifiedPath);
-
-impl<'a> LibraryUnitHashOrd<'a> {
-    fn discriminant(&self) -> u64 {
-        match &self.0 {
-            QualifiedPath::Rootless(_) => 0,
-            QualifiedPath::RelativeTargetProfile(_) => 1,
-            QualifiedPath::RelativeCargoHome(_) => 2,
-            QualifiedPath::Absolute(_) => 3,
-        }
-    }
-}
-
-impl<'a> Ord for LibraryUnitHashOrd<'a> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match (&self.0, &other.0) {
-            (QualifiedPath::Rootless(a), QualifiedPath::Rootless(b)) => a.cmp(b),
-            (QualifiedPath::RelativeTargetProfile(a), QualifiedPath::RelativeTargetProfile(b)) => {
-                a.cmp(b)
-            }
-            (QualifiedPath::RelativeCargoHome(a), QualifiedPath::RelativeCargoHome(b)) => a.cmp(b),
-            (QualifiedPath::Absolute(a), QualifiedPath::Absolute(b)) => a.cmp(b),
-            (_, _) => self.discriminant().cmp(&other.discriminant()),
-        }
-    }
-}
-
-impl<'a> PartialOrd for LibraryUnitHashOrd<'a> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl LibraryUnitHash {
-    /// Construct a library unit hash out of the files in the library unit.
-    ///
-    /// This constructor always ensures that the files are sorted, so any two
-    /// sets of files with the same paths and contents will produce the same
-    /// hash.
-    pub fn new(mut files: Vec<(QualifiedPath, Key)>) -> Self {
-        files.sort_by(|(q1, k1), (q2, k2)| {
-            (LibraryUnitHashOrd(q1), k1).cmp(&(LibraryUnitHashOrd(q2), k2))
-        });
-        Self { files }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq as pretty_assert_eq;
-
-    #[tokio::test]
-    async fn build_plan_flag_order_does_not_matter() {
-        // This is a relatively basic test to start with; if we find other edge
-        // cases we want to test we should add them here (or in a similar test).
-        let user_args = ["--release"];
-        let tool_args = ["--build-plan", "-Z", "unstable-options"];
-        let env = [("RUSTC_BOOTSTRAP", "1")];
-        let cmd = "build";
-
-        let args = user_args.iter().chain(tool_args.iter());
-        let user_args_first = match cargo::invoke_output(cmd, args, env).await {
-            Ok(output) => output.stdout,
-            Err(e) => panic!("user args first should succeed: {e}"),
-        };
-
-        let args = tool_args.iter().chain(user_args.iter());
-        let tool_args_first = match cargo::invoke_output(cmd, args, env).await {
-            Ok(output) => output.stdout,
-            Err(e) => panic!("tool args first should succeed: {e}"),
-        };
-
-        let user_plan = serde_json::from_slice::<BuildPlan>(&user_args_first).unwrap();
-        let tool_plan = serde_json::from_slice::<BuildPlan>(&tool_args_first).unwrap();
-        pretty_assert_eq!(
-            user_plan,
-            tool_plan,
-            "both orderings should produce same build plan"
-        );
-    }
 }

@@ -1,6 +1,8 @@
 use clap::Subcommand;
+use color_eyre::Result;
 
 pub mod copy;
+pub mod daemon;
 pub mod metadata;
 
 /// Supported debug subcommands.
@@ -12,4 +14,16 @@ pub enum Command {
 
     /// Recursively copy the contents of the source directory to destination.
     Copy(copy::Options),
+
+    /// Daemon-related debugging commands.
+    #[clap(subcommand)]
+    Daemon(daemon::Command),
+}
+
+pub async fn exec(cmd: Command) -> Result<()> {
+    match cmd {
+        Command::Metadata(opts) => metadata::exec(opts).await,
+        Command::Copy(opts) => copy::exec(opts).await,
+        Command::Daemon(subcmd) => daemon::exec(subcmd).await,
+    }
 }

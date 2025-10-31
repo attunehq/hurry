@@ -262,7 +262,7 @@ pub fn walk_files(root: &AbsDirPath) -> impl Stream<Item = Result<AbsFilePath>> 
     let root = root.clone();
 
     spawn_blocking(move || {
-        for entry in jwalk::WalkDir::new(root.as_std_path()) {
+        for entry in jwalk::WalkDir::new(root.as_std_path()).skip_hidden(false) {
             let entry = match entry.with_context(|| format!("walk files in {root:?}")) {
                 Ok(entry) => entry,
                 Err(err) => {
@@ -483,7 +483,7 @@ pub struct Metadata {
 
 impl Metadata {
     /// Read the metadata from the provided file.
-    #[instrument]
+    #[instrument(name = "Metadata::from_file")]
     pub async fn from_file(path: &AbsFilePath) -> Result<Option<Self>> {
         let path = path.as_std_path();
         let (executable, metadata) = tokio::join!(is_executable(path), metadata(path));
@@ -509,7 +509,7 @@ impl Metadata {
     /// Windows: in Windows files do not have "executable bits" and
     /// therefore whether they are executable is an intrinsic property of either
     /// the path extension or the file itself.
-    #[instrument]
+    #[instrument(name = "Metadata::set_file")]
     pub async fn set_file(&self, path: &AbsFilePath) -> Result<()> {
         // We read the current metadata for the file so that we don't
         // accidentally clobber other fields (although it's not clear

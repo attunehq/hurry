@@ -50,6 +50,16 @@ enum Command {
         args: Vec<String>,
     },
 
+    /// Passthrough to `cross` for cross-compilation
+    #[command(disable_help_flag = true, disable_version_flag = true)]
+    Cross {
+        // We do it this way instead of constructing subcommands "the clap way" because
+        // we want to passthrough things like `help` and `version` to cross instead of
+        // having clap intercept them.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
     // TODO: /// Manage remote authentication
     // Auth,
     /// Manage user cache
@@ -77,36 +87,32 @@ async fn main() -> Result<()> {
 
     let (logger, flame_guard) = log::make_logger(std::io::stderr, top.profile.clone(), top.color)?;
     let result = match top.command {
-        Command::Cache(cmd) => match cmd {
-            cmd::cache::Command::Reset(opts) => {
-                logger.init();
-                cmd::cache::reset::exec(opts).await
-            }
-            cmd::cache::Command::Show => {
-                logger.init();
-                cmd::cache::show::exec().await
-            }
-        },
+        Command::Cache(cmd) => {
+            logger.init();
+            cmd::cache::exec(cmd).await
+        }
         Command::Cargo { args } => {
             logger.init();
             cmd::cargo::exec(args).await
         }
-        Command::Debug(cmd) => match cmd {
-            cmd::debug::Command::Metadata(opts) => {
-                logger.init();
-                cmd::debug::metadata::exec(opts).await
-            }
-            cmd::debug::Command::Copy(opts) => {
-                logger.init();
-                cmd::debug::copy::exec(opts).await
-            }
-        },
+        Command::Cross { args } => {
+            logger.init();
+            cmd::cross::exec(args).await
+        }
+        Command::Debug(cmd) => {
+            logger.init();
+            cmd::debug::exec(cmd).await
+        }
         Command::Daemon(cmd) => match cmd {
             cmd::daemon::Command::Start(opts) => {
                 // Note that in daemon mode we do not initialize the logger!
                 // Instead, we pass in the STDERR logger, because our daemon
                 // logger is actually the file logger.
                 cmd::daemon::start::exec(t, logger, opts).await
+            }
+            cmd::daemon::Command::Stop(opts) => {
+                logger.init();
+                cmd::daemon::stop::exec(opts).await
             }
         },
     };

@@ -18,7 +18,7 @@ url = { workspace = true, optional = true }
 async-tar = { workspace = true, optional = true }
 piper = { workspace = true, optional = true }
 tap = { workspace = true, optional = true }
-tracing = { workspace = true, optional = true }
+tracing = { workspace = true }
 flume = { workspace = true, optional = true }
 enum-assoc.workspace = true
 async-compression = { workspace = true, features = ["tokio", "zstd"], optional = true }
@@ -36,7 +36,6 @@ client = [
     "dep:async-tar",
     "dep:piper",
     "dep:tap",
-    "dep:tracing",
     "dep:flume",
     "dep:async-compression",
     "dep:zstd"

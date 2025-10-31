@@ -28,9 +28,7 @@ mod workspace;
 pub use build_args::{CargoBuildArgument, CargoBuildArguments, ColorWhen, MessageFormat};
 pub use build_plan::BuildPlan;
 pub use build_script::{BuildScriptOutput, RootOutput};
-pub use cache::{
-    ArtifactKey, ArtifactPlan, BuiltArtifact, CacheStats, CargoCache, LibraryUnitHash, RestoreState,
-};
+pub use cache::{CacheStats, CargoCache, RestoreState};
 pub use dep_info::{DepInfo, DepInfoLine};
 pub use dependency::{Dependency, DependencyBuild, Optimizations};
 pub use path::QualifiedPath;
@@ -43,7 +41,36 @@ pub use unit_graph::{
     CargoCompileMode, UnitGraph, UnitGraphDependency, UnitGraphProfile,
     UnitGraphProfilePanicStrategy, UnitGraphUnit,
 };
-pub use workspace::*;
+pub use workspace::{
+    ArtifactKey, ArtifactPlan, BuildScriptDirs, BuiltArtifact, LibraryUnitHash, Workspace,
+};
+
+/// Execute Cargo without a subcommand with specified arguments.
+#[instrument]
+pub async fn invoke_plain(
+    args: impl IntoIterator<Item = impl AsRef<str>> + fmt::Debug,
+) -> Result<()> {
+    let args = args.into_iter().collect::<Vec<_>>();
+    let args = args.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+
+    trace!(?args, "invoke cargo");
+    let mut cmd = tokio::process::Command::new("cargo");
+    cmd.args(args.iter().copied());
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+
+    let status = cmd
+        .spawn()
+        .context("could not spawn cargo")?
+        .wait()
+        .await
+        .context("could not complete cargo execution")?;
+    if status.success() {
+        Ok(())
+    } else {
+        bail!("cargo exited with status: {}", status);
+    }
+}
 
 /// Execute a Cargo subcommand with specified arguments.
 #[instrument]
