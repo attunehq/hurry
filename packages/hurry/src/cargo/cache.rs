@@ -16,7 +16,7 @@ use std::{
 };
 use tap::Pipe as _;
 use tokio::{io::AsyncBufReadExt as _, task::JoinSet};
-use tracing::{Instrument, Span, debug, instrument, trace, warn};
+use tracing::{Span, debug, instrument, trace, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -250,15 +250,16 @@ impl CargoCache {
             .cargo_cache_restore_bulk(requests)
             .await
             .context("cache restore")?;
+        trace!(?restore_result, "cache restore response");
 
-        trace!(?restore_result, "cache restore result");
         for miss in restore_result.misses {
             debug!(artifact = ?miss, "no matching library unit build found");
             progress.dec_length(1);
         }
         let files_to_restore = self
-            .filter_files_need_restored(restore_result.hits, &artifacts)
+            .filter_files_need_restored(restore_result.hits, artifacts)
             .await?;
+        trace!(?files_to_restore, "files to restore");
 
         let restored = RestoreState::default();
         let worker_count = num_cpus::get();
@@ -266,6 +267,7 @@ impl CargoCache {
         let mut workers = self.spawn_restore_workers(worker_count, rx.clone(), progress, &restored);
         for (artifact, files) in files_to_restore {
             for (file, path) in files {
+                trace!(?artifact, ?file, ?path, "sending file to restore workers");
                 if let Err(error) = tx.send_async((file, path)).await {
                     panic!("invariant violated: no restore workers are alive: {error:?}");
                 }
@@ -292,58 +294,89 @@ impl CargoCache {
     async fn filter_files_need_restored(
         &self,
         hits: Vec<CargoBulkRestoreHit>,
-        artifacts: &HashMap<Vec<u8>, &ArtifactKey>,
+        artifacts: HashMap<Vec<u8>, ArtifactKey>,
     ) -> Result<HashMap<ArtifactKey, Vec<(ArtifactFile, AbsFilePath)>>> {
         let ws_profile_dir = self.ws.profile_dir.clone();
         let ws_cargo_home = self.ws.cargo_home.clone();
-        let artifacts = artifacts
-            .iter()
-            .map(|(k, &v)| (k.clone(), v.clone()))
-            .collect::<HashMap<_, _>>();
 
-        tokio::task::spawn_blocking({
-            let span = Span::current();
-            move || {
-                let _guard = span.enter();
-                hits.into_iter()
-                    .flat_map(|hit| {
-                        let request_hash = hit.request.hash();
-                        hit.artifacts
-                            .into_iter()
-                            .map(move |file| (request_hash.clone(), file))
-                    })
-                    .par_bridge()
-                    .filter_map(|(request_hash, file)| {
-                        let artifact = artifacts.get(&request_hash)?;
-                        let path = serde_json::from_str::<QualifiedPath>(&file.path)
-                            .ok()?
-                            .reconstruct_raw(&ws_profile_dir, &ws_cargo_home)
-                            .pipe(AbsFilePath::try_from)
-                            .ok()?;
+        let mut files_to_restore: HashMap<ArtifactKey, Vec<(ArtifactFile, AbsFilePath)>> =
+            HashMap::new();
+        for hit in hits {
+            let Some(artifact) = artifacts.get(&hit.request.hash()) else {
+                bail!("artifact was not requested but was restored: {hit:?}");
+            };
 
-                        // We use `metadata` instead of `exists` so that we validate permissions too.
-                        if std::fs::metadata(path.as_std_path()).is_ok() {
-                            let existing_hash = fs::hash_file_sync(&path).ok()?;
-                            if existing_hash == file.object_key {
-                                trace!(?path, "file already exists with correct hash, skipping");
-                                return None;
-                            }
-                        }
+            for file in hit.artifacts {
+                // Convert the artifact file path back to QualifiedPath and reconstruct it to an
+                // absolute path for this machine.
+                let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
+                let path = qualified
+                    .reconstruct_raw(&self.ws.profile_dir, &self.ws.cargo_home)
+                    .pipe(AbsFilePath::try_from)?;
 
-                        Some((artifact, (file, path)))
-                    })
-                    .fold(HashMap::<_, Vec<_>>::new, |mut acc, (artifact, entry)| {
-                        acc.entry(artifact.clone()).or_default().push(entry);
-                        acc
-                    })
-                    .reduce(HashMap::new, |mut acc, item| {
-                        acc.extend(item);
-                        acc
-                    })
+                // Check if file already exists with correct content. If so, don't need to
+                // restore it.
+                if fs::exists(path.as_std_path()).await {
+                    let existing_hash = fs::hash_file(&path).await?;
+                    if existing_hash == file.object_key {
+                        trace!(?path, "file already exists with correct hash, skipping");
+                        continue;
+                    }
+                }
+
+                files_to_restore
+                    .entry(artifact.to_owned())
+                    .or_default()
+                    .push((file, path));
             }
-        })
-        .await
-        .context("file validation task")
+        }
+
+        Ok(files_to_restore)
+
+        // tokio::task::spawn_blocking({
+        //     let span = Span::current();
+        //     move || {
+        //         let _guard = span.enter();
+        //         let span = Span::current();
+        //         hits.into_iter()
+        //             .flat_map(|hit| {
+        //                 let request_hash = hit.request.hash();
+        //                 hit.artifacts
+        //                     .into_iter()
+        //                     .map(move |file| (request_hash.clone(), file))
+        //             })
+        //             .par_bridge()
+        //             .filter_map(|(request_hash, file)| {
+        //                 let _guard = span.enter();
+        //                 let artifact = artifacts.get(&request_hash)?;
+        //                 let path = serde_json::from_str::<QualifiedPath>(&file.path)
+        //                     .ok()?
+        //                     .reconstruct_raw(&ws_profile_dir, &ws_cargo_home)
+        //                     .pipe(AbsFilePath::try_from)
+        //                     .ok()?;
+
+        //                 if std::fs::metadata(path.as_std_path()).is_ok() {
+        //                     let existing_hash = fs::hash_file_sync(&path).ok()?;
+        //                     if existing_hash == file.object_key {
+        //                         trace!(?path, "file already exists with correct hash, skipping");
+        //                         return None;
+        //                     }
+        //                 }
+
+        //                 Some((artifact, (file, path)))
+        //             })
+        //             .fold(HashMap::<_, Vec<_>>::new, |mut acc, (artifact, entry)| {
+        //                 acc.entry(artifact.clone()).or_default().push(entry);
+        //                 acc
+        //             })
+        //             .reduce(HashMap::new, |mut acc, item| {
+        //                 acc.extend(item);
+        //                 acc
+        //             })
+        //     }
+        // })
+        // .await
+        // .context("file validation task")
     }
 
     /// Spawn worker tasks to restore files from CAS in batches.
@@ -366,6 +399,7 @@ impl CargoCache {
                 let mut batch = Vec::new();
 
                 while let Ok(file) = rx.recv_async().await {
+                    trace!(?file, "worker got file");
                     batch.push(file);
                     if batch.len() < BATCH_SIZE {
                         continue;
@@ -527,7 +561,7 @@ impl CargoCache {
 /// Build CargoRestoreRequest objects from an artifact plan.
 fn build_restore_requests(
     artifact_plan: &ArtifactPlan,
-) -> (HashMap<Vec<u8>, &ArtifactKey>, Vec<CargoRestoreRequest>) {
+) -> (HashMap<Vec<u8>, ArtifactKey>, Vec<CargoRestoreRequest>) {
     artifact_plan.artifacts.iter().fold(
         (HashMap::new(), Vec::new()),
         |(mut artifacts, mut requests), artifact| {
@@ -543,7 +577,7 @@ fn build_restore_requests(
                     artifact.build_script_execution_unit_hash.as_ref(),
                 )
                 .build();
-            artifacts.insert(req.hash(), artifact);
+            artifacts.insert(req.hash(), artifact.clone());
             requests.push(req);
             (artifacts, requests)
         },
