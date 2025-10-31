@@ -4,7 +4,7 @@ use axum::{Json, Router, extract::State, routing::post};
 use clap::Args;
 use color_eyre::{
     Result, Section, SectionExt,
-    eyre::{Context as _, Error, OptionExt as _, bail},
+    eyre::{Context as _, OptionExt as _, bail},
 };
 use dashmap::DashMap;
 use derive_more::Debug;
@@ -299,67 +299,82 @@ async fn upload(
         },
     );
     tokio::spawn(async move {
-        trace!(artifact_plan = ?req.artifact_plan, "artifact plan");
-        let courier = Courier::new(req.courier_url)?;
-        let cas = CourierCas::new(courier.clone());
-        let restored_artifacts = HashSet::<_>::from_iter(req.skip_artifacts);
-        let restored_objects = HashSet::from_iter(req.skip_objects);
+        let result: Result<()> = async {
+            trace!(artifact_plan = ?req.artifact_plan, "artifact plan");
+            let courier = Courier::new(req.courier_url)?;
+            let cas = CourierCas::new(courier.clone());
+            let restored_artifacts = HashSet::<_>::from_iter(req.skip_artifacts);
+            let restored_objects = HashSet::from_iter(req.skip_objects);
 
-        let mut uploaded_artifacts = 0;
-        let mut uploaded_files = 0;
-        let mut uploaded_bytes = 0;
-        let mut total_artifacts = req.artifact_plan.artifacts.len() as u64;
+            let mut uploaded_artifacts = 0;
+            let mut uploaded_files = 0;
+            let mut uploaded_bytes = 0;
+            let mut total_artifacts = req.artifact_plan.artifacts.len() as u64;
 
-        for artifact_key in req.artifact_plan.artifacts {
-            let artifact = BuiltArtifact::from_key(&req.ws, artifact_key.clone()).await?;
-            debug!(?artifact, "caching artifact");
+            for artifact_key in req.artifact_plan.artifacts {
+                let artifact = BuiltArtifact::from_key(&req.ws, artifact_key.clone()).await?;
+                debug!(?artifact, "caching artifact");
 
-            if restored_artifacts.contains(&artifact_key) {
-                trace!(
-                    ?artifact_key,
-                    "skipping backup: artifact was restored from cache"
+                if restored_artifacts.contains(&artifact_key) {
+                    trace!(
+                        ?artifact_key,
+                        "skipping backup: artifact was restored from cache"
+                    );
+                    total_artifacts -= 1;
+                    continue;
+                }
+
+                let lib_files = collect_library_files(&req.ws, &artifact).await?;
+                let build_script_files = collect_build_script_files(&req.ws, &artifact).await?;
+                let files_to_save = lib_files.into_iter().chain(build_script_files).collect();
+                let (library_unit_files, artifact_files, bulk_entries) =
+                    process_files_for_upload(&req.ws, files_to_save, &restored_objects).await?;
+
+                let (bytes, files) = upload_files_bulk(&cas, bulk_entries).await?;
+                uploaded_bytes += bytes;
+                uploaded_files += files;
+
+                let content_hash = calculate_content_hash(library_unit_files)?;
+                debug!(?content_hash, "calculated content hash");
+
+                let request = build_save_request(
+                    &artifact,
+                    &req.artifact_plan.target,
+                    content_hash,
+                    artifact_files,
                 );
-                total_artifacts -= 1;
-                continue;
+
+                courier.cargo_cache_save(request).await?;
+                uploaded_artifacts += 1;
+                state.uploads.insert(
+                    request_id,
+                    CargoUploadStatus::InProgress {
+                        uploaded_artifacts,
+                        total_artifacts,
+                        uploaded_files,
+                        uploaded_bytes,
+                    },
+                );
             }
 
-            let lib_files = collect_library_files(&req.ws, &artifact).await?;
-            let build_script_files = collect_build_script_files(&req.ws, &artifact).await?;
-            let files_to_save = lib_files.into_iter().chain(build_script_files).collect();
-            let (library_unit_files, artifact_files, bulk_entries) =
-                process_files_for_upload(&req.ws, files_to_save, &restored_objects).await?;
-
-            let (bytes, files) = upload_files_bulk(&cas, bulk_entries).await?;
-            uploaded_bytes += bytes;
-            uploaded_files += files;
-
-            let content_hash = calculate_content_hash(library_unit_files)?;
-            debug!(?content_hash, "calculated content hash");
-
-            let request = build_save_request(
-                &artifact,
-                &req.artifact_plan.target,
-                content_hash,
-                artifact_files,
-            );
-
-            courier.cargo_cache_save(request).await?;
-            uploaded_artifacts += 1;
-            state.uploads.insert(
-                request_id,
-                CargoUploadStatus::InProgress {
-                    uploaded_artifacts,
-                    total_artifacts,
-                    uploaded_files,
-                    uploaded_bytes,
-                },
-            );
+            Ok(())
         }
+        .await;
 
-        state
-            .uploads
-            .insert(request_id, CargoUploadStatus::Complete);
-        Ok::<(), Error>(())
+        match result {
+            Ok(()) => {
+                info!(?request_id, "upload completed successfully");
+                state
+                    .uploads
+                    .insert(request_id, CargoUploadStatus::Complete);
+            }
+            Err(err) => {
+                error!(?err, ?request_id, "upload failed");
+                state
+                    .uploads
+                    .insert(request_id, CargoUploadStatus::Complete);
+            }
+        }
     });
     Json(CargoUploadResponse { ok: true })
 }
