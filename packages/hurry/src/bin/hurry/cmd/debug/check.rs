@@ -90,6 +90,7 @@ pub async fn exec(options: Options) -> Result<()> {
                 .repr
                 .starts_with("registry+https://github.com/rust-lang/crates.io-index#")
         {
+            // TODO: Only warn if _restored_ artifacts are not fresh.
             warn!("artifact {:?} is not fresh", msg.package_id);
             ok = false;
         }
