@@ -16,6 +16,7 @@ pub use client::Client;
 /// The key to a content-addressed storage blob.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Display)]
 #[display("{}", self.to_hex())]
+#[debug("{}", self.to_hex())]
 pub struct Key(Vec<u8>);
 
 impl Key {

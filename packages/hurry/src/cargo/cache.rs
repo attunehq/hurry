@@ -16,7 +16,7 @@ use std::{
 };
 use tap::Pipe as _;
 use tokio::{io::AsyncBufReadExt as _, task::JoinSet};
-use tracing::{debug, instrument, trace, warn};
+use tracing::{Instrument, Span, debug, instrument, trace, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -251,6 +251,7 @@ impl CargoCache {
             .await
             .context("cache restore")?;
 
+        trace!(?restore_result, "cache restore result");
         for miss in restore_result.misses {
             debug!(artifact = ?miss, "no matching library unit build found");
             progress.dec_length(1);
@@ -287,6 +288,7 @@ impl CargoCache {
 
     /// Filter the set to only the files which need to be restored, either
     /// because they don't exist locally or their hashes don't match.
+    #[instrument(name = "CargoCache::filter_files_need_restored", skip(hits, artifacts))]
     async fn filter_files_need_restored(
         &self,
         hits: Vec<CargoBulkRestoreHit>,
@@ -299,48 +301,53 @@ impl CargoCache {
             .map(|(k, &v)| (k.clone(), v.clone()))
             .collect::<HashMap<_, _>>();
 
-        tokio::task::spawn_blocking(move || {
-            hits.into_iter()
-                .flat_map(|hit| {
-                    let request_hash = hit.request.hash();
-                    hit.artifacts
-                        .into_iter()
-                        .map(move |file| (request_hash.clone(), file))
-                })
-                .par_bridge()
-                .filter_map(|(request_hash, file)| {
-                    let artifact = artifacts.get(&request_hash)?;
-                    let path = serde_json::from_str::<QualifiedPath>(&file.path)
-                        .ok()?
-                        .reconstruct_raw(&ws_profile_dir, &ws_cargo_home)
-                        .pipe(AbsFilePath::try_from)
-                        .ok()?;
+        tokio::task::spawn_blocking({
+            let span = Span::current();
+            move || {
+                let _guard = span.enter();
+                hits.into_iter()
+                    .flat_map(|hit| {
+                        let request_hash = hit.request.hash();
+                        hit.artifacts
+                            .into_iter()
+                            .map(move |file| (request_hash.clone(), file))
+                    })
+                    .par_bridge()
+                    .filter_map(|(request_hash, file)| {
+                        let artifact = artifacts.get(&request_hash)?;
+                        let path = serde_json::from_str::<QualifiedPath>(&file.path)
+                            .ok()?
+                            .reconstruct_raw(&ws_profile_dir, &ws_cargo_home)
+                            .pipe(AbsFilePath::try_from)
+                            .ok()?;
 
-                    // We use `metadata` instead of `exists` so that we validate permissions too.
-                    if std::fs::metadata(path.as_std_path()).is_ok() {
-                        let existing_hash = fs::hash_file_sync(&path).ok()?;
-                        if existing_hash == file.object_key {
-                            trace!(?path, "file already exists with correct hash, skipping");
-                            return None;
+                        // We use `metadata` instead of `exists` so that we validate permissions too.
+                        if std::fs::metadata(path.as_std_path()).is_ok() {
+                            let existing_hash = fs::hash_file_sync(&path).ok()?;
+                            if existing_hash == file.object_key {
+                                trace!(?path, "file already exists with correct hash, skipping");
+                                return None;
+                            }
                         }
-                    }
 
-                    Some((artifact, (file, path)))
-                })
-                .fold(HashMap::<_, Vec<_>>::new, |mut acc, (artifact, entry)| {
-                    acc.entry(artifact.clone()).or_default().push(entry);
-                    acc
-                })
-                .reduce(HashMap::new, |mut acc, item| {
-                    acc.extend(item);
-                    acc
-                })
+                        Some((artifact, (file, path)))
+                    })
+                    .fold(HashMap::<_, Vec<_>>::new, |mut acc, (artifact, entry)| {
+                        acc.entry(artifact.clone()).or_default().push(entry);
+                        acc
+                    })
+                    .reduce(HashMap::new, |mut acc, item| {
+                        acc.extend(item);
+                        acc
+                    })
+            }
         })
         .await
         .context("file validation task")
     }
 
     /// Spawn worker tasks to restore files from CAS in batches.
+    #[instrument(name = "CargoCache::spawn_restore_workers", skip(restored))]
     fn spawn_restore_workers(
         &self,
         worker_count: usize,
@@ -386,6 +393,7 @@ impl CargoCache {
     }
 
     /// Process a batch of files to restore from CAS.
+    #[instrument(name = "CargoCache::process_restore_batch", skip(restored))]
     async fn process_restore_batch(
         &self,
         batch: &[(ArtifactFile, AbsFilePath)],
@@ -435,6 +443,7 @@ impl CargoCache {
     }
 
     /// Restore a single file from CAS data.
+    #[instrument(name = "CargoCache::restore_single_file", skip(data, restored))]
     async fn restore_single_file(
         &self,
         file: &ArtifactFile,
