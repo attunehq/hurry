@@ -299,7 +299,7 @@ async fn upload(
         },
     );
     tokio::spawn(async move {
-        let result: Result<()> = async {
+        let upload = async {
             trace!(artifact_plan = ?req.artifact_plan, "artifact plan");
             let courier = Courier::new(req.courier_url)?;
             let cas = CourierCas::new(courier.clone());
@@ -357,11 +357,10 @@ async fn upload(
                 );
             }
 
-            Ok(())
+            Result::<_>::Ok(())
         }
         .await;
-
-        match result {
+        match upload {
             Ok(()) => {
                 info!(?request_id, "upload completed successfully");
                 state
