@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 
 use cargo_metadata::TargetKind;
 use color_eyre::{
-    Result,
+    Result, Section, SectionExt,
     eyre::{Context, OptionExt as _, bail, eyre},
 };
 use derive_more::{Debug as DebugExt, Display};
@@ -160,10 +160,21 @@ impl Workspace {
             String::from("-Z"),
             String::from("unstable-options"),
         ]);
-        cargo::invoke_output("build", build_args, [("RUSTC_BOOTSTRAP", "1")])
-            .await?
-            .pipe(|output| serde_json::from_slice::<BuildPlan>(&output.stdout))
+        let output = cargo::invoke_output("build", build_args, [("RUSTC_BOOTSTRAP", "1")])
+            .await
+            .context("run cargo command")?;
+        serde_json::from_slice::<BuildPlan>(&output.stdout)
             .context("parse build plan")
+            .with_section(move || {
+                String::from_utf8_lossy(&output.stdout)
+                    .to_string()
+                    .header("Stdout:")
+            })
+            .with_section(move || {
+                String::from_utf8_lossy(&output.stderr)
+                    .to_string()
+                    .header("Stderr:")
+            })
     }
 
     #[instrument(name = "Workspace::artifact_plan")]
