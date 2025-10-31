@@ -317,7 +317,11 @@ impl CargoCache {
                     if existing_hash == file.object_key {
                         trace!(?path, "file already exists with correct hash, skipping");
                         continue;
+                    } else {
+                        trace!(expected = %file.object_key, actual = %existing_hash, ?path, "file already exists, but incorrect hash");
                     }
+                } else {
+                    trace!(?path, "file does not exist");
                 }
 
                 files_to_restore

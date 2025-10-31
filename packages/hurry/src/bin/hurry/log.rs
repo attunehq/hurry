@@ -46,7 +46,7 @@ where
                 .with_target(true)
                 .with_thread_ids(true)
                 .with_thread_names(true)
-                .with_span_events(FmtSpan::FULL)
+                .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
                 .with_timer(Uptime::default())
                 .with_writer(writer)
                 .pretty();

@@ -65,6 +65,7 @@ pub async fn exec(options: Options) -> Result<()> {
     let artifact_count = artifact_plan.artifacts.len() as u64;
     let progress = TransferBar::new(artifact_count, "Restoring cache");
     cache.restore(&artifact_plan, &progress).await?;
+    drop(progress);
 
     // Run build with `--message-format=json`.
     let mut argv = options.argv;
