@@ -66,9 +66,15 @@ pub async fn exec(options: Options) -> Result<()> {
     let progress = TransferBar::new(artifact_count, "Restoring cache");
     cache.restore(&artifact_plan, &progress).await?;
 
-    // Run build with `--message-format=json`.
+    // Run build with `--message-format=json` for freshness indicators and
+    // `--verbose` for debugging information.
     let mut argv = options.argv;
-    argv.push(String::from("--message-format=json"));
+    if !argv.contains(&String::from("--message-format=json")) {
+        argv.push(String::from("--message-format=json"));
+    }
+    if !argv.contains(&String::from("--verbose")) {
+        argv.push(String::from("--verbose"));
+    }
     let handles = Handles {
         stdout: Stdio::piped(),
         stderr: Stdio::inherit(),
