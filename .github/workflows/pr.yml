@@ -83,7 +83,9 @@ jobs:
               uses: ./.github/actions/hurry-dev
 
             - name: Populate cache if needed
-              run: SQLX_OFFLINE=1 hurry-dev cargo build --hurry-wait-for-upload
+              run: SQLX_OFFLINE=1 hurry-dev cargo build --hurry-wait-for-upload --verbose
 
             - name: Check that cache restores are fresh
-              run: SQLX_OFFLINE=1 HURRY_LOG=warn hurry-dev debug check
+              run: |
+                cargo clean
+                SQLX_OFFLINE=1 HURRY_LOG=warn hurry-dev debug check
