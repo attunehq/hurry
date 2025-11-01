@@ -66,3 +66,21 @@ jobs:
 
             - name: Run full build
               run: cargo build -p hurry -p courier --verbose
+
+    hurry-rust:
+        name: Build with Hurry and check cache restores
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Install Rust
+              run: |
+                  rustup toolchain install nightly
+                  rustup component add --toolchain nightly rustfmt
+                  rustup show
+            - uses: actions/checkout@v4
+
+            - name: Setup hurry-dev
+              uses: ./.github/actions/hurry-dev
+
+            - name: Check that cache restores are fresh
+              run: HURRY_LOG=warn hurry-dev debug check
