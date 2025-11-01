@@ -55,6 +55,7 @@ pub async fn exec(options: Options) -> Result<()> {
         .artifact_plan(&profile, &args)
         .await
         .context("calculating expected artifacts")?;
+    info!(target = ?artifact_plan.target, "restoring using target");
 
     // Initialize cache.
     let cache = CargoCache::open(options.courier_url, workspace)
