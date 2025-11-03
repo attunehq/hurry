@@ -512,17 +512,16 @@ impl Workspace {
             }
         }
 
-        // Extract the target from the rustc invocations. All artifacts in a single
-        // build use the same target, so we just need to find the first one.
-        let target = build_plan
-            .invocations
-            .iter()
-            .find_map(|invocation| {
-                invocation.args.iter().find_map(|arg| match arg {
-                    RustcInvocationArgument::Target(target) => Some(target.clone()),
-                    _ => None,
-                })
-            })
+        // The target for the build is the user-provided `--target` flag, or the host
+        // target.
+        //
+        // Note: Individual artifacts may have different targets (some for host, some
+        // for the specified target), but this represents the "effective target"
+        // of the build for cache keying purposes.
+        let target = args
+            .as_ref()
+            .target()
+            .map(String::from)
             .unwrap_or_else(|| rustc.host_target.clone());
 
         Ok(ArtifactPlan {
