@@ -19,7 +19,7 @@ use crate::{
         QualifiedPath, RustcMetadata, build_plan::RustcInvocationArgument,
     },
     mk_rel_file,
-    path::{AbsDirPath, AbsFilePath, JoinWith as _, TryJoinWith as _, TypedPath},
+    path::{AbsDirPath, AbsFilePath, JoinWith as _, TryJoinWith as _},
 };
 use clients::courier::v1::Key;
 
@@ -130,28 +130,6 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// Determine which profile directory a path belongs to.
-    ///
-    /// During cross-compilation, artifacts can be in either the target profile
-    /// directory (for target-platform code) or the host profile directory (for
-    /// proc-macros and their dependencies). Rather than trying to infer from the
-    /// dependency graph which platform an artifact targets, we simply check where
-    /// Cargo actually placed the files.
-    pub fn determine_profile_dir<B, T>(&self, path: &TypedPath<B, T>) -> Result<&AbsDirPath> {
-        if path.starts_with(&self.profile_dir) {
-            Ok(&self.profile_dir)
-        } else if path.starts_with(&self.host_profile_dir) {
-            Ok(&self.host_profile_dir)
-        } else {
-            bail!(
-                "path {} is not in profile_dir {} or host_profile_dir {}",
-                path,
-                self.profile_dir,
-                self.host_profile_dir
-            )
-        }
-    }
-
     /// Create a workspace by parsing `cargo metadata` from the given directory.
     #[instrument(name = "Workspace::from_argv_in_dir")]
     pub async fn from_argv_in_dir(
@@ -542,6 +520,11 @@ impl Workspace {
                     deps = ?invocation.deps,
                     "artifacts to save"
                 );
+                let invocation_target = invocation.args.iter().find_map(|arg| match arg {
+                    RustcInvocationArgument::Target(target) => Some(target.clone()),
+                    _ => None,
+                });
+
                 artifacts.push(ArtifactKey {
                     package_name: invocation.package_name,
                     package_version: invocation.package_version,
@@ -551,6 +534,7 @@ impl Workspace {
                     build_script_compilation_unit_hash,
                     build_script_execution_unit_hash,
                     is_proc_macro: invocation.target_kind.contains(&TargetKind::ProcMacro),
+                    invocation_target,
                 });
 
                 // TODO: If needed, we could try to read previous build script
@@ -626,6 +610,20 @@ pub struct ArtifactKey {
     /// Proc-macros are always built for the host platform (even during
     /// cross-compilation) because they run at compile-time on the build machine.
     pub is_proc_macro: bool,
+
+    /// The target triple from the `--target` flag in the rustc invocation for this artifact.
+    ///
+    /// This determines which directory the artifacts are placed in:
+    /// - `Some(triple)`: Artifacts go in `target/<triple>/<profile>/`
+    /// - `None`: Artifacts go in `target/<profile>/` (host directory)
+    ///
+    /// When cross-compiling with `--target`, Cargo omits the `--target` flag for:
+    /// - Proc-macros (they run at compile-time on the build machine)
+    /// - Dependencies of proc-macros (needed at compile-time)
+    /// - Build scripts (they run at compile-time on the build machine)
+    ///
+    /// All other crates get the `--target` flag and are built for the target platform.
+    pub invocation_target: Option<String>,
 }
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
@@ -655,6 +653,10 @@ pub struct BuiltArtifact {
     pub build_script_output: Option<BuildScriptOutput>,
 
     pub is_proc_macro: bool,
+
+    /// The target triple from the `--target` flag in the rustc invocation for this artifact.
+    /// See `ArtifactKey::invocation_target` for details.
+    pub invocation_target: Option<String>,
 }
 
 impl BuiltArtifact {
@@ -690,6 +692,7 @@ impl BuiltArtifact {
             build_script_execution_unit_hash: key.build_script_execution_unit_hash,
             build_script_output,
             is_proc_macro: key.is_proc_macro,
+            invocation_target: key.invocation_target,
         })
     }
 }

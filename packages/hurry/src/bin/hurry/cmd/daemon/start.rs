@@ -430,14 +430,15 @@ async fn collect_library_files(
     ws: &Workspace,
     artifact: &BuiltArtifact,
 ) -> Result<Vec<AbsFilePath>> {
-    let first_lib_file = artifact
+    artifact
         .lib_files
         .first()
         .ok_or_eyre("artifact must have at least one lib file")?;
 
-    let base_profile_dir = ws
-        .determine_profile_dir(first_lib_file)
-        .context("determine profile dir for lib file")?;
+    let base_profile_dir = match &artifact.invocation_target {
+        Some(_triple) => &ws.profile_dir,
+        None => &ws.host_profile_dir,
+    };
 
     let lib_fingerprint_dir = base_profile_dir.try_join_dirs(&[
         String::from(".fingerprint"),
@@ -488,9 +489,10 @@ async fn collect_build_script_files(
         .try_collect::<Vec<_>>()
         .await?;
 
-    let output_base_profile_dir = ws
-        .determine_profile_dir(&build_script_files.output_dir)
-        .context("determine profile dir for build script output dir")?;
+    let output_base_profile_dir = match &artifact.invocation_target {
+        Some(_triple) => &ws.profile_dir,
+        None => &ws.host_profile_dir,
+    };
 
     let output_fingerprint_dir = output_base_profile_dir.try_join_dirs(&[
         String::from(".fingerprint"),
