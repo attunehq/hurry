@@ -96,9 +96,6 @@ pub struct Workspace {
     /// The profile directory for host platform artifacts.
     #[debug("{profile_dir}")]
     pub profile_dir: AbsDirPath,
-
-    /// The target triple specified via `--target`, if any.
-    pub target_triple: Option<String>,
 }
 
 impl Workspace {
@@ -153,7 +150,6 @@ impl Workspace {
         .context("parse path as utf8")?;
 
         let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
-        let target_triple = args.target().map(String::from);
         let profile_dir = workspace_target.try_join_dir(profile.as_str())?;
 
         Ok(Self {
@@ -162,7 +158,6 @@ impl Workspace {
             cargo_home,
             profile,
             profile_dir,
-            target_triple,
         })
     }
 
