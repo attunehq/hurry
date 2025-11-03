@@ -77,6 +77,7 @@ runs:
           with:
               name: hurry-dev-binary
               path: /tmp/hurry/hurry-dev
+          continue-on-error: true
 
         - name: Add hurry-dev to PATH
           if: steps.check-path.outputs.found != 'true'
