@@ -256,6 +256,11 @@ impl<B, T> TypedPath<B, T> {
         self.inner.as_os_str()
     }
 
+    /// Check if this path starts with the given base path.
+    pub fn starts_with(&self, base: impl AsRef<Path>) -> bool {
+        self.inner.starts_with(base)
+    }
+
     /// Get the parent of the provided path, if one exists.
     ///
     /// Unlike the standard library, this method returns `None`
@@ -368,6 +373,12 @@ impl<B: Validator, T: Validator> FromStr for TypedPath<B, T> {
 impl<B, T> AsRef<TypedPath<B, T>> for TypedPath<B, T> {
     fn as_ref(&self) -> &TypedPath<B, T> {
         self
+    }
+}
+
+impl<B, T> AsRef<Path> for TypedPath<B, T> {
+    fn as_ref(&self) -> &Path {
+        &self.inner
     }
 }
 
