@@ -484,6 +484,8 @@ impl Workspace {
                     RustcInvocationArgument::Target(target) => Some(target.clone()),
                     _ => None,
                 });
+                // TODO(#193): Validate this works correctly with CARGO_TARGET_DIR and
+                // build.target-dir config.
                 let profile_dir = match &invocation_target {
                     Some(triple) => self
                         .target

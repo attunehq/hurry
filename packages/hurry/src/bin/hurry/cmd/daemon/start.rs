@@ -430,11 +430,6 @@ async fn collect_library_files(
     _ws: &Workspace,
     artifact: &BuiltArtifact,
 ) -> Result<Vec<AbsFilePath>> {
-    artifact
-        .lib_files
-        .first()
-        .ok_or_eyre("artifact must have at least one lib file")?;
-
     let lib_fingerprint_dir = artifact.profile_dir.try_join_dirs(&[
         String::from(".fingerprint"),
         format!(
