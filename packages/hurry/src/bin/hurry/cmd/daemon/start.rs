@@ -427,7 +427,7 @@ async fn rewrite(ws: &Workspace, path: &AbsFilePath, content: &[u8]) -> Result<V
 
 /// Collect library files and their fingerprints for an artifact.
 async fn collect_library_files(
-    ws: &Workspace,
+    _ws: &Workspace,
     artifact: &BuiltArtifact,
 ) -> Result<Vec<AbsFilePath>> {
     artifact
@@ -435,12 +435,7 @@ async fn collect_library_files(
         .first()
         .ok_or_eyre("artifact must have at least one lib file")?;
 
-    let base_profile_dir = match &artifact.invocation_target {
-        Some(_triple) => &ws.profile_dir,
-        None => &ws.host_profile_dir,
-    };
-
-    let lib_fingerprint_dir = base_profile_dir.try_join_dirs(&[
+    let lib_fingerprint_dir = artifact.profile_dir.try_join_dirs(&[
         String::from(".fingerprint"),
         format!(
             "{}-{}",
@@ -468,10 +463,12 @@ async fn collect_build_script_files(
         return Ok(vec![]);
     };
 
+    // Build scripts are always stored in the base workspace profile directory,
+    // whether cross compiling or not.
     let compiled_files = fs::walk_files(&build_script_files.compiled_dir)
         .try_collect::<Vec<_>>()
         .await?;
-    let compiled_fingerprint_dir = ws.host_profile_dir.try_join_dirs(&[
+    let compiled_fingerprint_dir = ws.profile_dir.try_join_dirs(&[
         String::from(".fingerprint"),
         format!(
             "{}-{}",
@@ -489,12 +486,10 @@ async fn collect_build_script_files(
         .try_collect::<Vec<_>>()
         .await?;
 
-    let output_base_profile_dir = match &artifact.invocation_target {
-        Some(_triple) => &ws.profile_dir,
-        None => &ws.host_profile_dir,
-    };
-
-    let output_fingerprint_dir = output_base_profile_dir.try_join_dirs(&[
+    // Outputs are either stored in the base workspace profile directory (if not
+    // cross compiling) or are stored inside their specified target folder (if we
+    // are).
+    let output_fingerprint_dir = artifact.profile_dir.try_join_dirs(&[
         String::from(".fingerprint"),
         format!(
             "{}-{}",

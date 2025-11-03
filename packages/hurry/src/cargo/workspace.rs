@@ -31,8 +31,8 @@ use clients::courier::v1::Key;
 ///
 /// ## Cross-Compilation Directory Structure
 ///
-/// When cross-compiling with `--target <triple>`, Cargo uses a complex directory
-/// structure that separates host and target artifacts:
+/// When cross-compiling with `--target <triple>`, Cargo uses a complex
+/// directory structure that separates host and target artifacts:
 ///
 /// ```not_rust
 /// target/
@@ -68,23 +68,14 @@ use clients::courier::v1::Key;
 /// This means for a package like `serde` with a build script:
 /// - Binary: `target/debug/build/serde-{hash1}/build-script-build`
 /// - Binary fingerprint: `target/debug/.fingerprint/serde-{hash1}/`
-/// - Output directory: `target/aarch64-apple-darwin/debug/build/serde-{hash2}/out/`
-/// - Output fingerprint: `target/aarch64-apple-darwin/debug/.fingerprint/serde-{hash2}/`
+/// - Output directory:
+///   `target/aarch64-apple-darwin/debug/build/serde-{hash2}/out/`
+/// - Output fingerprint:
+///   `target/aarch64-apple-darwin/debug/.fingerprint/serde-{hash2}/`
 ///
-/// Notice that `hash1` (compilation) and `hash2` (execution) are different because
-/// they represent different compilation units with different dependencies and flags.
-///
-/// ### Which Path to Use?
-///
-/// - **Library artifacts**: Use `profile_dir` (includes target triple when cross-compiling)
-/// - **Library fingerprints**: Use `profile_dir` (includes target triple when cross-compiling)
-/// - **Build script binaries**: Use `host_profile_dir` (never includes target triple)
-/// - **Build script compilation fingerprints**: Use `host_profile_dir` (never includes target triple)
-/// - **Build script output**: Already absolute paths from build plan (in `target/<triple>/<profile>/build/`)
-/// - **Build script execution fingerprints**: Use `profile_dir` (includes target triple when cross-compiling)
-///
-/// When NOT cross-compiling (no `--target` flag), `profile_dir` and `host_profile_dir`
-/// have the same value since everything is built for the host platform.
+/// Notice that `hash1` (compilation) and `hash2` (execution) are different
+/// because they represent different compilation units with different
+/// dependencies and flags.
 #[derive(Clone, Eq, PartialEq, Hash, DebugExt, Display, Serialize, Deserialize)]
 #[display("{root}")]
 pub struct Workspace {
@@ -102,30 +93,11 @@ pub struct Workspace {
     /// The build profile of this workspace invocation.
     pub profile: Profile,
 
-    /// The profile directory for target platform artifacts.
-    ///
-    /// Points to `target/<triple>/<profile>/` when cross-compiling, or
-    /// `target/<profile>/` when building for the host.
-    ///
-    /// Use this for library artifacts, library fingerprints, and build script
-    /// execution fingerprints. See struct-level docs for details.
+    /// The profile directory for host platform artifacts.
     #[debug("{profile_dir}")]
     pub profile_dir: AbsDirPath,
 
-    /// The profile directory for host platform artifacts.
-    ///
-    /// Always points to `target/<profile>/` (never includes target triple),
-    /// even when cross-compiling.
-    ///
-    /// Use this for build script binaries and build script compilation
-    /// fingerprints. See struct-level docs for details.
-    #[debug("{host_profile_dir}")]
-    pub host_profile_dir: AbsDirPath,
-
     /// The target triple specified via `--target`, if any.
-    ///
-    /// When `Some`, indicates cross-compilation and means `profile_dir` will
-    /// include the triple in its path while `host_profile_dir` will not.
     pub target_triple: Option<String>,
 }
 
@@ -182,13 +154,7 @@ impl Workspace {
 
         let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
         let target_triple = args.target().map(String::from);
-
-        let host_profile_dir = workspace_target.try_join_dir(profile.as_str())?;
-        let profile_dir = if let Some(ref triple) = target_triple {
-            workspace_target.try_join_dirs([triple.as_str(), profile.as_str()])?
-        } else {
-            host_profile_dir.clone()
-        };
+        let profile_dir = workspace_target.try_join_dir(profile.as_str())?;
 
         Ok(Self {
             root: workspace_root,
@@ -196,7 +162,6 @@ impl Workspace {
             cargo_home,
             profile,
             profile_dir,
-            host_profile_dir,
             target_triple,
         })
     }
@@ -524,6 +489,12 @@ impl Workspace {
                     RustcInvocationArgument::Target(target) => Some(target.clone()),
                     _ => None,
                 });
+                let profile_dir = match &invocation_target {
+                    Some(triple) => self
+                        .target
+                        .try_join_dirs([triple.as_str(), profile.as_str()])?,
+                    None => self.profile_dir.clone(),
+                };
 
                 artifacts.push(ArtifactKey {
                     package_name: invocation.package_name,
@@ -533,8 +504,8 @@ impl Workspace {
                     library_crate_compilation_unit_hash,
                     build_script_compilation_unit_hash,
                     build_script_execution_unit_hash,
-                    is_proc_macro: invocation.target_kind.contains(&TargetKind::ProcMacro),
                     invocation_target,
+                    profile_dir,
                 });
 
                 // TODO: If needed, we could try to read previous build script
@@ -573,7 +544,6 @@ impl Workspace {
 pub struct ArtifactPlan {
     pub profile: Profile,
     pub target: String,
-
     pub artifacts: Vec<ArtifactKey>,
 }
 
@@ -605,25 +575,35 @@ pub struct ArtifactKey {
     pub build_script_compilation_unit_hash: Option<String>,
     pub build_script_execution_unit_hash: Option<String>,
 
-    /// Whether this is a proc-macro crate.
-    ///
-    /// Proc-macros are always built for the host platform (even during
-    /// cross-compilation) because they run at compile-time on the build machine.
-    pub is_proc_macro: bool,
-
-    /// The target triple from the `--target` flag in the rustc invocation for this artifact.
+    /// The target triple from the `--target` flag in the rustc invocation for
+    /// this artifact.
     ///
     /// This determines which directory the artifacts are placed in:
     /// - `Some(triple)`: Artifacts go in `target/<triple>/<profile>/`
     /// - `None`: Artifacts go in `target/<profile>/` (host directory)
     ///
-    /// When cross-compiling with `--target`, Cargo omits the `--target` flag for:
+    /// ## Native compilation
+    ///
+    /// When compiling for the current platform, Cargo entirely omits the
+    /// `--target` flag.
+    ///
+    /// ## Cross compilation
+    ///
+    /// When cross-compiling with `--target`, Cargo omits the `--target` flag
+    /// for:
     /// - Proc-macros (they run at compile-time on the build machine)
     /// - Dependencies of proc-macros (needed at compile-time)
     /// - Build scripts (they run at compile-time on the build machine)
     ///
-    /// All other crates get the `--target` flag and are built for the target platform.
+    /// All other crates get the `--target` flag and are built for the target
+    /// platform.
     pub invocation_target: Option<String>,
+
+    /// The profile directory where this artifact's files are located.
+    ///
+    /// This is either `target/<profile>/` (for host artifacts) or
+    /// `target/<triple>/<profile>/` (for target artifacts).
+    pub profile_dir: AbsDirPath,
 }
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
@@ -652,11 +632,35 @@ pub struct BuiltArtifact {
     // be separately optional, as if we could have some fields but not others.
     pub build_script_output: Option<BuildScriptOutput>,
 
-    pub is_proc_macro: bool,
-
-    /// The target triple from the `--target` flag in the rustc invocation for this artifact.
-    /// See `ArtifactKey::invocation_target` for details.
+    /// The target triple from the `--target` flag in the rustc invocation for
+    /// this artifact.
+    ///
+    /// This determines which directory the artifacts are placed in:
+    /// - `Some(triple)`: Artifacts go in `target/<triple>/<profile>/`
+    /// - `None`: Artifacts go in `target/<profile>/` (host directory)
+    ///
+    /// ## Native compilation
+    ///
+    /// When compiling for the current platform, Cargo entirely omits the
+    /// `--target` flag.
+    ///
+    /// ## Cross compilation
+    ///
+    /// When cross-compiling with `--target`, Cargo omits the `--target` flag
+    /// for:
+    /// - Proc-macros (they run at compile-time on the build machine)
+    /// - Dependencies of proc-macros (needed at compile-time)
+    /// - Build scripts (they run at compile-time on the build machine)
+    ///
+    /// All other crates get the `--target` flag and are built for the target
+    /// platform.
     pub invocation_target: Option<String>,
+
+    /// The profile directory where this artifact's files are located.
+    ///
+    /// This is either `target/<profile>/` (for host artifacts) or
+    /// `target/<triple>/<profile>/` (for target artifacts).
+    pub profile_dir: AbsDirPath,
 }
 
 impl BuiltArtifact {
@@ -683,16 +687,14 @@ impl BuiltArtifact {
         Ok(BuiltArtifact {
             package_name: key.package_name,
             package_version: key.package_version,
-
             lib_files: key.lib_files,
             build_script_files: key.build_script_files,
-
             library_crate_compilation_unit_hash: key.library_crate_compilation_unit_hash,
             build_script_compilation_unit_hash: key.build_script_compilation_unit_hash,
             build_script_execution_unit_hash: key.build_script_execution_unit_hash,
-            build_script_output,
-            is_proc_macro: key.is_proc_macro,
             invocation_target: key.invocation_target,
+            profile_dir: key.profile_dir,
+            build_script_output,
         })
     }
 }
