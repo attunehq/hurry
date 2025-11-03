@@ -55,6 +55,7 @@ pub async fn exec(options: Options) -> Result<()> {
         .artifact_plan(&profile, &args)
         .await
         .context("calculating expected artifacts")?;
+    info!(target = ?artifact_plan.target, "restoring using target");
 
     // Initialize cache.
     let cache = CargoCache::open(options.courier_url, workspace)
@@ -67,9 +68,15 @@ pub async fn exec(options: Options) -> Result<()> {
     cache.restore(&artifact_plan, &progress).await?;
     drop(progress);
 
-    // Run build with `--message-format=json`.
+    // Run build with `--message-format=json` for freshness indicators and
+    // `--verbose` for debugging information.
     let mut argv = options.argv;
-    argv.push(String::from("--message-format=json"));
+    if !argv.contains(&String::from("--message-format=json")) {
+        argv.push(String::from("--message-format=json"));
+    }
+    if !argv.contains(&String::from("--verbose")) {
+        argv.push(String::from("--verbose"));
+    }
     let handles = Handles {
         stdout: Stdio::piped(),
         stderr: Stdio::inherit(),
