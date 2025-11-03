@@ -1,18 +1,19 @@
-.PHONY: help format check check-fix autoinherit machete machete-fix precommit dev release sqlx-prepare install install-dev
+.PHONY: help format check check-fix autoinherit machete machete-fix precommit dev release sqlx-prepare install install-dev reset-local-cache
 
 .DEFAULT_GOAL := help
 
 help:
 	@echo "Available commands:"
-	@echo "  make format       - Format code with cargo +nightly fmt"
-	@echo "  make check        - Run clippy linter"
-	@echo "  make check-fix    - Run clippy with automatic fixes"
-	@echo "  make precommit    - Run checks and automated fixes before committing"
-	@echo "  make dev          - Build in debug mode"
-	@echo "  make release      - Build in release mode"
-	@echo "  make sqlx-prepare - Prepare sqlx metadata for courier and hurry"
-	@echo "  make install      - Install hurry locally"
-	@echo "  make install-dev  - Install hurry locally, renaming to 'hurry-dev'"
+	@echo "  make format            - Format code with cargo +nightly fmt"
+	@echo "  make check             - Run clippy linter"
+	@echo "  make check-fix         - Run clippy with automatic fixes"
+	@echo "  make precommit         - Run checks and automated fixes before committing"
+	@echo "  make dev               - Build in debug mode"
+	@echo "  make release           - Build in release mode"
+	@echo "  make sqlx-prepare      - Prepare sqlx metadata for courier and hurry"
+	@echo "  make install           - Install hurry locally"
+	@echo "  make install-dev       - Install hurry locally, renaming to 'hurry-dev'"
+	@echo "  make reset-local-cache - Reset local courier instance (docker down, clear data, migrate)"
 
 format:
 	cargo +nightly fmt
@@ -64,3 +65,9 @@ install-dev:
 		mv "$$CARGO_HOME/bin/hurry" "$$CARGO_HOME/bin/hurry-dev" && \
 		VERSION=$$($$CARGO_HOME/bin/hurry-dev --version) && \
 		echo "Installed '$$VERSION' to $$CARGO_HOME/bin/hurry-dev"
+
+reset-local-cache:
+	docker compose down
+	rm -rf .hurrydata
+	docker compose up -d postgres
+	cargo sqlx migrate run --source packages/courier/schema/migrations --database-url $(COURIER_DATABASE_URL)
