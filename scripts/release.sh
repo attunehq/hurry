@@ -139,27 +139,85 @@ Or set a valid AWS_PROFILE environment variable."
 usage() {
     cat <<EOF
 Usage: $0 <version> [options]
+       $0 --generate-changelog
 
 Arguments:
   version          Version to release (e.g., 1.0.0 or 1.0.0-beta.1)
 
 Options:
-  --skip-build     Skip the build step (use existing artifacts)
-  --skip-upload    Skip the S3 upload step
-  --dry-run        Don't upload to S3 or create git tags
-  -h, --help       Show this help message
+  --skip-build         Skip the build step (use existing artifacts)
+  --skip-upload        Skip the S3 upload step
+  --dry-run            Don't upload to S3 or create git tags
+  --generate-changelog Generate and display changelog only (no version required)
+  -h, --help           Show this help message
 
 Examples:
   $0 1.0.0                    # Release stable version 1.0.0
   $0 1.0.0-beta.1             # Release prerelease version 1.0.0-beta.1
   $0 1.0.0 --dry-run          # Test the release process without uploading
   $0 1.0.0 --skip-build       # Upload existing artifacts without rebuilding
+  $0 --generate-changelog     # Preview changelog without releasing
 
 Environment:
   AWS_PROFILE      AWS profile to use (default: $AWS_PROFILE)
   BUCKET           S3 bucket name (default: $BUCKET)
 EOF
     exit 0
+}
+
+is_user_facing_commit() {
+    local commit_msg="$1"
+    local commit_sha="$2"
+
+    # Check for explicit markers first
+    if [[ "$commit_msg" =~ \[skip.changelog\] ]] || [[ "$commit_msg" =~ \[internal\] ]]; then
+        return 1
+    fi
+
+    if [[ "$commit_msg" =~ \[user.facing\] ]]; then
+        return 0
+    fi
+
+    # Filter out non-user-facing commit types (conventional commits style)
+    if [[ "$commit_msg" =~ ^(refactor|chore|ci|docs|test|style|build):  ]]; then
+        return 1
+    fi
+
+    # Filter out commits that mention internal tooling
+    if [[ "$commit_msg" =~ (AGENTS\.md|CLAUDE\.md|\.agents/|agent guidance|Update agent) ]]; then
+        return 1
+    fi
+
+    # Check changed files for internal-only changes
+    local changed_files
+    changed_files=$(git show --name-only --format="" "$commit_sha" 2>/dev/null)
+
+    # Count how many files are internal vs user-facing
+    local internal_count=0
+    local total_count=0
+
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
+        ((total_count++))
+
+        # Internal files
+        if [[ "$file" =~ ^\.agents/ ]] || \
+           [[ "$file" =~ ^\.github/ ]] || \
+           [[ "$file" =~ AGENTS\.md$ ]] || \
+           [[ "$file" =~ CLAUDE\.md$ ]] || \
+           [[ "$file" =~ ^scripts/(release|install)\.sh$ ]] || \
+           [[ "$file" =~ ^\.scratch/ ]]; then
+            ((internal_count++))
+        fi
+    done <<< "$changed_files"
+
+    # If all changed files are internal, skip this commit
+    if [[ $total_count -gt 0 ]] && [[ $internal_count -eq $total_count ]]; then
+        return 1
+    fi
+
+    # Default: include the commit (user-facing)
+    return 0
 }
 
 generate_changelog() {
@@ -210,14 +268,22 @@ EOF
             commit_range="$prev_tag..$tag"
         fi
 
-        # Get commits and format them
-        local commits
-        commits=$(git log "$commit_range" --pretty=format:"- %s" --reverse 2>/dev/null)
+        # Get commits and filter for user-facing changes
+        local has_commits=false
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
 
-        if [[ -n "$commits" ]]; then
-            echo "$commits" >> "$output_file"
-        else
-            echo "- Initial release" >> "$output_file"
+            local commit_sha="${line%% *}"
+            local commit_msg="${line#* }"
+
+            if is_user_facing_commit "$commit_msg" "$commit_sha"; then
+                echo "- $commit_msg" >> "$output_file"
+                has_commits=true
+            fi
+        done < <(git log "$commit_range" --pretty=format:"%H %s" --reverse 2>/dev/null)
+
+        if [[ "$has_commits" == "false" ]]; then
+            echo "- Internal changes and improvements" >> "$output_file"
         fi
 
         echo "" >> "$output_file"
@@ -231,6 +297,7 @@ VERSION=""
 SKIP_BUILD=false
 SKIP_UPLOAD=false
 DRY_RUN=false
+GENERATE_CHANGELOG_ONLY=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -249,6 +316,10 @@ while [[ $# -gt 0 ]]; do
             DRY_RUN=true
             shift
             ;;
+        --generate-changelog)
+            GENERATE_CHANGELOG_ONLY=true
+            shift
+            ;;
         -*)
             fail "Unknown option: $1"
             ;;
@@ -262,6 +333,15 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Handle changelog-only mode
+if [[ "$GENERATE_CHANGELOG_ONLY" == "true" ]]; then
+    TEMP_CHANGELOG=$(mktemp)
+    generate_changelog "$TEMP_CHANGELOG" 2>/dev/null
+    cat "$TEMP_CHANGELOG"
+    rm "$TEMP_CHANGELOG"
+    exit 0
+fi
 
 # Validate version
 if [[ -z "$VERSION" ]]; then
