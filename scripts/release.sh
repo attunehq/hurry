@@ -115,6 +115,27 @@ Please install the missing commands:
     fi
 }
 
+check_aws_auth() {
+    # Skip AWS auth check if we're skipping upload or doing a dry run
+    if [[ "$SKIP_UPLOAD" == "true" ]] || [[ "$DRY_RUN" == "true" ]]; then
+        return 0
+    fi
+
+    step "Checking AWS authentication"
+
+    # Try to get AWS identity using the configured profile
+    if ! aws sts get-caller-identity --profile "$AWS_PROFILE" > /dev/null 2>&1; then
+        fail "AWS authentication failed for profile '$AWS_PROFILE'.
+
+Please authenticate with AWS:
+  aws sso login --profile $AWS_PROFILE
+
+Or set a valid AWS_PROFILE environment variable."
+    fi
+
+    info "✓ AWS authentication verified"
+}
+
 usage() {
     cat <<EOF
 Usage: $0 <version> [options]
@@ -254,6 +275,9 @@ fi
 
 # Check for required commands
 check_requirements
+
+# Check AWS authentication early
+check_aws_auth
 
 # Determine if this is a prerelease
 PRERELEASE=false
