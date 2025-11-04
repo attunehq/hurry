@@ -22,7 +22,7 @@ mod log;
 #[command(
     name = "hurry",
     about = "Really, really fast builds",
-    version = git_version!(args = ["--always"]),
+    version = git_version!(),
 )]
 struct TopLevelFlags {
     #[command(subcommand)]
