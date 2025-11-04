@@ -430,7 +430,7 @@ async fn collect_library_files(
     _ws: &Workspace,
     artifact: &BuiltArtifact,
 ) -> Result<Vec<AbsFilePath>> {
-    let lib_fingerprint_dir = artifact.profile_dir.try_join_dirs(&[
+    let lib_fingerprint_dir = artifact.profile_dir().try_join_dirs(&[
         String::from(".fingerprint"),
         format!(
             "{}-{}",
@@ -484,7 +484,7 @@ async fn collect_build_script_files(
     // Outputs are either stored in the base workspace profile directory (if not
     // cross compiling) or are stored inside their specified target folder (if we
     // are).
-    let output_fingerprint_dir = artifact.profile_dir.try_join_dirs(&[
+    let output_fingerprint_dir = artifact.profile_dir().try_join_dirs(&[
         String::from(".fingerprint"),
         format!(
             "{}-{}",

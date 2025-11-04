@@ -480,29 +480,21 @@ impl Workspace {
                     deps = ?invocation.deps,
                     "artifacts to save"
                 );
-                let invocation_target = invocation.args.iter().find_map(|arg| match arg {
+                let target = invocation.args.iter().find_map(|arg| match arg {
                     RustcInvocationArgument::Target(target) => Some(target.clone()),
                     _ => None,
                 });
-                // TODO(#193): Validate this works correctly with CARGO_TARGET_DIR and
-                // build.target-dir config.
-                let profile_dir = match &invocation_target {
-                    Some(triple) => self
-                        .target
-                        .try_join_dirs([triple.as_str(), profile.as_str()])?,
-                    None => self.profile_dir.clone(),
-                };
 
                 artifacts.push(ArtifactKey {
                     package_name: invocation.package_name,
                     package_version: invocation.package_version,
+                    profile: profile.clone(),
                     lib_files,
                     build_script_files,
                     library_crate_compilation_unit_hash,
                     build_script_compilation_unit_hash,
                     build_script_execution_unit_hash,
-                    invocation_target,
-                    profile_dir,
+                    target,
                 });
 
                 // TODO: If needed, we could try to read previous build script
@@ -572,34 +564,15 @@ pub struct ArtifactKey {
     pub build_script_execution_unit_hash: Option<String>,
 
     /// The target triple from the `--target` flag in the rustc invocation for
-    /// this artifact.
+    /// the _library crate_ of the artifact, if one was specified.
     ///
-    /// This determines which directory the artifacts are placed in:
-    /// - `Some(triple)`: Artifacts go in `target/<triple>/<profile>/`
-    /// - `None`: Artifacts go in `target/<profile>/` (host directory)
-    ///
-    /// ## Native compilation
-    ///
-    /// When compiling for the current platform, Cargo entirely omits the
-    /// `--target` flag.
-    ///
-    /// ## Cross compilation
-    ///
-    /// When cross-compiling with `--target`, Cargo omits the `--target` flag
-    /// for:
-    /// - Proc-macros (they run at compile-time on the build machine)
-    /// - Dependencies of proc-macros (needed at compile-time)
-    /// - Build scripts (they run at compile-time on the build machine)
-    ///
-    /// All other crates get the `--target` flag and are built for the target
-    /// platform.
-    pub invocation_target: Option<String>,
+    /// Note: build scripts ignore this and always build for the local target.
+    pub target: Option<String>,
 
-    /// The profile directory where this artifact's files are located.
+    /// The profile for the _library crate_ of the artifact.
     ///
-    /// This is either `target/<profile>/` (for host artifacts) or
-    /// `target/<triple>/<profile>/` (for target artifacts).
-    pub profile_dir: AbsDirPath,
+    /// Note: build scripts ignore this and always build a set profile.
+    pub profile: Profile,
 }
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
@@ -629,34 +602,30 @@ pub struct BuiltArtifact {
     pub build_script_output: Option<BuildScriptOutput>,
 
     /// The target triple from the `--target` flag in the rustc invocation for
-    /// this artifact.
+    /// the _library crate_ of the artifact, if one was specified.
     ///
-    /// This determines which directory the artifacts are placed in:
-    /// - `Some(triple)`: Artifacts go in `target/<triple>/<profile>/`
-    /// - `None`: Artifacts go in `target/<profile>/` (host directory)
-    ///
-    /// ## Native compilation
-    ///
-    /// When compiling for the current platform, Cargo entirely omits the
-    /// `--target` flag.
-    ///
-    /// ## Cross compilation
-    ///
-    /// When cross-compiling with `--target`, Cargo omits the `--target` flag
-    /// for:
-    /// - Proc-macros (they run at compile-time on the build machine)
-    /// - Dependencies of proc-macros (needed at compile-time)
-    /// - Build scripts (they run at compile-time on the build machine)
-    ///
-    /// All other crates get the `--target` flag and are built for the target
-    /// platform.
-    pub invocation_target: Option<String>,
+    /// Note: build scripts ignore this and always build for the local target.
+    pub target: Option<String>,
 
-    /// The profile directory where this artifact's files are located.
+    /// The profile for the _library crate_ of the artifact.
     ///
-    /// This is either `target/<profile>/` (for host artifacts) or
-    /// `target/<triple>/<profile>/` (for target artifacts).
-    pub profile_dir: AbsDirPath,
+    /// Note: build scripts ignore this and always build a set profile.
+    pub profile: Profile,
+
+    /// Memoized profile directory for the _library crate_ of the artifact.
+    ///
+    /// This is non-public so that it is accessed through the `profile_dir`
+    /// method; this value is only here for memoization and because constructing
+    /// it is fallible so we construct it inside `from_key` for convenience.
+    ///
+    /// The intention of making this a method instead of just allowing access to
+    /// the field is to have callers infer that this is an _emergent property_
+    /// of `BuiltArtifact` information, rather than a concrete piece of data
+    /// that Cargo provides.
+    ///
+    /// If `target` is specified, this is a folder for that target. If not, this
+    /// is the default profile dir for the workspace.
+    profile_dir: AbsDirPath,
 }
 
 impl BuiltArtifact {
@@ -667,15 +636,19 @@ impl BuiltArtifact {
         // Read the build script output from the build folders, and parse
         // the output for directives.
         let build_script_output = match &key.build_script_files {
-            Some(build_script_files) => {
-                let bso = BuildScriptOutput::from_file(
-                    ws,
-                    &build_script_files.output_dir.join(mk_rel_file!("output")),
-                )
-                .await?;
-                Some(bso)
+            Some(files) => {
+                BuildScriptOutput::from_file(ws, &files.output_dir.join(mk_rel_file!("output")))
+                    .await
+                    .map(Some)?
             }
             None => None,
+        };
+
+        let profile_dir = match &key.target {
+            Some(target) => ws
+                .target
+                .try_join_dirs([target.as_str(), key.profile.as_str()])?,
+            None => ws.profile_dir.clone(),
         };
 
         // TODO: Use this later to reconstruct the rustc invocation, and use all
@@ -688,10 +661,16 @@ impl BuiltArtifact {
             library_crate_compilation_unit_hash: key.library_crate_compilation_unit_hash,
             build_script_compilation_unit_hash: key.build_script_compilation_unit_hash,
             build_script_execution_unit_hash: key.build_script_execution_unit_hash,
-            invocation_target: key.invocation_target,
-            profile_dir: key.profile_dir,
+            profile: key.profile,
+            target: key.target,
+            profile_dir,
             build_script_output,
         })
+    }
+
+    /// The computed profile directory for the _library crate_ of the artifact.
+    pub fn profile_dir(&self) -> &AbsDirPath {
+        &self.profile_dir
     }
 }
 
