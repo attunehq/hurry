@@ -80,22 +80,23 @@ use clients::courier::v1::Key;
 #[display("{root}")]
 pub struct Workspace {
     /// The root directory of the workspace.
+    #[debug("{root}")]
     pub root: AbsDirPath,
 
     /// The target directory in the workspace.
-    #[debug(skip)]
+    #[debug("{target}")]
     pub target: AbsDirPath,
 
     /// The $CARGO_HOME value.
-    #[debug(skip)]
+    #[debug("{cargo_home}")]
     pub cargo_home: AbsDirPath,
-
-    /// The build profile of this workspace invocation.
-    pub profile: Profile,
 
     /// The profile directory for host platform artifacts.
     #[debug("{profile_dir}")]
     pub profile_dir: AbsDirPath,
+
+    /// The build profile of this workspace invocation.
+    pub profile: Profile,
 }
 
 impl Workspace {
