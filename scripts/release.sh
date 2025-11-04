@@ -244,9 +244,19 @@ EOF
         tags_array+=("$tag")
     done <<< "$tags"
 
-    # Process tags in reverse order (newest first)
-    for ((i=${#tags_array[@]}-1; i>=0; i--)); do
-        local tag="${tags_array[$i]}"
+    # Filter to only stable releases (non-prerelease versions)
+    local stable_tags=()
+    for tag in "${tags_array[@]}"; do
+        local version="${tag#v}"
+        # Skip prerelease versions (contain - followed by alpha, beta, rc, etc)
+        if [[ ! "$version" =~ -[a-z] ]]; then
+            stable_tags+=("$tag")
+        fi
+    done
+
+    # Process stable tags in reverse order (newest first)
+    for ((i=${#stable_tags[@]}-1; i>=0; i--)); do
+        local tag="${stable_tags[$i]}"
         local version="${tag#v}"
 
         # Get the tag date
@@ -258,14 +268,16 @@ EOF
         echo "" >> "$output_file"
 
         # Get commits for this version
+        # Range should be from previous stable release to this stable release
+        # This captures all commits including those in prerelease versions
         local commit_range
         if [[ $i -eq 0 ]]; then
-            # First tag: get all commits up to and including this tag
+            # First stable tag: get all commits up to and including this tag
             commit_range="$tag"
         else
-            # Get commits between previous tag and this tag
-            local prev_tag="${tags_array[$((i-1))]}"
-            commit_range="$prev_tag..$tag"
+            # Get commits between previous stable tag and this stable tag
+            local prev_stable_tag="${stable_tags[$((i-1))]}"
+            commit_range="$prev_stable_tag..$tag"
         fi
 
         # Get commits and filter for user-facing changes
@@ -289,7 +301,7 @@ EOF
         echo "" >> "$output_file"
     done
 
-    info "✓ Generated changelog with $(git tag -l 'v*' | wc -l | xargs) releases"
+    info "✓ Generated changelog with ${#stable_tags[@]} stable releases"
 }
 
 # Parse arguments
