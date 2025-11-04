@@ -324,7 +324,7 @@ async fn upload(
                     continue;
                 }
 
-                let lib_files = collect_library_files(&req.ws, &artifact).await?;
+                let lib_files = collect_library_files(&artifact).await?;
                 let build_script_files = collect_build_script_files(&req.ws, &artifact).await?;
                 let files_to_save = lib_files.into_iter().chain(build_script_files).collect();
                 let (library_unit_files, artifact_files, bulk_entries) =
@@ -426,10 +426,7 @@ async fn rewrite(ws: &Workspace, path: &AbsFilePath, content: &[u8]) -> Result<V
 }
 
 /// Collect library files and their fingerprints for an artifact.
-async fn collect_library_files(
-    _ws: &Workspace,
-    artifact: &BuiltArtifact,
-) -> Result<Vec<AbsFilePath>> {
+async fn collect_library_files(artifact: &BuiltArtifact) -> Result<Vec<AbsFilePath>> {
     let lib_fingerprint_dir = artifact.profile_dir().try_join_dirs(&[
         String::from(".fingerprint"),
         format!(
