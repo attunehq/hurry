@@ -179,7 +179,7 @@ is_user_facing_commit() {
     fi
 
     # Filter out non-user-facing commit types (conventional commits style)
-    if [[ "$commit_msg" =~ ^(refactor|chore|ci|docs|test|style|build):  ]]; then
+    if [[ "$commit_msg" =~ ^(refactor|chore|ci|docs|test|style|build): ]]; then
         return 1
     fi
 
@@ -205,7 +205,7 @@ is_user_facing_commit() {
            [[ "$file" =~ ^\.github/ ]] || \
            [[ "$file" =~ AGENTS\.md$ ]] || \
            [[ "$file" =~ CLAUDE\.md$ ]] || \
-           [[ "$file" =~ ^scripts/(release|install)\.sh$ ]] || \
+           [[ "$file" =~ ^scripts/release\.sh$ ]] || \
            [[ "$file" =~ ^\.scratch/ ]]; then
             ((internal_count++))
         fi
@@ -249,7 +249,7 @@ EOF
     for tag in "${tags_array[@]}"; do
         local version="${tag#v}"
         # Skip prerelease versions (contain - followed by alpha, beta, rc, etc)
-        if [[ ! "$version" =~ -[a-z] ]]; then
+        if [[ ! "$version" =~ -[a-z][a-z0-9.]* ]]; then
             stable_tags+=("$tag")
         fi
     done
@@ -349,7 +349,9 @@ done
 # Handle changelog-only mode
 if [[ "$GENERATE_CHANGELOG_ONLY" == "true" ]]; then
     TEMP_CHANGELOG=$(mktemp)
-    generate_changelog "$TEMP_CHANGELOG" 2>/dev/null
+    if ! generate_changelog "$TEMP_CHANGELOG" 2>&1; then
+        fail "Failed to generate changelog"
+    fi
     cat "$TEMP_CHANGELOG"
     rm "$TEMP_CHANGELOG"
     exit 0
