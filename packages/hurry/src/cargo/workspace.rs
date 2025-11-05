@@ -16,12 +16,11 @@ use uuid::Uuid;
 use crate::{
     cargo::{
         self, BuildPlan, BuildScriptOutput, CargoBuildArguments, CargoCompileMode, Profile,
-        QualifiedPath, RustcMetadata, build_plan::RustcInvocationArgument,
+        RustcMetadata, build_plan::RustcInvocationArgument,
     },
     mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith as _, TryJoinWith as _},
 };
-use clients::courier::v1::Key;
 
 /// The Cargo workspace of a build.
 ///
@@ -672,60 +671,6 @@ impl BuiltArtifact {
     /// The computed profile directory for the _library crate_ of the artifact.
     pub fn profile_dir(&self) -> &AbsDirPath {
         &self.profile_dir
-    }
-}
-
-/// A content hash of a library unit's artifacts.
-#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize)]
-pub struct LibraryUnitHash {
-    files: Vec<(QualifiedPath, Key)>,
-}
-
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
-struct LibraryUnitHashOrd<'a>(&'a QualifiedPath);
-
-impl<'a> LibraryUnitHashOrd<'a> {
-    fn discriminant(&self) -> u64 {
-        match &self.0 {
-            QualifiedPath::Rootless(_) => 0,
-            QualifiedPath::RelativeTargetProfile(_) => 1,
-            QualifiedPath::RelativeCargoHome(_) => 2,
-            QualifiedPath::Absolute(_) => 3,
-        }
-    }
-}
-
-impl<'a> Ord for LibraryUnitHashOrd<'a> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match (&self.0, &other.0) {
-            (QualifiedPath::Rootless(a), QualifiedPath::Rootless(b)) => a.cmp(b),
-            (QualifiedPath::RelativeTargetProfile(a), QualifiedPath::RelativeTargetProfile(b)) => {
-                a.cmp(b)
-            }
-            (QualifiedPath::RelativeCargoHome(a), QualifiedPath::RelativeCargoHome(b)) => a.cmp(b),
-            (QualifiedPath::Absolute(a), QualifiedPath::Absolute(b)) => a.cmp(b),
-            (_, _) => self.discriminant().cmp(&other.discriminant()),
-        }
-    }
-}
-
-impl<'a> PartialOrd for LibraryUnitHashOrd<'a> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl LibraryUnitHash {
-    /// Construct a library unit hash out of the files in the library unit.
-    ///
-    /// This constructor always ensures that the files are sorted, so any two
-    /// sets of files with the same paths and contents will produce the same
-    /// hash.
-    pub fn new(mut files: Vec<(QualifiedPath, Key)>) -> Self {
-        files.sort_by(|(q1, k1), (q2, k2)| {
-            (LibraryUnitHashOrd(q1), k1).cmp(&(LibraryUnitHashOrd(q2), k2))
-        });
-        Self { files }
     }
 }
 

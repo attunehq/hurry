@@ -5,7 +5,7 @@ use derive_more::Debug;
 use url::Url;
 use uuid::Uuid;
 
-use crate::cargo::{ArtifactKey, ArtifactPlan, Workspace};
+use crate::cargo::{ArtifactKey, ArtifactPlan, SaveProgress, Workspace};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct CargoUploadRequest {
@@ -23,14 +23,9 @@ pub struct CargoUploadResponse {
     pub ok: bool,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum CargoUploadStatus {
-    InProgress {
-        uploaded_artifacts: u64,
-        total_artifacts: u64,
-        uploaded_files: u64,
-        uploaded_bytes: u64,
-    },
+    InProgress(SaveProgress),
     Complete,
 }
 

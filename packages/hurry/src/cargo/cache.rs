@@ -40,6 +40,10 @@ use clients::{
     },
 };
 
+mod save;
+
+pub use save::{save_artifacts, SaveProgress};
+
 /// Statistics about cache operations.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct CacheStats {
@@ -215,20 +219,15 @@ impl CargoCache {
             let status = response.status.ok_or_eyre("no upload status")?;
             match status {
                 CargoUploadStatus::Complete => break,
-                CargoUploadStatus::InProgress {
-                    uploaded_artifacts,
-                    uploaded_files,
-                    uploaded_bytes,
-                    total_artifacts,
-                } => {
-                    progress.add_bytes(uploaded_bytes.saturating_sub(last_uploaded_bytes));
-                    last_uploaded_bytes = uploaded_bytes;
-                    progress.add_files(uploaded_files.saturating_sub(last_uploaded_files));
-                    last_uploaded_files = uploaded_files;
-                    progress.inc(uploaded_artifacts.saturating_sub(last_uploaded_artifacts));
-                    last_uploaded_artifacts = uploaded_artifacts;
-                    progress.dec_length(last_total_artifacts.saturating_sub(total_artifacts));
-                    last_total_artifacts = total_artifacts;
+                CargoUploadStatus::InProgress(save_progress) => {
+                    progress.add_bytes(save_progress.uploaded_bytes.saturating_sub(last_uploaded_bytes));
+                    last_uploaded_bytes = save_progress.uploaded_bytes;
+                    progress.add_files(save_progress.uploaded_files.saturating_sub(last_uploaded_files));
+                    last_uploaded_files = save_progress.uploaded_files;
+                    progress.inc(save_progress.uploaded_artifacts.saturating_sub(last_uploaded_artifacts));
+                    last_uploaded_artifacts = save_progress.uploaded_artifacts;
+                    progress.dec_length(last_total_artifacts.saturating_sub(save_progress.total_artifacts));
+                    last_total_artifacts = save_progress.total_artifacts;
                 }
             }
         }
