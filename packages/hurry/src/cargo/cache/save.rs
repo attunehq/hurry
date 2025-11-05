@@ -58,7 +58,7 @@ pub async fn save_artifacts(
         let artifact = BuiltArtifact::from_key(ws, artifact_key.clone()).await?;
         debug!(?artifact, "caching artifact");
 
-        if skip_artifacts.contains(&artifact_key) {
+        if skip_artifacts.contains(artifact_key) {
             trace!(
                 ?artifact_key,
                 "skipping backup: artifact was restored from cache"
@@ -73,7 +73,7 @@ pub async fn save_artifacts(
         let (library_unit_files, artifact_files, bulk_entries) =
             process_files_for_upload(ws, files_to_save, skip_objects).await?;
 
-        let (bytes, files) = upload_files_bulk(&cas, bulk_entries).await?;
+        let (bytes, files) = upload_files_bulk(cas, bulk_entries).await?;
         progress.uploaded_bytes += bytes;
         progress.uploaded_files += files;
 
