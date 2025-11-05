@@ -20,7 +20,13 @@ use std::{
     sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
-use tracing::{debug, instrument, warn};
+use tracing::debug;
+
+/// How frequently to check if the daemon has exceeded its idle timeout.
+///
+/// This balances responsiveness (shorter intervals shut down faster after becoming idle)
+/// against resource usage (frequent checks consume more CPU).
+const IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct DaemonContext {
@@ -94,7 +100,6 @@ pub struct IdleState {
 
 impl IdleState {
     /// Create a new instance with the given timeout.
-    #[instrument]
     pub fn new(timeout: Duration) -> Self {
         Self {
             last_activity: Arc::new(AtomicInstant::now()),
@@ -103,20 +108,17 @@ impl IdleState {
     }
 
     /// Indicates activity, resetting the idle state.
-    #[instrument]
     pub fn touch(&self) {
         self.last_activity.store(Instant::now(), Ordering::Relaxed);
     }
 
     /// Check if the state is idle.
-    #[instrument]
     pub fn is_idle(&self) -> bool {
         let last = self.last_activity.load(Ordering::Relaxed);
         last.elapsed() > self.timeout
     }
 
     /// The configured timeout duration.
-    #[instrument]
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
@@ -127,10 +129,8 @@ impl IdleState {
     ///
     /// This method is cancellation safe and intended to be used in
     /// `tokio::select!` or similar calls.
-    #[instrument]
     pub async fn monitor(&self) {
-        const CHECK_INTERVAL: Duration = Duration::from_secs(5);
-        let mut interval = tokio::time::interval(CHECK_INTERVAL);
+        let mut interval = tokio::time::interval(IDLE_CHECK_INTERVAL);
         loop {
             interval.tick().await;
             debug!("checking idle state for server");
