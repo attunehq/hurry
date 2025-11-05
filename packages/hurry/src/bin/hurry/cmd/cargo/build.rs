@@ -4,14 +4,25 @@
 //! - `docs/DESIGN.md`
 //! - `docs/development/cargo.md`
 
+use std::time::Duration;
+
 use clap::Args;
-use color_eyre::{Result, eyre::Context};
+use color_eyre::{
+    Result, Section as _, SectionExt as _,
+    eyre::{Context, OptionExt as _, bail},
+};
 use derive_more::Debug;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, instrument, trace, warn};
 use url::Url;
+use uuid::Uuid;
 
 use hurry::{
     cargo::{self, CargoBuildArguments, CargoCache, Profile, Workspace},
+    daemon::{
+        CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse, DaemonContext,
+        DaemonPaths,
+    },
+    fs,
     progress::TransferBar,
 };
 
@@ -205,7 +216,78 @@ pub async fn exec(options: Options) -> Result<()> {
         let upload_id = cache.save(artifact_plan, restored).await?;
         if options.wait_for_upload {
             let progress = TransferBar::new(artifact_count, "Uploading cache");
-            cache.wait_for_upload(&upload_id, &progress).await?;
+            wait_for_upload(&upload_id, &progress).await?;
+        }
+    }
+
+    Ok(())
+}
+
+#[instrument]
+async fn wait_for_upload(request_id: &Uuid, progress: &TransferBar) -> Result<()> {
+    let paths = DaemonPaths::initialize().await?;
+    let daemon = if paths.daemon_running().await? {
+        let context = fs::read_buffered_utf8(&paths.context_path)
+            .await
+            .context("read daemon context file")?
+            .ok_or_eyre("no daemon context file")?;
+        serde_json::from_str::<DaemonContext>(&context)
+            .context("parse daemon context")
+            .with_section(|| context.header("Daemon context file:"))?
+    } else {
+        bail!("daemon is not running");
+    };
+
+    let client = reqwest::Client::default();
+    let endpoint = format!("http://{}/api/v0/cargo/status", daemon.url);
+    let request = CargoUploadStatusRequest {
+        request_id: *request_id,
+    };
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+
+    let mut last_uploaded_artifacts = 0u64;
+    let mut last_uploaded_files = 0u64;
+    let mut last_uploaded_bytes = 0u64;
+    let mut last_total_artifacts = 0u64;
+    loop {
+        interval.tick().await;
+        trace!(?request, "submitting upload status request");
+        let response = client
+            .post(&endpoint)
+            .json(&request)
+            .send()
+            .await
+            .with_context(|| format!("send upload status request to daemon at: {endpoint}"))
+            .with_section(|| format!("{daemon:?}").header("Daemon context:"))?;
+        trace!(?response, "got upload status response");
+        let response = response.json::<CargoUploadStatusResponse>().await?;
+        trace!(?response, "parsed upload status response");
+        let status = response.status.ok_or_eyre("no upload status")?;
+        match status {
+            CargoUploadStatus::Complete => break,
+            CargoUploadStatus::InProgress(save_progress) => {
+                progress.add_bytes(
+                    save_progress
+                        .uploaded_bytes
+                        .saturating_sub(last_uploaded_bytes),
+                );
+                last_uploaded_bytes = save_progress.uploaded_bytes;
+                progress.add_files(
+                    save_progress
+                        .uploaded_files
+                        .saturating_sub(last_uploaded_files),
+                );
+                last_uploaded_files = save_progress.uploaded_files;
+                progress.inc(
+                    save_progress
+                        .uploaded_artifacts
+                        .saturating_sub(last_uploaded_artifacts),
+                );
+                last_uploaded_artifacts = save_progress.uploaded_artifacts;
+                progress
+                    .dec_length(last_total_artifacts.saturating_sub(save_progress.total_artifacts));
+                last_total_artifacts = save_progress.total_artifacts;
+            }
         }
     }
 
