@@ -28,7 +28,7 @@ mod workspace;
 pub use build_args::{CargoBuildArgument, CargoBuildArguments, ColorWhen, MessageFormat};
 pub use build_plan::BuildPlan;
 pub use build_script::{BuildScriptOutput, RootOutput};
-pub use cache::{CargoCache, RestoreState, SaveProgress, save_artifacts};
+pub use cache::{CargoCache, Restored, SaveProgress, save_artifacts};
 pub use dep_info::{DepInfo, DepInfoLine};
 pub use dependency::{Dependency, DependencyBuild, Optimizations};
 pub use path::QualifiedPath;
