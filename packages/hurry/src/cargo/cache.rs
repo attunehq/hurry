@@ -6,7 +6,6 @@ use dashmap::DashSet;
 use derive_more::Debug;
 use futures::StreamExt;
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     env::VarError,
@@ -41,19 +40,11 @@ mod save;
 
 pub use save::{SaveProgress, save_artifacts};
 
-/// Statistics about cache operations.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub struct CacheStats {
-    pub files: u64,
-    pub bytes: u64,
-}
-
 /// Tracks items that were restored from the cache.
 #[derive(Debug, Clone, Default)]
 pub struct RestoreState {
     pub artifacts: DashSet<ArtifactKey>,
     pub objects: DashSet<Key>,
-    pub stats: CacheStats,
 }
 
 impl RestoreState {
@@ -65,14 +56,6 @@ impl RestoreState {
     /// Records that an object was restored from cache.
     fn record_object(&self, key: &Key) {
         self.objects.insert(key.clone());
-    }
-
-    fn with_stats(self, stats: CacheStats) -> Self {
-        Self {
-            artifacts: self.artifacts,
-            objects: self.objects,
-            stats,
-        }
     }
 }
 
@@ -219,10 +202,7 @@ impl CargoCache {
             worker.context("cas restore worker")?;
         }
 
-        Ok(restored.with_stats(CacheStats {
-            files: progress.files(),
-            bytes: progress.bytes(),
-        }))
+        Ok(restored)
     }
 
     /// Filter the set to only the files which need to be restored, either
