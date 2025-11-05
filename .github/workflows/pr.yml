@@ -83,7 +83,7 @@ jobs:
               uses: ./.github/actions/hurry-dev
 
             - name: Populate cache if needed
-              run: SQLX_OFFLINE=1 hurry-dev cargo build --hurry-wait-for-upload --verbose
+              run: SQLX_OFFLINE=1 hurry-dev cargo build --verbose
 
             - name: Check that cache restores are fresh
               run: |

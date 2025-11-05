@@ -3,7 +3,7 @@ use std::{collections::HashSet, sync::Arc};
 use axum::{
     Router,
     extract::{Json, State},
-    routing::post,
+    routing::{get, post},
 };
 use dashmap::DashMap;
 use derive_more::Debug;
@@ -35,6 +35,7 @@ pub fn cargo_router() -> Router<CargoDaemonState> {
     Router::new()
         .route("/upload", post(upload))
         .route("/status", post(status))
+        .route("/status/all", get(status_all))
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -134,4 +135,19 @@ async fn status(
         .get(&req.request_id)
         .map(|r| r.value().to_owned());
     Json(CargoUploadStatusResponse { status })
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct CargoUploadStatusAllResponse {
+    pub statuses: Vec<(Uuid, CargoUploadStatus)>,
+}
+
+#[instrument]
+async fn status_all(State(state): State<CargoDaemonState>) -> Json<CargoUploadStatusAllResponse> {
+    let statuses = state
+        .uploads
+        .iter()
+        .map(|entry| (*entry.key(), entry.value().clone()))
+        .collect();
+    Json(CargoUploadStatusAllResponse { statuses })
 }
