@@ -121,18 +121,6 @@ pub async fn exec(
         })?;
     }
 
-    // Open the socket and start the server.
-    match fs::remove_file(&paths.context_path).await {
-        Ok(_) => {}
-        Err(err) => {
-            let err = err.downcast::<std::io::Error>()?;
-            if err.kind() != std::io::ErrorKind::NotFound {
-                error!(?err, "could not remove socket file");
-                bail!("could not remove socket file");
-            }
-        }
-    }
-
     // Bind to port 0 to get a random ephemeral port from the OS. Since this binds
     // an ephemeral port, this does not conflict with typical userspace ports (3000,
     // 8000, 8080, etc) or service ports.
