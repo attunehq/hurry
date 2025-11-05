@@ -212,7 +212,7 @@ pub async fn exec(options: Options) -> Result<()> {
         let upload_id = cache.save(artifact_plan, restored).await?;
         if options.wait_for_upload {
             let progress = TransferBar::new(artifact_count, "Uploading cache");
-            wait_for_upload(&upload_id, &progress).await?;
+            wait_for_upload(upload_id, &progress).await?;
         }
     }
 
@@ -220,7 +220,7 @@ pub async fn exec(options: Options) -> Result<()> {
 }
 
 #[instrument]
-async fn wait_for_upload(request_id: &Uuid, progress: &TransferBar) -> Result<()> {
+async fn wait_for_upload(request_id: Uuid, progress: &TransferBar) -> Result<()> {
     let paths = DaemonPaths::initialize().await?;
     let Some(daemon) = paths.daemon_running().await? else {
         bail!("daemon is not running");
@@ -228,9 +228,7 @@ async fn wait_for_upload(request_id: &Uuid, progress: &TransferBar) -> Result<()
 
     let client = reqwest::Client::default();
     let endpoint = format!("http://{}/api/v0/cargo/status", daemon.url);
-    let request = CargoUploadStatusRequest {
-        request_id: *request_id,
-    };
+    let request = CargoUploadStatusRequest { request_id };
     let mut interval = tokio::time::interval(Duration::from_secs(1));
 
     let mut last_uploaded_artifacts = 0u64;

@@ -1,9 +1,6 @@
 use std::{env::VarError, process::Stdio, time::Duration};
 
-use color_eyre::{
-    Result, Section, SectionExt,
-    eyre::{self, Context as _},
-};
+use color_eyre::{Result, Section, SectionExt, eyre::Context as _};
 use derive_more::Debug;
 use tracing::{debug, instrument, trace};
 use url::Url;
@@ -84,7 +81,7 @@ impl CargoCache {
                 loop {
                     interval.tick().await;
                     if let Some(daemon) = paths.daemon_running().await? {
-                        break Ok::<_, eyre::Report>(daemon);
+                        break Result::<_>::Ok(daemon);
                     }
                 }
             })
