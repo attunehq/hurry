@@ -24,8 +24,8 @@ use tracing::debug;
 
 /// How frequently to check if the daemon has exceeded its idle timeout.
 ///
-/// This balances responsiveness (shorter intervals shut down faster after becoming idle)
-/// against resource usage (frequent checks consume more CPU).
+/// This balances responsiveness (shorter intervals shut down faster after
+/// becoming idle) against resource usage (frequent checks consume more CPU).
 const IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
