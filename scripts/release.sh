@@ -67,11 +67,6 @@ check_requirements() {
         missing+=("cargo-cross")
     fi
 
-    # Check for cargo-set-version
-    if ! command -v cargo-set-version > /dev/null; then
-        missing+=("cargo-set-version")
-    fi
-
     # Check for jq
     if ! command -v jq > /dev/null; then
         missing+=("jq")
@@ -106,7 +101,6 @@ Please install the missing commands:
 
   cargo:              https://rustup.rs/
   cargo-cross:        cargo install cargo-cross
-  cargo-set-version:  cargo install cargo-set-version
   jq:                 https://jqlang.github.io/jq/download/ (or: brew install jq, apt install jq)
   aws:                https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
   gh:                 https://cli.github.com/ (or: brew install gh, apt install gh)
@@ -455,13 +449,7 @@ ARTIFACT_DIR="$REPO_ROOT/target/release-artifacts"
 rm -rf "$ARTIFACT_DIR"
 mkdir -p "$ARTIFACT_DIR"
 
-# Update version in Cargo.toml files
-step "Updating version in Cargo.toml files"
-cargo set-version "$VERSION" || fail "Failed to set version"
-
 # Create git tag before building so git_version! picks it up
-# Note: We create the tag pointing to HEAD (before the Cargo.toml changes)
-# This ensures the built binaries have the correct version string
 if [[ "$DRY_RUN" == "false" ]]; then
     step "Creating git tag $TAG (before build)"
     git tag -a "$TAG" -m "Release $VERSION" || fail "Failed to create git tag"

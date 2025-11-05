@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, crate_version};
+use clap::{Parser, Subcommand};
 use color_eyre::{Result, eyre::Context};
 use git_version::git_version;
 use tracing::instrument;
@@ -16,14 +16,14 @@ use tracing_subscriber::util::SubscriberInitExt;
 mod cmd;
 mod log;
 
-// We use `cargo set-version` in CI to update the version in `Cargo.toml` to
-// match the tag provided at release time; this means officially built releases
-// are always "dirty" so we modify the `git_version!` macro to account for that.
+// Version is sourced directly from the git tag at build time.
+// In development, this will show the commit hash; in releases, it will show the
+// tag (e.g., "v0.3.0").
 #[derive(Clone, Debug, Parser)]
 #[command(
     name = "hurry",
     about = "Really, really fast builds",
-    version = format!("v{} commit {}", crate_version!(), git_version!(args = ["--always"])),
+    version = git_version!(),
 )]
 struct TopLevelFlags {
     #[command(subcommand)]
