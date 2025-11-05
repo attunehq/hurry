@@ -15,7 +15,6 @@ harness = false
 
 [dependencies]
 clients = { workspace = true, features = ["client"] }
-atomic-time = { workspace = true }
 blake3 = { workspace = true }
 bon = { workspace = true }
 cargo_metadata = { workspace = true }
@@ -37,7 +36,6 @@ tracing = { workspace = true }
 tracing-error = { workspace = true }
 tracing-flame = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-tracing-tree = { workspace = true, features = ["time"] }
 tokio = { workspace = true, features = ["full"] }
 extfn = { workspace = true }
 async-walkdir = { workspace = true }

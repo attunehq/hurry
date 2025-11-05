@@ -324,7 +324,7 @@ async fn upload(
                     continue;
                 }
 
-                let lib_files = collect_library_files(&req.ws, &artifact).await?;
+                let lib_files = collect_library_files(&artifact).await?;
                 let build_script_files = collect_build_script_files(&req.ws, &artifact).await?;
                 let files_to_save = lib_files.into_iter().chain(build_script_files).collect();
                 let (library_unit_files, artifact_files, bulk_entries) =
@@ -426,11 +426,8 @@ async fn rewrite(ws: &Workspace, path: &AbsFilePath, content: &[u8]) -> Result<V
 }
 
 /// Collect library files and their fingerprints for an artifact.
-async fn collect_library_files(
-    ws: &Workspace,
-    artifact: &BuiltArtifact,
-) -> Result<Vec<AbsFilePath>> {
-    let lib_fingerprint_dir = ws.profile_dir.try_join_dirs(&[
+async fn collect_library_files(artifact: &BuiltArtifact) -> Result<Vec<AbsFilePath>> {
+    let lib_fingerprint_dir = artifact.profile_dir().try_join_dirs(&[
         String::from(".fingerprint"),
         format!(
             "{}-{}",
@@ -458,6 +455,8 @@ async fn collect_build_script_files(
         return Ok(vec![]);
     };
 
+    // Build scripts are always stored in the base workspace profile directory,
+    // whether cross compiling or not.
     let compiled_files = fs::walk_files(&build_script_files.compiled_dir)
         .try_collect::<Vec<_>>()
         .await?;
@@ -478,7 +477,11 @@ async fn collect_build_script_files(
     let output_files = fs::walk_files(&build_script_files.output_dir)
         .try_collect::<Vec<_>>()
         .await?;
-    let output_fingerprint_dir = ws.profile_dir.try_join_dirs(&[
+
+    // Outputs are either stored in the base workspace profile directory (if not
+    // cross compiling) or are stored inside their specified target folder (if we
+    // are).
+    let output_fingerprint_dir = artifact.profile_dir().try_join_dirs(&[
         String::from(".fingerprint"),
         format!(
             "{}-{}",
