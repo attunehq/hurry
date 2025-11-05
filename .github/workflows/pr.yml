@@ -14,7 +14,7 @@ on:
     workflow_dispatch:
 
 concurrency:
-    group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-pr
     cancel-in-progress: true
 
 env:
@@ -66,3 +66,26 @@ jobs:
 
             - name: Run full build
               run: cargo build -p hurry -p courier --verbose
+
+    hurry-rust:
+        name: Build with Hurry and check cache restores
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Install Rust
+              run: |
+                  rustup toolchain install nightly
+                  rustup component add --toolchain nightly rustfmt
+                  rustup show
+            - uses: actions/checkout@v4
+
+            - name: Setup hurry-dev
+              uses: ./.github/actions/hurry-dev
+
+            - name: Populate cache if needed
+              run: SQLX_OFFLINE=1 hurry-dev cargo build --hurry-wait-for-upload --verbose
+
+            - name: Check that cache restores are fresh
+              run: |
+                cargo clean
+                SQLX_OFFLINE=1 HURRY_LOG=hurry::cmd::debug::check=info hurry-dev debug check

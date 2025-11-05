@@ -37,7 +37,6 @@ tracing = { workspace = true }
 tracing-error = { workspace = true }
 tracing-flame = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-tracing-tree = { workspace = true, features = ["time"] }
 tokio = { workspace = true, features = ["full"] }
 extfn = { workspace = true }
 async-walkdir = { workspace = true }
@@ -65,7 +64,7 @@ scopeguard = { workspace = true }
 dashmap = { workspace = true }
 console = { workspace = true }
 sysinfo = { workspace = true }
-axum = { workspace = true }
+axum = { workspace = true, features = ["macros"] }
 tower-http = { workspace = true, features = ["trace"] }
 signal-hook = { workspace = true }
 reqwest.workspace = true

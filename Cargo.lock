@@ -443,6 +443,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a18ed336352031311f4e0b4dd2ff392d4fbb370777c9d18d7fc9d7359f73871"
 dependencies = [
  "axum-core",
+ "axum-macros",
  "base64",
  "bytes",
  "form_urlencoded",
@@ -2281,7 +2282,6 @@ name = "hurry"
 version = "0.0.0"
 dependencies = [
  "async-walkdir",
- "atomic-time",
  "axum",
  "blake3",
  "bon",
@@ -2337,7 +2337,6 @@ dependencies = [
  "tracing-error",
  "tracing-flame",
  "tracing-subscriber",
- "tracing-tree",
  "url",
  "uuid",
  "walkdir",

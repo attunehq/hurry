@@ -28,7 +28,7 @@ mod workspace;
 pub use build_args::{CargoBuildArgument, CargoBuildArguments, ColorWhen, MessageFormat};
 pub use build_plan::BuildPlan;
 pub use build_script::{BuildScriptOutput, RootOutput};
-pub use cache::{CacheStats, CargoCache, RestoreState};
+pub use cache::{CargoCache, Restored, SaveProgress, save_artifacts};
 pub use dep_info::{DepInfo, DepInfoLine};
 pub use dependency::{Dependency, DependencyBuild, Optimizations};
 pub use path::QualifiedPath;
@@ -41,9 +41,7 @@ pub use unit_graph::{
     CargoCompileMode, UnitGraph, UnitGraphDependency, UnitGraphProfile,
     UnitGraphProfilePanicStrategy, UnitGraphUnit,
 };
-pub use workspace::{
-    ArtifactKey, ArtifactPlan, BuildScriptDirs, BuiltArtifact, LibraryUnitHash, Workspace,
-};
+pub use workspace::{ArtifactKey, ArtifactPlan, BuildScriptDirs, BuiltArtifact, Workspace};
 
 /// Execute Cargo without a subcommand with specified arguments.
 #[instrument]
