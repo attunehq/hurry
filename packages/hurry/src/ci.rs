@@ -7,11 +7,24 @@
 
 use std::env;
 
+/// Checks if an environment variable is set to a truthy value.
+///
+/// Truthy values are: "true" or "1"
+///
+/// Most CI providers use "true", but some use "1" as a boolean representation.
+fn is_env_truthy(var: &str) -> bool {
+    env::var(var).is_ok_and(|v| v == "true" || v == "1")
+}
+
 /// Detects if the current process is running in a CI environment.
 ///
 /// Detection is based on standard environment variables set by CI providers:
-/// - `CI=true`: Set by GitHub Actions, GitLab CI, CircleCI, and many others
+/// - `CI=true` or `CI=1`: Set by GitHub Actions, GitLab CI, CircleCI, and many others
 /// - Provider-specific variables for explicit detection
+///
+/// Reference: <https://github.com/semantic-release/env-ci>
+/// This detection strategy is based on the widely-used env-ci library which
+/// supports 32+ CI providers and uses CI=true as the standard detection method
 ///
 /// # Examples
 ///
@@ -23,24 +36,24 @@ use std::env;
 /// }
 /// ```
 pub fn is_ci() -> bool {
-    // Primary detection: Most CI providers set CI=true
-    if env::var("CI").is_ok_and(|v| v == "true") {
+    // Primary detection: Most CI providers set CI=true or CI=1
+    if is_env_truthy("CI") {
         return true;
     }
 
     // Secondary detection: Provider-specific variables
     // GitHub Actions
-    if env::var("GITHUB_ACTIONS").is_ok_and(|v| v == "true") {
+    if is_env_truthy("GITHUB_ACTIONS") {
         return true;
     }
 
     // GitLab CI
-    if env::var("GITLAB_CI").is_ok_and(|v| v == "true") {
+    if is_env_truthy("GITLAB_CI") {
         return true;
     }
 
     // CircleCI
-    if env::var("CIRCLECI").is_ok_and(|v| v == "true") {
+    if is_env_truthy("CIRCLECI") {
         return true;
     }
 
@@ -50,12 +63,12 @@ pub fn is_ci() -> bool {
     }
 
     // Travis CI
-    if env::var("TRAVIS").is_ok_and(|v| v == "true") {
+    if is_env_truthy("TRAVIS") {
         return true;
     }
 
     // Buildkite
-    if env::var("BUILDKITE").is_ok_and(|v| v == "true") {
+    if is_env_truthy("BUILDKITE") {
         return true;
     }
 
