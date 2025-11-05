@@ -1,30 +1,25 @@
-use std::{collections::HashSet, sync::Arc};
-
-use axum::{Json, Router, extract::State, routing::post};
+use axum::{
+    Json, Router,
+    extract::{FromRef, State},
+    routing::post,
+};
 use clap::Args;
 use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context as _, bail},
 };
-use dashmap::DashMap;
+
 use derive_more::Debug;
 use tokio::signal;
 use tokio::sync::watch;
 use tower_http::trace::TraceLayer;
-use tracing::{Subscriber, debug, dispatcher, error, info, instrument, warn};
+use tracing::{Subscriber, debug, dispatcher, info, instrument, warn};
 use tracing_subscriber::util::SubscriberInitExt as _;
 use url::Url;
-use uuid::Uuid;
 
 use crate::{TopLevelFlags, log};
-use clients::Courier;
 use hurry::{
-    cargo::{SaveProgress, save_artifacts},
-    cas::CourierCas,
-    daemon::{
-        CargoUploadRequest, CargoUploadResponse, CargoUploadStatus, CargoUploadStatusRequest,
-        CargoUploadStatusResponse, DaemonContext, DaemonPaths,
-    },
+    daemon::{CargoDaemonState, DaemonContext, DaemonPaths, cargo_router},
     fs,
     path::TryJoinWith,
 };
@@ -140,17 +135,15 @@ pub async fn exec(
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let state = ServerState {
-        uploads: DashMap::new().into(),
+        cargo: CargoDaemonState::default(),
         shutdown_tx,
     };
 
-    let cargo = Router::new()
-        .route("/upload", post(upload))
-        .route("/status", post(status))
-        .with_state(state.clone());
-
     let app = Router::new()
-        .nest("/api/v0/cargo", cargo)
+        .nest(
+            "/api/v0/cargo",
+            cargo_router().with_state(state.cargo.clone()),
+        )
         .route("/api/v0/shutdown", post(shutdown))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
@@ -229,24 +222,11 @@ async fn shutdown_signal(mut shutdown_rx: watch::Receiver<bool>) {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FromRef)]
 struct ServerState {
-    uploads: Arc<DashMap<Uuid, CargoUploadStatus>>,
+    cargo: CargoDaemonState,
     shutdown_tx: watch::Sender<bool>,
 }
-
-#[instrument]
-async fn status(
-    State(state): State<ServerState>,
-    Json(req): Json<CargoUploadStatusRequest>,
-) -> Json<CargoUploadStatusResponse> {
-    let status = state
-        .uploads
-        .get(&req.request_id)
-        .map(|r| r.value().to_owned());
-    Json(CargoUploadStatusResponse { status })
-}
-
 #[instrument]
 async fn shutdown(State(state): State<ServerState>) -> Json<serde_json::Value> {
     info!("shutdown request received");
@@ -254,59 +234,4 @@ async fn shutdown(State(state): State<ServerState>) -> Json<serde_json::Value> {
     let _ = state.shutdown_tx.send(true);
 
     Json(serde_json::json!({ "ok": true }))
-}
-
-#[instrument]
-async fn upload(
-    State(state): State<ServerState>,
-    Json(req): Json<CargoUploadRequest>,
-) -> Json<CargoUploadResponse> {
-    let request_id = req.request_id;
-    state.uploads.insert(
-        request_id,
-        CargoUploadStatus::InProgress(SaveProgress {
-            uploaded_artifacts: 0,
-            total_artifacts: req.artifact_plan.artifacts.len() as u64,
-            uploaded_files: 0,
-            uploaded_bytes: 0,
-        }),
-    );
-    tokio::spawn(async move {
-        let upload = async {
-            let courier = Courier::new(req.courier_url)?;
-            let cas = CourierCas::new(courier.clone());
-            let skip_artifacts = HashSet::<_>::from_iter(req.skip_artifacts);
-            let skip_objects = HashSet::from_iter(req.skip_objects);
-            save_artifacts(
-                &courier,
-                &cas,
-                &req.ws,
-                &req.artifact_plan,
-                &skip_artifacts,
-                &skip_objects,
-                |progress| {
-                    state
-                        .uploads
-                        .insert(request_id, CargoUploadStatus::InProgress(progress.clone()));
-                },
-            )
-            .await
-        }
-        .await;
-        match upload {
-            Ok(()) => {
-                info!(?request_id, "upload completed successfully");
-                state
-                    .uploads
-                    .insert(request_id, CargoUploadStatus::Complete);
-            }
-            Err(err) => {
-                error!(?err, ?request_id, "upload failed");
-                state
-                    .uploads
-                    .insert(request_id, CargoUploadStatus::Complete);
-            }
-        }
-    });
-    Json(CargoUploadResponse { ok: true })
 }
