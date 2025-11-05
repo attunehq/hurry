@@ -88,4 +88,4 @@ jobs:
             - name: Check that cache restores are fresh
               run: |
                 cargo clean
-                SQLX_OFFLINE=1 HURRY_LOG=info hurry-dev debug check
+                SQLX_OFFLINE=1 HURRY_LOG=hurry::cmd::debug::check=info hurry-dev debug check

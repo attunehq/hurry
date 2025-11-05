@@ -63,7 +63,7 @@ scopeguard = { workspace = true }
 dashmap = { workspace = true }
 console = { workspace = true }
 sysinfo = { workspace = true }
-axum = { workspace = true }
+axum = { workspace = true, features = ["macros"] }
 tower-http = { workspace = true, features = ["trace"] }
 signal-hook = { workspace = true }
 reqwest.workspace = true

@@ -10,10 +10,9 @@ pub struct Options {}
 pub async fn exec(_options: Options) -> Result<()> {
     let paths = DaemonPaths::initialize().await?;
 
-    if paths.daemon_running().await? {
-        println!("running");
-    } else {
-        println!("stopped");
+    match paths.daemon_running().await? {
+        Some(_) => println!("running"),
+        None => println!("stopped"),
     }
 
     Ok(())

@@ -1,8 +1,8 @@
 mod cargo;
 
 pub use cargo::{
-    CargoUploadRequest, CargoUploadResponse, CargoUploadStatus, CargoUploadStatusRequest,
-    CargoUploadStatusResponse,
+    CargoDaemonState, CargoUploadRequest, CargoUploadResponse, CargoUploadStatus,
+    CargoUploadStatusRequest, CargoUploadStatusResponse, cargo_router,
 };
 
 use crate::{
@@ -11,15 +11,14 @@ use crate::{
 };
 use color_eyre::{
     Result,
-    eyre::{Context as _, OptionExt as _},
+    eyre::{Context as _, OptionExt as _, bail},
 };
 use serde::{Deserialize, Serialize};
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tap::Pipe as _;
-use tracing::warn;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct DaemonReadyMessage {
+pub struct DaemonContext {
     pub pid: u32,
     pub url: String,
     pub log_file_path: AbsFilePath,
@@ -42,7 +41,7 @@ impl DaemonPaths {
         })
     }
 
-    pub async fn daemon_running(&self) -> Result<bool> {
+    pub async fn daemon_running(&self) -> Result<Option<DaemonContext>> {
         if self.pid_file_path.exists().await {
             let pid = fs::must_read_buffered_utf8(&self.pid_file_path).await?;
             match pid.trim().parse::<u32>() {
@@ -51,20 +50,22 @@ impl DaemonPaths {
                         RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
                     );
                     let process = system.process(Pid::from_u32(pid));
-                    process.is_some()
+                    match process {
+                        Some(_) => self.read_context().await?,
+                        None => None,
+                    }
                 }
                 Err(err) => {
-                    warn!(?err, "could not parse pid-file");
-                    false
+                    bail!("could not parse pid-file: {err}")
                 }
             }
         } else {
-            false
+            None
         }
         .pipe(Ok)
     }
 
-    pub async fn read_context(&self) -> Result<Option<DaemonReadyMessage>> {
+    pub async fn read_context(&self) -> Result<Option<DaemonContext>> {
         if !self.context_path.exists().await {
             return Ok(None);
         }
@@ -75,7 +76,7 @@ impl DaemonPaths {
             .ok_or_eyre("no daemon context file")?;
 
         let daemon_context =
-            serde_json::from_str::<DaemonReadyMessage>(&context).context("parse daemon context")?;
+            serde_json::from_str::<DaemonContext>(&context).context("parse daemon context")?;
 
         Ok(Some(daemon_context))
     }
