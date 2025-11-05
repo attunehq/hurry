@@ -69,6 +69,7 @@ signal-hook = { workspace = true }
 reqwest.workspace = true
 is_executable = { workspace = true }
 directories = { workspace = true }
+toml = "0.9.8"
 
 [dev-dependencies]
 async-walkdir.workspace = true

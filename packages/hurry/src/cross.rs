@@ -12,14 +12,16 @@ use std::{
 };
 
 use color_eyre::{
-    Result,
+    Result, Section, SectionExt,
     eyre::{Context, bail},
 };
 use tokio::process::Child;
 use tracing::{instrument, trace};
 
+mod config;
 mod workspace;
 
+pub use config::CrossConfigGuard;
 pub use workspace::artifact_plan;
 
 #[derive(Debug)]
@@ -108,7 +110,20 @@ pub async fn invoke_output(
     if output.status.success() {
         Ok(output)
     } else {
-        bail!("cross exited with status: {}", output.status);
+        Err(color_eyre::eyre::eyre!(
+            "cross exited with status: {}",
+            output.status
+        ))
+        .with_section(move || {
+            String::from_utf8_lossy(&output.stdout)
+                .to_string()
+                .header("Stdout:")
+        })
+        .with_section(move || {
+            String::from_utf8_lossy(&output.stderr)
+                .to_string()
+                .header("Stderr:")
+        })
     }
 }
 

@@ -14,7 +14,7 @@ use crate::{
         ArtifactKey, ArtifactPlan, BuildPlan, BuildScriptDirs, CargoBuildArguments,
         CargoCompileMode, Profile, Workspace,
     },
-    cross,
+    cross::{self, CrossConfigGuard},
     path::{AbsDirPath, AbsFilePath},
 };
 
@@ -41,6 +41,10 @@ async fn build_plan(
     workspace: &crate::cargo::Workspace,
     args: impl AsRef<CargoBuildArguments> + std::fmt::Debug,
 ) -> Result<BuildPlan> {
+    // Set up Cross.toml to allow RUSTC_BOOTSTRAP passthrough.
+    // This guard will restore the original state when dropped.
+    let mut config_guard = CrossConfigGuard::setup(workspace.root.as_std_path()).await?;
+
     // Running `cargo build --build-plan` deletes a bunch of items in the `target`
     // directory. To work around this we temporarily move `target` -> run
     // the build plan -> move it back. If the rename fails (e.g., permissions,
@@ -74,6 +78,13 @@ async fn build_plan(
     let output = cross::invoke_output("build", build_args, [("RUSTC_BOOTSTRAP", "1")])
         .await
         .context("run cross command")?;
+
+    // Restore Cross.toml before processing the output
+    config_guard
+        .restore()
+        .await
+        .context("restoring Cross.toml")?;
+
     serde_json::from_slice::<BuildPlan>(&output.stdout)
         .context("parse build plan")
         .with_section(move || {

@@ -1,9 +1,0 @@
-# Cross configuration for building with hurry
-# https://github.com/cross-rs/cross
-
-[build.env]
-# Allow RUSTC_BOOTSTRAP to pass through to the container so we can use
-# unstable cargo features like `--build-plan` for hurry's artifact planning
-passthrough = [
-    "RUSTC_BOOTSTRAP",
-]
