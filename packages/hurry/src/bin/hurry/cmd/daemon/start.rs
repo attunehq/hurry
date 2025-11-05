@@ -74,7 +74,7 @@ pub async fn exec(
 
     // If a pid-file exists, read it and check if the process is running. Exit
     // if another instance is running.
-    if paths.daemon_running().await? {
+    if paths.daemon_running().await?.is_some() {
         bail!("hurryd is already running");
     }
 

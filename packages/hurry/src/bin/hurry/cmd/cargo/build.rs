@@ -18,11 +18,7 @@ use uuid::Uuid;
 
 use hurry::{
     cargo::{self, CargoBuildArguments, CargoCache, Profile, Workspace},
-    daemon::{
-        CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse, DaemonContext,
-        DaemonPaths,
-    },
-    fs,
+    daemon::{CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse, DaemonPaths},
     progress::TransferBar,
 };
 
@@ -226,15 +222,7 @@ pub async fn exec(options: Options) -> Result<()> {
 #[instrument]
 async fn wait_for_upload(request_id: &Uuid, progress: &TransferBar) -> Result<()> {
     let paths = DaemonPaths::initialize().await?;
-    let daemon = if paths.daemon_running().await? {
-        let context = fs::read_buffered_utf8(&paths.context_path)
-            .await
-            .context("read daemon context file")?
-            .ok_or_eyre("no daemon context file")?;
-        serde_json::from_str::<DaemonContext>(&context)
-            .context("parse daemon context")
-            .with_section(|| context.header("Daemon context file:"))?
-    } else {
+    let Some(daemon) = paths.daemon_running().await? else {
         bail!("daemon is not running");
     };
 

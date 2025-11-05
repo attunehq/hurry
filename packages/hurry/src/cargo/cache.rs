@@ -2,10 +2,9 @@ use std::{env::VarError, process::Stdio, time::Duration};
 
 use color_eyre::{
     Result, Section, SectionExt,
-    eyre::{Context as _, OptionExt, eyre},
+    eyre::{self, Context as _},
 };
 use derive_more::Debug;
-use tokio::io::AsyncBufReadExt as _;
 use tracing::{debug, instrument, trace};
 use url::Url;
 use uuid::Uuid;
@@ -13,7 +12,7 @@ use uuid::Uuid;
 use crate::{
     cargo::{ArtifactPlan, Workspace},
     cas::CourierCas,
-    daemon::{CargoUploadRequest, DaemonContext, DaemonPaths},
+    daemon::{CargoUploadRequest, DaemonPaths},
     progress::TransferBar,
 };
 use clients::Courier;
@@ -54,11 +53,8 @@ impl CargoCache {
 
         // Start daemon if it's not already running. If it is, try to read its context
         // file to get its url, which we need to know in order to communicate with it.
-        let daemon = if paths.daemon_running().await? {
-            paths
-                .read_context()
-                .await?
-                .ok_or_eyre("daemon running but no context file")?
+        let daemon = if let Some(daemon) = paths.daemon_running().await? {
+            daemon
         } else {
             // TODO: Ideally we'd replace this with proper double-fork daemonization to
             // avoid the security and compatibility concerns here: someone could replace the
@@ -79,20 +75,21 @@ impl CargoCache {
                 cmd.env("HURRY_LOG", "debug");
             }
 
-            let mut child = cmd.spawn()?;
-            let stdout = child.stdout.take().ok_or_eyre("daemon has no stdout")?;
-            let mut stdout = tokio::io::BufReader::new(stdout).lines();
+            cmd.spawn()?;
 
             // This value was chosen arbitrarily. Adjust as needed.
             const DAEMON_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
-            let line = tokio::time::timeout(DAEMON_STARTUP_TIMEOUT, stdout.next_line())
-                .await
-                .map_err(|elapsed| eyre!("daemon startup timed out after {elapsed:?}"))?
-                .context("read daemon output")?
-                .ok_or_eyre("daemon crashed on startup")?;
-            serde_json::from_str::<DaemonContext>(&line)
-                .context("parse daemon ready message")
-                .with_section(|| line.header("Daemon output:"))?
+            tokio::time::timeout(DAEMON_STARTUP_TIMEOUT, async {
+                let mut interval = tokio::time::interval(Duration::from_secs(1));
+                loop {
+                    interval.tick().await;
+                    if let Some(daemon) = paths.daemon_running().await? {
+                        break Ok::<_, eyre::Report>(daemon);
+                    }
+                }
+            })
+            .await
+            .context("wait for daemon to start")??
         };
 
         // Connect to daemon HTTP server.
