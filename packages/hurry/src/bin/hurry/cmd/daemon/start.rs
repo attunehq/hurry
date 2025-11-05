@@ -35,7 +35,7 @@ use hurry::{
     cas::CourierCas,
     daemon::{
         CargoUploadRequest, CargoUploadResponse, CargoUploadStatus, CargoUploadStatusRequest,
-        CargoUploadStatusResponse, DaemonPaths, DaemonReadyMessage,
+        CargoUploadStatusResponse, DaemonPaths, DaemonContext,
     },
     fs,
     path::{AbsFilePath, TryJoinWith},
@@ -167,10 +167,8 @@ pub async fn exec(
         .with_state(state)
         .layer(TraceLayer::new_for_http());
 
-    // Print ready message to STDOUT for parent processes. This uses `println!`
-    // instead of the tracing macros because it emits a special sentinel value
-    // on STDOUT.
-    let message = DaemonReadyMessage {
+    // Write context file for daemon clients.
+    let message = DaemonContext {
         pid,
         url: format!("{addr}"),
         log_file_path,
@@ -181,7 +179,6 @@ pub async fn exec(
     fs::write(&paths.context_path, &encoded)
         .await
         .with_context(|| format!("write daemon context to {:?}", paths.context_path))?;
-    println!("{encoded}");
 
     // We don't immediately handle the error with `?` here so that we can perform
     // the cleanup operations regardless of whether an error occurred.

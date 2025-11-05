@@ -26,7 +26,7 @@ use crate::{
     cas::CourierCas,
     daemon::{
         CargoUploadRequest, CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse,
-        DaemonPaths, DaemonReadyMessage,
+        DaemonPaths, DaemonContext,
     },
     fs,
     path::{AbsDirPath, AbsFilePath},
@@ -141,7 +141,7 @@ impl CargoCache {
                 .map_err(|elapsed| eyre!("daemon startup timed out after {elapsed:?}"))?
                 .context("read daemon output")?
                 .ok_or_eyre("daemon crashed on startup")?;
-            serde_json::from_str::<DaemonReadyMessage>(&line)
+            serde_json::from_str::<DaemonContext>(&line)
                 .context("parse daemon ready message")
                 .with_section(|| line.header("Daemon output:"))?
         };
@@ -181,7 +181,7 @@ impl CargoCache {
                 .await
                 .context("read daemon context file")?
                 .ok_or_eyre("no daemon context file")?;
-            serde_json::from_str::<DaemonReadyMessage>(&context)
+            serde_json::from_str::<DaemonContext>(&context)
                 .context("parse daemon context")
                 .with_section(|| context.header("Daemon context file:"))?
         } else {

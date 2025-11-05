@@ -19,7 +19,7 @@ use tap::Pipe as _;
 use tracing::warn;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct DaemonReadyMessage {
+pub struct DaemonContext {
     pub pid: u32,
     pub url: String,
     pub log_file_path: AbsFilePath,
@@ -64,7 +64,7 @@ impl DaemonPaths {
         .pipe(Ok)
     }
 
-    pub async fn read_context(&self) -> Result<Option<DaemonReadyMessage>> {
+    pub async fn read_context(&self) -> Result<Option<DaemonContext>> {
         if !self.context_path.exists().await {
             return Ok(None);
         }
@@ -75,7 +75,7 @@ impl DaemonPaths {
             .ok_or_eyre("no daemon context file")?;
 
         let daemon_context =
-            serde_json::from_str::<DaemonReadyMessage>(&context).context("parse daemon context")?;
+            serde_json::from_str::<DaemonContext>(&context).context("parse daemon context")?;
 
         Ok(Some(daemon_context))
     }
