@@ -43,12 +43,30 @@ impl Key {
         &self.0
     }
 
+    /// Parse a key from raw bytes (the inverse of `as_bytes`).
+    ///
+    /// This is used when deserializing keys from the database or other binary formats.
+    /// The bytes must be exactly 32 bytes (a blake3 hash).
+    pub fn from_bytes(bytes: impl AsRef<[u8]>) -> color_eyre::Result<Self> {
+        use color_eyre::eyre::bail;
+        let bytes = bytes.as_ref();
+        let len = bytes.len();
+        if len != 32 {
+            bail!("invalid hash length: expected 32 bytes, got {len}");
+        }
+        Ok(Self(bytes.to_vec()))
+    }
+
     /// Create a key from a blake3 hash.
     pub fn from_blake3(hash: blake3::Hash) -> Self {
         Self(hash.as_bytes().to_vec())
     }
 
-    /// Hash the contents of a buffer.
+    /// Hash the contents of a buffer to create a key.
+    ///
+    /// This computes the blake3 hash of the provided buffer and returns the resulting key.
+    /// Use this when you have file contents or other data that you want to content-address.
+    /// This is NOT for parsing keys that are already in binary format - use `from_bytes` for that.
     pub fn from_buffer(buffer: impl AsRef<[u8]>) -> Self {
         let buffer = buffer.as_ref();
         let mut hasher = blake3::Hasher::new();

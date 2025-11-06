@@ -582,6 +582,43 @@ impl Postgres {
         Ok(result.exists)
     }
 
+    /// Check which keys from a set the organization has access to.
+    /// Returns a HashSet of keys that the organization can access.
+    #[tracing::instrument(name = "Postgres::check_cas_access_bulk", skip(keys))]
+    pub async fn check_cas_access_bulk(
+        &self,
+        org_id: OrgId,
+        keys: &[Key],
+    ) -> Result<std::collections::HashSet<Key>> {
+        if keys.is_empty() {
+            return Ok(std::collections::HashSet::new());
+        }
+
+        let key_bytes: Vec<Vec<u8>> = keys.iter().map(|k| k.as_bytes().to_vec()).collect();
+
+        let rows = sqlx::query!(
+            r#"
+            SELECT cas_key.content
+            FROM cas_key
+            JOIN cas_access ON cas_key.id = cas_access.cas_key_id
+            WHERE cas_access.organization_id = $1
+            AND cas_key.content = ANY($2)
+            "#,
+            org_id.as_i64(),
+            &key_bytes,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("check cas access bulk")?;
+
+        rows.into_iter()
+            .map(|row| {
+                Key::from_bytes(&row.content)
+                    .with_context(|| format!("parse key: {:x?}", &row.content))
+            })
+            .collect()
+    }
+
     #[tracing::instrument(name = "Postgres::cargo_cache_reset")]
     pub async fn cargo_cache_reset(&self, auth: &AuthenticatedToken) -> Result<()> {
         // Delete all cache data for the authenticated organization

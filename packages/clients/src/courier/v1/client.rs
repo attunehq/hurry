@@ -55,11 +55,14 @@ pub struct Client {
 
     #[debug(skip)]
     http: reqwest::Client,
+
+    #[debug(skip)]
+    token: String,
 }
 
 impl Client {
-    /// Create a new client with the given base URL.
-    pub fn new(base: Url) -> Result<Self> {
+    /// Create a new client with the given base URL and authentication token.
+    pub fn new(base: Url, token: impl Into<String>) -> Result<Self> {
         let http = reqwest::Client::builder()
             .gzip(true)
             .brotli(true)
@@ -69,6 +72,7 @@ impl Client {
         Ok(Self {
             base: Arc::new(base),
             http,
+            token: token.into(),
         })
     }
 
@@ -95,7 +99,13 @@ impl Client {
     #[instrument(skip(self))]
     pub async fn cas_exists(&self, key: &Key) -> Result<bool> {
         let url = self.base.join(&format!("api/v1/cas/{key}"))?;
-        let response = self.http.head(url).send().await.context("send")?;
+        let response = self
+            .http
+            .head(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("send")?;
         match response.status() {
             StatusCode::OK => Ok(true),
             StatusCode::NOT_FOUND => Ok(false),
@@ -118,6 +128,7 @@ impl Client {
         let response = self
             .http
             .get(url)
+            .bearer_auth(&self.token)
             .header(ContentType::ACCEPT, ContentType::BytesZstd.value())
             .send()
             .await
@@ -160,6 +171,7 @@ impl Client {
         let response = self
             .http
             .put(url)
+            .bearer_auth(&self.token)
             .header(ContentType::HEADER, ContentType::BytesZstd.value())
             .body(body)
             .send()
@@ -186,6 +198,7 @@ impl Client {
         let response = self
             .http
             .post(url)
+            .bearer_auth(&self.token)
             .json(&body)
             .send()
             .await
@@ -215,6 +228,7 @@ impl Client {
         let response = self
             .http
             .post(url)
+            .bearer_auth(&self.token)
             .json(&body)
             .send()
             .await
@@ -260,6 +274,7 @@ impl Client {
         let response = self
             .http
             .post(url)
+            .bearer_auth(&self.token)
             .json(&body)
             .send()
             .await
@@ -293,6 +308,7 @@ impl Client {
         let response = self
             .http
             .put(url)
+            .bearer_auth(&self.token)
             .header(ContentType::HEADER, ContentType::BytesZstd.value())
             .body(compressed)
             .send()
@@ -318,6 +334,7 @@ impl Client {
         let response = self
             .http
             .get(url)
+            .bearer_auth(&self.token)
             .header(ContentType::ACCEPT, ContentType::BytesZstd.value())
             .send()
             .await
@@ -373,6 +390,7 @@ impl Client {
         let response = self
             .http
             .post(url)
+            .bearer_auth(&self.token)
             .header(ContentType::HEADER, ContentType::TarZstd.value())
             .body(body)
             .send()
@@ -411,6 +429,7 @@ impl Client {
         let response = self
             .http
             .post(url)
+            .bearer_auth(&self.token)
             .header(ContentType::ACCEPT, ContentType::TarZstd.value())
             .json(&request)
             .send()
@@ -469,7 +488,13 @@ impl Client {
     #[instrument(skip(self))]
     pub async fn cache_reset(&self) -> Result<()> {
         let url = self.base.join("api/v1/cache/cargo/reset")?;
-        let response = self.http.post(url).send().await.context("send")?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("send")?;
         match response.status() {
             StatusCode::NO_CONTENT => Ok(()),
             status => {

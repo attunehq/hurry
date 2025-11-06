@@ -21,12 +21,13 @@ use tokio_util::{
 };
 use tracing::{error, info};
 
-use crate::storage::{Disk, Key};
+use crate::{auth::RawToken, db::Postgres, storage::{Disk, Key}};
 
 /// Responses for bulk write operation.
 pub enum BulkWriteResponse {
     Success(CasBulkWriteResponse),
     PartialSuccess(CasBulkWriteResponse),
+    Unauthorized,
     InvalidRequest(Report),
     Error(Report),
 }
@@ -76,8 +77,20 @@ pub enum BulkWriteResponse {
 /// Each blob is validated during write to ensure its content hashes to the
 /// provided key, just like single-item writes.
 #[tracing::instrument(skip(body))]
-pub async fn handle(Dep(cas): Dep<Disk>, headers: HeaderMap, body: Body) -> BulkWriteResponse {
+pub async fn handle(
+    raw_token: RawToken,
+    Dep(db): Dep<Postgres>,
+    Dep(cas): Dep<Disk>,
+    headers: HeaderMap,
+    body: Body,
+) -> BulkWriteResponse {
     info!("cas.bulk.write.start");
+
+    let auth = match db.validate(raw_token).await {
+        Ok(Some(auth)) => auth,
+        Ok(None) => return BulkWriteResponse::Unauthorized,
+        Err(err) => return BulkWriteResponse::Error(err),
+    };
 
     // Check Content-Type to determine if entries are pre-compressed
     let entries_compressed = headers
@@ -85,25 +98,41 @@ pub async fn handle(Dep(cas): Dep<Disk>, headers: HeaderMap, body: Body) -> Bulk
         .is_some_and(|v| v == ContentType::TarZstd);
 
     if entries_compressed {
-        handle_compressed(cas, body).await
+        handle_compressed(db, cas, auth, body).await
     } else {
-        handle_plain(cas, body).await
+        handle_plain(db, cas, auth, body).await
     }
 }
 
 #[tracing::instrument(skip(body))]
-async fn handle_compressed(cas: Disk, body: Body) -> BulkWriteResponse {
+async fn handle_compressed(
+    db: Postgres,
+    cas: Disk,
+    auth: crate::auth::AuthenticatedToken,
+    body: Body,
+) -> BulkWriteResponse {
     info!("cas.bulk.write.compressed");
-    process_archive(cas, body, true).await
+    process_archive(db, cas, auth, body, true).await
 }
 
 #[tracing::instrument(skip(body))]
-async fn handle_plain(cas: Disk, body: Body) -> BulkWriteResponse {
+async fn handle_plain(
+    db: Postgres,
+    cas: Disk,
+    auth: crate::auth::AuthenticatedToken,
+    body: Body,
+) -> BulkWriteResponse {
     info!("cas.bulk.write.uncompressed");
-    process_archive(cas, body, false).await
+    process_archive(db, cas, auth, body, false).await
 }
 
-async fn process_archive(cas: Disk, body: Body, entries_compressed: bool) -> BulkWriteResponse {
+async fn process_archive(
+    db: Postgres,
+    cas: Disk,
+    auth: crate::auth::AuthenticatedToken,
+    body: Body,
+    entries_compressed: bool,
+) -> BulkWriteResponse {
     let stream = body.into_data_stream();
     let stream = stream.map(|result| result.map_err(std::io::Error::other));
     let archive = StreamReader::new(stream).compat().pipe(Archive::new);
@@ -158,8 +187,18 @@ async fn process_archive(cas: Disk, body: Body, entries_compressed: bool) -> Bul
 
         match result {
             Ok(()) => {
-                info!(%key, "cas.bulk.write.success");
-                written.insert(key);
+                if let Err(error) = db.grant_cas_access(auth.org_id, &key).await {
+                    error!(%key, ?error, "cas.bulk.write.grant_access.error");
+                    errors.insert(
+                        CasBulkWriteKeyError::builder()
+                            .key(key)
+                            .error(format!("write succeeded but failed to grant access: {error:?}"))
+                            .build(),
+                    );
+                } else {
+                    info!(%key, "cas.bulk.write.success");                // Grant access after successful write
+                    written.insert(key);
+                }
             }
             Err(error) => {
                 error!(%key, ?error, "cas.bulk.write.error");
@@ -199,6 +238,9 @@ impl IntoResponse for BulkWriteResponse {
             BulkWriteResponse::Success(body) => (StatusCode::CREATED, Json(body)).into_response(),
             BulkWriteResponse::PartialSuccess(body) => {
                 (StatusCode::ACCEPTED, Json(body)).into_response()
+            }
+            BulkWriteResponse::Unauthorized => {
+                (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
             }
             BulkWriteResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()

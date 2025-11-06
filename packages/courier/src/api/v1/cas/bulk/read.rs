@@ -7,6 +7,7 @@ use axum::{
     response::IntoResponse,
 };
 use clients::{ContentType, NETWORK_BUFFER_SIZE, courier::v1::cas::CasBulkReadRequest};
+use color_eyre::Report;
 use futures::AsyncWriteExt;
 use tokio_util::{
     compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt},
@@ -14,7 +15,7 @@ use tokio_util::{
 };
 use tracing::{error, info};
 
-use crate::storage::Disk;
+use crate::{auth::RawToken, db::Postgres, storage::Disk};
 
 /// Read multiple blobs from the CAS and return them as a tar archive.
 ///
@@ -52,30 +53,59 @@ use crate::storage::Disk;
 /// tar stream as it's processed.
 #[tracing::instrument(skip(req))]
 pub async fn handle(
+    raw_token: RawToken,
+    Dep(db): Dep<Postgres>,
     Dep(cas): Dep<Disk>,
     headers: HeaderMap,
     Json(req): Json<CasBulkReadRequest>,
 ) -> BulkReadResponse {
     info!(keys = req.keys.len(), "cas.bulk.read.start");
 
+    let auth = match db.validate(raw_token).await {
+        Ok(Some(auth)) => auth,
+        Ok(None) => return BulkReadResponse::Unauthorized,
+        Err(err) => return BulkReadResponse::Error(err),
+    };
+
     let want_compressed = headers
         .get(ContentType::ACCEPT)
         .is_some_and(|accept| accept == ContentType::TarZstd);
 
     if want_compressed {
-        handle_compressed(cas, req).await
+        handle_compressed(db, cas, auth, req).await
     } else {
-        handle_plain(cas, req).await
+        handle_plain(db, cas, auth, req).await
     }
 }
 
 #[tracing::instrument]
-async fn handle_compressed(cas: Disk, req: CasBulkReadRequest) -> BulkReadResponse {
+async fn handle_compressed(
+    db: Postgres,
+    cas: Disk,
+    auth: crate::auth::AuthenticatedToken,
+    req: CasBulkReadRequest,
+) -> BulkReadResponse {
     info!("cas.bulk.read.compressed");
+
+    // Check access for all keys in a single query
+    let accessible_keys = match db.check_cas_access_bulk(auth.org_id, &req.keys).await {
+        Ok(keys) => keys,
+        Err(error) => {
+            error!(?error, "cas.bulk.read.access_check_bulk.error");
+            return BulkReadResponse::Error(error);
+        }
+    };
+
     let (reader, writer) = piper::pipe(NETWORK_BUFFER_SIZE);
     tokio::spawn(async move {
         let mut builder = Builder::new(writer);
         for key in req.keys {
+            // Check if org has access to this key
+            if !accessible_keys.contains(&key) {
+                error!(%key, "cas.bulk.read.forbidden");
+                continue;
+            }
+
             let reader = match cas.read_compressed(&key).await {
                 Ok(reader) => reader,
                 Err(error) => {
@@ -131,12 +161,33 @@ async fn handle_compressed(cas: Disk, req: CasBulkReadRequest) -> BulkReadRespon
 }
 
 #[tracing::instrument]
-async fn handle_plain(cas: Disk, req: CasBulkReadRequest) -> BulkReadResponse {
+async fn handle_plain(
+    db: Postgres,
+    cas: Disk,
+    auth: crate::auth::AuthenticatedToken,
+    req: CasBulkReadRequest,
+) -> BulkReadResponse {
     info!("cas.bulk.read.uncompressed");
+
+    // Check access for all keys in a single query
+    let accessible_keys = match db.check_cas_access_bulk(auth.org_id, &req.keys).await {
+        Ok(keys) => keys,
+        Err(error) => {
+            error!(?error, "cas.bulk.read.access_check_bulk.error");
+            return BulkReadResponse::Error(error);
+        }
+    };
+
     let (reader, writer) = piper::pipe(NETWORK_BUFFER_SIZE);
     tokio::spawn(async move {
         let mut builder = Builder::new(writer);
         for key in req.keys {
+            // Check if org has access to this key
+            if !accessible_keys.contains(&key) {
+                error!(%key, "cas.bulk.read.forbidden");
+                continue;
+            }
+
             let reader = match cas.read(&key).await {
                 Ok(reader) => reader,
                 Err(error) => {
@@ -194,6 +245,8 @@ async fn handle_plain(cas: Disk, req: CasBulkReadRequest) -> BulkReadResponse {
 #[derive(Debug)]
 pub enum BulkReadResponse {
     Success(Body, ContentType),
+    Unauthorized,
+    Error(Report),
 }
 
 impl IntoResponse for BulkReadResponse {
@@ -201,6 +254,12 @@ impl IntoResponse for BulkReadResponse {
         match self {
             BulkReadResponse::Success(body, ct) => {
                 (StatusCode::OK, [(ContentType::HEADER, ct.value())], body).into_response()
+            }
+            BulkReadResponse::Unauthorized => {
+                (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+            }
+            BulkReadResponse::Error(err) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("{err:?}")).into_response()
             }
         }
     }
