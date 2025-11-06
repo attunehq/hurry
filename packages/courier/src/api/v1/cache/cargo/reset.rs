@@ -1,13 +1,26 @@
 use aerosol::axum::Dep;
 use axum::http::StatusCode;
-use color_eyre::Result;
 use tracing::{error, info, instrument};
 
-use crate::{db::Postgres, storage::Disk};
+use crate::{auth::RawToken, db::Postgres};
 
-#[instrument(skip_all)]
-pub async fn handle(Dep(db): Dep<Postgres>, Dep(storage): Dep<Disk>) -> StatusCode {
-    match reset_all(&db, &storage).await {
+#[instrument(skip(raw_token))]
+pub async fn handle(raw_token: RawToken, Dep(db): Dep<Postgres>) -> StatusCode {
+    // Validate token
+    let auth = match db.validate(raw_token).await {
+        Ok(Some(auth)) => auth,
+        Ok(None) => {
+            info!("cache.reset.unauthorized");
+            return StatusCode::UNAUTHORIZED;
+        }
+        Err(err) => {
+            error!(error = ?err, "cache.reset.auth_error");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
+    // Delete the authenticated org's cache data
+    match db.cargo_cache_reset(&auth).await {
         Ok(()) => {
             info!("cache.reset.success");
             StatusCode::NO_CONTENT
@@ -17,25 +30,6 @@ pub async fn handle(Dep(db): Dep<Postgres>, Dep(storage): Dep<Disk>) -> StatusCo
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
-}
-
-/// Reset all cache data: delete all database records and CAS blobs.
-#[instrument]
-async fn reset_all(db: &Postgres, storage: &Disk) -> Result<()> {
-    db.cargo_cache_reset().await?;
-
-    tokio::fs::remove_dir_all(storage.root())
-        .await
-        .or_else(|err| {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                Ok(())
-            } else {
-                Err(err)
-            }
-        })?;
-    tokio::fs::create_dir_all(storage.root()).await?;
-
-    Ok(())
 }
 
 #[cfg(test)]

@@ -23,6 +23,8 @@ use num_traits::ToPrimitive;
 use sqlx::{PgPool, migrate::Migrator};
 use tracing::{debug, warn};
 
+use crate::auth::{AccountId, AuthenticatedToken, OrgId, RawToken};
+
 /// A connected Postgres database instance.
 #[derive(Clone, Debug)]
 #[debug("Postgres(pool_size = {})", self.pool.size())]
@@ -69,22 +71,23 @@ struct CargoLibraryUnitBuildRow {
 
 impl Postgres {
     #[tracing::instrument(name = "Postgres::save_cargo_cache")]
-    pub async fn cargo_cache_save(&self, request: CargoSaveRequest) -> Result<()> {
+    pub async fn cargo_cache_save(&self, auth: &AuthenticatedToken, request: CargoSaveRequest) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         let package_id = sqlx::query!(
             r#"
             WITH inserted AS (
-                INSERT INTO cargo_package (name, version)
-                VALUES ($1, $2)
-                ON CONFLICT (name, version) DO NOTHING
+                INSERT INTO cargo_package (organization_id, name, version)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (organization_id, name, version) DO NOTHING
                 RETURNING id
             )
             SELECT id FROM inserted
             UNION ALL
-            SELECT id FROM cargo_package WHERE name = $1 AND version = $2
+            SELECT id FROM cargo_package WHERE organization_id = $1 AND name = $2 AND version = $3
             LIMIT 1
             "#,
+            auth.org_id.as_i64(),
             request.package_name,
             request.package_version
         )
@@ -146,6 +149,7 @@ impl Postgres {
         let library_unit_build_id = sqlx::query!(
             r#"
             INSERT INTO cargo_library_unit_build (
+                organization_id,
                 package_id,
                 target,
                 library_crate_compilation_unit_hash,
@@ -153,9 +157,10 @@ impl Postgres {
                 build_script_execution_unit_hash,
                 content_hash
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id
             "#,
+            auth.org_id.as_i64(),
             package_id,
             request.target,
             request.library_crate_compilation_unit_hash,
@@ -219,6 +224,7 @@ impl Postgres {
     #[tracing::instrument(name = "Postgres::cargo_cache_restore")]
     pub async fn cargo_cache_restore(
         &self,
+        auth: &AuthenticatedToken,
         request: CargoRestoreRequest,
     ) -> Result<Vec<ArtifactFile>, Report> {
         let mut tx = self.pool.begin().await?;
@@ -237,13 +243,15 @@ impl Postgres {
                 FROM cargo_package
                 JOIN cargo_library_unit_build ON cargo_package.id = cargo_library_unit_build.package_id
                 WHERE
-                    cargo_package.name = $1
-                    AND cargo_package.version = $2
-                    AND target = $3
-                    AND library_crate_compilation_unit_hash = $4
-                    AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($5, '')
-                    AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($6, '')
+                    cargo_package.organization_id = $1
+                    AND cargo_package.name = $2
+                    AND cargo_package.version = $3
+                    AND target = $4
+                    AND library_crate_compilation_unit_hash = $5
+                    AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($6, '')
+                    AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($7, '')
                 "#,
+                auth.org_id.as_i64(),
                 request.package_name,
                 request.package_version,
                 request.target,
@@ -341,6 +349,7 @@ impl Postgres {
     #[tracing::instrument(name = "Postgres::cargo_cache_restore_bulk", skip(requests))]
     pub async fn cargo_cache_restore_bulk(
         &self,
+        auth: &AuthenticatedToken,
         requests: &[CargoRestoreRequest],
     ) -> Result<HashMap<usize, Vec<ArtifactFile>>, Report> {
         if requests.is_empty() {
@@ -371,20 +380,20 @@ impl Postgres {
             r#"
             WITH request_data AS (
                 SELECT
-                    unnest($1::integer[]) as request_idx,
-                    unnest($2::text[]) as package_name,
-                    unnest($3::text[]) as package_version,
-                    unnest($4::text[]) as target,
-                    unnest($5::text[]) as lib_hash,
-                    unnest($6::text[]) as build_comp_hash,
-                    unnest($7::text[]) as build_exec_hash
+                    unnest($2::integer[]) as request_idx,
+                    unnest($3::text[]) as package_name,
+                    unnest($4::text[]) as package_version,
+                    unnest($5::text[]) as target,
+                    unnest($6::text[]) as lib_hash,
+                    unnest($7::text[]) as build_comp_hash,
+                    unnest($8::text[]) as build_exec_hash
             )
             SELECT
                 rd.request_idx,
                 clb.id as build_id,
                 clb.content_hash
             FROM request_data rd
-            JOIN cargo_package cp ON cp.name = rd.package_name AND cp.version = rd.package_version
+            JOIN cargo_package cp ON cp.organization_id = $1 AND cp.name = rd.package_name AND cp.version = rd.package_version
             JOIN cargo_library_unit_build clb ON
                 clb.package_id = cp.id
                 AND clb.target = rd.target
@@ -392,6 +401,7 @@ impl Postgres {
                 AND COALESCE(clb.build_script_compilation_unit_hash, '') = COALESCE(rd.build_comp_hash, '')
                 AND COALESCE(clb.build_script_execution_unit_hash, '') = COALESCE(rd.build_exec_hash, '')
             "#,
+            auth.org_id.as_i64(),
             &request_indices,
             &package_names as &[&str],
             &package_versions as &[&str],
@@ -487,18 +497,110 @@ impl Postgres {
         Ok(results_by_request_idx)
     }
 
-    #[tracing::instrument(name = "Postgres::cargo_cache_reset")]
-    pub async fn cargo_cache_reset(&self) -> Result<()> {
+    /// Validate a raw token against the database.
+    ///
+    /// Returns `Some(AuthenticatedToken)` if the token is valid and not revoked,
+    /// otherwise returns `None`. Errors are only returned for database failures.
+    #[tracing::instrument(name = "Postgres::validate", skip(token))]
+    pub async fn validate(&self, token: RawToken) -> Result<Option<AuthenticatedToken>> {
+        let result = sqlx::query!(
+            r#"
+            SELECT account.id, account.organization_id
+            FROM account
+            JOIN api_key ON account.id = api_key.account_id
+            WHERE api_key.content = $1
+            AND api_key.revoked_at IS NULL
+            "#,
+            token.as_str(),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("validate token")?;
+
+        Ok(result.map(|row| AuthenticatedToken {
+            account_id: AccountId::from_i64(row.id),
+            org_id: OrgId::from_i64(row.organization_id),
+            token,
+        }))
+    }
+
+    /// Grant an organization access to a CAS key.
+    ///
+    /// This is idempotent: if the organization already has access, this is a no-op.
+    #[tracing::instrument(name = "Postgres::grant_cas_access")]
+    pub async fn grant_cas_access(&self, org_id: OrgId, key: &Key) -> Result<()> {
+        // First, ensure the CAS key exists
+        let key_id = sqlx::query!(
+            r#"
+            INSERT INTO cas_key (content)
+            VALUES ($1)
+            ON CONFLICT (content) DO UPDATE SET content = EXCLUDED.content
+            RETURNING id
+            "#,
+            key.as_bytes(),
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("upsert cas key")?
+        .id;
+
+        // Then grant access to the organization
         sqlx::query!(
             r#"
-            TRUNCATE TABLE
-                cargo_library_unit_build_artifact,
-                cargo_library_unit_build,
-                cargo_package,
-                cargo_object
-            RESTART IDENTITY
-            CASCADE
-        "#
+            INSERT INTO cas_access (organization_id, cas_key_id)
+            VALUES ($1, $2)
+            ON CONFLICT (organization_id, cas_key_id) DO NOTHING
+            "#,
+            org_id.as_i64(),
+            key_id,
+        )
+        .execute(&self.pool)
+        .await
+        .context("grant org access to cas key")?;
+
+        Ok(())
+    }
+
+    /// Check if an organization has access to a CAS key.
+    #[tracing::instrument(name = "Postgres::check_cas_access")]
+    pub async fn check_cas_access(&self, org_id: OrgId, key: &Key) -> Result<bool> {
+        let result = sqlx::query!(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM cas_access
+                WHERE organization_id = $1
+                AND cas_key_id = (SELECT id FROM cas_key WHERE content = $2)
+            ) as "exists!"
+            "#,
+            org_id.as_i64(),
+            key.as_bytes(),
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("check cas access")?;
+
+        Ok(result.exists)
+    }
+
+    #[tracing::instrument(name = "Postgres::cargo_cache_reset")]
+    pub async fn cargo_cache_reset(&self, auth: &AuthenticatedToken) -> Result<()> {
+        // Delete all cache data for the authenticated organization
+        sqlx::query!(
+            r#"
+            DELETE FROM cargo_library_unit_build
+            WHERE organization_id = $1
+            "#,
+            auth.org_id.as_i64()
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query!(
+            r#"
+            DELETE FROM cargo_package
+            WHERE organization_id = $1
+            "#,
+            auth.org_id.as_i64()
         )
         .execute(&self.pool)
         .await?;

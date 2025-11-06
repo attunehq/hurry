@@ -7,7 +7,7 @@ use color_eyre::eyre::{Report, eyre};
 use tap::Pipe;
 use tracing::{error, info};
 
-use crate::db::Postgres;
+use crate::{auth::RawToken, db::Postgres};
 
 /// The max amount of items in a single bulk restore request.
 ///
@@ -25,11 +25,25 @@ use crate::db::Postgres;
 /// requests.
 const MAX_BULK_RESTORE_REQUESTS: usize = 100_000;
 
-#[tracing::instrument(skip(body))]
+#[tracing::instrument(skip(raw_token, body))]
 pub async fn handle(
+    raw_token: RawToken,
     Dep(db): Dep<Postgres>,
     Json(body): Json<CargoBulkRestoreRequest>,
 ) -> CacheBulkRestoreResponse {
+    // Validate token
+    let auth = match db.validate(raw_token).await {
+        Ok(Some(auth)) => auth,
+        Ok(None) => {
+            info!("cache.bulk_restore.unauthorized");
+            return CacheBulkRestoreResponse::Unauthorized;
+        }
+        Err(err) => {
+            error!(error = ?err, "cache.bulk_restore.auth_error");
+            return CacheBulkRestoreResponse::Error(err);
+        }
+    };
+
     info!(requests = body.requests.len(), "cache.bulk_restore.start");
 
     if body.requests.len() > MAX_BULK_RESTORE_REQUESTS {
@@ -45,7 +59,7 @@ pub async fn handle(
         ));
     }
 
-    let mut results = match db.cargo_cache_restore_bulk(&body.requests).await {
+    let mut results = match db.cargo_cache_restore_bulk(&auth, &body.requests).await {
         Ok(results) => results,
         Err(err) => {
             error!(error = ?err, "cache.bulk_restore.error");
@@ -85,6 +99,7 @@ pub async fn handle(
 pub enum CacheBulkRestoreResponse {
     Success(CargoBulkRestoreResponse),
     InvalidRequest(Report),
+    Unauthorized,
     Error(Report),
 }
 
@@ -95,6 +110,7 @@ impl IntoResponse for CacheBulkRestoreResponse {
             CacheBulkRestoreResponse::InvalidRequest(error) => {
                 (StatusCode::BAD_REQUEST, format!("{error:?}")).into_response()
             }
+            CacheBulkRestoreResponse::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
             CacheBulkRestoreResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }

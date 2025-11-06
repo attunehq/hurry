@@ -18,6 +18,7 @@ use tracing_tree::time::FormatTime;
 use crate::db::Postgres;
 
 mod api;
+mod auth;
 mod db;
 mod storage;
 

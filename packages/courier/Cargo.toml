@@ -32,6 +32,7 @@ clap = { workspace = true, features = ["derive", "env"] }
 atomic-time = { workspace = true }
 tap = { workspace = true }
 derive_more = { workspace = true, features = ["full"] }
+serde = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 aerosol = { workspace = true, features = ["async", "axum", "axum-extra", "tracing"] }
 futures = { workspace = true }

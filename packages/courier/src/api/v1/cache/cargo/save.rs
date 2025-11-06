@@ -4,14 +4,28 @@ use clients::courier::v1::cache::CargoSaveRequest;
 use color_eyre::eyre::Report;
 use tracing::{error, info};
 
-use crate::db::Postgres;
+use crate::{auth::RawToken, db::Postgres};
 
-#[tracing::instrument]
+#[tracing::instrument(skip(raw_token))]
 pub async fn handle(
+    raw_token: RawToken,
     Dep(db): Dep<Postgres>,
     Json(request): Json<CargoSaveRequest>,
 ) -> CacheSaveResponse {
-    match db.cargo_cache_save(request).await {
+    // Validate token
+    let auth = match db.validate(raw_token).await {
+        Ok(Some(auth)) => auth,
+        Ok(None) => {
+            info!("cache.save.unauthorized");
+            return CacheSaveResponse::Unauthorized;
+        }
+        Err(err) => {
+            error!(error = ?err, "cache.save.auth_error");
+            return CacheSaveResponse::Error(err);
+        }
+    };
+
+    match db.cargo_cache_save(&auth, request).await {
         Ok(()) => {
             info!("cache.save.created");
             CacheSaveResponse::Created
@@ -26,6 +40,7 @@ pub async fn handle(
 #[derive(Debug)]
 pub enum CacheSaveResponse {
     Created,
+    Unauthorized,
     Error(Report),
 }
 
@@ -33,6 +48,7 @@ impl IntoResponse for CacheSaveResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             CacheSaveResponse::Created => StatusCode::CREATED.into_response(),
+            CacheSaveResponse::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
             CacheSaveResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }

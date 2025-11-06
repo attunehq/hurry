@@ -1146,6 +1146,7 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "rand 0.8.5",
+ "serde",
  "serde_json",
  "simple_test_case",
  "sqlx",

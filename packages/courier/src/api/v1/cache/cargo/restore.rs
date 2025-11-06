@@ -5,14 +5,28 @@ use color_eyre::eyre::Report;
 use tap::Pipe;
 use tracing::{error, info};
 
-use crate::db::Postgres;
+use crate::{auth::RawToken, db::Postgres};
 
-#[tracing::instrument]
+#[tracing::instrument(skip(raw_token))]
 pub async fn handle(
+    raw_token: RawToken,
     Dep(db): Dep<Postgres>,
     Json(request): Json<CargoRestoreRequest>,
 ) -> CacheRestoreResponse {
-    match db.cargo_cache_restore(request).await {
+    // Validate token
+    let auth = match db.validate(raw_token).await {
+        Ok(Some(auth)) => auth,
+        Ok(None) => {
+            info!("cache.restore.unauthorized");
+            return CacheRestoreResponse::Unauthorized;
+        }
+        Err(err) => {
+            error!(error = ?err, "cache.restore.auth_error");
+            return CacheRestoreResponse::Error(err);
+        }
+    };
+
+    match db.cargo_cache_restore(&auth, request).await {
         Ok(artifacts) if artifacts.is_empty() => {
             info!("cache.restore.miss");
             CacheRestoreResponse::NotFound
@@ -36,6 +50,7 @@ pub async fn handle(
 pub enum CacheRestoreResponse {
     Ok(Json<CargoRestoreResponse>),
     NotFound,
+    Unauthorized,
     Error(Report),
 }
 
@@ -44,6 +59,7 @@ impl IntoResponse for CacheRestoreResponse {
         match self {
             CacheRestoreResponse::Ok(json) => (StatusCode::OK, json).into_response(),
             CacheRestoreResponse::NotFound => StatusCode::NOT_FOUND.into_response(),
+            CacheRestoreResponse::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
             CacheRestoreResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }

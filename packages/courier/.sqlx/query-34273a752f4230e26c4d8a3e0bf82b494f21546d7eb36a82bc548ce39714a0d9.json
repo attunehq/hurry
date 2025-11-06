@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT EXISTS(\n                SELECT 1 FROM cas_access\n                WHERE organization_id = $1\n                AND cas_key_id = (SELECT id FROM cas_key WHERE content = $2)\n            ) as \"exists!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "34273a752f4230e26c4d8a3e0bf82b494f21546d7eb36a82bc548ce39714a0d9"
+}

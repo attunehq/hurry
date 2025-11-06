@@ -12,7 +12,11 @@ use tap::Pipe;
 use tokio_util::io::StreamReader;
 use tracing::{error, info};
 
-use crate::storage::{Disk, Key};
+use crate::{
+    auth::RawToken,
+    db::Postgres,
+    storage::{Disk, Key},
+};
 
 /// Write the content to the CAS for the given key.
 ///
@@ -54,13 +58,31 @@ use crate::storage::{Disk, Key};
 ///
 /// Pre-compressed content is validated to ensure it decompresses correctly and
 /// hashes to the expected key.
-#[tracing::instrument(skip(body))]
+#[tracing::instrument(skip(raw_token, body))]
 pub async fn handle(
+    raw_token: RawToken,
+    Dep(db): Dep<Postgres>,
     Dep(cas): Dep<Disk>,
     Path(key): Path<Key>,
     headers: HeaderMap,
     body: Body,
 ) -> CasWriteResponse {
+    // Validate token
+    let auth = match db.validate(raw_token).await {
+        Ok(Some(auth)) => auth,
+        Ok(None) => {
+            // Still need to consume body to avoid connection reset
+            body.into_data_stream().for_each(|_| async {}).await;
+            info!("cas.write.unauthorized");
+            return CasWriteResponse::Unauthorized;
+        }
+        Err(err) => {
+            body.into_data_stream().for_each(|_| async {}).await;
+            error!(error = ?err, "cas.write.auth_error");
+            return CasWriteResponse::Error(err);
+        }
+    };
+
     // Check if the key already exists before consuming the body
     // If it exists, we still need to consume the entire body; if we return early
     // instead then clients see a "connection reset by peer" error.
@@ -76,6 +98,13 @@ pub async fn handle(
         // Consume and discard the body to avoid client connection errors. But even if
         // we for some reason fail to drain, report it as a success anyway.
         body.into_data_stream().for_each(|_| async {}).await;
+
+        // Grant access even though it already exists (idempotent, in case org didn't have access)
+        if let Err(err) = db.grant_cas_access(auth.org_id, &key).await {
+            error!(error = ?err, "cas.write.grant_access_error");
+            return CasWriteResponse::Error(err);
+        }
+
         info!("cas.write.exists");
         return CasWriteResponse::Created;
     }
@@ -86,13 +115,19 @@ pub async fn handle(
         .is_some_and(|v| v == ContentType::BytesZstd);
 
     let result = if is_compressed {
-        handle_compressed(cas, key, body).await
+        handle_compressed(cas, key.clone(), body).await
     } else {
-        handle_plain(cas, key, body).await
+        handle_plain(cas, key.clone(), body).await
     };
 
     match result {
         Ok(()) => {
+            // Grant org access to the CAS key after successful write
+            if let Err(err) = db.grant_cas_access(auth.org_id, &key).await {
+                error!(error = ?err, "cas.write.grant_access_error");
+                return CasWriteResponse::Error(err);
+            }
+
             info!("cas.write.success");
             CasWriteResponse::Created
         }
@@ -126,6 +161,7 @@ async fn handle_plain(cas: Disk, key: Key, body: Body) -> Result<()> {
 #[derive(Debug)]
 pub enum CasWriteResponse {
     Created,
+    Unauthorized,
     Error(Report),
 }
 
@@ -133,6 +169,7 @@ impl IntoResponse for CasWriteResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             CasWriteResponse::Created => StatusCode::CREATED.into_response(),
+            CasWriteResponse::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
             CasWriteResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }

@@ -10,7 +10,11 @@ use color_eyre::{Result, eyre::Report};
 use tokio_util::io::ReaderStream;
 use tracing::{error, info};
 
-use crate::storage::{Disk, Key};
+use crate::{
+    auth::RawToken,
+    db::Postgres,
+    storage::{Disk, Key},
+};
 
 /// Read the content from the CAS for the given key.
 ///
@@ -26,12 +30,40 @@ use crate::storage::{Disk, Key};
 /// The response sets `Content-Type`:
 /// - `application/octet-stream+zstd`: The body is compressed with `zstd`.
 /// - `application/octet-stream`: The body is uncompressed.
-#[tracing::instrument]
+#[tracing::instrument(skip(raw_token))]
 pub async fn handle(
+    raw_token: RawToken,
+    Dep(db): Dep<Postgres>,
     Dep(cas): Dep<Disk>,
     Path(key): Path<Key>,
     headers: HeaderMap,
 ) -> CasReadResponse {
+    // Validate token
+    let auth = match db.validate(raw_token).await {
+        Ok(Some(auth)) => auth,
+        Ok(None) => {
+            info!("cas.read.unauthorized");
+            return CasReadResponse::Unauthorized;
+        }
+        Err(err) => {
+            error!(error = ?err, "cas.read.auth_error");
+            return CasReadResponse::Error(err);
+        }
+    };
+
+    // Check if org has access to this CAS key
+    match db.check_cas_access(auth.org_id, &key).await {
+        Ok(true) => {}
+        Ok(false) => {
+            info!("cas.read.forbidden");
+            return CasReadResponse::Forbidden;
+        }
+        Err(err) => {
+            error!(error = ?err, "cas.read.access_check_error");
+            return CasReadResponse::Error(err);
+        }
+    }
+
     // Check Accept header to determine if client wants compressed response
     let want_compressed = headers
         .get(ContentType::ACCEPT)
@@ -89,6 +121,8 @@ async fn handle_plain(cas: Disk, key: Key) -> Result<Body> {
 pub enum CasReadResponse {
     Found(Body, ContentType),
     NotFound,
+    Unauthorized,
+    Forbidden,
     Error(Report),
 }
 
@@ -99,6 +133,8 @@ impl IntoResponse for CasReadResponse {
                 (StatusCode::OK, [(ContentType::HEADER, ct.value())], body).into_response()
             }
             CasReadResponse::NotFound => StatusCode::NOT_FOUND.into_response(),
+            CasReadResponse::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
+            CasReadResponse::Forbidden => StatusCode::FORBIDDEN.into_response(),
             CasReadResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }

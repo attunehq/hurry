@@ -3,7 +3,11 @@ use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
 use tracing::{error, info};
 
-use crate::storage::{Disk, Key};
+use crate::{
+    auth::RawToken,
+    db::Postgres,
+    storage::{Disk, Key},
+};
 
 /// Check whether the given key exists in the CAS.
 ///
@@ -33,8 +37,40 @@ use crate::storage::{Disk, Key};
 ///   since this can be non-trivial. This tradeoff seems worth the minor amount
 ///   of extra complexity/potential confusion that having an existence check may
 ///   bring to the service.
-#[tracing::instrument]
-pub async fn handle(Dep(cas): Dep<Disk>, Path(key): Path<Key>) -> CasCheckResponse {
+#[tracing::instrument(skip(raw_token))]
+pub async fn handle(
+    raw_token: RawToken,
+    Dep(db): Dep<Postgres>,
+    Dep(cas): Dep<Disk>,
+    Path(key): Path<Key>,
+) -> CasCheckResponse {
+    // Validate token
+    let auth = match db.validate(raw_token).await {
+        Ok(Some(auth)) => auth,
+        Ok(None) => {
+            info!("cas.check.unauthorized");
+            return CasCheckResponse::Unauthorized;
+        }
+        Err(err) => {
+            error!(error = ?err, "cas.check.auth_error");
+            return CasCheckResponse::Error(err);
+        }
+    };
+
+    // Check if org has access to this CAS key
+    match db.check_cas_access(auth.org_id, &key).await {
+        Ok(true) => {}
+        Ok(false) => {
+            info!("cas.check.forbidden");
+            return CasCheckResponse::Forbidden;
+        }
+        Err(err) => {
+            error!(error = ?err, "cas.check.access_check_error");
+            return CasCheckResponse::Error(err);
+        }
+    }
+
+    // Check if blob exists
     match cas.exists(&key).await {
         Ok(true) => {
             info!("cas.check.found");
@@ -55,6 +91,8 @@ pub async fn handle(Dep(cas): Dep<Disk>, Path(key): Path<Key>) -> CasCheckRespon
 pub enum CasCheckResponse {
     Found,
     NotFound,
+    Unauthorized,
+    Forbidden,
     Error(Report),
 }
 
@@ -63,6 +101,8 @@ impl IntoResponse for CasCheckResponse {
         match self {
             CasCheckResponse::Found => StatusCode::OK.into_response(),
             CasCheckResponse::NotFound => StatusCode::NOT_FOUND.into_response(),
+            CasCheckResponse::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
+            CasCheckResponse::Forbidden => StatusCode::FORBIDDEN.into_response(),
             CasCheckResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }
