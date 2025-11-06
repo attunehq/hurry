@@ -20,9 +20,9 @@ jobs:
 
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pull-requests: read
-      issues: read
+      contents: write  # Required for git operations
+      pull-requests: write  # Required for PR comments and updates
+      issues: write  # Required for commenting
       id-token: write
 
     steps:

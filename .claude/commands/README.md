@@ -440,6 +440,22 @@ These commands are automatically available when Claude Code runs in GitHub Actio
 @claude /pr-comment-trace
 ```
 
+### Commands Suitable for GitHub App Use
+
+**Fully compatible** (read-only or report-only):
+- `/code-review` - Reviews code and reports findings (doesn't auto-commit fixes)
+- `/code-trace` - Generates code architecture maps
+- `/diff-trace` - Analyzes branch differences
+- `/pr-comment-trace` - Posts technical analysis to PR
+- `/resolution-verify` - Verifies conflict resolution (read-only analysis)
+
+**Use with caution in GitHub app** (creates commits/PRs):
+- `/changes-commit` - Creates git commits (requires write permissions)
+- `/conflicts-resolve` - Merges and commits conflict resolution (requires write permissions)
+- `/pr-draft` - Creates draft PRs (requires PR creation permissions)
+
+**Note**: The GitHub workflows have been configured with `contents: write` and `pull-requests: write` permissions to support all commands. However, commands that create commits or PRs should be used intentionally when invoked via `@claude`.
+
 ## Project-Specific Context
 
 These commands are designed specifically for the Hurry/Courier codebase and:
