@@ -12,7 +12,7 @@ use crate::{
     daemon::{CargoUploadRequest, DaemonPaths},
     progress::TransferBar,
 };
-use clients::Courier;
+use clients::{Courier, courier::Token};
 
 mod restore;
 mod save;
@@ -24,19 +24,21 @@ pub use save::{SaveProgress, save_artifacts};
 pub struct CargoCache {
     #[debug("{:?}", courier_url.as_str())]
     courier_url: Url,
+    courier_token: Token,
     courier: Courier,
     cas: CourierCas,
     ws: Workspace,
 }
 
 impl CargoCache {
-    #[instrument(name = "CargoCache::open")]
-    pub async fn open(courier_url: Url, ws: Workspace) -> Result<Self> {
-        let courier = Courier::new(courier_url.clone())?;
+    #[instrument(name = "CargoCache::open", skip(courier_token))]
+    pub async fn open(courier_url: Url, courier_token: Token, ws: Workspace) -> Result<Self> {
+        let courier = Courier::new(courier_url.clone(), courier_token.clone())?;
         courier.ping().await.context("ping courier service")?;
         let cas = CourierCas::new(courier.clone());
         Ok(Self {
             courier_url,
+            courier_token,
             courier,
             cas,
             ws,
@@ -98,6 +100,7 @@ impl CargoCache {
         let request = CargoUploadRequest {
             request_id,
             courier_url: self.courier_url.clone(),
+            courier_token: self.courier_token.clone(),
             ws: self.ws.clone(),
             artifact_plan,
             skip_artifacts: restored.artifacts.into_iter().collect(),

@@ -1,5 +1,5 @@
 use clap::Args;
-use clients::{Courier, courier::v1::cache::CargoRestoreRequest};
+use clients::{Courier, courier::{Token, v1::cache::CargoRestoreRequest}};
 use color_eyre::Result;
 use derive_more::Debug;
 use hurry::cargo::{CargoBuildArguments, Profile, Workspace};
@@ -15,6 +15,10 @@ pub struct Options {
     )]
     #[debug("{courier_url}")]
     courier_url: Url,
+
+    /// Authentication token for the Courier instance.
+    #[arg(long = "courier-token", env = "HURRY_COURIER_TOKEN")]
+    courier_token: Token,
 
     /// Name of the package to display.
     #[arg(long)]
@@ -47,7 +51,7 @@ pub async fn exec(opts: Options) -> Result<()> {
         })
         .collect::<Vec<_>>();
 
-    let courier = Courier::new(opts.courier_url)?;
+    let courier = Courier::new(opts.courier_url, opts.courier_token)?;
 
     println!("Found {} matching artifacts:", matching_artifacts.len());
     for artifact in matching_artifacts {

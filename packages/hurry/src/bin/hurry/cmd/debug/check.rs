@@ -10,6 +10,7 @@ use derive_more::Debug;
 use tracing::{debug, info, instrument, trace, warn};
 use url::Url;
 
+use clients::courier::Token;
 use hurry::{
     cargo::{self, CargoBuildArguments, CargoCache, Handles, Profile, Workspace},
     progress::TransferBar,
@@ -25,6 +26,10 @@ pub struct Options {
     )]
     #[debug("{courier_url}")]
     courier_url: Url,
+
+    /// Authentication token for the Courier instance.
+    #[arg(long = "hurry-courier-token", env = "HURRY_COURIER_TOKEN")]
+    courier_token: Token,
 
     /// These arguments are passed directly to `cargo build` as provided.
     #[arg(
@@ -58,7 +63,7 @@ pub async fn exec(options: Options) -> Result<()> {
     info!(target = ?artifact_plan.target, "restoring using target");
 
     // Initialize cache.
-    let cache = CargoCache::open(options.courier_url, workspace)
+    let cache = CargoCache::open(options.courier_url, options.courier_token, workspace)
         .await
         .context("opening cache")?;
 

@@ -16,7 +16,7 @@ use crate::{
     cargo::{ArtifactKey, ArtifactPlan, SaveProgress, Workspace, save_artifacts},
     cas::CourierCas,
 };
-use clients::{Courier, courier::v1::Key};
+use clients::{Courier, courier::{Token, v1::Key}};
 
 #[derive(Debug, Clone)]
 pub struct CargoDaemonState {
@@ -41,6 +41,7 @@ pub fn cargo_router() -> Router<CargoDaemonState> {
 pub struct CargoUploadRequest {
     pub request_id: Uuid,
     pub courier_url: Url,
+    pub courier_token: Token,
     pub ws: Workspace,
     #[debug(skip)]
     pub artifact_plan: ArtifactPlan,
@@ -70,7 +71,7 @@ async fn upload(
     );
     tokio::spawn(async move {
         let upload = async {
-            let courier = Courier::new(req.courier_url)?;
+            let courier = Courier::new(req.courier_url, req.courier_token)?;
             let cas = CourierCas::new(courier.clone());
             let skip_artifacts = HashSet::<_>::from_iter(req.skip_artifacts);
             let skip_objects = HashSet::from_iter(req.skip_objects);
