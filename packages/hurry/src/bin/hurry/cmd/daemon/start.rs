@@ -1,3 +1,5 @@
+use std::time::{Duration, SystemTime};
+
 use axum::{
     Json, Router,
     extract::{FromRef, State},
@@ -36,6 +38,74 @@ pub struct Options {
     courier_url: Url,
 }
 
+/// Clean up daemon log files older than the specified age.
+///
+/// This function runs asynchronously in the background and does not block
+/// daemon startup. It scans the cache directory for log files matching the
+/// pattern `hurryd.*.log` and removes those with modification times older
+/// than the specified duration.
+#[instrument]
+async fn cleanup_old_logs(cache_dir: &hurry::path::AbsDirPath, max_age: Duration) {
+    debug!("starting log cleanup task");
+
+    let result: Result<()> = async {
+        let mut read_dir = fs::read_dir(cache_dir).await?;
+        let mut removed_count = 0;
+        let mut error_count = 0;
+
+        let cutoff_time = SystemTime::now()
+            .checked_sub(max_age)
+            .ok_or_else(|| color_eyre::eyre::eyre!("failed to calculate cutoff time"))?;
+
+        while let Some(entry) = read_dir.next_entry().await? {
+            let path = entry.path();
+
+            // Check if the file matches the daemon log pattern
+            if let Some(filename) = path.file_name().and_then(|n| n.to_str())
+                && filename.starts_with("hurryd.")
+                && filename.ends_with(".log")
+            {
+                // Check the file's modification time
+                match fs::metadata(&path).await {
+                    Ok(Some(metadata)) => {
+                        if let Ok(modified) = metadata.modified()
+                            && modified < cutoff_time
+                        {
+                            // Try to remove the old log file
+                            match tokio::fs::remove_file(&path).await {
+                                Ok(_) => {
+                                    debug!(?path, "removed old log file");
+                                    removed_count += 1;
+                                }
+                                Err(err) => {
+                                    warn!(?path, ?err, "failed to remove old log file");
+                                    error_count += 1;
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        debug!(?path, "log file does not exist (race condition)");
+                    }
+                    Err(err) => {
+                        warn!(?path, ?err, "failed to get metadata for log file");
+                        error_count += 1;
+                    }
+                }
+            }
+        }
+
+        info!(removed_count, error_count, "log cleanup completed");
+
+        Ok(())
+    }
+    .await;
+
+    if let Err(err) = result {
+        warn!(?err, "log cleanup task failed");
+    }
+}
+
 #[instrument(skip(cli_logger))]
 pub async fn exec(
     top_level_flags: TopLevelFlags,
@@ -71,6 +141,15 @@ pub async fn exec(
         )
     })?;
     file_logger.init();
+
+    // Spawn a background task to clean up old log files (older than 3 days).
+    // This runs asynchronously and does not block daemon startup.
+    {
+        let cache_dir = cache_dir.clone();
+        tokio::spawn(async move {
+            cleanup_old_logs(&cache_dir, Duration::from_secs(3 * 24 * 60 * 60)).await;
+        });
+    }
 
     // If a pid-file exists, read it and check if the process is running. Exit
     // if another instance is running.
