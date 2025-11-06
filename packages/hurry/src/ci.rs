@@ -7,24 +7,78 @@
 
 use std::env;
 
-/// Checks if an environment variable is set to a truthy value.
+/// CI environment variable detection patterns.
 ///
-/// Truthy values are: "true" or "1"
+/// Each entry specifies how to detect a specific CI provider.
+enum CiCheckVar {
+    /// Check if the variable exists and equals "true" or "1"
+    Truthy(&'static str),
+    /// Check if the variable exists (any value)
+    Present(&'static str),
+    /// Check if the variable exists and equals a specific value
+    Equals(&'static str, &'static str),
+}
+
+/// List of CI environment variables to check for CI detection.
 ///
-/// Most CI providers use "true", but some use "1" as a boolean representation.
-fn is_env_truthy(var: &str) -> bool {
-    env::var(var).is_ok_and(|v| v == "true" || v == "1")
+/// This list is based on the env-ci library (<https://github.com/semantic-release/env-ci>).
+/// Variables are checked in order, with the generic `CI` variable first (set by
+/// most providers), followed by provider-specific variables for explicit
+/// detection.
+const CI_VARS: &[CiCheckVar] = &[
+    // Generic CI variable: Set by most CI providers
+    CiCheckVar::Truthy("CI"),
+    // Provider-specific variables (alphabetically ordered)
+    CiCheckVar::Truthy("APPVEYOR"),                       // Appveyor
+    CiCheckVar::Present("BUILD_BUILDURI"),                // Azure Pipelines
+    CiCheckVar::Present("bamboo_agentId"),                // Bamboo
+    CiCheckVar::Present("BITBUCKET_BUILD_NUMBER"),        // Bitbucket Pipelines
+    CiCheckVar::Truthy("BITRISE_IO"),                     // Bitrise
+    CiCheckVar::Present("BUDDY_WORKSPACE_ID"),            // Buddy
+    CiCheckVar::Truthy("BUILDKITE"),                      // Buildkite
+    CiCheckVar::Equals("CF_PAGES", "1"),                  // Cloudflare Pages
+    CiCheckVar::Present("CF_BUILD_ID"),                   // Codefresh
+    CiCheckVar::Truthy("CIRCLECI"),                       // CircleCI
+    CiCheckVar::Truthy("CIRRUS_CI"),                      // Cirrus CI
+    CiCheckVar::Equals("CI_NAME", "codeship"),            // Codeship
+    CiCheckVar::Present("CODEBUILD_BUILD_ID"),            // AWS CodeBuild
+    CiCheckVar::Present("DISTELLI_APPNAME"),              // Puppet (Distelli)
+    CiCheckVar::Truthy("DRONE"),                          // Drone
+    CiCheckVar::Truthy("GITHUB_ACTIONS"),                 // GitHub Actions
+    CiCheckVar::Truthy("GITLAB_CI"),                      // GitLab CI
+    CiCheckVar::Present("JB_SPACE_EXECUTION_NUMBER"),     // JetBrains Space
+    CiCheckVar::Present("JENKINS_URL"),                   // Jenkins
+    CiCheckVar::Equals("NETLIFY", "true"),                // Netlify
+    CiCheckVar::Present("NOW_GITHUB_DEPLOYMENT"),         // Vercel (legacy Zeit Now)
+    CiCheckVar::Truthy("SAILCI"),                         // Sail CI
+    CiCheckVar::Truthy("SCREWDRIVER"),                    // Screwdriver.cd
+    CiCheckVar::Truthy("SCRUTINIZER"),                    // Scrutinizer
+    CiCheckVar::Truthy("SEMAPHORE"),                      // Semaphore
+    CiCheckVar::Truthy("SHIPPABLE"),                      // Shippable
+    CiCheckVar::Present("TEAMCITY_VERSION"),              // TeamCity
+    CiCheckVar::Truthy("TRAVIS"),                         // Travis CI
+    CiCheckVar::Truthy("VELA"),                           // Vela
+    CiCheckVar::Truthy("VERCEL"),                         // Vercel
+    CiCheckVar::Present("WERCKER_MAIN_PIPELINE_STARTED"), // Wercker
+];
+
+/// Checks if an environment variable matches the given CI detection pattern.
+fn matches_ci_var(ci_var: &CiCheckVar) -> bool {
+    match ci_var {
+        CiCheckVar::Truthy(var) => env::var(var).is_ok_and(|v| v == "true" || v == "1"),
+        CiCheckVar::Present(var) => env::var(var).is_ok(),
+        CiCheckVar::Equals(var, expected) => env::var(var).is_ok_and(|v| v == *expected),
+    }
 }
 
 /// Detects if the current process is running in a CI environment.
 ///
-/// Detection is based on standard environment variables set by CI providers:
-/// - `CI=true` or `CI=1`: Set by GitHub Actions, GitLab CI, CircleCI, and many others
+/// Detection is based on environment variables set by CI providers:
+/// - `CI=true` or `CI=1`: Set by GitHub Actions, GitLab CI, CircleCI, and many
+///   others
 /// - Provider-specific variables for explicit detection
 ///
 /// Reference: <https://github.com/semantic-release/env-ci>
-/// This detection strategy is based on the widely-used env-ci library which
-/// supports 32+ CI providers and uses CI=true as the standard detection method
 ///
 /// # Examples
 ///
@@ -36,41 +90,5 @@ fn is_env_truthy(var: &str) -> bool {
 /// }
 /// ```
 pub fn is_ci() -> bool {
-    // Primary detection: Most CI providers set CI=true or CI=1
-    if is_env_truthy("CI") {
-        return true;
-    }
-
-    // Secondary detection: Provider-specific variables
-    // GitHub Actions
-    if is_env_truthy("GITHUB_ACTIONS") {
-        return true;
-    }
-
-    // GitLab CI
-    if is_env_truthy("GITLAB_CI") {
-        return true;
-    }
-
-    // CircleCI
-    if is_env_truthy("CIRCLECI") {
-        return true;
-    }
-
-    // Jenkins
-    if env::var("JENKINS_URL").is_ok() {
-        return true;
-    }
-
-    // Travis CI
-    if is_env_truthy("TRAVIS") {
-        return true;
-    }
-
-    // Buildkite
-    if is_env_truthy("BUILDKITE") {
-        return true;
-    }
-
-    false
+    CI_VARS.iter().any(matches_ci_var)
 }
