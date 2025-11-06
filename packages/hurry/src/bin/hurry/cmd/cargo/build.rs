@@ -281,45 +281,5 @@ async fn wait_for_upload(request_id: Uuid, progress: &TransferBar) -> Result<()>
         }
     }
 
-    // Check if there are other active uploads before shutting down the daemon
-    let status_all_endpoint = format!("http://{}/api/v0/cargo/status/all", daemon.url);
-    trace!("checking status of all uploads");
-    let status_all_response = client
-        .get(&status_all_endpoint)
-        .send()
-        .await
-        .context("send status all request to daemon")?;
-    trace!(?status_all_response, "got status all response");
-    let status_all_response = status_all_response
-        .json::<hurry::daemon::CargoUploadStatusAllResponse>()
-        .await?;
-    trace!(?status_all_response, "parsed status all response");
-
-    // Count in-progress uploads
-    let in_progress_count = status_all_response
-        .statuses
-        .values()
-        .filter(|status| matches!(status, hurry::daemon::CargoUploadStatus::InProgress(_)))
-        .count();
-
-    // If no other uploads are in progress, shut down the daemon
-    if in_progress_count == 0 {
-        info!("no other uploads in progress, shutting down daemon");
-        let shutdown_endpoint = format!("http://{}/api/v0/shutdown", daemon.url);
-        match client.post(&shutdown_endpoint).send().await {
-            Ok(_) => {
-                debug!("daemon shutdown signal sent successfully");
-            }
-            Err(err) => {
-                warn!(?err, "failed to send daemon shutdown signal");
-            }
-        }
-    } else {
-        debug!(
-            count = in_progress_count,
-            "other uploads in progress, not shutting down daemon"
-        );
-    }
-
     Ok(())
 }
