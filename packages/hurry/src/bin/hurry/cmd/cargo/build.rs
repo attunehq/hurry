@@ -213,10 +213,10 @@ pub async fn exec(options: Options) -> Result<()> {
     // Cache the built artifacts.
     if !options.skip_backup {
         let upload_id = cache.save(artifact_plan, restored).await?;
-        let wait_for_upload = options.wait_for_upload.unwrap_or_else(hurry::ci::is_ci);
-        if wait_for_upload {
+        let should_wait_for_upload = options.wait_for_upload.unwrap_or_else(hurry::ci::is_ci);
+        if should_wait_for_upload {
             let progress = TransferBar::new(artifact_count, "Uploading cache");
-            wait_for_upload_fn(upload_id, &progress).await?;
+            wait_for_upload(upload_id, &progress).await?;
         }
     }
 
@@ -224,7 +224,7 @@ pub async fn exec(options: Options) -> Result<()> {
 }
 
 #[instrument]
-async fn wait_for_upload_fn(request_id: Uuid, progress: &TransferBar) -> Result<()> {
+async fn wait_for_upload(request_id: Uuid, progress: &TransferBar) -> Result<()> {
     let paths = DaemonPaths::initialize().await?;
     let Some(daemon) = paths.daemon_running().await? else {
         bail!("daemon is not running");
@@ -298,8 +298,8 @@ async fn wait_for_upload_fn(request_id: Uuid, progress: &TransferBar) -> Result<
     // Count in-progress uploads
     let in_progress_count = status_all_response
         .statuses
-        .iter()
-        .filter(|(_, status)| matches!(status, hurry::daemon::CargoUploadStatus::InProgress(_)))
+        .values()
+        .filter(|status| matches!(status, hurry::daemon::CargoUploadStatus::InProgress(_)))
         .count();
 
     // If no other uploads are in progress, shut down the daemon

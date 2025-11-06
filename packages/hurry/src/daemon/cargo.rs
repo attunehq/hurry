@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use axum::{
     Router,
@@ -137,9 +140,9 @@ async fn status(
     Json(CargoUploadStatusResponse { status })
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CargoUploadStatusAllResponse {
-    pub statuses: Vec<(Uuid, CargoUploadStatus)>,
+    pub statuses: HashMap<Uuid, CargoUploadStatus>,
 }
 
 #[instrument]
