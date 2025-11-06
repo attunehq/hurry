@@ -3,3 +3,8 @@
 .vscode
 .hurrydata
 target
+
+# Un-ignore .claude directory to share commands with team
+!.claude
+# But ignore local settings
+.claude/settings.local.json
