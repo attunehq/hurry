@@ -230,8 +230,7 @@ pub async fn exec(options: Options) -> Result<()> {
     // Cache the built artifacts.
     if !options.skip_backup {
         let upload_id = cache.save(artifact_plan, restored).await?;
-        let wait_for_upload_mode = WaitForUpload::from(options.wait_for_upload);
-        if wait_for_upload_mode.should_wait() {
+        if WaitForUpload::from(options.wait_for_upload).should_wait() {
             let progress = TransferBar::new(artifact_count, "Uploading cache");
             wait_for_upload(upload_id, &progress).await?;
         }
