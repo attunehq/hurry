@@ -41,13 +41,7 @@ Once you have clarity, create a draft PR that includes:
 ## Title
 - Concise, descriptive title following conventional commit style
 - Detect commit type from branch name pattern:
-  - Branch patterns like `*/fix/*` or `*-fix-*` → `fix:`
-  - Branch patterns like `*/feat/*` or `*-feat-*` → `feat:`
-  - Branch patterns like `*/chore/*` or `*-chore-*` → `chore:`
-  - Branch patterns like `*/docs/*` or `*-docs-*` → `docs:`
-  - Branch patterns like `*/refactor/*` or `*-refactor-*` → `refactor:`
-  - Branch patterns like `*/test/*` or `*-test-*` → `test:`
-  - Branch patterns like `*/perf/*` or `*-perf-*` → `perf:`
+  - Branch patterns like `*/TYPE/*` or `*-TYPE-*` where TYPE is one of: fix, feat, chore, docs, refactor, test, perf. Use the corresponding conventional commit prefix (e.g., `fix:`, `feat:`, etc.).
 - If the branch name doesn't contain a recognizable commit type pattern, **ask the user** what conventional commit categorization to use (feat, fix, chore, docs, refactor, test, perf, etc.)
 - Example: `feat: Add cargo command passthrough support`
 
