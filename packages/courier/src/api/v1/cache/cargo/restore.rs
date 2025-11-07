@@ -882,4 +882,170 @@ mod tests {
 
         Ok(())
     }
+
+    // Multi-tenant isolation tests
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn org_cannot_restore_other_orgs_cache(pool: PgPool) -> Result<()> {
+        use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN, test_blob};
+
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(b"artifact content");
+
+        // Org A (Acme) saves a cache entry
+        let save_request = CargoSaveRequest::builder()
+            .package_name("private-pkg")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash_a")
+            .content_hash("content_a")
+            .artifacts([ArtifactFile::builder()
+                .object_key(key)
+                .path("lib.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .json(&save_request)
+            .await;
+        response.assert_status(StatusCode::CREATED);
+
+        // Org B (Widget) tries to restore it
+        let restore_request = CargoRestoreRequest::builder()
+            .package_name("private-pkg")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash_a")
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(WIDGET_CHARLIE_TOKEN)
+            .json(&restore_request)
+            .await;
+
+        // Should not find it (appears non-existent to org B)
+        response.assert_status(StatusCode::NOT_FOUND);
+
+        // Org A can still restore it
+        let response = server
+            .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .json(&restore_request)
+            .await;
+
+        response.assert_status_ok();
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
+        use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN, test_blob};
+
+        let (server, _tmp) = crate::api::test_server(pool.clone())
+            .await
+            .context("create test server")?;
+
+        let (_, key_a) = test_blob(b"org a artifact");
+        let (_, key_b) = test_blob(b"org b artifact");
+
+        // Org A saves cache
+        let save_a = CargoSaveRequest::builder()
+            .package_name("pkg-a")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash_a")
+            .content_hash("content_a")
+            .artifacts([ArtifactFile::builder()
+                .object_key(key_a)
+                .path("liba.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
+
+        server
+            .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .json(&save_a)
+            .await
+            .assert_status(StatusCode::CREATED);
+
+        // Org B saves cache
+        let save_b = CargoSaveRequest::builder()
+            .package_name("pkg-b")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash_b")
+            .content_hash("content_b")
+            .artifacts([ArtifactFile::builder()
+                .object_key(key_b)
+                .path("libb.rlib")
+                .mtime_nanos(2000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
+
+        server
+            .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(WIDGET_CHARLIE_TOKEN)
+            .json(&save_b)
+            .await
+            .assert_status(StatusCode::CREATED);
+
+        // Org A resets their cache
+        server
+            .post("/api/v1/cache/cargo/reset")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+
+        // Org A's cache should be gone
+        let restore_a = CargoRestoreRequest::builder()
+            .package_name("pkg-a")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash_a")
+            .build();
+
+        server
+            .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .json(&restore_a)
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+
+        // Org B's cache should still exist
+        let restore_b = CargoRestoreRequest::builder()
+            .package_name("pkg-b")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash_b")
+            .build();
+
+        server
+            .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(WIDGET_CHARLIE_TOKEN)
+            .json(&restore_b)
+            .await
+            .assert_status_ok();
+
+        Ok(())
+    }
 }

@@ -637,4 +637,67 @@ mod tests {
         pretty_assert_eq!(found, expected);
         Ok(())
     }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn bulk_read_filters_inaccessible_blobs(pool: PgPool) -> Result<()> {
+        use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN, write_cas};
+
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        // Org A writes two blobs
+        let content_a1 = b"org A blob 1";
+        let key_a1 = write_cas(&server, content_a1, ACME_ALICE_TOKEN).await?;
+
+        let content_a2 = b"org A blob 2";
+        let key_a2 = write_cas(&server, content_a2, ACME_ALICE_TOKEN).await?;
+
+        // Org B writes one blob
+        let content_b = b"org B blob";
+        let key_b = write_cas(&server, content_b, WIDGET_CHARLIE_TOKEN).await?;
+
+        // Org A tries to bulk read all three keys
+        let request = clients::courier::v1::cas::CasBulkReadRequest::builder()
+            .keys([&key_a1, &key_a2, &key_b])
+            .build();
+
+        let response = server
+            .post("/api/v1/cas/bulk/read")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .json(&request)
+            .await;
+
+        response.assert_status_ok();
+
+        // Parse tar response
+        let tar_data = response.as_bytes();
+        let cursor = futures::io::Cursor::new(tar_data.to_vec());
+        let archive = async_tar::Archive::new(cursor);
+        let mut entries = archive.entries()?;
+
+        let mut found = BTreeMap::new();
+        while let Some(entry) = entries.next().await {
+            let mut entry = entry?;
+            let path = entry.path()?.to_string_lossy().into_owned();
+            let mut content = Vec::new();
+            futures::io::AsyncReadExt::read_to_end(&mut entry, &mut content).await?;
+            found.insert(path, content);
+        }
+
+        // Should only contain Org A's blobs, not Org B's
+        let expected = btreemap! {
+            key_a1.to_string() => content_a1.to_vec(),
+            key_a2.to_string() => content_a2.to_vec(),
+            // key_b should NOT be here
+        };
+
+        pretty_assert_eq!(found, expected);
+
+        Ok(())
+    }
 }

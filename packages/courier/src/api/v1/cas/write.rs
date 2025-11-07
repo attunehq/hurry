@@ -661,4 +661,74 @@ mod tests {
 
         Ok(())
     }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn write_missing_auth_returns_401(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (content, key) = test_blob(b"test content");
+
+        let response = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .bytes(content.into())
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn write_invalid_token_returns_401(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (content, key) = test_blob(b"test content");
+
+        let response = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer("invalid-token-that-does-not-exist")
+            .bytes(content.into())
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn write_revoked_token_returns_401(pool: PgPool) -> Result<()> {
+        use crate::api::test_helpers::REVOKED_TOKEN;
+
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (content, key) = test_blob(b"test content");
+
+        let response = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(REVOKED_TOKEN)
+            .bytes(content.into())
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
 }

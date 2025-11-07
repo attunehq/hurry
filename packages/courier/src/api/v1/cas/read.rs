@@ -310,4 +310,164 @@ mod tests {
 
         Ok(())
     }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn read_missing_auth_returns_401(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(b"test content");
+
+        let response = server.get(&format!("/api/v1/cas/{key}")).await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn read_invalid_token_returns_401(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(b"test content");
+
+        let response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer("invalid-token-that-does-not-exist")
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn read_revoked_token_returns_401(pool: PgPool) -> Result<()> {
+        use crate::api::test_helpers::REVOKED_TOKEN;
+
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(b"test content");
+
+        let response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(REVOKED_TOKEN)
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+
+    // Multi-tenant isolation tests
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn org_cannot_read_other_orgs_blob(pool: PgPool) -> Result<()> {
+        use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN};
+
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        const CONTENT: &[u8] = b"org A private data";
+
+        // Org A (Acme) writes a blob
+        let key = write_cas(&server, CONTENT, ACME_ALICE_TOKEN).await?;
+
+        // Org B (Widget) tries to read it - should get 404 (blob appears non-existent)
+        let response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(WIDGET_CHARLIE_TOKEN)
+            .await;
+
+        response.assert_status(StatusCode::NOT_FOUND);
+
+        // Org A can still read it
+        let response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
+
+        response.assert_status_ok();
+        pretty_assert_eq!(response.as_bytes().as_ref(), CONTENT);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn same_content_different_orgs_separate_access(pool: PgPool) -> Result<()> {
+        use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN};
+
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        const CONTENT: &[u8] = b"shared content";
+        let (_, key) = test_blob(CONTENT);
+
+        // Org A writes the content
+        let response_a = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .bytes(CONTENT.to_vec().into())
+            .await;
+        response_a.assert_status(StatusCode::CREATED);
+
+        // Org B cannot read it yet (hasn't been granted access)
+        let response_b_read = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(WIDGET_CHARLIE_TOKEN)
+            .await;
+        response_b_read.assert_status(StatusCode::NOT_FOUND);
+
+        // Org B writes the same content (grants them access)
+        let response_b = server
+            .put(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(WIDGET_CHARLIE_TOKEN)
+            .bytes(CONTENT.to_vec().into())
+            .await;
+        response_b.assert_status(StatusCode::CREATED);
+
+        // Both orgs can read it
+        let response_a = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
+        response_a.assert_status_ok();
+        pretty_assert_eq!(response_a.as_bytes().as_ref(), CONTENT);
+
+        let response_b = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(WIDGET_CHARLIE_TOKEN)
+            .await;
+        response_b.assert_status_ok();
+        pretty_assert_eq!(response_b.as_bytes().as_ref(), CONTENT);
+
+        Ok(())
+    }
 }

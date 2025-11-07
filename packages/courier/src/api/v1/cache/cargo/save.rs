@@ -755,4 +755,113 @@ mod tests {
 
         Ok(())
     }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn save_missing_auth_returns_401(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(b"artifact content");
+        let request = CargoSaveRequest::builder()
+            .package_name("test-pkg")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash")
+            .content_hash("content")
+            .artifacts([ArtifactFile::builder()
+                .object_key(key)
+                .path("lib.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .json(&request)
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn save_invalid_token_returns_401(pool: PgPool) -> Result<()> {
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(b"artifact content");
+        let request = CargoSaveRequest::builder()
+            .package_name("test-pkg")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash")
+            .content_hash("content")
+            .artifacts([ArtifactFile::builder()
+                .object_key(key)
+                .path("lib.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .authorization_bearer("invalid-token-that-does-not-exist")
+            .json(&request)
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn save_revoked_token_returns_401(pool: PgPool) -> Result<()> {
+        use crate::api::test_helpers::REVOKED_TOKEN;
+
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (_, key) = test_blob(b"artifact content");
+        let request = CargoSaveRequest::builder()
+            .package_name("test-pkg")
+            .package_version("1.0.0")
+            .target("x86_64-unknown-linux-gnu")
+            .library_crate_compilation_unit_hash("hash")
+            .content_hash("content")
+            .artifacts([ArtifactFile::builder()
+                .object_key(key)
+                .path("lib.rlib")
+                .mtime_nanos(1000000000000000000u128)
+                .executable(false)
+                .build()])
+            .build();
+
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(REVOKED_TOKEN)
+            .json(&request)
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
 }
