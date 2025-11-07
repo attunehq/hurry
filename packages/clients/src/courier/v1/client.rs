@@ -31,7 +31,7 @@ use super::{
     },
     cas::{CasBulkReadRequest, CasBulkWriteResponse},
 };
-use crate::{ContentType, NETWORK_BUFFER_SIZE, courier::Token};
+use crate::{ContentType, NETWORK_BUFFER_SIZE, Token};
 
 /// Maximum decompressed size for individual blob decompression (1GB).
 ///

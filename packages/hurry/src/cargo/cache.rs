@@ -12,7 +12,7 @@ use crate::{
     daemon::{CargoUploadRequest, DaemonPaths},
     progress::TransferBar,
 };
-use clients::{Courier, courier::Token};
+use clients::{Courier, Token};
 
 mod restore;
 mod save;

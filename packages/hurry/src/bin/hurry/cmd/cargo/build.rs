@@ -16,7 +16,7 @@ use tracing::{debug, info, instrument, trace, warn};
 use url::Url;
 use uuid::Uuid;
 
-use clients::courier::Token;
+use clients::Token;
 use hurry::{
     cargo::{self, CargoBuildArguments, CargoCache, Profile, Workspace},
     ci::is_ci,

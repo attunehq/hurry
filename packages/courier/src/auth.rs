@@ -1,8 +1,10 @@
+use std::fmt;
+
 use axum::{
     extract::FromRequestParts,
     http::{StatusCode, header::AUTHORIZATION, request::Parts},
 };
-use derive_more::{Debug, Display, From, Into};
+use derive_more::{Display, From, Into};
 use serde::{Deserialize, Serialize};
 
 /// An ID uniquely identifying an organization.
@@ -78,8 +80,11 @@ impl AccountId {
 ///
 /// These are provided by the client and have not yet been validated against
 /// the database. To validate a token, use [`crate::db::Postgres::validate()`].
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
-#[debug("RawToken(..)")]
+///
+/// This type wraps a token string and ensures it is never accidentally leaked
+/// in logs or debug output. To access the actual token value, use the
+/// `as_str()` method.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
 pub struct RawToken(String);
 
 impl RawToken {
@@ -91,6 +96,18 @@ impl RawToken {
     /// View the token as a string.
     pub fn as_str(&self) -> &str {
         self.0.as_str()
+    }
+}
+
+impl fmt::Debug for RawToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[redacted]")
+    }
+}
+
+impl fmt::Display for RawToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[redacted]")
     }
 }
 

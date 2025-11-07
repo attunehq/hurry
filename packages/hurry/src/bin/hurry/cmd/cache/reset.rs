@@ -6,7 +6,7 @@ use inquire::Confirm;
 use tracing::instrument;
 use url::Url;
 
-use clients::{Courier, courier::Token};
+use clients::{Courier, Token};
 
 #[derive(Clone, Args, Debug)]
 pub struct Options {

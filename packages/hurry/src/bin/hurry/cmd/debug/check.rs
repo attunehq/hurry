@@ -10,7 +10,7 @@ use derive_more::Debug;
 use tracing::{debug, info, instrument, trace, warn};
 use url::Url;
 
-use clients::courier::Token;
+use clients::Token;
 use hurry::{
     cargo::{self, CargoBuildArguments, CargoCache, Handles, Profile, Workspace},
     progress::TransferBar,
