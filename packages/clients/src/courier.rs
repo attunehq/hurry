@@ -78,4 +78,17 @@ mod tests {
         // Empty string should fail
         assert!("".parse::<Token>().is_err());
     }
+
+    #[test]
+    fn test_token_serialization() {
+        let token = Token::from("test-token-12345");
+
+        // Serialize
+        let json = serde_json::to_string(&token).unwrap();
+        assert_eq!(json, r#""test-token-12345""#);
+
+        // Deserialize
+        let deserialized = serde_json::from_str::<Token>(&json).unwrap();
+        assert_eq!(deserialized.expose(), "test-token-12345");
+    }
 }

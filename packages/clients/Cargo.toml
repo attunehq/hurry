@@ -24,6 +24,7 @@ enum-assoc.workspace = true
 async-compression = { workspace = true, features = ["tokio", "zstd"], optional = true }
 zstd = { workspace = true, optional = true }
 http = { workspace = true }
+serde_json.workspace = true
 
 [features]
 default = []

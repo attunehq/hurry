@@ -928,6 +928,7 @@ dependencies = [
  "pretty_assertions",
  "reqwest",
  "serde",
+ "serde_json",
  "tap",
  "tokio",
  "tokio-util",
