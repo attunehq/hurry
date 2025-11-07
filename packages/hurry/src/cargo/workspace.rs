@@ -259,6 +259,12 @@ impl Workspace {
         let build_plan = self.build_plan(&args).await?;
         trace!(?build_plan, "build plan");
 
+        // TODO: We also need to record output files from the build plan
+        // invocation for each unit. Setting the mtimes on these output files
+        // compared to the `invoked.timestamp` of the unit is how Cargo checks
+        // for freshness. When recording these output files, we also need to
+        // resolve `links` when they exist.
+
         let mut build_script_index_to_dir = HashMap::new();
         let mut build_script_program_file_to_index = HashMap::new();
         let mut build_script_executions = HashMap::new();

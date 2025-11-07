@@ -7,10 +7,6 @@
 -- sql-schema migration --name {new name here}
 -- ```
 
-CREATE TYPE cargo_object_type AS ENUM (
-  ''
-);
-
 CREATE TABLE cargo_object (
   id BIGSERIAL PRIMARY KEY,
   key TEXT NOT NULL,
@@ -28,10 +24,16 @@ CREATE TABLE cargo_library_unit_build (
   id BIGSERIAL PRIMARY KEY,
   package_id BIGINT NOT NULL REFERENCES cargo_package(id),
   target TEXT NOT NULL,
+
   library_crate_compilation_unit_hash TEXT NOT NULL,
   build_script_compilation_unit_hash TEXT,
   build_script_execution_unit_hash TEXT,
   content_hash TEXT NOT NULL,
+
+  library_crate_fingerprint_key BIGINT NOT NULL REFERENCES cargo_object(id),
+  build_script_compilation_fingerprint_key BIGINT NOT NULL REFERENCES cargo_object(id),
+  build_script_execution_fingerprint_key BIGINT NOT NULL REFERENCES cargo_object(id),
+
   UNIQUE NULLS NOT DISTINCT (package_id, target, library_crate_compilation_unit_hash, build_script_compilation_unit_hash, build_script_execution_unit_hash)
 );
 

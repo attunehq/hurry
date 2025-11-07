@@ -12,8 +12,8 @@ use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     cargo::{
-        ArtifactKey, ArtifactPlan, BuildScriptOutput, BuiltArtifact, DepInfo, QualifiedPath,
-        RootOutput, Workspace,
+        ArtifactKey, ArtifactPlan, BuildScriptOutput, BuiltArtifact, DepInfo, Fingerprint,
+        QualifiedPath, RootOutput, Workspace,
     },
     cas::CourierCas,
     fs, mk_rel_dir,
@@ -67,6 +67,7 @@ pub async fn save_artifacts(
             continue;
         }
 
+        let _lib_files = LibraryFiles::collect(&artifact).await?;
         let lib_files = library_files(&artifact).await?;
         let build_script_files = collect_build_script_files(ws, &artifact).await?;
         let files_to_save = lib_files.into_iter().chain(build_script_files).collect();
@@ -142,15 +143,49 @@ async fn rewrite(ws: &Workspace, path: &AbsFilePath, content: &[u8]) -> Result<V
     }
 }
 
+/// Libraries are usually associated with 7 files:
+///
+/// - 2 output files (an `.rmeta` and an `.rlib`)
+/// - 1 rustc dep-info (`.d`) file in the `deps` folder
+/// - 4 files in the fingerprint directory
+///   - An `EncodedDepInfo` file
+///   - A fingerprint hash
+///   - A fingerprint JSON
+///   - An invoked timestamp
+///
+/// Of these files, the fingerprint hash, fingerprint JSON, and invoked
+/// timestamp are all reconstructed from fingerprint information during
+/// restoration.
 struct LibraryFiles {
-    outputs: Vec<AbsFilePath>,
-    fingerprints: Vec<AbsFilePath>,
-    dep_info: AbsFilePath,
+    /// These files come from the build plan's `outputs` field.
+    output_files: Vec<AbsFilePath>,
+    /// This file is always at a known path in
+    /// `deps/{package_name}-{unit_hash}.d`.
+    dep_info_file: AbsFilePath,
+    /// This information is parsed from the initial fingerprint created after
+    /// the build, and is used to dynamically reconstruct fingerprints on
+    /// restoration.
+    fingerprint: Fingerprint,
+    /// This file is always at a known path in
+    /// `.fingerprint/{package_name}-{unit_hash}/dep-lib-{crate_name}`. It can
+    /// be safely relocatably copied because the `EncodedDepInfo` struct only
+    /// ever contains relative file path information (note that deps always have
+    /// a `DepInfoPathType`, which is either `PackageRootRelative` or
+    /// `BuildRootRelative`)[^1].
+    ///
+    /// [^1]: https://github.com/rust-lang/cargo/blob/df07b394850b07348c918703054712e3427715cf/src/cargo/core/compiler/fingerprint/dep_info.rs#L112
+    encoded_fingerprint_file: AbsFilePath,
 }
 
 impl LibraryFiles {
     async fn collect(artifact: &BuiltArtifact) -> Result<Self> {
-        let outputs = artifact.lib_files.clone();
+        let output_files = artifact.lib_files.clone();
+        let deps_dir = artifact.profile_dir().join(mk_rel_dir!("deps"));
+        let dep_info_file = deps_dir.try_join_file(format!(
+            "{}-{}.d",
+            artifact.package_name, artifact.library_crate_compilation_unit_hash
+        ))?;
+
         let fingerprint_dir = artifact.profile_dir().try_join_dirs(&[
             String::from(".fingerprint"),
             format!(
@@ -158,18 +193,31 @@ impl LibraryFiles {
                 artifact.package_name, artifact.library_crate_compilation_unit_hash
             ),
         ])?;
-        let fingerprints = fs::walk_files(&fingerprint_dir)
-            .try_collect::<Vec<_>>()
-            .await?;
-        let deps_dir = artifact.profile_dir().join(mk_rel_dir!("deps"));
-        let dep_info = deps_dir.try_join_file(format!(
-            "{}-{}.d",
-            artifact.package_name, artifact.library_crate_compilation_unit_hash
-        ))?;
+        let encoded_fingerprint_file =
+            fingerprint_dir.try_join_file(format!("dep-lib-{}", artifact.crate_name))?;
+        let fingerprint = {
+            let fingerprint_file =
+                fingerprint_dir.try_join_file(format!("lib-{}.json", artifact.crate_name))?;
+            let content = fs::must_read_buffered_utf8(&fingerprint_file).await?;
+            let fingerprint: Fingerprint = serde_json::from_str(&content)?;
+
+            let fingerprint_hash_file =
+                fingerprint_dir.try_join_file(format!("lib-{}", artifact.crate_name))?;
+            let fingerprint_hash = fs::must_read_buffered_utf8(&fingerprint_hash_file).await?;
+
+            // Sanity check that the fingerprint hashes match.
+            if hex::encode(fingerprint.hash_u64().to_le_bytes()) != fingerprint_hash {
+                bail!("fingerprint hash mismatch");
+            }
+
+            fingerprint
+        };
+
         Ok(Self {
-            outputs,
-            fingerprints,
-            dep_info,
+            output_files,
+            dep_info_file,
+            fingerprint,
+            encoded_fingerprint_file,
         })
     }
 }
