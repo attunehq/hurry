@@ -195,4 +195,43 @@ mod tests {
 
         Ok(())
     }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn same_org_users_can_check_each_others_blobs(pool: PgPool) -> Result<()> {
+        use crate::api::test_helpers::{ACME_ALICE_TOKEN, ACME_BOB_TOKEN};
+
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        // Alice writes a blob
+        const ALICE_CONTENT: &[u8] = b"Alice's data for check";
+        let alice_key = write_cas(&server, ALICE_CONTENT, ACME_ALICE_TOKEN).await?;
+
+        // Bob (same org) can check Alice's blob exists
+        let response = server
+            .method(Method::HEAD, &format!("/api/v1/cas/{alice_key}"))
+            .authorization_bearer(ACME_BOB_TOKEN)
+            .await;
+
+        response.assert_status_ok();
+
+        // Bob writes a blob
+        const BOB_CONTENT: &[u8] = b"Bob's data for check";
+        let bob_key = write_cas(&server, BOB_CONTENT, ACME_BOB_TOKEN).await?;
+
+        // Alice can check Bob's blob exists
+        let response = server
+            .method(Method::HEAD, &format!("/api/v1/cas/{bob_key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
+
+        response.assert_status_ok();
+
+        Ok(())
+    }
 }

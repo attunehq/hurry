@@ -700,4 +700,99 @@ mod tests {
 
         Ok(())
     }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn same_org_users_can_bulk_read_each_others_blobs(pool: PgPool) -> Result<()> {
+        use crate::api::test_helpers::{ACME_ALICE_TOKEN, ACME_BOB_TOKEN};
+
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        // Alice writes two blobs
+        const ALICE_CONTENT_1: &[u8] = b"Alice's first blob";
+        const ALICE_CONTENT_2: &[u8] = b"Alice's second blob";
+        let alice_key_1 = write_cas(&server, ALICE_CONTENT_1, ACME_ALICE_TOKEN).await?;
+        let alice_key_2 = write_cas(&server, ALICE_CONTENT_2, ACME_ALICE_TOKEN).await?;
+
+        // Bob writes two blobs
+        const BOB_CONTENT_1: &[u8] = b"Bob's first blob";
+        const BOB_CONTENT_2: &[u8] = b"Bob's second blob";
+        let bob_key_1 = write_cas(&server, BOB_CONTENT_1, ACME_BOB_TOKEN).await?;
+        let bob_key_2 = write_cas(&server, BOB_CONTENT_2, ACME_BOB_TOKEN).await?;
+
+        // Bob can bulk read Alice's blobs
+        let request = CasBulkReadRequest::builder()
+            .keys([&alice_key_1, &alice_key_2])
+            .build();
+
+        let response = server
+            .post("/api/v1/cas/bulk/read")
+            .authorization_bearer(ACME_BOB_TOKEN)
+            .json(&request)
+            .await;
+
+        response.assert_status_ok();
+        let tar_data = response.as_bytes();
+
+        let cursor = Cursor::new(tar_data.to_vec());
+        let archive = Archive::new(cursor);
+        let mut entries = archive.entries()?;
+
+        let mut bob_found = BTreeMap::new();
+        while let Some(entry) = entries.next().await {
+            let entry = entry?;
+            let path = entry.path()?.to_string_lossy().to_string();
+            let mut content = Vec::new();
+            tokio::io::copy(&mut entry.compat(), &mut content).await?;
+            bob_found.insert(path, content);
+        }
+
+        let expected_alice = btreemap! {
+            alice_key_1.to_string() => ALICE_CONTENT_1.to_vec(),
+            alice_key_2.to_string() => ALICE_CONTENT_2.to_vec(),
+        };
+
+        pretty_assert_eq!(bob_found, expected_alice);
+
+        // Alice can bulk read Bob's blobs
+        let request = CasBulkReadRequest::builder()
+            .keys([&bob_key_1, &bob_key_2])
+            .build();
+
+        let response = server
+            .post("/api/v1/cas/bulk/read")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .json(&request)
+            .await;
+
+        response.assert_status_ok();
+        let tar_data = response.as_bytes();
+
+        let cursor = Cursor::new(tar_data.to_vec());
+        let archive = Archive::new(cursor);
+        let mut entries = archive.entries()?;
+
+        let mut alice_found = BTreeMap::new();
+        while let Some(entry) = entries.next().await {
+            let entry = entry?;
+            let path = entry.path()?.to_string_lossy().to_string();
+            let mut content = Vec::new();
+            tokio::io::copy(&mut entry.compat(), &mut content).await?;
+            alice_found.insert(path, content);
+        }
+
+        let expected_bob = btreemap! {
+            bob_key_1.to_string() => BOB_CONTENT_1.to_vec(),
+            bob_key_2.to_string() => BOB_CONTENT_2.to_vec(),
+        };
+
+        pretty_assert_eq!(alice_found, expected_bob);
+
+        Ok(())
+    }
 }
