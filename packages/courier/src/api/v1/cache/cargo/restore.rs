@@ -77,7 +77,7 @@ mod tests {
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::{ACME_ALICE_TOKEN, test_blob};
+    use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN, test_blob};
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
@@ -891,8 +891,6 @@ mod tests {
     )]
     #[test_log::test]
     async fn org_cannot_restore_other_orgs_cache(pool: PgPool) -> Result<()> {
-        use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN, test_blob};
-
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
@@ -956,8 +954,6 @@ mod tests {
     )]
     #[test_log::test]
     async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
-        use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN, test_blob};
-
         let (server, _tmp) = crate::api::test_server(pool.clone())
             .await
             .context("create test server")?;

@@ -64,7 +64,7 @@ mod tests {
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::{ACME_ALICE_TOKEN, acme_alice_auth, test_blob};
+    use crate::api::test_helpers::{ACME_ALICE_TOKEN, REVOKED_TOKEN, acme_alice_auth, test_blob};
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
@@ -830,8 +830,6 @@ mod tests {
     )]
     #[test_log::test]
     async fn save_revoked_token_returns_401(pool: PgPool) -> Result<()> {
-        use crate::api::test_helpers::REVOKED_TOKEN;
-
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;

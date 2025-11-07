@@ -294,7 +294,7 @@ mod tests {
     use sqlx::PgPool;
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
-    use crate::api::test_helpers::{ACME_ALICE_TOKEN, test_blob};
+    use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN, test_blob};
 
     #[track_caller]
     fn compress(data: impl AsRef<[u8]>) -> Vec<u8> {
@@ -822,8 +822,6 @@ mod tests {
     )]
     #[test_log::test]
     async fn bulk_write_grants_access_when_blob_exists(pool: PgPool) -> Result<()> {
-        use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN};
-
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;

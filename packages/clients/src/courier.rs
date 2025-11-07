@@ -4,6 +4,7 @@ use std::{fmt, str::FromStr};
 
 use color_eyre::eyre::bail;
 use serde::{Deserialize, Serialize};
+use tap::Pipe;
 
 pub mod v1;
 
@@ -44,7 +45,7 @@ impl FromStr for Token {
         if s.is_empty() {
             bail!("token cannot be empty");
         }
-        Ok(Self(s.to_string()))
+        String::from(s).pipe(Self).pipe(Ok)
     }
 }
 
