@@ -34,8 +34,12 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 ---
 
-## Next Steps
+## Post-Commit Steps
 
-After committing, consider:
-- Running `/code-review` if you haven't already reviewed the changes
-- Running `/pr-draft` if you're ready to create a pull request
+After creating the initial commit:
+
+1. **Run `make precommit`** to apply formatters, linters, and other checks
+2. **If `make precommit` produces changes**, create a second commit with just the message: `make precommit`
+3. **Suggest next steps** to the user:
+   - Running `/code-review` if they haven't already reviewed the changes
+   - Running `/pr-draft` if they're ready to create a pull request
