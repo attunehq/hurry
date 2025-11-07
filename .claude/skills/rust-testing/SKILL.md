@@ -14,14 +14,10 @@ Project-specific testing patterns for consistent, readable tests.
 
 ## Assertions with pretty_assertions
 
-Import with prefixes to avoid shadowing:
+Import with prefixes to avoid shadowing (see hurry/tests/it/passthrough.rs:7 or hurry/src/cargo/build_args.rs:650):
 
 ```rust
-use pretty_assertions::{
-    assert_eq as pretty_assert_eq,
-    assert_ne as pretty_assert_ne,
-    assert_matches as pretty_assert_matches,
-};
+use pretty_assertions::assert_eq as pretty_assert_eq;
 ```
 
 ### Key Pattern: Construct Full Expected Value First
@@ -60,22 +56,22 @@ assert!(body["errors"][0]["error"].as_str().unwrap().contains("expected substrin
 
 ## Parameterized Tests
 
-Use `simple_test_case` for tests with multiple variations:
+Use `simple_test_case` for tests with multiple variations (see hurry/tests/it/passthrough.rs:55-65 or hurry/src/cargo/build_args.rs:655-662):
 
 ```rust
 use simple_test_case::test_case;
 
-#[test_case("--flag"; "long")]
-#[test_case("-f"; "short")]
+#[test_case("--release"; "long")]
+#[test_case("-r"; "short")]
 #[test]
-fn parses_flag(flag: &str) {
-    let args = parse(vec![flag]);
-    let expected = vec![Flag];
-    pretty_assert_eq!(args, expected);
+fn parses_release_flag(flag: &str) {
+    let args = CargoBuildArguments::from_iter(vec![flag]);
+    assert!(args.is_release());
+    pretty_assert_eq!(args.profile(), Some("release"));
 }
 ```
 
-Each case runs independently: `parses_flag::long`, `parses_flag::short`
+Each case runs independently: `parses_release_flag::long`, `parses_release_flag::short`
 
 **See** `references/parameterized-tests.md` for testing multiple input formats
 
@@ -85,6 +81,8 @@ Use cargo nextest:
 ```bash
 cargo nextest run -p {PACKAGE_NAME}
 ```
+
+Available packages: `hurry`, `courier`, `clients`, `e2e`
 
 ### Workflow
 

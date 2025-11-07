@@ -30,8 +30,10 @@ Avoid array indexing. Use iterator methods: `.enumerate()`, `.iter().map()`
 
 ### Type Names: Avoid Stuttering
 When a type is namespaced by its module, don't repeat context:
-- ❌ `storage::CasStorage` — stutters "storage"
-- ✅ `storage::Disk` — describes implementation
+- ❌ `storage::CasStorage` or `storage::DiskStorage` — stutters "storage"
+- ✅ `storage::Disk` — describes implementation (see courier/src/storage.rs:54)
+- ❌ `db::PostgresDatabase` — stutters "database"
+- ✅ `db::Postgres` — describes implementation (see courier/src/db.rs:29)
 
 ### Enum Variants
 Use single canonical variant with alias functions instead of separate variants for the same concept
@@ -71,8 +73,10 @@ Inline rust variables in format strings if possible:
 - Run `cargo autoinherit` after adding packages (if workspace uses inheritance)
 
 ### Code Quality
-- Format code: `make format` or `cargo fmt`
-- Run linter: `cargo clippy`
+- Format code: `make format` (uses nightly rustfmt)
+- Run linter: `make check`
+- Auto-fix lints: `make check-fix`
+- Pre-commit checks: `make precommit` (runs machete-fix, autoinherit, check-fix, format, sqlx-prepare)
 - Prefer `Itertools::sorted` over `Vec::sort` for iterator chains
 
 ### I/O Operations
@@ -87,6 +91,10 @@ Prefer streaming over buffered by default. Use traits: `AsyncRead`, `AsyncWrite`
 Don't bold bullet points in markdown:
 - ❌ `- **Hook**: message`
 - ✅ `- Hook: message`
+
+Avoid "space dash space" pattern in prose, use colon instead:
+- ❌ "All commands work the same way - do x then y"
+- ✅ "All commands work the same way: do x then y"
 
 ## Reference Files
 
