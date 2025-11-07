@@ -314,7 +314,6 @@ mod tests {
         let response = server
             .post("/api/v1/cas/bulk/read")
             .authorization_bearer(ACME_ALICE_TOKEN)
-            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&request)
             .await;
 
