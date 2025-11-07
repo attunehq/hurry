@@ -148,9 +148,6 @@ pub(crate) mod test_helpers {
     pub const WIDGET_CHARLIE_TOKEN: &str = "widget-charlie-token-001";
 
     /// Token constant used in the `auth.sql` fixture.
-    pub const TEST_TOKEN: &str = "test-token-001";
-
-    /// Token constant used in the `auth.sql` fixture.
     pub const REVOKED_TOKEN: &str = "acme-alice-token-revoked";
 
     /// Create an authenticated token for testing.
