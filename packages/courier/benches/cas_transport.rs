@@ -19,9 +19,9 @@
 //! docker compose up courier
 //! ```
 
-use clients::courier::{
+use clients::{
     Token,
-    v1::{Client, Key},
+    courier::v1::{Client, Key},
 };
 use futures::StreamExt;
 use rand::RngCore;

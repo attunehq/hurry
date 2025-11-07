@@ -19,10 +19,7 @@ use crate::{
     cargo::{ArtifactKey, ArtifactPlan, SaveProgress, Workspace, save_artifacts},
     cas::CourierCas,
 };
-use clients::{
-    Courier,
-    courier::{Token, v1::Key},
-};
+use clients::{Courier, Token, courier::v1::Key};
 
 #[derive(Debug, Clone)]
 pub struct CargoDaemonState {

@@ -19,9 +19,9 @@
 //! docker compose up courier
 //! ```
 
-use clients::courier::{
+use clients::{
     Token,
-    v1::{
+    courier::v1::{
         Client,
         cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest},
     },

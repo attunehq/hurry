@@ -1,8 +1,5 @@
 use clap::Args;
-use clients::{
-    Courier,
-    courier::{Token, v1::cache::CargoRestoreRequest},
-};
+use clients::{Courier, Token, courier::v1::cache::CargoRestoreRequest};
 use color_eyre::Result;
 use derive_more::Debug;
 use hurry::cargo::{CargoBuildArguments, Profile, Workspace};
