@@ -531,9 +531,11 @@ impl Postgres {
 
     /// Grant an organization access to a CAS key.
     ///
-    /// This is idempotent: if the organization already has access, this is a no-op.
+    /// This is idempotent: if the organization already has access, this is a
+    /// no-op.
     ///
-    /// Returns `true` if access was newly granted, `false` if the org already had access.
+    /// Returns `true` if access was newly granted, `false` if the org already
+    /// had access.
     #[tracing::instrument(name = "Postgres::grant_cas_access")]
     pub async fn grant_cas_access(&self, org_id: OrgId, key: &Key) -> Result<bool> {
         // First, ensure the CAS key exists
