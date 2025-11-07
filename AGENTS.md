@@ -74,14 +74,96 @@ This is a monorepo containing two main projects:
 - `cargo_library_unit_build`: Represents a specific build configuration with compilation unit hashes
 - `cargo_library_unit_build_artifact`: Individual build artifacts with paths, mtimes, and executable flags
 
+## Rust Programming Guidelines
+
+This is a Rust codebase. Always follow these conventions when writing or reviewing Rust code.
+
+### Code Style
+
+**String Creation**
+- Use `String::from("...")` instead of `"...".to_string()`
+- Use `String::new()` instead of `"".to_string()`
+
+**Type Annotations**
+- Always use postfix types (turbofish syntax)
+- ❌ `let foo: Vec<_> = items.collect()`
+- ✅ `let foo = items.collect::<Vec<_>>()`
+
+**Control Flow**
+- Prefer `let Some(value) = option else { ... }` over `.is_none()` + `.unwrap()`
+
+**Array Indexing**
+- Avoid array indexing. Use iterator methods: `.enumerate()`, `.iter().map()`
+
+**Imports**
+- Prefer direct imports over fully qualified paths unless ambiguous
+- Never put `import` statements inside functions (unless feature/cfg gated): always put them at file level
+
+**Module Structure**
+- Do not use `mod.rs`. Always prefer `my_module.rs` + `my_module/other_file.rs`
+
+**String Formatting**
+- Inline rust variables in format strings: `format!("Hello, {name}")`
+
+### Naming Conventions
+
+**Type Names: Avoid Stuttering**
+- When a type is namespaced by its module, don't repeat context
+- ❌ `storage::CasStorage` — stutters "storage"
+- ✅ `storage::Disk` — describes implementation
+
+**Function and Variable Names**
+- Don't prefix test functions with `test_`
+- Don't use hungarian notation; prefer shadowing
+- ❌ `formats_str` → ✅ `formats`
+
+### Error Handling
+- Use `color-eyre` for errors and reporting
+- Only panic for invariant violations or in tests
+- Prefer returning `Result` for recoverable errors
+
+### Testing Patterns
+
+**Test Organization**
+- Colocate tests with code in `#[cfg(test)]` modules (not separate `tests/` directories)
+- Write tests integration-style (test public APIs) not unit-style (test internals)
+
+**Assertions**
+- Use `pretty_assertions` with prefixed imports to avoid shadowing:
+  ```rust
+  use pretty_assertions::{
+      assert_eq as pretty_assert_eq,
+      assert_ne as pretty_assert_ne,
+  };
+  ```
+- Always construct the ENTIRE expected value upfront and compare in ONE operation
+- ✅ Declare expected value first, single assertion
+- ❌ Property-by-property assertions
+
+**Parameterized Tests**
+- Use `simple_test_case` for tests with multiple variations
+
+**Running Tests**
+- Use cargo nextest: `cargo nextest run -p {PACKAGE_NAME}`
+
+### Development Workflow
+
+**Dependency Management**
+- Use `cargo add` instead of manual `Cargo.toml` edits
+- Run `cargo autoinherit` after adding packages (workspace uses inheritance)
+
+**Code Quality**
+- Format code: `make format` or `cargo fmt`
+- Run linter: `cargo clippy`
+
 ## Context-Specific Guides
 
-When working on specific aspects of this project, load the relevant guide for detailed instructions:
+For deeper patterns and examples beyond the core guidelines above, load these guides:
 
-- **Writing Rust code**: Load `.agents/style.md` for style conventions, naming patterns, error handling, and code organization
-- **Writing tests**: Load `.agents/testing.md` for testing strategies, assertion patterns, and test organization
-- **Implementing features**: Load `.agents/patterns.md` for architectural patterns including async, HTTP/API, database, file I/O, and type design patterns
+- **Detailed patterns**: Load `.agents/patterns.md` for architectural patterns including async, HTTP/API, database, file I/O, and type design patterns
 - **Development tasks**: Load `.agents/workflow.md` for build commands, testing procedures, release processes, and tool-specific workflows
+- **Rust style deep-dive**: Invoke the `rust-programming` skill for detailed examples on naming, control flow, and indexing patterns
+- **Testing deep-dive**: Invoke the `rust-testing` skill for detailed assertion patterns and parameterized test examples
 
 **Note**: These guides contain detailed, prescriptive instructions. Only load them when actively working on the relevant task to avoid unnecessary context usage.
 
