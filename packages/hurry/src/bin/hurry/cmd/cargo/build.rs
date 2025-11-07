@@ -57,8 +57,11 @@ pub struct Options {
     skip_restore: bool,
 
     /// Wait for all new artifacts to upload to cache to finish before exiting.
-    #[arg(long = "hurry-wait-for-upload", default_value_t = false)]
-    wait_for_upload: bool,
+    ///
+    /// If not specified, this is automatically enabled in CI environments.
+    /// Use `--hurry-wait-for-upload=false` to explicitly disable.
+    #[arg(long = "hurry-wait-for-upload")]
+    wait_for_upload: Option<bool>,
 
     /// Show help for `hurry cargo build`.
     #[arg(long = "hurry-help", default_value_t = false)]
@@ -210,7 +213,8 @@ pub async fn exec(options: Options) -> Result<()> {
     // Cache the built artifacts.
     if !options.skip_backup {
         let upload_id = cache.save(artifact_plan, restored).await?;
-        if options.wait_for_upload {
+        let should_wait_for_upload = options.wait_for_upload.unwrap_or_else(hurry::ci::is_ci);
+        if should_wait_for_upload {
             let progress = TransferBar::new(artifact_count, "Uploading cache");
             wait_for_upload(upload_id, &progress).await?;
         }
