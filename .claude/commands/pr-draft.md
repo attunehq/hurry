@@ -39,7 +39,10 @@ Using the understood intention and branch information, analyze what you can conf
 Once you have clarity, create a draft PR that includes:
 
 ## Title
-- Concise, descriptive title following conventional commit style if applicable
+- Concise, descriptive title following conventional commit style
+- Detect commit type from branch name pattern:
+  - Branch patterns like `*/TYPE/*` or `*-TYPE-*` where TYPE is one of: fix, feat, chore, docs, refactor, test, perf. Use the corresponding conventional commit prefix (e.g., `fix:`, `feat:`, etc.).
+- If the branch name doesn't contain a recognizable commit type pattern, **ask the user** what conventional commit categorization to use (feat, fix, chore, docs, refactor, test, perf, etc.)
 - Example: `feat: Add cargo command passthrough support`
 
 ## Body Structure
