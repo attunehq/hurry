@@ -281,7 +281,7 @@ mod tests {
     use tap::Pipe;
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
-    use crate::api::test_helpers::{ACME_ALICE_TOKEN, write_cas};
+    use crate::api::test_helpers::{ACME_ALICE_TOKEN, ACME_BOB_TOKEN, write_cas};
 
     #[track_caller]
     fn decompress(data: impl AsRef<[u8]>) -> Vec<u8> {
@@ -707,8 +707,6 @@ mod tests {
     )]
     #[test_log::test]
     async fn same_org_users_can_bulk_read_each_others_blobs(pool: PgPool) -> Result<()> {
-        use crate::api::test_helpers::{ACME_ALICE_TOKEN, ACME_BOB_TOKEN};
-
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;

@@ -150,7 +150,7 @@ mod tests {
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::{ACME_ALICE_TOKEN, test_blob, write_cas};
+    use crate::api::test_helpers::{ACME_ALICE_TOKEN, ACME_BOB_TOKEN, test_blob, write_cas};
 
     #[track_caller]
     fn decompress(data: impl AsRef<[u8]>) -> Vec<u8> {
@@ -478,8 +478,6 @@ mod tests {
     )]
     #[test_log::test]
     async fn same_org_users_can_access_each_others_blobs(pool: PgPool) -> Result<()> {
-        use crate::api::test_helpers::{ACME_ALICE_TOKEN, ACME_BOB_TOKEN};
-
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;

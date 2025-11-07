@@ -116,7 +116,7 @@ mod tests {
     use color_eyre::{Result, eyre::Context};
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::{ACME_ALICE_TOKEN, test_blob, write_cas};
+    use crate::api::test_helpers::{ACME_ALICE_TOKEN, ACME_BOB_TOKEN, test_blob, write_cas};
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
@@ -202,8 +202,6 @@ mod tests {
     )]
     #[test_log::test]
     async fn same_org_users_can_check_each_others_blobs(pool: PgPool) -> Result<()> {
-        use crate::api::test_helpers::{ACME_ALICE_TOKEN, ACME_BOB_TOKEN};
-
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
