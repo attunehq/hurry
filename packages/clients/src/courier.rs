@@ -9,8 +9,9 @@ pub mod v1;
 
 /// An authentication token for Courier API access.
 ///
-/// This type wraps a token string and ensures it is never accidentally leaked in logs
-/// or debug output. To access the actual token value, use the `expose()` method.
+/// This type wraps a token string and ensures it is never accidentally leaked
+/// in logs or debug output. To access the actual token value, use the
+/// `expose()` method.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Token(String);
 

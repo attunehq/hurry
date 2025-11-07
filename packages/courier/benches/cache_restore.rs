@@ -19,9 +19,12 @@
 //! docker compose up courier
 //! ```
 
-use clients::courier::v1::{
-    Client,
-    cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest},
+use clients::courier::{
+    Token,
+    v1::{
+        Client,
+        cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest},
+    },
 };
 use std::env;
 use url::Url;
@@ -38,6 +41,14 @@ fn courier_url() -> Url {
         .expect("HURRY_COURIER_URL must be set to run benchmarks")
         .parse()
         .expect("HURRY_COURIER_URL must be a valid URL")
+}
+
+/// Get the Courier token from environment or panic with a helpful message.
+fn courier_token() -> Token {
+    env::var("HURRY_COURIER_TOKEN")
+        .expect("HURRY_COURIER_TOKEN must be set to run benchmarks")
+        .parse()
+        .expect("HURRY_COURIER_TOKEN must be a valid token")
 }
 
 /// Test data helpers for cache benchmarks.
@@ -95,7 +106,7 @@ mod restore {
     #[divan::bench(args = PACKAGE_COUNTS, sample_count = 5)]
     fn individual(bencher: divan::Bencher, count: usize) {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
-        let client = Client::new(courier_url()).expect("create client");
+        let client = Client::new(courier_url(), courier_token()).expect("create client");
 
         bencher
             .with_inputs(|| {
@@ -138,7 +149,7 @@ mod restore {
     #[divan::bench(args = PACKAGE_COUNTS, sample_count = 5)]
     fn bulk(bencher: divan::Bencher, count: usize) {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
-        let client = Client::new(courier_url()).expect("create client");
+        let client = Client::new(courier_url(), courier_token()).expect("create client");
 
         bencher
             .with_inputs(|| {

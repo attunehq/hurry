@@ -1,6 +1,9 @@
 use std::{collections::BTreeSet, convert::identity, fmt::Debug};
 
-use clients::{Courier, courier::{Token, v1::Key}};
+use clients::{
+    Courier,
+    courier::{Token, v1::Key},
+};
 use color_eyre::{Result, eyre::OptionExt};
 use derive_more::Display;
 use futures::Stream;

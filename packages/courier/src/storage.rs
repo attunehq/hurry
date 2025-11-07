@@ -77,11 +77,6 @@ impl Disk {
         Self { root: root.into() }
     }
 
-    /// Get the root path for the CAS storage.
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
     /// Create a new instance in a temporary directory.
     #[cfg(test)]
     pub async fn new_temp() -> Result<(Self, async_tempfile::TempDir)> {

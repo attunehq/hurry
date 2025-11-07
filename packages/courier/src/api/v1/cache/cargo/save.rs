@@ -781,10 +781,7 @@ mod tests {
                 .build()])
             .build();
 
-        let response = server
-            .post("/api/v1/cache/cargo/save")
-            .json(&request)
-            .await;
+        let response = server.post("/api/v1/cache/cargo/save").json(&request).await;
 
         response.assert_status(StatusCode::UNAUTHORIZED);
 

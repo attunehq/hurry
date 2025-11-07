@@ -52,7 +52,8 @@ pub async fn handle(
     };
 
     // Check if org has access to this CAS key
-    // Return NotFound (not Forbidden) to avoid leaking information about blob existence
+    // Return NotFound (not Forbidden) to avoid leaking information about blob
+    // existence
     match db.check_cas_access(auth.org_id, &key).await {
         Ok(true) => {}
         Ok(false) => {
