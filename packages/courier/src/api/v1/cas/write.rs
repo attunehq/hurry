@@ -101,13 +101,16 @@ pub async fn handle(
 
         // Grant access even though it already exists (idempotent, in case org didn't
         // have access)
-        if let Err(err) = db.grant_cas_access(auth.org_id, &key).await {
-            error!(error = ?err, "cas.write.grant_access_error");
-            return CasWriteResponse::Error(err);
+        match db.grant_cas_access(auth.org_id, &key).await {
+            Ok(granted) => {
+                info!(?granted, "cas.write.exists");
+                return CasWriteResponse::Created;
+            }
+            Err(err) => {
+                error!(error = ?err, "cas.write.grant_access_error");
+                return CasWriteResponse::Error(err);
+            }
         }
-
-        info!("cas.write.exists");
-        return CasWriteResponse::Created;
     }
 
     // Check Content-Type header to determine if content is pre-compressed
@@ -124,13 +127,16 @@ pub async fn handle(
     match result {
         Ok(()) => {
             // Grant org access to the CAS key after successful write
-            if let Err(err) = db.grant_cas_access(auth.org_id, &key).await {
-                error!(error = ?err, "cas.write.grant_access_error");
-                return CasWriteResponse::Error(err);
+            match db.grant_cas_access(auth.org_id, &key).await {
+                Ok(granted) => {
+                    info!(?granted, "cas.write.success");
+                    CasWriteResponse::Created
+                }
+                Err(err) => {
+                    error!(error = ?err, "cas.write.grant_access_error");
+                    CasWriteResponse::Error(err)
+                }
             }
-
-            info!("cas.write.success");
-            CasWriteResponse::Created
         }
         Err(err) => {
             error!(error = ?err, "cas.write.error");

@@ -177,9 +177,30 @@ async fn process_archive(
             }
         };
 
+        // We still need to grant access, even if the CAS item exists.
         if let Ok(true) = cas.exists(&key).await {
-            info!(%key, "cas.bulk.write.skipped");
-            skipped.insert(key);
+            match db.grant_cas_access(auth.org_id, &key).await {
+                Ok(granted) => {
+                    if granted {
+                        // Org didn't have access, to them this was "written"
+                        info!(%key, "cas.bulk.write.exists.granted");
+                        written.insert(key);
+                    } else {
+                        // Org already had access, so this was "skipped"
+                        info!(%key, "cas.bulk.write.skipped");
+                        skipped.insert(key);
+                    }
+                }
+                Err(error) => {
+                    error!(%key, ?error, "cas.bulk.write.grant_access.error");
+                    errors.insert(
+                        CasBulkWriteKeyError::builder()
+                            .key(key)
+                            .error(format!("blob exists but failed to grant access: {error:?}"))
+                            .build(),
+                    );
+                }
+            }
             continue;
         }
 
@@ -190,8 +211,12 @@ async fn process_archive(
         };
 
         match result {
-            Ok(()) => {
-                if let Err(error) = db.grant_cas_access(auth.org_id, &key).await {
+            Ok(()) => match db.grant_cas_access(auth.org_id, &key).await {
+                Ok(granted) => {
+                    info!(%key, ?granted, "cas.bulk.write.success");
+                    written.insert(key);
+                }
+                Err(error) => {
                     error!(%key, ?error, "cas.bulk.write.grant_access.error");
                     errors.insert(
                         CasBulkWriteKeyError::builder()
@@ -201,11 +226,8 @@ async fn process_archive(
                             ))
                             .build(),
                     );
-                } else {
-                    info!(%key, "cas.bulk.write.success"); // Grant access after successful write
-                    written.insert(key);
                 }
-            }
+            },
             Err(error) => {
                 error!(%key, ?error, "cas.bulk.write.error");
                 errors.insert(
@@ -389,6 +411,8 @@ mod tests {
         response2.assert_status_success();
         let body2 = response2.json::<CasBulkWriteResponse>();
 
+        // Second write by same org should be reported as "skipped" (org already had
+        // access)
         let expected2 = CasBulkWriteResponse::builder().skipped([&key]).build();
         pretty_assert_eq!(body2, expected2);
 
@@ -789,6 +813,70 @@ mod tests {
         };
 
         pretty_assert_eq!(found, expected);
+        Ok(())
+    }
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
+    async fn bulk_write_grants_access_when_blob_exists(pool: PgPool) -> Result<()> {
+        use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN};
+
+        let (server, _tmp) = crate::api::test_server(pool)
+            .await
+            .context("create test server")?;
+
+        let (content, key) = test_blob(b"shared blob content");
+
+        // Alice uploads the blob first
+        let tar_data_alice = create_tar(vec![(key.to_hex(), content.clone())]).await?;
+        let response_alice = server
+            .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .content_type("application/x-tar")
+            .bytes(tar_data_alice.into())
+            .await;
+
+        response_alice.assert_status_success();
+        let body_alice = response_alice.json::<CasBulkWriteResponse>();
+        pretty_assert_eq!(body_alice.written, btreeset! { key.clone() });
+
+        // Charlie (different org) should not be able to read the blob yet
+        let check_response = server
+            .method(axum::http::Method::HEAD, &format!("/api/v1/cas/{key}"))
+            .authorization_bearer(WIDGET_CHARLIE_TOKEN)
+            .await;
+        check_response.assert_status(StatusCode::NOT_FOUND);
+
+        // Charlie uploads the same blob (blob exists on disk, but Charlie doesn't have
+        // access)
+        let tar_data_charlie = create_tar(vec![(key.to_hex(), content.clone())]).await?;
+        let response_charlie = server
+            .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(WIDGET_CHARLIE_TOKEN)
+            .content_type("application/x-tar")
+            .bytes(tar_data_charlie.into())
+            .await;
+
+        response_charlie.assert_status_success();
+        let body_charlie = response_charlie.json::<CasBulkWriteResponse>();
+
+        // Should be reported as "written" because Charlie's org didn't have access
+        // before
+        pretty_assert_eq!(body_charlie.written, btreeset! { key.clone() });
+        pretty_assert_eq!(body_charlie.skipped, BTreeSet::new());
+        pretty_assert_eq!(body_charlie.errors, BTreeSet::new());
+
+        // Now Charlie should be able to read the blob
+        let read_response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(WIDGET_CHARLIE_TOKEN)
+            .await;
+        read_response.assert_status_ok();
+        pretty_assert_eq!(read_response.as_bytes().as_ref(), content.as_slice());
+
         Ok(())
     }
 }

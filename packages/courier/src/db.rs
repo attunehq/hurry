@@ -531,10 +531,11 @@ impl Postgres {
 
     /// Grant an organization access to a CAS key.
     ///
-    /// This is idempotent: if the organization already has access, this is a
-    /// no-op.
+    /// This is idempotent: if the organization already has access, this is a no-op.
+    ///
+    /// Returns `true` if access was newly granted, `false` if the org already had access.
     #[tracing::instrument(name = "Postgres::grant_cas_access")]
-    pub async fn grant_cas_access(&self, org_id: OrgId, key: &Key) -> Result<()> {
+    pub async fn grant_cas_access(&self, org_id: OrgId, key: &Key) -> Result<bool> {
         // First, ensure the CAS key exists
         let key_id = sqlx::query!(
             r#"
@@ -551,7 +552,7 @@ impl Postgres {
         .id;
 
         // Then grant access to the organization
-        sqlx::query!(
+        let result = sqlx::query!(
             r#"
             INSERT INTO cas_access (organization_id, cas_key_id)
             VALUES ($1, $2)
@@ -564,7 +565,9 @@ impl Postgres {
         .await
         .context("grant org access to cas key")?;
 
-        Ok(())
+        // If rows_affected is 1, we inserted a new row (newly granted access)
+        // If rows_affected is 0, the row already existed (org already had access)
+        Ok(result.rows_affected() == 1)
     }
 
     /// Check if an organization has access to a CAS key.
