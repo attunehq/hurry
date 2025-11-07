@@ -2,7 +2,8 @@ mod cargo;
 
 pub use cargo::{
     CargoDaemonState, CargoUploadRequest, CargoUploadResponse, CargoUploadStatus,
-    CargoUploadStatusRequest, CargoUploadStatusResponse, cargo_router,
+    CargoUploadStatusAllResponse, CargoUploadStatusRequest, CargoUploadStatusResponse,
+    cargo_router,
 };
 
 use crate::{
