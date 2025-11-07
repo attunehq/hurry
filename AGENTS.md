@@ -160,7 +160,7 @@ This is a Rust codebase. Always follow these conventions when writing or reviewi
 
 ## Context-Specific Guides
 
-For deeper patterns and examples beyond the core guidelines above, load these guides:
+For additional patterns and examples beyond the core guidelines above, load these guides:
 
 - **Detailed patterns**: Load `.agents/patterns.md` for architectural patterns including async, HTTP/API, database, file I/O, and type design patterns
 - **Development tasks**: Load `.agents/workflow.md` for build commands, testing procedures, release processes, and tool-specific workflows
