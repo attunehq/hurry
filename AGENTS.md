@@ -109,8 +109,10 @@ This is a Rust codebase. Always follow these conventions when writing or reviewi
 
 **Type Names: Avoid Stuttering**
 - When a type is namespaced by its module, don't repeat context
-- ❌ `storage::CasStorage` — stutters "storage"
-- ✅ `storage::Disk` — describes implementation
+- ❌ `storage::CasStorage` or `storage::DiskStorage` — stutters "storage"
+- ✅ `storage::Disk` — describes implementation (actual example from courier/src/storage.rs)
+- ❌ `db::PostgresDatabase` — stutters "database"
+- ✅ `db::Postgres` — describes implementation (actual example from courier/src/db.rs)
 
 **Function and Variable Names**
 - Don't prefix test functions with `test_`
@@ -129,22 +131,20 @@ This is a Rust codebase. Always follow these conventions when writing or reviewi
 - Write tests integration-style (test public APIs) not unit-style (test internals)
 
 **Assertions**
-- Use `pretty_assertions` with prefixed imports to avoid shadowing:
+- Use `pretty_assertions` with prefixed imports to avoid shadowing (see hurry/tests/it/passthrough.rs:7 or hurry/src/cargo/build_args.rs:650):
   ```rust
-  use pretty_assertions::{
-      assert_eq as pretty_assert_eq,
-      assert_ne as pretty_assert_ne,
-  };
+  use pretty_assertions::assert_eq as pretty_assert_eq;
   ```
 - Always construct the ENTIRE expected value upfront and compare in ONE operation
 - ✅ Declare expected value first, single assertion
 - ❌ Property-by-property assertions
 
 **Parameterized Tests**
-- Use `simple_test_case` for tests with multiple variations
+- Use `simple_test_case` for tests with multiple variations (see hurry/tests/it/passthrough.rs:55-65 or hurry/src/cargo/build_args.rs:655-662)
 
 **Running Tests**
 - Use cargo nextest: `cargo nextest run -p {PACKAGE_NAME}`
+- Available packages: `hurry`, `courier`, `clients`, `e2e`
 
 ### Development Workflow
 
@@ -153,8 +153,10 @@ This is a Rust codebase. Always follow these conventions when writing or reviewi
 - Run `cargo autoinherit` after adding packages (workspace uses inheritance)
 
 **Code Quality**
-- Format code: `make format` or `cargo fmt`
-- Run linter: `cargo clippy`
+- Format code: `make format` (uses nightly rustfmt)
+- Run linter: `make check`
+- Auto-fix lints: `make check-fix`
+- Pre-commit checks: `make precommit` (runs machete-fix, autoinherit, check-fix, format, sqlx-prepare)
 
 ## Context-Specific Guides
 
