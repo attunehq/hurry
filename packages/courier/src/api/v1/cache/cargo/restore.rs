@@ -77,9 +77,13 @@ mod tests {
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::test_blob;
+    use crate::api::test_helpers::{ACME_ALICE_TOKEN, test_blob};
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn restore_after_save(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -112,6 +116,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&save_request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -125,6 +130,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&restore_request)
             .await;
 
@@ -153,7 +159,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn restore_nonexistent_cache(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -168,6 +178,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&restore_request)
             .await;
 
@@ -176,7 +187,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn restore_with_build_script_hashes(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -202,6 +217,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&save_request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -217,6 +233,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&restore_request)
             .await;
 
@@ -237,7 +254,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn restore_wrong_build_script_hash(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -262,6 +283,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&save_request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -276,6 +298,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&restore_request)
             .await;
 
@@ -284,7 +307,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn restore_different_targets(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -316,6 +343,7 @@ mod tests {
 
             let response = server
                 .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&save_request)
                 .await;
             response.assert_status(StatusCode::CREATED);
@@ -331,6 +359,7 @@ mod tests {
 
             let response = server
                 .post("/api/v1/cache/cargo/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&restore_request)
                 .await;
 
@@ -352,7 +381,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn restore_with_many_artifacts(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -384,6 +417,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&save_request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -397,6 +431,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&restore_request)
             .await;
 
@@ -412,7 +447,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn concurrent_restores_same_cache(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -435,6 +474,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&save_request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -449,33 +489,43 @@ mod tests {
         let (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10) = tokio::join!(
             server
                 .post("/api/v1/cache/cargo/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&restore_request),
             server
                 .post("/api/v1/cache/cargo/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&restore_request),
             server
                 .post("/api/v1/cache/cargo/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&restore_request),
             server
                 .post("/api/v1/cache/cargo/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&restore_request),
             server
                 .post("/api/v1/cache/cargo/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&restore_request),
             server
                 .post("/api/v1/cache/cargo/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&restore_request),
             server
                 .post("/api/v1/cache/cargo/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&restore_request),
             server
                 .post("/api/v1/cache/cargo/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&restore_request),
             server
                 .post("/api/v1/cache/cargo/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&restore_request),
             server
                 .post("/api/v1/cache/cargo/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&restore_request),
         );
 
@@ -497,7 +547,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn restore_different_package_versions(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -527,6 +581,7 @@ mod tests {
 
             let response = server
                 .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&save_request)
                 .await;
             response.assert_status(StatusCode::CREATED);
@@ -542,6 +597,7 @@ mod tests {
 
             let response = server
                 .post("/api/v1/cache/cargo/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&restore_request)
                 .await;
 
@@ -563,7 +619,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn restore_preserves_mtime_precision(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -588,6 +648,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&save_request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -601,6 +662,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&restore_request)
             .await;
 
@@ -621,7 +683,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn restore_wrong_package_name(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -645,6 +711,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&save_request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -658,6 +725,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&restore_request)
             .await;
         response.assert_status(StatusCode::NOT_FOUND);
@@ -665,7 +733,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn restore_wrong_package_version(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -689,6 +761,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&save_request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -702,6 +775,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&restore_request)
             .await;
         response.assert_status(StatusCode::NOT_FOUND);
@@ -709,7 +783,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn restore_wrong_target(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -733,6 +811,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&save_request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -746,6 +825,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&restore_request)
             .await;
         response.assert_status(StatusCode::NOT_FOUND);
@@ -753,7 +833,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn restore_wrong_library_crate_hash(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -777,6 +861,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&save_request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -790,6 +875,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&restore_request)
             .await;
         response.assert_status(StatusCode::NOT_FOUND);

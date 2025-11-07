@@ -21,7 +21,11 @@ use tokio_util::{
 };
 use tracing::{error, info};
 
-use crate::{auth::RawToken, db::Postgres, storage::{Disk, Key}};
+use crate::{
+    auth::RawToken,
+    db::Postgres,
+    storage::{Disk, Key},
+};
 
 /// Responses for bulk write operation.
 pub enum BulkWriteResponse {
@@ -192,11 +196,13 @@ async fn process_archive(
                     errors.insert(
                         CasBulkWriteKeyError::builder()
                             .key(key)
-                            .error(format!("write succeeded but failed to grant access: {error:?}"))
+                            .error(format!(
+                                "write succeeded but failed to grant access: {error:?}"
+                            ))
                             .build(),
                     );
                 } else {
-                    info!(%key, "cas.bulk.write.success");                // Grant access after successful write
+                    info!(%key, "cas.bulk.write.success"); // Grant access after successful write
                     written.insert(key);
                 }
             }
@@ -266,7 +272,7 @@ mod tests {
     use sqlx::PgPool;
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
-    use crate::api::test_helpers::test_blob;
+    use crate::api::test_helpers::{ACME_ALICE_TOKEN, test_blob};
 
     #[track_caller]
     fn compress(data: impl AsRef<[u8]>) -> Vec<u8> {
@@ -298,7 +304,11 @@ mod tests {
         Ok(cursor.into_inner())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_write_multiple_blobs(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -317,6 +327,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .content_type("application/x-tar")
             .bytes(tar_data.into())
             .await;
@@ -330,7 +341,10 @@ mod tests {
         pretty_assert_eq!(body, expected);
 
         for (key, expected) in [(key1, content1), (key2, content2), (key3, content3)] {
-            let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
+            let read_response = server
+                .get(&format!("/api/v1/cas/{key}"))
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .await;
             read_response.assert_status_ok();
             let body = read_response.as_bytes();
             pretty_assert_eq!(body.as_ref(), expected.as_slice());
@@ -339,7 +353,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_write_idempotent(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -350,6 +368,7 @@ mod tests {
 
         let response1 = server
             .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .content_type("application/x-tar")
             .bytes(tar_data.clone().into())
             .await;
@@ -362,6 +381,7 @@ mod tests {
 
         let response2 = server
             .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .content_type("application/x-tar")
             .bytes(tar_data.into())
             .await;
@@ -375,7 +395,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_write_invalid_hash(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -387,6 +411,7 @@ mod tests {
         let tar = create_tar(vec![(key.to_hex(), content)]).await?;
         let response = server
             .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .content_type("application/x-tar")
             .bytes(tar.into())
             .await;
@@ -406,7 +431,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_write_invalid_filename(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -415,6 +444,7 @@ mod tests {
         let tar = create_tar(vec![("not-a-valid-hex-key", b"test content")]).await?;
         let response = server
             .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .content_type("application/x-tar")
             .bytes(tar.into())
             .await;
@@ -423,7 +453,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_write_partial_success(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -441,6 +475,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .content_type("application/x-tar")
             .bytes(tar_data.into())
             .await;
@@ -456,14 +491,21 @@ mod tests {
         let error = body.errors.iter().next().unwrap();
         pretty_assert_eq!(&error.key, &wrong_key);
 
-        let response = server.get(&format!("/api/v1/cas/{valid_key}")).await;
+        let response = server
+            .get(&format!("/api/v1/cas/{valid_key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
         response.assert_status_ok();
         pretty_assert_eq!(response.as_bytes().as_ref(), &valid_content);
 
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_write_empty_tar(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -472,6 +514,7 @@ mod tests {
         let tar = create_tar(Vec::<(&str, &[u8])>::new()).await?;
         let response = server
             .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .content_type("application/x-tar")
             .bytes(tar.into())
             .await;
@@ -508,7 +551,11 @@ mod tests {
         Ok(cursor.into_inner())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_write_compressed(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -527,6 +574,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .content_type(ContentType::TarZstd.to_str())
             .bytes(tar_data.into())
             .await;
@@ -540,7 +588,10 @@ mod tests {
         pretty_assert_eq!(body, expected);
 
         for (key, expected) in [(key1, content1), (key2, content2), (key3, content3)] {
-            let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
+            let read_response = server
+                .get(&format!("/api/v1/cas/{key}"))
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .await;
             read_response.assert_status_ok();
             let body = read_response.as_bytes();
             pretty_assert_eq!(body.as_ref(), expected.as_slice());
@@ -549,7 +600,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_write_compressed_idempotent(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -560,6 +615,7 @@ mod tests {
 
         let response1 = server
             .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .content_type(ContentType::TarZstd.to_str())
             .bytes(tar_data.clone().into())
             .await;
@@ -572,6 +628,7 @@ mod tests {
 
         let response2 = server
             .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .content_type(ContentType::TarZstd.to_str())
             .bytes(tar_data.into())
             .await;
@@ -585,7 +642,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_write_compressed_invalid_hash(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -597,6 +658,7 @@ mod tests {
         let tar = create_tar_compressed(vec![(key.to_hex(), content)]).await?;
         let response = server
             .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .content_type(ContentType::TarZstd.to_str())
             .bytes(tar.into())
             .await;
@@ -615,7 +677,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_write_compressed_partial_success(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -633,6 +699,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .content_type(ContentType::TarZstd.to_str())
             .bytes(tar_data.into())
             .await;
@@ -646,14 +713,21 @@ mod tests {
         let error = body.errors.iter().next().unwrap();
         pretty_assert_eq!(&error.key, &wrong_key);
 
-        let response = server.get(&format!("/api/v1/cas/{valid_key}")).await;
+        let response = server
+            .get(&format!("/api/v1/cas/{valid_key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
         response.assert_status_ok();
         pretty_assert_eq!(response.as_bytes().as_ref(), &valid_content);
 
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_write_compressed_roundtrip(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -670,6 +744,7 @@ mod tests {
 
         let write_response = server
             .post("/api/v1/cas/bulk/write")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .content_type(ContentType::TarZstd.to_str())
             .bytes(tar_data.into())
             .await;
@@ -682,6 +757,7 @@ mod tests {
 
         let read_response = server
             .post("/api/v1/cas/bulk/read")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .add_header(clients::ContentType::ACCEPT, ContentType::TarZstd.value())
             .json(&request)
             .await;

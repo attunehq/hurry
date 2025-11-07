@@ -99,7 +99,8 @@ pub async fn handle(
         // we for some reason fail to drain, report it as a success anyway.
         body.into_data_stream().for_each(|_| async {}).await;
 
-        // Grant access even though it already exists (idempotent, in case org didn't have access)
+        // Grant access even though it already exists (idempotent, in case org didn't
+        // have access)
         if let Err(err) = db.grant_cas_access(auth.org_id, &key).await {
             error!(error = ?err, "cas.write.grant_access_error");
             return CasWriteResponse::Error(err);
@@ -186,7 +187,7 @@ mod tests {
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::{test_blob, write_cas};
+    use crate::api::test_helpers::{ACME_ALICE_TOKEN, test_blob, write_cas};
 
     #[track_caller]
     fn compress(data: impl AsRef<[u8]>) -> Vec<u8> {
@@ -198,7 +199,11 @@ mod tests {
         zstd::bulk::decompress(data.as_ref(), 10 * 1024 * 1024).expect("decompress")
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn basic_write_flow(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"hello world";
         let (server, _tmp) = crate::api::test_server(pool)
@@ -206,9 +211,9 @@ mod tests {
             .context("create test server")?;
 
         let (_, key) = test_blob(CONTENT);
-
         let response = server
             .put(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .bytes(Bytes::from_static(CONTENT))
             .await;
 
@@ -217,7 +222,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn idempotent_writes(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"idempotent test";
         let (server, _tmp) = crate::api::test_server(pool)
@@ -229,6 +238,7 @@ mod tests {
         // First write
         let response1 = server
             .put(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .bytes(Bytes::from_static(CONTENT))
             .await;
         response1.assert_status(StatusCode::CREATED);
@@ -236,12 +246,17 @@ mod tests {
         // Second write
         let response2 = server
             .put(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .bytes(Bytes::from_static(CONTENT))
             .await;
         response2.assert_status(StatusCode::CREATED);
 
         // Content should still be readable
-        let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
+
+        let read_response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
         read_response.assert_status_ok();
         let body = read_response.as_bytes();
         pretty_assert_eq!(body.as_ref(), CONTENT);
@@ -249,7 +264,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn idempotent_write_large_blob(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -261,6 +280,7 @@ mod tests {
         // First write
         let response1 = server
             .put(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .bytes(Bytes::copy_from_slice(&content))
             .await;
         response1.assert_status(StatusCode::CREATED);
@@ -270,12 +290,16 @@ mod tests {
         // already exists, avoiding "connection reset by peer" errors
         let response2 = server
             .put(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .bytes(Bytes::copy_from_slice(&content))
             .await;
         response2.assert_status(StatusCode::CREATED);
 
         // Verify content is still readable and correct
-        let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
+        let read_response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
         read_response.assert_status_ok();
         let body = read_response.as_bytes();
         pretty_assert_eq!(body.len(), content.len());
@@ -284,7 +308,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn invalid_key_hash(pool: PgPool) -> Result<()> {
         const ACTUAL_CONTENT: &[u8] = b"actual content";
         const WRONG_CONTENT: &[u8] = b"different content";
@@ -293,9 +321,9 @@ mod tests {
             .context("create test server")?;
 
         let (_, wrong_key) = test_blob(WRONG_CONTENT);
-
         let response = server
             .put(&format!("/api/v1/cas/{wrong_key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .bytes(Bytes::from_static(ACTUAL_CONTENT))
             .await;
 
@@ -304,17 +332,24 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn large_blob_write(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
         let content = vec![0xAB; 1024 * 1024]; // 1MB blob
-        let key = write_cas(&server, &content).await?;
+        let key = write_cas(&server, &content, ACME_ALICE_TOKEN).await?;
 
         // Verify it can be read back
-        let response = server.get(&format!("/api/v1/cas/{key}")).await;
+        let response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
         response.assert_status_ok();
         let body = response.as_bytes();
         pretty_assert_eq!(body.len(), content.len());
@@ -323,7 +358,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn concurrent_writes_same_blob(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"concurrent write test content";
         let (server, _tmp) = crate::api::test_server(pool)
@@ -336,33 +375,43 @@ mod tests {
         let (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10) = tokio::join!(
             server
                 .put(&format!("/api/v1/cas/{key}"))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::from_static(CONTENT)),
             server
                 .put(&format!("/api/v1/cas/{key}"))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::from_static(CONTENT)),
             server
                 .put(&format!("/api/v1/cas/{key}"))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::from_static(CONTENT)),
             server
                 .put(&format!("/api/v1/cas/{key}"))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::from_static(CONTENT)),
             server
                 .put(&format!("/api/v1/cas/{key}"))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::from_static(CONTENT)),
             server
                 .put(&format!("/api/v1/cas/{key}"))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::from_static(CONTENT)),
             server
                 .put(&format!("/api/v1/cas/{key}"))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::from_static(CONTENT)),
             server
                 .put(&format!("/api/v1/cas/{key}"))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::from_static(CONTENT)),
             server
                 .put(&format!("/api/v1/cas/{key}"))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::from_static(CONTENT)),
             server
                 .put(&format!("/api/v1/cas/{key}"))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::from_static(CONTENT)),
         );
 
@@ -372,7 +421,10 @@ mod tests {
         }
 
         // Verify content is correct and uncorrupted
-        let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
+        let read_response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
         read_response.assert_status_ok();
         let body = read_response.as_bytes();
         pretty_assert_eq!(body.as_ref(), CONTENT, "content should be uncorrupted");
@@ -380,7 +432,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn concurrent_writes_different_blobs(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -399,33 +455,43 @@ mod tests {
         let (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10) = tokio::join!(
             server
                 .put(&format!("/api/v1/cas/{}", blobs[0].0))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::copy_from_slice(&blobs[0].1)),
             server
                 .put(&format!("/api/v1/cas/{}", blobs[1].0))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::copy_from_slice(&blobs[1].1)),
             server
                 .put(&format!("/api/v1/cas/{}", blobs[2].0))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::copy_from_slice(&blobs[2].1)),
             server
                 .put(&format!("/api/v1/cas/{}", blobs[3].0))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::copy_from_slice(&blobs[3].1)),
             server
                 .put(&format!("/api/v1/cas/{}", blobs[4].0))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::copy_from_slice(&blobs[4].1)),
             server
                 .put(&format!("/api/v1/cas/{}", blobs[5].0))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::copy_from_slice(&blobs[5].1)),
             server
                 .put(&format!("/api/v1/cas/{}", blobs[6].0))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::copy_from_slice(&blobs[6].1)),
             server
                 .put(&format!("/api/v1/cas/{}", blobs[7].0))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::copy_from_slice(&blobs[7].1)),
             server
                 .put(&format!("/api/v1/cas/{}", blobs[8].0))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::copy_from_slice(&blobs[8].1)),
             server
                 .put(&format!("/api/v1/cas/{}", blobs[9].0))
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .bytes(Bytes::copy_from_slice(&blobs[9].1)),
         );
 
@@ -436,7 +502,10 @@ mod tests {
 
         // Verify all blobs can be read back with correct content
         for (key, expected_content) in blobs {
-            let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
+            let read_response = server
+                .get(&format!("/api/v1/cas/{key}"))
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .await;
             read_response.assert_status_ok();
             let body = read_response.as_bytes();
             pretty_assert_eq!(
@@ -449,7 +518,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn write_compressed(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"test content for compression";
         let (server, _tmp) = crate::api::test_server(pool)
@@ -462,12 +535,16 @@ mod tests {
         let response = server
             .put(&format!("/api/v1/cas/{key}"))
             .content_type(ContentType::BytesZstd.to_str())
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .bytes(Bytes::copy_from_slice(&compressed))
             .await;
 
         response.assert_status(StatusCode::CREATED);
 
-        let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
+        let read_response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
         read_response.assert_status_ok();
         let body = read_response.as_bytes();
         pretty_assert_eq!(body.as_ref(), CONTENT);
@@ -475,7 +552,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn write_compressed_idempotent(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"idempotent compressed test";
         let (server, _tmp) = crate::api::test_server(pool)
@@ -488,6 +569,7 @@ mod tests {
         let response1 = server
             .put(&format!("/api/v1/cas/{key}"))
             .content_type(ContentType::BytesZstd.to_str())
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .bytes(Bytes::copy_from_slice(&compressed))
             .await;
         response1.assert_status(StatusCode::CREATED);
@@ -495,11 +577,15 @@ mod tests {
         let response2 = server
             .put(&format!("/api/v1/cas/{key}"))
             .content_type(ContentType::BytesZstd.to_str())
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .bytes(Bytes::copy_from_slice(&compressed))
             .await;
         response2.assert_status(StatusCode::CREATED);
 
-        let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
+        let read_response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
         read_response.assert_status_ok();
         let body = read_response.as_bytes();
         pretty_assert_eq!(body.as_ref(), CONTENT);
@@ -507,7 +593,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn write_compressed_invalid_hash(pool: PgPool) -> Result<()> {
         const ACTUAL_CONTENT: &[u8] = b"actual content";
         const WRONG_CONTENT: &[u8] = b"different content";
@@ -521,6 +611,7 @@ mod tests {
         let response = server
             .put(&format!("/api/v1/cas/{wrong_key}"))
             .content_type(ContentType::BytesZstd.to_str())
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .bytes(Bytes::copy_from_slice(&compressed))
             .await;
 
@@ -529,7 +620,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn write_compressed_roundtrip(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"roundtrip test content";
         let (server, _tmp) = crate::api::test_server(pool)
@@ -542,6 +637,7 @@ mod tests {
         let write_response = server
             .put(&format!("/api/v1/cas/{key}"))
             .content_type(ContentType::BytesZstd.to_str())
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .bytes(Bytes::copy_from_slice(&compressed))
             .await;
         write_response.assert_status(StatusCode::CREATED);
@@ -549,6 +645,7 @@ mod tests {
         let read_response = server
             .get(&format!("/api/v1/cas/{key}"))
             .add_header(ContentType::ACCEPT, ContentType::BytesZstd.value())
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .await;
 
         read_response.assert_status_ok();

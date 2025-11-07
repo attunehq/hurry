@@ -58,11 +58,12 @@ pub async fn handle(
     };
 
     // Check if org has access to this CAS key
+    // Return NotFound (not Forbidden) to avoid leaking information about blob existence
     match db.check_cas_access(auth.org_id, &key).await {
         Ok(true) => {}
         Ok(false) => {
-            info!("cas.check.forbidden");
-            return CasCheckResponse::Forbidden;
+            info!("cas.check.no_access");
+            return CasCheckResponse::NotFound;
         }
         Err(err) => {
             error!(error = ?err, "cas.check.access_check_error");
@@ -92,7 +93,6 @@ pub enum CasCheckResponse {
     Found,
     NotFound,
     Unauthorized,
-    Forbidden,
     Error(Report),
 }
 
@@ -102,7 +102,6 @@ impl IntoResponse for CasCheckResponse {
             CasCheckResponse::Found => StatusCode::OK.into_response(),
             CasCheckResponse::NotFound => StatusCode::NOT_FOUND.into_response(),
             CasCheckResponse::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
-            CasCheckResponse::Forbidden => StatusCode::FORBIDDEN.into_response(),
             CasCheckResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }
@@ -112,23 +111,28 @@ impl IntoResponse for CasCheckResponse {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::StatusCode;
+    use axum::http::{Method, StatusCode};
     use color_eyre::{Result, eyre::Context};
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::{test_blob, write_cas};
+    use crate::api::test_helpers::{ACME_ALICE_TOKEN, test_blob, write_cas};
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn check_exists(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"check exists test";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
-        let key = write_cas(&server, CONTENT).await?;
+        let key = write_cas(&server, CONTENT, ACME_ALICE_TOKEN).await?;
 
         let response = server
-            .method(axum::http::Method::HEAD, &format!("/api/v1/cas/{key}"))
+            .method(Method::HEAD, &format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .await;
 
         response.assert_status_ok();
@@ -136,7 +140,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn check_doesnt_exist(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -145,10 +153,8 @@ mod tests {
         let (_, nonexistent_key) = test_blob(b"never written");
 
         let response = server
-            .method(
-                axum::http::Method::HEAD,
-                &format!("/api/v1/cas/{nonexistent_key}"),
-            )
+            .method(Method::HEAD, &format!("/api/v1/cas/{nonexistent_key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .await;
 
         response.assert_status(StatusCode::NOT_FOUND);
@@ -156,7 +162,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn check_then_write_toctou_safety(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"toctou test";
         let (server, _tmp) = crate::api::test_server(pool)
@@ -168,15 +178,17 @@ mod tests {
         // Check before write
         let check1 = server
             .method(axum::http::Method::HEAD, &format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .await;
         check1.assert_status(StatusCode::NOT_FOUND);
 
         // Write content
-        write_cas(&server, CONTENT).await?;
+        write_cas(&server, CONTENT, ACME_ALICE_TOKEN).await?;
 
         // Check after write
         let check2 = server
             .method(axum::http::Method::HEAD, &format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .await;
         check2.assert_status_ok();
 

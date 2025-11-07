@@ -136,6 +136,34 @@ pub(crate) mod test_helpers {
     use clients::courier::v1::Key;
     use color_eyre::Result;
 
+    use crate::auth::{AccountId, AuthenticatedToken, OrgId, RawToken};
+
+    /// Token constant used in the `auth.sql` fixture.
+    pub const ACME_ALICE_TOKEN: &str = "acme-alice-token-001";
+
+    /// Token constant used in the `auth.sql` fixture.
+    pub const ACME_BOB_TOKEN: &str = "acme-bob-token-001";
+
+    /// Token constant used in the `auth.sql` fixture.
+    pub const WIDGET_CHARLIE_TOKEN: &str = "widget-charlie-token-001";
+
+    /// Token constant used in the `auth.sql` fixture.
+    pub const TEST_TOKEN: &str = "test-token-001";
+
+    /// Token constant used in the `auth.sql` fixture.
+    pub const REVOKED_TOKEN: &str = "acme-alice-token-revoked";
+
+    /// Create an authenticated token for testing.
+    /// This corresponds to alice@acme.com (account_id=1, org_id=2) from
+    /// auth.sql fixture.
+    pub fn acme_alice_auth() -> AuthenticatedToken {
+        AuthenticatedToken {
+            account_id: AccountId::from_i64(1),
+            org_id: OrgId::from_u64(2),
+            token: RawToken::new(ACME_ALICE_TOKEN),
+        }
+    }
+
     /// Generate test content and compute its key.
     pub fn test_blob(content: &[u8]) -> (Vec<u8>, Key) {
         let hash = blake3::hash(content);
@@ -143,10 +171,13 @@ pub(crate) mod test_helpers {
     }
 
     /// Write a blob to CAS and return the key.
-    pub async fn write_cas(server: &TestServer, content: &[u8]) -> Result<Key> {
+    /// Requires an authentication token to be explicitly provided.
+    pub async fn write_cas(server: &TestServer, content: &[u8], token: &str) -> Result<Key> {
         let (_, key) = test_blob(content);
+
         let response = server
             .put(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(token)
             .bytes(Bytes::copy_from_slice(content))
             .await;
 

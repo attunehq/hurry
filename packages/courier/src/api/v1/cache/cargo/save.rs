@@ -64,9 +64,13 @@ mod tests {
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::test_blob;
+    use crate::api::test_helpers::{ACME_ALICE_TOKEN, acme_alice_auth, test_blob};
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn basic_save_flow(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool.clone())
             .await
@@ -97,7 +101,11 @@ mod tests {
             ])
             .build();
 
-        let response = server.post("/api/v1/cache/cargo/save").json(&request).await;
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .json(&request)
+            .await;
         response.assert_status(StatusCode::CREATED);
 
         // Verify database state
@@ -109,7 +117,9 @@ mod tests {
             .library_crate_compilation_unit_hash("abc123")
             .build();
 
-        let artifacts = db.cargo_cache_restore(restore_request).await?;
+        let artifacts = db
+            .cargo_cache_restore(&acme_alice_auth(), restore_request)
+            .await?;
         let expected = vec![
             ArtifactFile::builder()
                 .object_key(key1)
@@ -130,7 +140,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn idempotent_saves(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool.clone())
             .await
@@ -161,10 +175,18 @@ mod tests {
             ])
             .build();
 
-        let response1 = server.post("/api/v1/cache/cargo/save").json(&request).await;
+        let response1 = server
+            .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .json(&request)
+            .await;
         response1.assert_status(StatusCode::CREATED);
 
-        let response2 = server.post("/api/v1/cache/cargo/save").json(&request).await;
+        let response2 = server
+            .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .json(&request)
+            .await;
         response2.assert_status(StatusCode::CREATED);
 
         // Verify database state after idempotent saves
@@ -176,7 +198,9 @@ mod tests {
             .library_crate_compilation_unit_hash("abc123")
             .build();
 
-        let artifacts = db.cargo_cache_restore(restore_request).await?;
+        let artifacts = db
+            .cargo_cache_restore(&acme_alice_auth(), restore_request)
+            .await?;
         let expected = vec![
             ArtifactFile::builder()
                 .object_key(key1)
@@ -197,7 +221,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn save_with_build_script_hashes(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool.clone())
             .await
@@ -221,7 +249,11 @@ mod tests {
                 .build()])
             .build();
 
-        let response = server.post("/api/v1/cache/cargo/save").json(&request).await;
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .json(&request)
+            .await;
         response.assert_status(StatusCode::CREATED);
 
         // Verify database state
@@ -235,7 +267,9 @@ mod tests {
             .build_script_execution_unit_hash("build_exec_hash")
             .build();
 
-        let artifacts = db.cargo_cache_restore(restore_request).await?;
+        let artifacts = db
+            .cargo_cache_restore(&acme_alice_auth(), restore_request)
+            .await?;
         let expected = vec![
             ArtifactFile::builder()
                 .object_key(key)
@@ -250,7 +284,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn save_multiple_packages(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool.clone())
             .await
@@ -280,7 +318,11 @@ mod tests {
                     .build()])
                 .build();
 
-            let response = server.post("/api/v1/cache/cargo/save").json(&request).await;
+            let response = server
+                .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .json(&request)
+                .await;
             response.assert_status(StatusCode::CREATED);
         }
 
@@ -294,7 +336,9 @@ mod tests {
                 .library_crate_compilation_unit_hash(format!("hash_{i}"))
                 .build();
 
-            let artifacts = db.cargo_cache_restore(restore_request).await?;
+            let artifacts = db
+                .cargo_cache_restore(&acme_alice_auth(), restore_request)
+                .await?;
             let expected = vec![
                 ArtifactFile::builder()
                     .object_key(key)
@@ -309,7 +353,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn save_same_package_different_targets(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool.clone())
             .await
@@ -340,7 +388,11 @@ mod tests {
                     .build()])
                 .build();
 
-            let response = server.post("/api/v1/cache/cargo/save").json(&request).await;
+            let response = server
+                .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .json(&request)
+                .await;
             response.assert_status(StatusCode::CREATED);
         }
 
@@ -354,7 +406,9 @@ mod tests {
                 .library_crate_compilation_unit_hash(format!("hash_{i}"))
                 .build();
 
-            let artifacts = db.cargo_cache_restore(restore_request).await?;
+            let artifacts = db
+                .cargo_cache_restore(&acme_alice_auth(), restore_request)
+                .await?;
             let expected = vec![
                 ArtifactFile::builder()
                     .object_key(key)
@@ -369,7 +423,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn save_reuses_existing_objects(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool.clone())
             .await
@@ -393,6 +451,7 @@ mod tests {
 
         let response1 = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&request1)
             .await;
         response1.assert_status(StatusCode::CREATED);
@@ -413,6 +472,7 @@ mod tests {
 
         let response2 = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&request2)
             .await;
         response2.assert_status(StatusCode::CREATED);
@@ -427,7 +487,9 @@ mod tests {
             .library_crate_compilation_unit_hash("hash_a")
             .build();
 
-        let artifacts_a = db.cargo_cache_restore(restore_a).await?;
+        let artifacts_a = db
+            .cargo_cache_restore(&acme_alice_auth(), restore_a)
+            .await?;
         let expected_a = vec![
             ArtifactFile::builder()
                 .object_key(&shared_object_key)
@@ -445,7 +507,9 @@ mod tests {
             .library_crate_compilation_unit_hash("hash_b")
             .build();
 
-        let artifacts_b = db.cargo_cache_restore(restore_b).await?;
+        let artifacts_b = db
+            .cargo_cache_restore(&acme_alice_auth(), restore_b)
+            .await?;
         let expected_b = vec![
             ArtifactFile::builder()
                 .object_key(&shared_object_key)
@@ -459,7 +523,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn save_with_many_artifacts(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool.clone())
             .await
@@ -486,7 +554,11 @@ mod tests {
             .artifacts(artifacts)
             .build();
 
-        let response = server.post("/api/v1/cache/cargo/save").json(&request).await;
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .json(&request)
+            .await;
         response.assert_status(StatusCode::CREATED);
 
         // Verify all artifacts were saved correctly
@@ -498,7 +570,9 @@ mod tests {
             .library_crate_compilation_unit_hash("large_hash")
             .build();
 
-        let artifacts = db.cargo_cache_restore(restore_request).await?;
+        let artifacts = db
+            .cargo_cache_restore(&acme_alice_auth(), restore_request)
+            .await?;
         let expected = artifacts
             .iter()
             .enumerate()
@@ -517,7 +591,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn concurrent_saves_different_packages(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool.clone())
             .await
@@ -543,16 +621,46 @@ mod tests {
             .collect::<Vec<_>>();
 
         let (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10) = tokio::join!(
-            server.post("/api/v1/cache/cargo/save").json(&requests[0]),
-            server.post("/api/v1/cache/cargo/save").json(&requests[1]),
-            server.post("/api/v1/cache/cargo/save").json(&requests[2]),
-            server.post("/api/v1/cache/cargo/save").json(&requests[3]),
-            server.post("/api/v1/cache/cargo/save").json(&requests[4]),
-            server.post("/api/v1/cache/cargo/save").json(&requests[5]),
-            server.post("/api/v1/cache/cargo/save").json(&requests[6]),
-            server.post("/api/v1/cache/cargo/save").json(&requests[7]),
-            server.post("/api/v1/cache/cargo/save").json(&requests[8]),
-            server.post("/api/v1/cache/cargo/save").json(&requests[9]),
+            server
+                .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .json(&requests[0]),
+            server
+                .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .json(&requests[1]),
+            server
+                .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .json(&requests[2]),
+            server
+                .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .json(&requests[3]),
+            server
+                .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .json(&requests[4]),
+            server
+                .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .json(&requests[5]),
+            server
+                .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .json(&requests[6]),
+            server
+                .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .json(&requests[7]),
+            server
+                .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .json(&requests[8]),
+            server
+                .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
+                .json(&requests[9]),
         );
 
         for response in [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10] {
@@ -569,7 +677,9 @@ mod tests {
                 .library_crate_compilation_unit_hash(format!("hash_{i}"))
                 .build();
 
-            let artifacts = db.cargo_cache_restore(restore_request).await?;
+            let artifacts = db
+                .cargo_cache_restore(&acme_alice_auth(), restore_request)
+                .await?;
             let expected = artifacts
                 .iter()
                 .map(|artifact| {
@@ -587,7 +697,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn save_content_hash_mismatch_fails(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -612,6 +726,7 @@ mod tests {
 
         let response1 = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&request1)
             .await;
         response1.assert_status(StatusCode::CREATED);
@@ -633,6 +748,7 @@ mod tests {
 
         let response2 = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&request2)
             .await;
         response2.assert_status(StatusCode::INTERNAL_SERVER_ERROR);

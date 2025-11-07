@@ -52,11 +52,12 @@ pub async fn handle(
     };
 
     // Check if org has access to this CAS key
+    // Return NotFound (not Forbidden) to avoid leaking information about blob existence
     match db.check_cas_access(auth.org_id, &key).await {
         Ok(true) => {}
         Ok(false) => {
-            info!("cas.read.forbidden");
-            return CasReadResponse::Forbidden;
+            info!("cas.read.no_access");
+            return CasReadResponse::NotFound;
         }
         Err(err) => {
             error!(error = ?err, "cas.read.access_check_error");
@@ -122,7 +123,6 @@ pub enum CasReadResponse {
     Found(Body, ContentType),
     NotFound,
     Unauthorized,
-    Forbidden,
     Error(Report),
 }
 
@@ -134,7 +134,6 @@ impl IntoResponse for CasReadResponse {
             }
             CasReadResponse::NotFound => StatusCode::NOT_FOUND.into_response(),
             CasReadResponse::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
-            CasReadResponse::Forbidden => StatusCode::FORBIDDEN.into_response(),
             CasReadResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }
@@ -150,23 +149,30 @@ mod tests {
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::{test_blob, write_cas};
+    use crate::api::test_helpers::{ACME_ALICE_TOKEN, test_blob, write_cas};
 
     #[track_caller]
     fn decompress(data: impl AsRef<[u8]>) -> Vec<u8> {
         zstd::bulk::decompress(data.as_ref(), 10 * 1024 * 1024).expect("decompress")
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn read_after_write(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"read test content";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
-        let key = write_cas(&server, CONTENT).await?;
+        let key = write_cas(&server, CONTENT, ACME_ALICE_TOKEN).await?;
 
-        let response = server.get(&format!("/api/v1/cas/{key}")).await;
+        let response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
 
         response.assert_status_ok();
         let body = response.as_bytes();
@@ -175,31 +181,44 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn read_nonexistent_key(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
         let (_, nonexistent_key) = test_blob(b"never written");
-
-        let response = server.get(&format!("/api/v1/cas/{nonexistent_key}")).await;
+        let response = server
+            .get(&format!("/api/v1/cas/{nonexistent_key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
 
         response.assert_status(StatusCode::NOT_FOUND);
 
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn read_large_blob(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
         let content = vec![0xFF; 5 * 1024 * 1024]; // 5MB blob
-        let key = write_cas(&server, &content).await?;
+        let key = write_cas(&server, &content, ACME_ALICE_TOKEN).await?;
 
-        let response = server.get(&format!("/api/v1/cas/{key}")).await;
+        let response = server
+            .get(&format!("/api/v1/cas/{key}"))
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
 
         response.assert_status_ok();
         let body = response.as_bytes();
@@ -209,18 +228,23 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn read_compressed(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"test content for compression";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
-        let key = write_cas(&server, CONTENT).await?;
+        let key = write_cas(&server, CONTENT, ACME_ALICE_TOKEN).await?;
 
         let response = server
             .get(&format!("/api/v1/cas/{key}"))
             .add_header(ContentType::ACCEPT, ContentType::BytesZstd.value())
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .await;
 
         response.assert_status_ok();
@@ -237,18 +261,22 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn read_uncompressed_explicit(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"test content without compression";
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
-        let key = write_cas(&server, CONTENT).await?;
-
+        let key = write_cas(&server, CONTENT, ACME_ALICE_TOKEN).await?;
         let response = server
             .get(&format!("/api/v1/cas/{key}"))
             .add_header(ContentType::ACCEPT, ContentType::Bytes.value())
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .await;
 
         response.assert_status_ok();
@@ -261,17 +289,21 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn read_compressed_nonexistent_key(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
         let (_, nonexistent_key) = test_blob(b"never written");
-
         let response = server
             .get(&format!("/api/v1/cas/{nonexistent_key}"))
             .add_header(ContentType::ACCEPT, ContentType::BytesZstd.value())
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .await;
 
         response.assert_status(StatusCode::NOT_FOUND);

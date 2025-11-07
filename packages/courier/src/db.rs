@@ -71,7 +71,11 @@ struct CargoLibraryUnitBuildRow {
 
 impl Postgres {
     #[tracing::instrument(name = "Postgres::save_cargo_cache")]
-    pub async fn cargo_cache_save(&self, auth: &AuthenticatedToken, request: CargoSaveRequest) -> Result<()> {
+    pub async fn cargo_cache_save(
+        &self,
+        auth: &AuthenticatedToken,
+        request: CargoSaveRequest,
+    ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         let package_id = sqlx::query!(
@@ -499,8 +503,9 @@ impl Postgres {
 
     /// Validate a raw token against the database.
     ///
-    /// Returns `Some(AuthenticatedToken)` if the token is valid and not revoked,
-    /// otherwise returns `None`. Errors are only returned for database failures.
+    /// Returns `Some(AuthenticatedToken)` if the token is valid and not
+    /// revoked, otherwise returns `None`. Errors are only returned for
+    /// database failures.
     #[tracing::instrument(name = "Postgres::validate", skip(token))]
     pub async fn validate(&self, token: RawToken) -> Result<Option<AuthenticatedToken>> {
         let result = sqlx::query!(
@@ -526,7 +531,8 @@ impl Postgres {
 
     /// Grant an organization access to a CAS key.
     ///
-    /// This is idempotent: if the organization already has access, this is a no-op.
+    /// This is idempotent: if the organization already has access, this is a
+    /// no-op.
     #[tracing::instrument(name = "Postgres::grant_cas_access")]
     pub async fn grant_cas_access(&self, org_id: OrgId, key: &Key) -> Result<()> {
         // First, ensure the CAS key exists
@@ -621,7 +627,25 @@ impl Postgres {
 
     #[tracing::instrument(name = "Postgres::cargo_cache_reset")]
     pub async fn cargo_cache_reset(&self, auth: &AuthenticatedToken) -> Result<()> {
-        // Delete all cache data for the authenticated organization
+        // Delete all cache data for the authenticated organization in a single
+        // transaction
+        let mut tx = self.pool.begin().await?;
+
+        // Must delete in order: artifacts -> builds -> packages (respecting foreign
+        // keys)
+        sqlx::query!(
+            r#"
+            DELETE FROM cargo_library_unit_build_artifact
+            WHERE library_unit_build_id IN (
+                SELECT id FROM cargo_library_unit_build
+                WHERE organization_id = $1
+            )
+            "#,
+            auth.org_id.as_i64()
+        )
+        .execute(&mut *tx)
+        .await?;
+
         sqlx::query!(
             r#"
             DELETE FROM cargo_library_unit_build
@@ -629,7 +653,7 @@ impl Postgres {
             "#,
             auth.org_id.as_i64()
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
 
         sqlx::query!(
@@ -639,10 +663,10 @@ impl Postgres {
             "#,
             auth.org_id.as_i64()
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
 
-        Ok(())
+        tx.commit().await
     }
 }
 
@@ -651,6 +675,7 @@ mod tests {
     use super::*;
 
     #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[test_log::test]
     async fn open_test_database(pool: PgPool) {
         let db = crate::db::Postgres { pool };
         db.ping().await.expect("ping database");

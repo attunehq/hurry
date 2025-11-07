@@ -40,7 +40,13 @@ mod tests {
     use serde_json::json;
     use sqlx::PgPool;
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    use crate::api::test_helpers::ACME_ALICE_TOKEN;
+
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn resets_cache(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool.clone())
             .await
@@ -63,7 +69,11 @@ mod tests {
             }]
         });
 
-        let response = server.post("/api/v1/cache/cargo/save").json(&request).await;
+        let response = server
+            .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .json(&request)
+            .await;
         response.assert_status(StatusCode::CREATED);
 
         // Verify data exists
@@ -77,10 +87,13 @@ mod tests {
         pretty_assert_eq!(count, 1);
 
         // Reset cache
-        let response = server.post("/api/v1/cache/cargo/reset").await;
+        let response = server
+            .post("/api/v1/cache/cargo/reset")
+            .authorization_bearer(ACME_ALICE_TOKEN)
+            .await;
         response.assert_status(StatusCode::NO_CONTENT);
 
-        // Verify all data is gone
+        // Verify cache metadata is gone
         let count = sqlx::query!("SELECT COUNT(*) as count FROM cargo_package")
             .fetch_one(&db.pool)
             .await
@@ -89,13 +102,16 @@ mod tests {
             .unwrap_or(0);
         pretty_assert_eq!(count, 0);
 
-        let count = sqlx::query!("SELECT COUNT(*) as count FROM cargo_object")
+        let count = sqlx::query!("SELECT COUNT(*) as count FROM cargo_library_unit_build")
             .fetch_one(&db.pool)
             .await
-            .context("query objects after reset")?
+            .context("query builds after reset")?
             .count
             .unwrap_or(0);
         pretty_assert_eq!(count, 0);
+
+        // Note: cargo_object (CAS layer) is not deleted as it's shared across orgs
+        // Only the org's cache metadata is removed
 
         Ok(())
     }

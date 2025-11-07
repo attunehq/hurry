@@ -129,9 +129,13 @@ mod tests {
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::test_blob;
+    use crate::api::test_helpers::{ACME_ALICE_TOKEN, test_blob};
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_restore_multiple_packages(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -170,6 +174,7 @@ mod tests {
         for (_, _, _, _, save_request) in &saved_packages {
             let response = server
                 .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(save_request)
                 .await;
             response.assert_status(StatusCode::CREATED);
@@ -189,6 +194,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/bulk/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&bulk_request)
             .await;
 
@@ -227,7 +233,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_restore_partial_hits(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -255,6 +265,7 @@ mod tests {
 
             let response = server
                 .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&save_request)
                 .await;
             response.assert_status(StatusCode::CREATED);
@@ -281,6 +292,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/bulk/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&bulk_request)
             .await;
 
@@ -311,7 +323,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_restore_all_misses(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -337,6 +353,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/bulk/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&bulk_request)
             .await;
 
@@ -349,7 +366,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_restore_empty_request(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -359,6 +380,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/bulk/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&bulk_request)
             .await;
 
@@ -371,7 +393,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_restore_with_build_scripts(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -398,6 +424,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&save_request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -416,6 +443,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/bulk/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&bulk_request)
             .await;
 
@@ -450,7 +478,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_restore_wrong_hashes(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -478,6 +510,7 @@ mod tests {
 
             let response = server
                 .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&save_request)
                 .await;
             response.assert_status(StatusCode::CREATED);
@@ -503,6 +536,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/bulk/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&bulk_request)
             .await;
 
@@ -531,7 +565,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_restore_same_package_different_targets(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -563,6 +601,7 @@ mod tests {
 
             let response = server
                 .post("/api/v1/cache/cargo/save")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&save_request)
                 .await;
             response.assert_status(StatusCode::CREATED);
@@ -582,6 +621,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/bulk/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&bulk_request)
             .await;
 
@@ -607,7 +647,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_restore_concurrent(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -632,6 +676,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&save_request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -649,18 +694,23 @@ mod tests {
         let (r1, r2, r3, r4, r5) = tokio::join!(
             server
                 .post("/api/v1/cache/cargo/bulk/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&bulk_request),
             server
                 .post("/api/v1/cache/cargo/bulk/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&bulk_request),
             server
                 .post("/api/v1/cache/cargo/bulk/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&bulk_request),
             server
                 .post("/api/v1/cache/cargo/bulk/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&bulk_request),
             server
                 .post("/api/v1/cache/cargo/bulk/restore")
+                .authorization_bearer(ACME_ALICE_TOKEN)
                 .json(&bulk_request),
         );
 
@@ -675,7 +725,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
+    #[sqlx::test(
+        migrator = "crate::db::Postgres::MIGRATOR",
+        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
+    )]
+    #[test_log::test]
     async fn bulk_restore_preserves_request_data(pool: PgPool) -> Result<()> {
         let (server, _tmp) = crate::api::test_server(pool)
             .await
@@ -702,6 +756,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&save_request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -729,6 +784,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/bulk/restore")
+            .authorization_bearer(ACME_ALICE_TOKEN)
             .json(&bulk_request)
             .await;
 
