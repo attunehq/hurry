@@ -565,6 +565,8 @@ pub struct ArtifactKey {
 
     // Artifact folders to save and restore.
     pub lib_files: Vec<AbsFilePath>,
+    // TODO: Given the build script unit hashes, these folder paths are probably
+    // redundant.
     pub build_script_files: Option<BuildScriptDirs>,
 
     // Unit hashes.
@@ -643,6 +645,10 @@ impl BuiltArtifact {
     /// disk and construct a `BuiltArtifact`.
     #[instrument(name = "BuiltArtifact::from_key")]
     pub async fn from_key(ws: &Workspace, key: ArtifactKey) -> Result<Self> {
+        // TODO: Maybe all the `*Files::collect` methods should actually be
+        // running in here, on construction of a "built unit" after a build has
+        // executed.
+
         // Read the build script output from the build folders, and parse
         // the output for directives.
         let build_script_output = match &key.build_script_files {

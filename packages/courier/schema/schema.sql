@@ -23,6 +23,8 @@ CREATE TABLE cargo_package (
 CREATE TABLE cargo_library_unit_build (
   id BIGSERIAL PRIMARY KEY,
   package_id BIGINT NOT NULL REFERENCES cargo_package(id),
+
+  -- TODO: Do these need to be keyed by host triple too?
   target TEXT NOT NULL,
 
   library_crate_compilation_unit_hash TEXT NOT NULL,
@@ -33,6 +35,9 @@ CREATE TABLE cargo_library_unit_build (
   library_crate_fingerprint_key BIGINT NOT NULL REFERENCES cargo_object(id),
   build_script_compilation_fingerprint_key BIGINT NOT NULL REFERENCES cargo_object(id),
   build_script_execution_fingerprint_key BIGINT NOT NULL REFERENCES cargo_object(id),
+
+  -- TODO: Key on build script output directives to invalidate based on file
+  -- hash differences etc.
 
   UNIQUE NULLS NOT DISTINCT (package_id, target, library_crate_compilation_unit_hash, build_script_compilation_unit_hash, build_script_execution_unit_hash)
 );

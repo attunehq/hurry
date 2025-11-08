@@ -14,7 +14,6 @@ use crate::{
 };
 use clients::Courier;
 
-mod relocate;
 mod restore;
 mod save;
 

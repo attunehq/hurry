@@ -174,26 +174,27 @@ struct LibraryFiles {
     /// `BuildRootRelative`)[^1].
     ///
     /// [^1]: https://github.com/rust-lang/cargo/blob/df07b394850b07348c918703054712e3427715cf/src/cargo/core/compiler/fingerprint/dep_info.rs#L112
-    encoded_fingerprint_file: AbsFilePath,
+    encoded_dep_info_file: AbsFilePath,
 }
 
 impl LibraryFiles {
     async fn collect(artifact: &BuiltArtifact) -> Result<Self> {
         let output_files = artifact.lib_files.clone();
-        let deps_dir = artifact.profile_dir().join(mk_rel_dir!("deps"));
+        let profile_dir = artifact.profile_dir();
+        let deps_dir = profile_dir.join(mk_rel_dir!("deps"));
         let dep_info_file = deps_dir.try_join_file(format!(
             "{}-{}.d",
             artifact.package_name, artifact.library_crate_compilation_unit_hash
         ))?;
 
-        let fingerprint_dir = artifact.profile_dir().try_join_dirs(&[
+        let fingerprint_dir = profile_dir.try_join_dirs(&[
             String::from(".fingerprint"),
             format!(
                 "{}-{}",
                 artifact.package_name, artifact.library_crate_compilation_unit_hash
             ),
         ])?;
-        let encoded_fingerprint_file =
+        let encoded_dep_info_file =
             fingerprint_dir.try_join_file(format!("dep-lib-{}", artifact.crate_name))?;
         let fingerprint = {
             let fingerprint_file =
@@ -217,19 +218,10 @@ impl LibraryFiles {
             output_files,
             dep_info_file,
             fingerprint,
-            encoded_fingerprint_file,
+            encoded_dep_info_file,
         })
     }
 }
-
-struct FingerprintFiles {
-    fingerprint_hash: AbsFilePath,
-    fingerprint_json: AbsFilePath,
-    encoded_dep_info: AbsFilePath,
-    invoked_timestamp: AbsFilePath,
-}
-
-struct BuildScriptOutputFiles {}
 
 /// Collect library files and their fingerprints for an artifact.
 async fn library_files(artifact: &BuiltArtifact) -> Result<Vec<AbsFilePath>> {
@@ -251,6 +243,147 @@ async fn library_files(artifact: &BuiltArtifact) -> Result<Vec<AbsFilePath>> {
         .collect::<Vec<_>>()
         .pipe(Ok)
 }
+
+struct BuildScriptFiles {
+    compilation: BuildScriptCompilationFiles,
+    execution: BuildScriptExecutionFiles,
+}
+
+impl BuildScriptFiles {}
+
+struct BuildScriptCompilationFiles {
+    /// This field contains the absolute path to the
+    /// `build_script_{build_script_entrypoint}-{build_script_compilation_unit_hash}`
+    /// compiled program, and the corresponding hard link to
+    /// `build-script-{build_script_entrypoint}`.
+    // TODO: These are directly provided by `outputs` in the build plan. Should
+    // we derive these from there instead?
+    program_paths: Vec<AbsFilePath>,
+    /// This is the path to the rustc dep-info file in the build directory.
+    dep_info_file: AbsFilePath,
+    /// This fingerprint is stored in `.fingerprint`, and is used to derive the
+    /// timestamp, fingerprint hash file, and fingerprint JSON file.
+    fingerprint: Fingerprint,
+    /// This `EncodedDepInfo` (i.e. Cargo dep-info) file is stored in
+    /// `.fingerprint`, and is directly saved and restored.
+    encoded_dep_info_file: AbsFilePath,
+}
+
+impl BuildScriptCompilationFiles {
+    async fn collect(ws: &Workspace, artifact: &BuiltArtifact) -> Result<Option<Self>> {
+        let Some(ref build_script_files) = artifact.build_script_files else {
+            return Ok(None);
+        };
+
+        let fingerprint_dir = ws.profile_dir.try_join_dirs(vec![
+            String::from(".fingerprint"),
+            format!(
+                "{}-{}",
+                artifact.package_name,
+                artifact
+                    .build_script_compilation_unit_hash
+                    .as_ref()
+                    .expect("build script files have compilation unit hash")
+            ),
+        ])?;
+
+        todo!()
+
+        // // Build scripts are always stored in the base workspace profile directory,
+        // // whether cross compiling or not.
+        // let compiled_files = fs::walk_files(&build_script_files.compiled_dir)
+        //     .try_collect::<Vec<_>>()
+        //     .await?;
+        // let compiled_fingerprint_dir = ws.profile_dir.try_join_dirs(&[
+        //     String::from(".fingerprint"),
+        //     format!(
+        //         "{}-{}",
+        //         artifact.package_name,
+        //         artifact
+        //             .build_script_compilation_unit_hash
+        //             .as_ref()
+        //             .expect("build script files have compilation unit hash")
+        //     ),
+        // ])?;
+        // let compiled_fingerprint_files = fs::walk_files(&compiled_fingerprint_dir)
+        //     .try_collect::<Vec<_>>()
+        //     .await?;
+        // let output_files = fs::walk_files(&build_script_files.output_dir)
+        //     .try_collect::<Vec<_>>()
+        //     .await?;
+
+        // // Outputs are either stored in the base workspace profile directory (if not
+        // // cross compiling) or are stored inside their specified target folder (if we
+        // // are).
+        // let output_fingerprint_dir = artifact.profile_dir().try_join_dirs(&[
+        //     String::from(".fingerprint"),
+        //     format!(
+        //         "{}-{}",
+        //         artifact.package_name,
+        //         artifact
+        //             .build_script_execution_unit_hash
+        //             .as_ref()
+        //             .expect("build script files have execution unit hash")
+        //     ),
+        // ])?;
+        // let output_fingerprint_files = fs::walk_files(&output_fingerprint_dir)
+        //     .try_collect::<Vec<_>>()
+        //     .await?;
+
+        // compiled_files
+        //     .into_iter()
+        //     .chain(compiled_fingerprint_files)
+        //     .chain(output_files)
+        //     .chain(output_fingerprint_files)
+        //     .collect::<Vec<_>>()
+        //     .pipe(Ok);
+
+        // let output_files = artifact.lib_files.clone();
+        // let profile_dir = artifact.profile_dir();
+        // let deps_dir = profile_dir.join(mk_rel_dir!("deps"));
+        // let dep_info_file = deps_dir.try_join_file(format!(
+        //     "{}-{}.d",
+        //     artifact.package_name, artifact.library_crate_compilation_unit_hash
+        // ))?;
+
+        // let fingerprint_dir = profile_dir.try_join_dirs(&[
+        //     String::from(".fingerprint"),
+        //     format!(
+        //         "{}-{}",
+        //         artifact.package_name, artifact.library_crate_compilation_unit_hash
+        //     ),
+        // ])?;
+        // let encoded_dep_info_file =
+        //     fingerprint_dir.try_join_file(format!("dep-lib-{}", artifact.crate_name))?;
+        // let fingerprint = {
+        //     let fingerprint_file =
+        //         fingerprint_dir.try_join_file(format!("lib-{}.json", artifact.crate_name))?;
+        //     let content = fs::must_read_buffered_utf8(&fingerprint_file).await?;
+        //     let fingerprint: Fingerprint = serde_json::from_str(&content)?;
+
+        //     let fingerprint_hash_file =
+        //         fingerprint_dir.try_join_file(format!("lib-{}", artifact.crate_name))?;
+        //     let fingerprint_hash = fs::must_read_buffered_utf8(&fingerprint_hash_file).await?;
+
+        //     // Sanity check that the fingerprint hashes match.
+        //     if hex::encode(fingerprint.hash_u64().to_le_bytes()) != fingerprint_hash {
+        //         bail!("fingerprint hash mismatch");
+        //     }
+
+        //     fingerprint
+        // };
+    }
+}
+
+struct BuildScriptExecutionFiles {
+    out_dir_files: Vec<AbsFilePath>,
+    output_file: AbsFilePath,
+    root_output_file: AbsFilePath,
+    stderr_file: AbsFilePath,
+    fingerprint: Fingerprint,
+}
+
+impl BuildScriptExecutionFiles {}
 
 /// Collect build script files and their fingerprints for an artifact.
 async fn collect_build_script_files(
@@ -315,6 +448,8 @@ async fn collect_build_script_files(
 /// metadata.
 async fn process_files_for_upload(
     ws: &Workspace,
+    // TODO: Take explicit LibraryFiles and handle them differently for
+    // rewrites.
     files: Vec<AbsFilePath>,
     restored_objects: &HashSet<Key>,
 ) -> Result<(
