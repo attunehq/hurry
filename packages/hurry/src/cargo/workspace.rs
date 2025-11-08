@@ -6,19 +6,17 @@ use color_eyre::{
     eyre::{Context, OptionExt as _, bail, eyre},
 };
 use derive_more::{Debug as DebugExt, Display};
-use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use tap::{Pipe as _, Tap as _, TapFallible as _};
 use tokio::task::spawn_blocking;
-use tracing::{debug, instrument, trace};
-use uuid::Uuid;
+use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     cargo::{
         self, BuildPlan, BuildScriptOutput, CargoBuildArguments, CargoCompileMode, Profile,
         RustcMetadata, build_plan::RustcInvocationArgument,
     },
-    mk_rel_file,
+    fs, mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith as _, TryJoinWith as _},
 };
 
@@ -180,27 +178,20 @@ impl Workspace {
     ) -> Result<BuildPlan> {
         // Running `cargo build --build-plan` deletes a bunch of items in the `target`
         // directory. To work around this we temporarily move `target` -> run
-        // the build plan -> move it back. If the rename fails (e.g., permissions,
-        // cross-device), we proceed without it; this will then have the original issue
-        // but at least won't break the build.
-        let temp = self
-            .root
-            .as_std_path()
-            .join(format!("target.backup.{}", Uuid::new_v4()));
-
-        let renamed = tokio::fs::rename(self.target.as_std_path(), &temp)
+        // the build plan -> move it back.
+        //
+        // We convert the error case to `Ok` because if the rename fails (e.g.,
+        // permissions, cross-device), we can proceed without it; this will then
+        // have the original issue but at least won't break the build.
+        let _rename_guard = fs::rename_temporary(&self.target)
             .await
-            .is_ok();
-
-        defer! {
-            if renamed {
-                let target = self.target.as_std_path();
-                #[allow(clippy::disallowed_methods, reason = "cannot use async in defer")]
-                let _ = std::fs::remove_dir_all(target);
-                #[allow(clippy::disallowed_methods, reason = "cannot use async in defer")]
-                let _ = std::fs::rename(&temp, target);
-            }
-        }
+            .inspect_err(|error| {
+                warn!(
+                    ?error,
+                    "failed to rename `target`; there may be spurious rebuilds"
+                )
+            })
+            .ok();
 
         let mut build_args = args.as_ref().to_argv();
         build_args.extend([

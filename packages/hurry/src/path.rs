@@ -365,6 +365,12 @@ impl<B: Validator, T: Validator> FromStr for TypedPath<B, T> {
     }
 }
 
+impl<B, T> AsRef<Path> for TypedPath<B, T> {
+    fn as_ref(&self) -> &Path {
+        &self.inner
+    }
+}
+
 impl<B, T> AsRef<TypedPath<B, T>> for TypedPath<B, T> {
     fn as_ref(&self) -> &TypedPath<B, T> {
         self

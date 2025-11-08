@@ -25,14 +25,19 @@
 )]
 
 use std::{
-    collections::HashSet, convert::identity, fmt::Debug as StdDebug, marker::PhantomData,
-    sync::Arc, time::SystemTime,
+    collections::HashSet,
+    convert::identity,
+    fmt::Debug as StdDebug,
+    marker::PhantomData,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::SystemTime,
 };
 
 use bon::Builder;
 use color_eyre::{
     Result,
-    eyre::{Context, OptionExt},
+    eyre::{Context, OptionExt, bail},
 };
 use derive_more::{Debug, Display};
 use filetime::FileTime;
@@ -40,11 +45,12 @@ use fslock::LockFile as FsLockFile;
 use futures::{Stream, TryStreamExt, future};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use tap::{Pipe, TapFallible};
+use tap::{Conv, Pipe, TapFallible};
 use tokio::{fs::ReadDir, io::AsyncReadExt, sync::Mutex, task::spawn_blocking};
-use tracing::{debug, error, instrument, trace};
+use tracing::{debug, error, instrument, trace, warn};
 
 use clients::courier::v1::Key;
+use uuid::Uuid;
 
 use crate::{
     ext::then_context,
@@ -440,6 +446,129 @@ pub async fn remove_file(path: &AbsFilePath) -> Result<()> {
         .await
         .with_context(|| format!("remove file: {path:?}"))
         .tap_ok(|_| trace!(?path, "remove file"))
+}
+
+/// Rename a file or directory.
+#[instrument]
+pub async fn rename(
+    from: impl AsRef<Path> + StdDebug,
+    to: impl AsRef<Path> + StdDebug,
+) -> Result<()> {
+    let from = from.as_ref();
+    let to = to.as_ref();
+    tokio::fs::rename(from, to)
+        .await
+        .with_context(|| format!("rename {from:?} to {to:?}"))
+        .tap_ok(|_| trace!(?from, ?to, "rename"))
+}
+
+/// Rename a file or directory, returning a guard that restores it to its
+/// original location when dropped.
+///
+/// This function attempts to create the temporary path "close to the original":
+/// - If the path has a name, the temporary file uses it as a prefix.
+/// - If the path has a parent, the temporary file is stored there too.
+/// - If neither are true, this function errors.
+///
+/// The intention for using this function is mainly for temporary backups; the
+/// rename destination is a "sibling" of the original path so that:
+/// 1. We can rename without worrying about crossing file systems.
+/// 2. If the process dies part of the way through for some reason and cleanup
+///    isn't possible, it's hopefully obvious to the user how to recover.
+///
+/// ## Example
+///
+/// If your original path looks like this:
+/// ```not_rust
+/// /some/path/to/entity.ext
+/// ```
+///
+/// The renamed version should look like this:
+/// ```not_rust
+/// /some/path/to/entity.ext.2f5ba9bf-0672-47eb-8542-710b0967330c
+/// ```
+#[instrument]
+pub async fn rename_temporary(from: impl Into<PathBuf> + StdDebug) -> Result<RenameGuard> {
+    let from = from.conv::<PathBuf>();
+    let Some(parent) = from.parent() else {
+        bail!("path does not have a parent: {from:?}");
+    };
+    let Some(name) = from.file_name() else {
+        bail!("path does not have a name: {from:?}");
+    };
+    let to = parent.join(format!(
+        "{}.{}",
+        String::from_utf8_lossy(name.as_encoded_bytes()),
+        Uuid::new_v4()
+    ));
+
+    rename(&from, &to).await.map(|_| RenameGuard::new(from, to))
+}
+
+/// Restore a file or directory to its original location when dropped.
+///
+/// ## Leaking
+///
+/// Restoring the rename can fail if:
+/// - A new file exists in the `original` location.
+/// - The program crashes before the `Drop` implementation can run.
+/// - The instance of `RenameGuard` is prevented from dropping.
+#[derive(Debug)]
+pub struct RenameGuard {
+    restored: bool,
+    original: PathBuf,
+    renamed: PathBuf,
+}
+
+impl RenameGuard {
+    /// Create a new instance with the provided paths.
+    fn new(original: PathBuf, renamed: PathBuf) -> Self {
+        trace!(?original, ?renamed, "temporarily renamed path");
+        Self {
+            restored: false,
+            original,
+            renamed,
+        }
+    }
+
+    /// Restore the file or directory to its original location.
+    ///
+    /// This is also performed on drop, so you only need to do this if you want
+    /// to ensure the synchronous drop IO doesn't get performed or if you want
+    /// to handle errors explicitly.
+    #[instrument]
+    pub async fn restore(&mut self) -> Result<()> {
+        trace!(
+            original = ?self.original,
+            renamed = ?self.renamed,
+            "restored temporary renamed path"
+        );
+
+        rename(&self.renamed, &self.original).await?;
+        self.restored = true;
+        Ok(())
+    }
+}
+
+#[allow(clippy::disallowed_methods, reason = "cannot use async in drop")]
+impl Drop for RenameGuard {
+    fn drop(&mut self) {
+        if !self.restored {
+            match std::fs::rename(&self.renamed, &self.original) {
+                Ok(_) => trace!(
+                    original = ?self.original,
+                    renamed = ?self.renamed,
+                    "restored temporary renamed path"
+                ),
+                Err(error) => warn!(
+                    original = ?self.original,
+                    renamed = ?self.renamed,
+                    ?error,
+                    "failed to restore temporarily renamed path"
+                ),
+            }
+        }
+    }
 }
 
 /// Read directory entries.

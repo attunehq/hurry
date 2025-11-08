@@ -5,13 +5,13 @@
 //! the Cross.toml file to ensure RUSTC_BOOTSTRAP can be passed through for
 //! unstable cargo features like `--build-plan`.
 
-use std::path::{Path, PathBuf};
-
 use color_eyre::{Result, eyre::Context};
-use tracing::{debug, trace};
 
-const CROSS_CONFIG_NAME: &str = "Cross.toml";
-const CROSS_BACKUP_NAME: &str = "Cross.toml.hurry-backup";
+use crate::{
+    fs::{self, RenameGuard},
+    mk_rel_file,
+    path::{AbsDirPath, AbsFilePath, JoinWith as _},
+};
 
 /// TOML configuration for Cross.toml with RUSTC_BOOTSTRAP passthrough.
 const CROSS_CONFIG_WITH_RUSTC_BOOTSTRAP: &str = r#"[build.env]
@@ -25,16 +25,18 @@ passthrough = [
 enum ConfigState {
     /// No Cross.toml existed.
     Missing,
+
     /// Cross.toml existed and already had RUSTC_BOOTSTRAP configured.
     AlreadyConfigured,
-    /// Cross.toml existed but needed RUSTC_BOOTSTRAP added (backed up to this
-    /// path).
-    Modified { backup_path: PathBuf },
+
+    /// Cross.toml existed but needed RUSTC_BOOTSTRAP added.
+    Modified { backup: RenameGuard },
 }
 
 /// Guard that ensures Cross.toml is restored to its original state.
 pub struct CrossConfigGuard {
-    workspace_root: PathBuf,
+    restored: bool,
+    config: AbsFilePath,
     state: ConfigState,
 }
 
@@ -45,101 +47,75 @@ impl CrossConfigGuard {
     /// configuration to pass RUSTC_BOOTSTRAP through to the container.
     ///
     /// Returns a guard that will restore the original state when dropped.
-    pub async fn setup(workspace_root: impl AsRef<Path>) -> Result<Self> {
-        let workspace_root = workspace_root.as_ref().to_path_buf();
-        let config_path = workspace_root.join(CROSS_CONFIG_NAME);
+    pub async fn setup(workspace_root: &AbsDirPath) -> Result<Self> {
+        let config = workspace_root.join(mk_rel_file!("Cross.toml"));
 
-        let state = if config_path.exists() {
-            // Cross.toml exists: check if it already has RUSTC_BOOTSTRAP
-            let content = tokio::fs::read_to_string(&config_path)
+        let state = if fs::exists(&config).await {
+            let content = fs::must_read_buffered_utf8(&config)
                 .await
                 .context("reading Cross.toml")?;
 
             if has_rustc_bootstrap_passthrough(&content) {
-                debug!("Cross.toml already has RUSTC_BOOTSTRAP passthrough configured");
                 ConfigState::AlreadyConfigured
             } else {
-                debug!("Cross.toml exists but needs RUSTC_BOOTSTRAP passthrough");
-                // Back up the current config
-                let backup_path = workspace_root.join(CROSS_BACKUP_NAME);
-                tokio::fs::copy(&config_path, &backup_path)
+                let backup = fs::rename_temporary(&config)
                     .await
-                    .context("backing up Cross.toml")?;
-                debug!(?backup_path, "backed up Cross.toml");
+                    .context("backup Cross.toml")?;
 
-                // Add RUSTC_BOOTSTRAP to the config
-                let new_content = add_rustc_bootstrap_passthrough(&content)?;
-                tokio::fs::write(&config_path, new_content)
+                let content = add_rustc_bootstrap_passthrough(&content)?;
+                fs::write(&config, content)
                     .await
                     .context("writing updated Cross.toml")?;
-                debug!("added RUSTC_BOOTSTRAP passthrough to Cross.toml");
 
-                ConfigState::Modified { backup_path }
+                ConfigState::Modified { backup }
             }
         } else {
-            debug!("No Cross.toml found, creating temporary one");
-            // No Cross.toml: create one with RUSTC_BOOTSTRAP
-            tokio::fs::write(&config_path, CROSS_CONFIG_WITH_RUSTC_BOOTSTRAP)
+            fs::write(&config, CROSS_CONFIG_WITH_RUSTC_BOOTSTRAP)
                 .await
                 .context("creating Cross.toml")?;
-            debug!("created temporary Cross.toml");
-
             ConfigState::Missing
         };
 
         Ok(Self {
-            workspace_root,
+            restored: false,
+            config,
             state,
         })
     }
 
     /// Restore the original Cross.toml state.
+    ///
+    /// This is also performed on drop, so you only need to do this if you want
+    /// to ensure the synchronous drop IO doesn't get performed or if you want
+    /// to handle errors explicitly.
     pub async fn restore(&mut self) -> Result<()> {
-        let config_path = self.workspace_root.join(CROSS_CONFIG_NAME);
-
-        match &self.state {
+        match &mut self.state {
+            ConfigState::AlreadyConfigured => {}
             ConfigState::Missing => {
-                // Remove the temporary config we created
-                if config_path.exists() {
-                    tokio::fs::remove_file(&config_path)
-                        .await
-                        .context("removing temporary Cross.toml")?;
-                    debug!("removed temporary Cross.toml");
-                }
+                let _ = tokio::fs::remove_file(&self.config).await;
             }
-            ConfigState::AlreadyConfigured => {
-                // Nothing to do: config was already correct
-                trace!("Cross.toml was already configured, nothing to restore");
-            }
-            ConfigState::Modified { backup_path } => {
-                // Restore from backup
-                tokio::fs::rename(backup_path, &config_path)
-                    .await
-                    .context("restoring Cross.toml from backup")?;
-                debug!("restored original Cross.toml from backup");
+            ConfigState::Modified { backup } => {
+                backup.restore().await?;
             }
         }
 
+        self.restored = true;
         Ok(())
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cannot use async in drop")]
 impl Drop for CrossConfigGuard {
     fn drop(&mut self) {
-        // Try to restore synchronously in drop
-        let config_path = self.workspace_root.join(CROSS_CONFIG_NAME);
-
-        match &self.state {
-            ConfigState::Missing => {
-                if config_path.exists() {
-                    #[allow(clippy::disallowed_methods, reason = "cannot use async in drop")]
-                    let _ = std::fs::remove_file(&config_path);
+        if !self.restored {
+            // `RenameGuard` will move the file back when it is dropped, so no need to
+            // handle the `Modified` case explicitly.
+            match &self.state {
+                ConfigState::AlreadyConfigured => {}
+                ConfigState::Modified { .. } => {}
+                ConfigState::Missing => {
+                    let _ = std::fs::remove_file(&self.config);
                 }
-            }
-            ConfigState::AlreadyConfigured => {}
-            ConfigState::Modified { backup_path } => {
-                #[allow(clippy::disallowed_methods, reason = "cannot use async in drop")]
-                let _ = std::fs::rename(backup_path, &config_path);
             }
         }
     }

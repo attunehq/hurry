@@ -1,13 +1,11 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Debug};
 
 use cargo_metadata::TargetKind;
 use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context, OptionExt as _, bail, eyre},
 };
-use scopeguard::defer;
-use tracing::{debug, instrument, trace};
-use uuid::Uuid;
+use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     cargo::{
@@ -15,6 +13,7 @@ use crate::{
         CargoCompileMode, Profile, Workspace,
     },
     cross::{self, CrossConfigGuard},
+    fs::{self},
     path::{AbsDirPath, AbsFilePath},
 };
 
@@ -38,36 +37,29 @@ fn convert_container_path_to_host(path: &str, workspace: &Workspace) -> String {
 /// Docker container) where cross will actually perform the compilation.
 #[instrument(name = "cross::build_plan")]
 async fn build_plan(
-    workspace: &crate::cargo::Workspace,
-    args: impl AsRef<CargoBuildArguments> + std::fmt::Debug,
+    workspace: &Workspace,
+    args: impl AsRef<CargoBuildArguments> + Debug,
 ) -> Result<BuildPlan> {
-    // Set up Cross.toml to allow RUSTC_BOOTSTRAP passthrough.
-    // This guard will restore the original state when dropped.
-    let mut config_guard = CrossConfigGuard::setup(workspace.root.as_std_path()).await?;
-
     // Running `cargo build --build-plan` deletes a bunch of items in the `target`
     // directory. To work around this we temporarily move `target` -> run
-    // the build plan -> move it back. If the rename fails (e.g., permissions,
-    // cross-device), we proceed without it; this will then have the original issue
-    // but at least won't break the build.
-    let temp = workspace
-        .root
-        .as_std_path()
-        .join(format!("target.backup.{}", Uuid::new_v4()));
-
-    let renamed = tokio::fs::rename(workspace.target.as_std_path(), &temp)
+    // the build plan -> move it back.
+    //
+    // We convert the error case to `Ok` because if the rename fails (e.g.,
+    // permissions, cross-device), we can proceed without it; this will then
+    // have the original issue but at least won't break the build.
+    let _rename_guard = fs::rename_temporary(&workspace.target)
         .await
-        .is_ok();
+        .inspect_err(|error| {
+            warn!(
+                ?error,
+                "failed to rename `target`; there may be spurious rebuilds"
+            )
+        })
+        .ok();
 
-    defer! {
-        if renamed {
-            let target = workspace.target.as_std_path();
-            #[allow(clippy::disallowed_methods, reason = "cannot use async in defer")]
-            let _ = std::fs::remove_dir_all(target);
-            #[allow(clippy::disallowed_methods, reason = "cannot use async in defer")]
-            let _ = std::fs::rename(&temp, target);
-        }
-    }
+    // Set up Cross.toml to allow RUSTC_BOOTSTRAP passthrough.
+    // This guard will restore the original state when dropped.
+    let _config_guard = CrossConfigGuard::setup(&workspace.root).await?;
 
     let mut build_args = args.as_ref().to_argv();
     build_args.extend([
@@ -78,12 +70,6 @@ async fn build_plan(
     let output = cross::invoke_output("build", build_args, [("RUSTC_BOOTSTRAP", "1")])
         .await
         .context("run cross command")?;
-
-    // Restore Cross.toml before processing the output
-    config_guard
-        .restore()
-        .await
-        .context("restoring Cross.toml")?;
 
     serde_json::from_slice::<BuildPlan>(&output.stdout)
         .context("parse build plan")

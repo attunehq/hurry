@@ -2,10 +2,7 @@ use clap::Args;
 use color_eyre::{Result, eyre::Context as _};
 use hurry::{daemon::DaemonPaths, fs, path::AbsFilePath};
 use std::io::Write as _;
-use tokio::{
-    fs::File,
-    io::{AsyncBufReadExt, AsyncSeekExt as _, BufReader},
-};
+use tokio::io::{AsyncBufReadExt, AsyncSeekExt as _, BufReader};
 use tracing::instrument;
 
 #[derive(Clone, Args, Debug)]
@@ -57,7 +54,7 @@ async fn follow_log(log_path: &AbsFilePath) -> Result<()> {
     print!("{content}");
     std::io::stdout().flush().context("flush stdout")?;
 
-    let mut file = File::open(log_path.as_std_path())
+    let mut file = fs::open_file(log_path)
         .await
         .context("open log file for following")?;
 
