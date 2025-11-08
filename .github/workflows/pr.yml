@@ -25,7 +25,7 @@ env:
 jobs:
     rust:
         name: Build, check, and test Rust
-        runs-on: ubuntu-latest
+        runs-on: attune-ubuntu-2404-2
 
         services:
             postgres:
@@ -69,7 +69,7 @@ jobs:
 
     hurry-rust:
         name: Build with Hurry and check cache restores
-        runs-on: ubuntu-latest
+        runs-on: attune-ubuntu-2404-2
 
         steps:
             - name: Install Rust

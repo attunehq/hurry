@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
     clean:
-        runs-on: ubuntu-latest
+        runs-on: attune-ubuntu-2404-2
         outputs:
             duration: ${{ steps.build.outputs.duration }}
 
@@ -29,7 +29,7 @@ jobs:
                   echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
     hurry:
-        runs-on: ubuntu-latest
+        runs-on: attune-ubuntu-2404-2
         outputs:
             duration: ${{ steps.build.outputs.duration }}
 
@@ -48,7 +48,7 @@ jobs:
                   echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
     swatinem:
-        runs-on: ubuntu-latest
+        runs-on: attune-ubuntu-2404-2
         outputs:
             duration: ${{ steps.complete.outputs.duration }}
 
@@ -70,7 +70,7 @@ jobs:
                   echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
     sccache:
-        runs-on: ubuntu-latest
+        runs-on: attune-ubuntu-2404-2
         outputs:
             duration: ${{ steps.complete.outputs.duration }}
 
@@ -96,7 +96,7 @@ jobs:
 
     summary:
         name: Benchmark
-        runs-on: ubuntu-latest
+        runs-on: attune-ubuntu-2404-2
         needs: [clean, hurry, swatinem, sccache]
 
         steps:
