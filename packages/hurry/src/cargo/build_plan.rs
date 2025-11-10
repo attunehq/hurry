@@ -79,6 +79,16 @@ impl RustcArguments {
             _ => None,
         })
     }
+
+    /// The path to the source file being compiled.
+    pub fn src_path(&self) -> &str {
+        let positional_arguments = self.0.iter().filter_map(|arg| match arg {
+            RustcArgument::Positional(p) => Some(p.as_str()),
+            _ => None,
+        }).collect::<Vec<_>>();
+        debug_assert_eq!(positional_arguments.len(), 1, "expected one rustc positional argument");
+        positional_arguments.first().expect("rustc arguments should have one positional argument")
+    }
 }
 
 impl IntoIterator for RustcArguments {

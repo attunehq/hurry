@@ -25,6 +25,7 @@ mod profile;
 mod rustc;
 mod unit_graph;
 mod workspace;
+mod workspace2;
 
 pub use build_args::{CargoBuildArgument, CargoBuildArguments, ColorWhen, MessageFormat};
 pub use build_plan::BuildPlan;

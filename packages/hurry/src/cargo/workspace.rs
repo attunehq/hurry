@@ -318,6 +318,13 @@ impl Workspace {
                         // First, we need to figure out the build script being
                         // executed. We can do this using the program file being
                         // executed.
+
+                        // Note that it's insufficient to use the `deps` field
+                        // because `run-custom-build` invocations can depend on
+                        // other build scripts being executed because of
+                        // `cargo::metadata` and `package.links`.
+                        //
+                        // RUSTC_BOOTSTRAP=1 cargo build --build-plan -Z unstable-options | jq '.invocations | map(select(.compile_mode == "run-custom-build") | select(.deps | length != 1))'
                         let build_script_index = *build_script_program_file_to_index
                             .get(&invocation.program)
                             .ok_or_eyre("build script should be compiled before execution")?;

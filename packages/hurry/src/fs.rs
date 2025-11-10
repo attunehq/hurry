@@ -45,7 +45,7 @@ use tracing::{debug, error, instrument, trace};
 
 use clients::courier::v1::Key;
 
-use crate::path::{AbsDirPath, AbsFilePath, JoinWith, RelativeTo};
+use crate::path::{Abs, AbsDirPath, AbsFilePath, JoinWith, RelativeTo, TypedPath};
 
 /// The default level of concurrency used in hurry `fs` operations.
 ///
@@ -384,6 +384,15 @@ pub async fn remove_file(path: &AbsFilePath) -> Result<()> {
         .await
         .with_context(|| format!("remove file: {path:?}"))
         .tap_ok(|_| trace!(?path, "remove file"))
+}
+
+/// Rename a file or folder, overwriting the destination if it already exists.
+#[instrument]
+pub async fn rename<T>(src: &TypedPath<Abs, T>, dst: &TypedPath<Abs, T>) -> Result<()> {
+    tokio::fs::rename(src.as_std_path(), dst.as_std_path())
+        .await
+        .with_context(|| format!("rename file: {src:?} -> {dst:?}"))
+        .tap_ok(|_| trace!(?src, ?dst, "rename file"))
 }
 
 /// Read directory entries.

@@ -152,7 +152,6 @@ impl Hash for Fingerprint {
             name,
             public,
             fingerprint,
-            only_requires_rmeta: _, // static property, no need to hash
         } in deps
         {
             pkg_id.hash(h);
@@ -186,11 +185,6 @@ struct DepFingerprint {
     name: String,
     /// Whether or not this dependency is flagged as a public dependency or not.
     public: bool,
-    /// Whether or not this dependency is an rmeta dependency or a "full"
-    /// dependency. In the case of an rmeta dependency our dependency edge only
-    /// actually requires the rmeta from what we depend on, so when checking
-    /// mtime information all files other than the rmeta can be ignored.
-    only_requires_rmeta: bool,
     /// The dependency's fingerprint we recursively point to, containing all the
     /// other hash information we'd otherwise need.
     fingerprint: Arc<Fingerprint>,
@@ -225,10 +219,6 @@ impl<'de> Deserialize<'de> for DepFingerprint {
                 memoized_hash: Mutex::new(Some(hash)),
                 ..Fingerprint::new()
             }),
-            // This field is never read since it's only used in
-            // `check_filesystem` which isn't used by fingerprints loaded from
-            // disk.
-            only_requires_rmeta: false,
         })
     }
 }
