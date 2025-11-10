@@ -1,10 +1,9 @@
-use std::fmt;
-
+use aerosol::axum::Dep;
 use axum::{
     extract::FromRequestParts,
     http::{StatusCode, header::AUTHORIZATION, request::Parts},
 };
-use derive_more::{Display, From, Into};
+use derive_more::Display;
 use serde::{Deserialize, Serialize};
 
 /// An ID uniquely identifying an organization.
@@ -53,100 +52,20 @@ impl OrgId {
     Default,
     Deserialize,
     Serialize,
-    From,
-    Into,
 )]
 pub struct AccountId(u64);
 
 impl AccountId {
-    pub fn as_i64(&self) -> i64 {
-        self.0 as i64
-    }
-
-    pub fn as_u64(&self) -> u64 {
-        self.0
-    }
-
     pub fn from_i64(id: i64) -> Self {
         Self(id as u64)
-    }
-
-    pub fn from_u64(id: u64) -> Self {
-        Self(id)
-    }
-}
-
-/// An unauthenticated token extracted from the Authorization header.
-///
-/// These are provided by the client and have not yet been validated against
-/// the database. To validate a token, use [`crate::db::Postgres::validate()`].
-///
-/// This type wraps a token string and ensures it is never accidentally leaked
-/// in logs or debug output. To access the actual token value, use the
-/// `as_str()` method.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
-pub struct RawToken(String);
-
-impl RawToken {
-    /// Create a new raw token.
-    pub fn new(token: impl Into<String>) -> Self {
-        Self(token.into())
-    }
-
-    /// View the token as a string.
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
-    }
-}
-
-impl fmt::Debug for RawToken {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("[redacted]")
-    }
-}
-
-impl fmt::Display for RawToken {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("[redacted]")
-    }
-}
-
-impl<S: Into<String>> From<S> for RawToken {
-    fn from(token: S) -> Self {
-        Self::new(token)
-    }
-}
-
-impl<S: Send + Sync> FromRequestParts<S> for RawToken {
-    type Rejection = (StatusCode, &'static str);
-
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let Some(header) = parts.headers.get(AUTHORIZATION) else {
-            return Err((StatusCode::UNAUTHORIZED, "Authorization header required"));
-        };
-        let Ok(token) = header.to_str() else {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "Authorization header must be a string",
-            ));
-        };
-
-        let token = match token.strip_prefix("Bearer") {
-            Some(token) => token.trim(),
-            None => token.trim(),
-        };
-        if token.is_empty() {
-            return Err((StatusCode::BAD_REQUEST, "Empty authorization token"));
-        }
-
-        Ok(RawToken::new(token))
     }
 }
 
 /// An authenticated token, which has been validated against the database.
 ///
-/// This type cannot be extracted directly from a request; it must be obtained
-/// by calling [`crate::db::Postgres::validate()`] with a [`RawToken`].
+/// This type can be extracted directly from a request using Axum's extractor
+/// system. It will automatically validate the bearer token from the
+/// Authorization header against the database before the handler is called.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AuthenticatedToken {
     /// The account ID in the database.
@@ -154,19 +73,56 @@ pub struct AuthenticatedToken {
 
     /// The organization ID in the database.
     pub org_id: OrgId,
-
-    /// The token that was authenticated.
-    pub token: RawToken,
 }
 
-impl From<AuthenticatedToken> for RawToken {
-    fn from(val: AuthenticatedToken) -> Self {
-        val.token
-    }
-}
+impl FromRequestParts<crate::api::State> for AuthenticatedToken {
+    type Rejection = (StatusCode, &'static str);
 
-impl AsRef<RawToken> for AuthenticatedToken {
-    fn as_ref(&self) -> &RawToken {
-        &self.token
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &crate::api::State,
+    ) -> Result<Self, Self::Rejection> {
+        // Extract and parse Authorization header before borrowing parts mutably
+        let token = {
+            let Some(header) = parts.headers.get(AUTHORIZATION) else {
+                return Err((StatusCode::UNAUTHORIZED, "Authorization header required"));
+            };
+            let Ok(token_str) = header.to_str() else {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Authorization header must be a string",
+                ));
+            };
+
+            let token = match token_str.strip_prefix("Bearer") {
+                Some(token) => token.trim(),
+                None => token_str.trim(),
+            };
+            if token.is_empty() {
+                return Err((StatusCode::BAD_REQUEST, "Empty authorization token"));
+            }
+
+            token.to_string()
+        };
+
+        // Get database from state
+        let Dep(db) = Dep::<crate::db::Postgres>::from_request_parts(parts, state)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to extract database",
+                )
+            })?;
+
+        // Validate token against database
+        match db.validate(&token).await {
+            Ok(Some(auth)) => Ok(auth),
+            Ok(None) => Err((StatusCode::UNAUTHORIZED, "Invalid or revoked token")),
+            Err(_) => Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Database error during authentication",
+            )),
+        }
     }
 }

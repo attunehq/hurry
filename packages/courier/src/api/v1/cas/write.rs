@@ -13,7 +13,7 @@ use tokio_util::io::StreamReader;
 use tracing::{error, info};
 
 use crate::{
-    auth::RawToken,
+    auth::AuthenticatedToken,
     db::Postgres,
     storage::{Disk, Key},
 };
@@ -58,30 +58,15 @@ use crate::{
 ///
 /// Pre-compressed content is validated to ensure it decompresses correctly and
 /// hashes to the expected key.
-#[tracing::instrument(skip(raw_token, body))]
+#[tracing::instrument(skip(auth, body))]
 pub async fn handle(
-    raw_token: RawToken,
+    auth: AuthenticatedToken,
     Dep(db): Dep<Postgres>,
     Dep(cas): Dep<Disk>,
     Path(key): Path<Key>,
     headers: HeaderMap,
     body: Body,
 ) -> CasWriteResponse {
-    // Validate token
-    let auth = match db.validate(raw_token).await {
-        Ok(Some(auth)) => auth,
-        Ok(None) => {
-            // Still need to consume body to avoid connection reset
-            body.into_data_stream().for_each(|_| async {}).await;
-            info!("cas.write.unauthorized");
-            return CasWriteResponse::Unauthorized;
-        }
-        Err(err) => {
-            body.into_data_stream().for_each(|_| async {}).await;
-            error!(error = ?err, "cas.write.auth_error");
-            return CasWriteResponse::Error(err);
-        }
-    };
 
     // Check if the key already exists before consuming the body
     // If it exists, we still need to consume the entire body; if we return early
@@ -168,7 +153,6 @@ async fn handle_plain(cas: Disk, key: Key, body: Body) -> Result<()> {
 #[derive(Debug)]
 pub enum CasWriteResponse {
     Created,
-    Unauthorized,
     Error(Report),
 }
 
@@ -176,7 +160,6 @@ impl IntoResponse for CasWriteResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             CasWriteResponse::Created => StatusCode::CREATED.into_response(),
-            CasWriteResponse::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
             CasWriteResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }

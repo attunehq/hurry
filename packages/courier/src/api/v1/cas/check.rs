@@ -4,7 +4,7 @@ use color_eyre::eyre::Report;
 use tracing::{error, info};
 
 use crate::{
-    auth::RawToken,
+    auth::AuthenticatedToken,
     db::Postgres,
     storage::{Disk, Key},
 };
@@ -37,25 +37,13 @@ use crate::{
 ///   since this can be non-trivial. This tradeoff seems worth the minor amount
 ///   of extra complexity/potential confusion that having an existence check may
 ///   bring to the service.
-#[tracing::instrument(skip(raw_token))]
+#[tracing::instrument(skip(auth))]
 pub async fn handle(
-    raw_token: RawToken,
+    auth: AuthenticatedToken,
     Dep(db): Dep<Postgres>,
     Dep(cas): Dep<Disk>,
     Path(key): Path<Key>,
 ) -> CasCheckResponse {
-    // Validate token
-    let auth = match db.validate(raw_token).await {
-        Ok(Some(auth)) => auth,
-        Ok(None) => {
-            info!("cas.check.unauthorized");
-            return CasCheckResponse::Unauthorized;
-        }
-        Err(err) => {
-            error!(error = ?err, "cas.check.auth_error");
-            return CasCheckResponse::Error(err);
-        }
-    };
 
     // Check if org has access to this CAS key
     // Return NotFound (not Forbidden) to avoid leaking information about blob
@@ -93,7 +81,6 @@ pub async fn handle(
 pub enum CasCheckResponse {
     Found,
     NotFound,
-    Unauthorized,
     Error(Report),
 }
 
@@ -102,7 +89,6 @@ impl IntoResponse for CasCheckResponse {
         match self {
             CasCheckResponse::Found => StatusCode::OK.into_response(),
             CasCheckResponse::NotFound => StatusCode::NOT_FOUND.into_response(),
-            CasCheckResponse::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
             CasCheckResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }

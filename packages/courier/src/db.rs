@@ -23,7 +23,7 @@ use num_traits::ToPrimitive;
 use sqlx::{PgPool, migrate::Migrator};
 use tracing::{debug, warn};
 
-use crate::auth::{AccountId, AuthenticatedToken, OrgId, RawToken};
+use crate::auth::{AccountId, AuthenticatedToken, OrgId};
 
 /// A connected Postgres database instance.
 #[derive(Clone, Debug)]
@@ -507,7 +507,7 @@ impl Postgres {
     /// revoked, otherwise returns `None`. Errors are only returned for
     /// database failures.
     #[tracing::instrument(name = "Postgres::validate", skip(token))]
-    pub async fn validate(&self, token: RawToken) -> Result<Option<AuthenticatedToken>> {
+    pub async fn validate(&self, token: &str) -> Result<Option<AuthenticatedToken>> {
         let result = sqlx::query!(
             r#"
             SELECT account.id, account.organization_id
@@ -516,7 +516,7 @@ impl Postgres {
             WHERE api_key.content = $1
             AND api_key.revoked_at IS NULL
             "#,
-            token.as_str(),
+            token,
         )
         .fetch_optional(&self.pool)
         .await
@@ -525,7 +525,6 @@ impl Postgres {
         Ok(result.map(|row| AuthenticatedToken {
             account_id: AccountId::from_i64(row.id),
             org_id: OrgId::from_i64(row.organization_id),
-            token,
         }))
     }
 

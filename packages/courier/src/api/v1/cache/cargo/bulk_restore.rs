@@ -7,7 +7,7 @@ use color_eyre::eyre::{Report, eyre};
 use tap::Pipe;
 use tracing::{error, info};
 
-use crate::{auth::RawToken, db::Postgres};
+use crate::{auth::AuthenticatedToken, db::Postgres};
 
 /// The max amount of items in a single bulk restore request.
 ///
@@ -25,24 +25,12 @@ use crate::{auth::RawToken, db::Postgres};
 /// requests.
 const MAX_BULK_RESTORE_REQUESTS: usize = 100_000;
 
-#[tracing::instrument(skip(raw_token, body))]
+#[tracing::instrument(skip(auth, body))]
 pub async fn handle(
-    raw_token: RawToken,
+    auth: AuthenticatedToken,
     Dep(db): Dep<Postgres>,
     Json(body): Json<CargoBulkRestoreRequest>,
 ) -> CacheBulkRestoreResponse {
-    // Validate token
-    let auth = match db.validate(raw_token).await {
-        Ok(Some(auth)) => auth,
-        Ok(None) => {
-            info!("cache.bulk_restore.unauthorized");
-            return CacheBulkRestoreResponse::Unauthorized;
-        }
-        Err(err) => {
-            error!(error = ?err, "cache.bulk_restore.auth_error");
-            return CacheBulkRestoreResponse::Error(err);
-        }
-    };
 
     info!(requests = body.requests.len(), "cache.bulk_restore.start");
 
@@ -99,7 +87,6 @@ pub async fn handle(
 pub enum CacheBulkRestoreResponse {
     Success(CargoBulkRestoreResponse),
     InvalidRequest(Report),
-    Unauthorized,
     Error(Report),
 }
 
@@ -110,7 +97,6 @@ impl IntoResponse for CacheBulkRestoreResponse {
             CacheBulkRestoreResponse::InvalidRequest(error) => {
                 (StatusCode::BAD_REQUEST, format!("{error:?}")).into_response()
             }
-            CacheBulkRestoreResponse::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
             CacheBulkRestoreResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }

@@ -15,7 +15,11 @@ use tokio_util::{
 };
 use tracing::{error, info};
 
-use crate::{auth::RawToken, db::Postgres, storage::Disk};
+use crate::{
+    auth::AuthenticatedToken,
+    db::Postgres,
+    storage::Disk,
+};
 
 /// Read multiple blobs from the CAS and return them as a tar archive.
 ///
@@ -51,21 +55,15 @@ use crate::{auth::RawToken, db::Postgres, storage::Disk};
 /// The tar archive is streamed directly to the client without buffering the
 /// entire archive in memory. Each blob is read from disk and written to the
 /// tar stream as it's processed.
-#[tracing::instrument(skip(req))]
+#[tracing::instrument(skip(auth, req))]
 pub async fn handle(
-    raw_token: RawToken,
+    auth: AuthenticatedToken,
     Dep(db): Dep<Postgres>,
     Dep(cas): Dep<Disk>,
     headers: HeaderMap,
     Json(req): Json<CasBulkReadRequest>,
 ) -> BulkReadResponse {
     info!(keys = req.keys.len(), "cas.bulk.read.start");
-
-    let auth = match db.validate(raw_token).await {
-        Ok(Some(auth)) => auth,
-        Ok(None) => return BulkReadResponse::Unauthorized,
-        Err(err) => return BulkReadResponse::Error(err),
-    };
 
     let want_compressed = headers
         .get(ContentType::ACCEPT)
@@ -82,7 +80,7 @@ pub async fn handle(
 async fn handle_compressed(
     db: Postgres,
     cas: Disk,
-    auth: crate::auth::AuthenticatedToken,
+    auth: AuthenticatedToken,
     req: CasBulkReadRequest,
 ) -> BulkReadResponse {
     info!("cas.bulk.read.compressed");
@@ -164,7 +162,7 @@ async fn handle_compressed(
 async fn handle_plain(
     db: Postgres,
     cas: Disk,
-    auth: crate::auth::AuthenticatedToken,
+    auth: AuthenticatedToken,
     req: CasBulkReadRequest,
 ) -> BulkReadResponse {
     info!("cas.bulk.read.uncompressed");
@@ -245,7 +243,6 @@ async fn handle_plain(
 #[derive(Debug)]
 pub enum BulkReadResponse {
     Success(Body, ContentType),
-    Unauthorized,
     Error(Report),
 }
 
@@ -254,9 +251,6 @@ impl IntoResponse for BulkReadResponse {
         match self {
             BulkReadResponse::Success(body, ct) => {
                 (StatusCode::OK, [(ContentType::HEADER, ct.value())], body).into_response()
-            }
-            BulkReadResponse::Unauthorized => {
-                (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
             }
             BulkReadResponse::Error(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{err:?}")).into_response()

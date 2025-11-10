@@ -2,22 +2,10 @@ use aerosol::axum::Dep;
 use axum::http::StatusCode;
 use tracing::{error, info, instrument};
 
-use crate::{auth::RawToken, db::Postgres};
+use crate::{auth::AuthenticatedToken, db::Postgres};
 
-#[instrument(skip(raw_token))]
-pub async fn handle(raw_token: RawToken, Dep(db): Dep<Postgres>) -> StatusCode {
-    // Validate token
-    let auth = match db.validate(raw_token).await {
-        Ok(Some(auth)) => auth,
-        Ok(None) => {
-            info!("cache.reset.unauthorized");
-            return StatusCode::UNAUTHORIZED;
-        }
-        Err(err) => {
-            error!(error = ?err, "cache.reset.auth_error");
-            return StatusCode::INTERNAL_SERVER_ERROR;
-        }
-    };
+#[instrument(skip(auth))]
+pub async fn handle(auth: AuthenticatedToken, Dep(db): Dep<Postgres>) -> StatusCode {
 
     // Delete the authenticated org's cache data
     match db.cargo_cache_reset(&auth).await {

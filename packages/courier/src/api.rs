@@ -136,7 +136,7 @@ pub(crate) mod test_helpers {
     use clients::courier::v1::Key;
     use color_eyre::Result;
 
-    use crate::auth::{AccountId, AuthenticatedToken, OrgId, RawToken};
+    use crate::auth::{AccountId, AuthenticatedToken, OrgId};
 
     /// Token constant used in the `auth.sql` fixture.
     pub const ACME_ALICE_TOKEN: &str = "acme-alice-token-001";
@@ -157,7 +157,6 @@ pub(crate) mod test_helpers {
         AuthenticatedToken {
             account_id: AccountId::from_i64(1),
             org_id: OrgId::from_u64(2),
-            token: RawToken::new(ACME_ALICE_TOKEN),
         }
     }
 
