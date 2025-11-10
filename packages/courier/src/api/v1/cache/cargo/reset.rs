@@ -6,7 +6,6 @@ use crate::{auth::AuthenticatedToken, db::Postgres};
 
 #[instrument(skip(auth))]
 pub async fn handle(auth: AuthenticatedToken, Dep(db): Dep<Postgres>) -> StatusCode {
-
     // Delete the authenticated org's cache data
     match db.cargo_cache_reset(&auth).await {
         Ok(()) => {

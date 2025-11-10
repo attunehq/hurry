@@ -15,11 +15,7 @@ use tokio_util::{
 };
 use tracing::{error, info};
 
-use crate::{
-    auth::AuthenticatedToken,
-    db::Postgres,
-    storage::Disk,
-};
+use crate::{auth::AuthenticatedToken, db::Postgres, storage::Disk};
 
 /// Read multiple blobs from the CAS and return them as a tar archive.
 ///

@@ -12,7 +12,6 @@ pub async fn handle(
     Dep(db): Dep<Postgres>,
     Json(request): Json<CargoSaveRequest>,
 ) -> CacheSaveResponse {
-
     match db.cargo_cache_save(&auth, request).await {
         Ok(()) => {
             info!("cache.save.created");

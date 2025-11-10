@@ -31,7 +31,6 @@ pub async fn handle(
     Dep(db): Dep<Postgres>,
     Json(body): Json<CargoBulkRestoreRequest>,
 ) -> CacheBulkRestoreResponse {
-
     info!(requests = body.requests.len(), "cache.bulk_restore.start");
 
     if body.requests.len() > MAX_BULK_RESTORE_REQUESTS {

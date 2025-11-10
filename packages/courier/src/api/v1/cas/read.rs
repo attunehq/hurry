@@ -38,7 +38,6 @@ pub async fn handle(
     Path(key): Path<Key>,
     headers: HeaderMap,
 ) -> CasReadResponse {
-
     // Check if org has access to this CAS key
     // Return NotFound (not Forbidden) to avoid leaking information about blob
     // existence

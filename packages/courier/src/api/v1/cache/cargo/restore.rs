@@ -13,7 +13,6 @@ pub async fn handle(
     Dep(db): Dep<Postgres>,
     Json(request): Json<CargoRestoreRequest>,
 ) -> CacheRestoreResponse {
-
     match db.cargo_cache_restore(&auth, request).await {
         Ok(artifacts) if artifacts.is_empty() => {
             info!("cache.restore.miss");

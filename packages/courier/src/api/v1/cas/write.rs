@@ -67,7 +67,6 @@ pub async fn handle(
     headers: HeaderMap,
     body: Body,
 ) -> CasWriteResponse {
-
     // Check if the key already exists before consuming the body
     // If it exists, we still need to consume the entire body; if we return early
     // instead then clients see a "connection reset by peer" error.

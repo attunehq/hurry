@@ -44,7 +44,6 @@ pub async fn handle(
     Dep(cas): Dep<Disk>,
     Path(key): Path<Key>,
 ) -> CasCheckResponse {
-
     // Check if org has access to this CAS key
     // Return NotFound (not Forbidden) to avoid leaking information about blob
     // existence
