@@ -43,7 +43,7 @@ piper = { workspace = true }
 maplit = { workspace = true }
 rand = { workspace = true }
 duplicate.workspace = true
-sha2 = "0.10.9"
+sha2 = { workspace = true }
 
 [dev-dependencies]
 async-tempfile = { workspace = true }

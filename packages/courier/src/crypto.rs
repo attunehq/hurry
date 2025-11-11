@@ -1,13 +1,14 @@
 //! Cryptographic utilities for token hashing and verification.
 
-use sha2::{Sha256, Digest};
 use color_eyre::Result;
+use sha2::{Digest, Sha256};
 
 /// A hashed API token.
 ///
-/// Hashed tokens use SHA2 (SHA256) algorithm: when you call `new`, the plaintext
-/// token is hashed to produce a deterministic hex string. Verification compares
-/// the hash of the provided plaintext token against the stored hash.
+/// Hashed tokens use SHA2 (SHA256) algorithm: when you call `new`, the
+/// plaintext token is hashed to produce a deterministic hex string.
+/// Verification compares the hash of the provided plaintext token against the
+/// stored hash.
 ///
 /// Note: it's not a _security issue_ to leak this value, but they're not really
 /// _intended to be sent to clients_. Instead, the goal is to have clients send
@@ -20,7 +21,8 @@ use color_eyre::Result;
 pub struct TokenHash(String);
 
 impl TokenHash {
-    /// Currently only used in tests. If used elsewhere, feel free to make this generally available.
+    /// Currently only used in tests. If used elsewhere, feel free to make this
+    /// generally available.
     #[cfg(test)]
     pub fn parse(hash: impl AsRef<str>) -> Result<Self> {
         Ok(Self(String::from(hash.as_ref())))
@@ -34,7 +36,8 @@ impl TokenHash {
         Ok(Self(format!("{:x}", hash)))
     }
 
-    /// Currently only used in tests. If used elsewhere, feel free to make this generally available.
+    /// Currently only used in tests. If used elsewhere, feel free to make this
+    /// generally available.
     #[cfg(test)]
     pub fn verify(&self, token: impl AsRef<str>) -> bool {
         match Self::new(token) {
@@ -48,7 +51,8 @@ impl TokenHash {
         &self.0
     }
 
-    /// Currently only used in tests. If used elsewhere, feel free to make this generally available.
+    /// Currently only used in tests. If used elsewhere, feel free to make this
+    /// generally available.
     #[cfg(test)]
     pub fn to_string(&self) -> String {
         self.0.clone()
@@ -81,10 +85,7 @@ mod tests {
         let token1 = TokenHash::new(plain).expect("hash token");
         let token2 = TokenHash::new(plain).expect("hash token");
 
-        assert_eq!(
-            token1, token2,
-            "same plaintext produces same SHA256 hash"
-        );
+        assert_eq!(token1, token2, "same plaintext produces same SHA256 hash");
     }
 
     #[test]

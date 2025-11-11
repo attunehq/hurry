@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                account.id as account_id,\n                account.organization_id\n            FROM api_key\n            JOIN account ON api_key.account_id = account.id\n            WHERE api_key.hash = $1 AND api_key.revoked_at IS NULL\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "account_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "organization_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "fe059b09bc36b0c85fea6c17e566c55c1286982976af4167e7d0a4ba03587ff1"
+}
