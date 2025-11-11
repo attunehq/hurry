@@ -49,17 +49,13 @@ mod tests {
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::{ACME_ALICE_TOKEN, REVOKED_TOKEN, acme_alice_auth, test_blob};
+    use crate::api::test_helpers::{TestAuth, test_blob, test_server};
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn basic_save_flow(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool.clone())
-            .await
-            .context("create test server")?;
+        let db = crate::db::Postgres { pool: pool.clone() };
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (_, key1) = crate::api::test_helpers::test_blob(b"serde_artifact_1");
         let (_, key2) = crate::api::test_helpers::test_blob(b"serde_artifact_2");
@@ -88,13 +84,17 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request)
             .await;
         response.assert_status(StatusCode::CREATED);
 
         // Verify database state
-        let db = crate::db::Postgres { pool };
+        let alice_validated = db
+            .validate(auth.token_alice())
+            .await
+            .expect("validate token")
+            .expect("token must exist");
         let restore_request = CargoRestoreRequest::builder()
             .package_name("serde")
             .package_version("1.0.0")
@@ -103,7 +103,7 @@ mod tests {
             .build();
 
         let artifacts = db
-            .cargo_cache_restore(&acme_alice_auth(), restore_request)
+            .cargo_cache_restore(&alice_validated, restore_request)
             .await?;
         let expected = vec![
             ArtifactFile::builder()
@@ -125,15 +125,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn idempotent_saves(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool.clone())
-            .await
-            .context("create test server")?;
+        let db = crate::db::Postgres { pool: pool.clone() };
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (_, key1) = crate::api::test_helpers::test_blob(b"idempotent_1");
         let (_, key2) = crate::api::test_helpers::test_blob(b"idempotent_2");
@@ -162,20 +158,24 @@ mod tests {
 
         let response1 = server
             .post("/api/v1/cache/cargo/save")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request)
             .await;
         response1.assert_status(StatusCode::CREATED);
 
         let response2 = server
             .post("/api/v1/cache/cargo/save")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request)
             .await;
         response2.assert_status(StatusCode::CREATED);
 
         // Verify database state after idempotent saves
-        let db = crate::db::Postgres { pool };
+        let alice_validated = db
+            .validate(auth.token_alice())
+            .await
+            .expect("validate token")
+            .expect("token must exist");
         let restore_request = CargoRestoreRequest::builder()
             .package_name("serde")
             .package_version("1.0.0")
@@ -184,7 +184,7 @@ mod tests {
             .build();
 
         let artifacts = db
-            .cargo_cache_restore(&acme_alice_auth(), restore_request)
+            .cargo_cache_restore(&alice_validated, restore_request)
             .await?;
         let expected = vec![
             ArtifactFile::builder()
@@ -206,15 +206,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn save_with_build_script_hashes(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool.clone())
-            .await
-            .context("create test server")?;
+        let db = crate::db::Postgres { pool: pool.clone() };
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (_, key) = crate::api::test_helpers::test_blob(b"proc_macro_artifact");
 
@@ -236,13 +232,17 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request)
             .await;
         response.assert_status(StatusCode::CREATED);
 
         // Verify database state
-        let db = crate::db::Postgres { pool };
+        let alice_validated = db
+            .validate(auth.token_alice())
+            .await
+            .expect("validate token")
+            .expect("token must exist");
         let restore_request = CargoRestoreRequest::builder()
             .package_name("proc-macro-crate")
             .package_version("2.0.0")
@@ -253,7 +253,7 @@ mod tests {
             .build();
 
         let artifacts = db
-            .cargo_cache_restore(&acme_alice_auth(), restore_request)
+            .cargo_cache_restore(&alice_validated, restore_request)
             .await?;
         let expected = vec![
             ArtifactFile::builder()
@@ -269,15 +269,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn save_multiple_packages(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool.clone())
-            .await
-            .context("create test server")?;
+        let db = crate::db::Postgres { pool: pool.clone() };
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let packages = [("serde", "1.0.0"), ("tokio", "1.35.0"), ("axum", "0.7.0")];
         let keyed_packages = packages.iter().enumerate().map(|(i, (name, version))| {
@@ -305,14 +301,18 @@ mod tests {
 
             let response = server
                 .post("/api/v1/cache/cargo/save")
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .json(&request)
                 .await;
             response.assert_status(StatusCode::CREATED);
         }
 
         // Verify all packages were saved correctly
-        let db = crate::db::Postgres { pool };
+        let alice_validated = db
+            .validate(auth.token_alice())
+            .await
+            .expect("validate token")
+            .expect("token must exist");
         for (i, (name, version, key)) in keyed_packages.enumerate() {
             let restore_request = CargoRestoreRequest::builder()
                 .package_name(*name)
@@ -322,7 +322,7 @@ mod tests {
                 .build();
 
             let artifacts = db
-                .cargo_cache_restore(&acme_alice_auth(), restore_request)
+                .cargo_cache_restore(&alice_validated, restore_request)
                 .await?;
             let expected = vec![
                 ArtifactFile::builder()
@@ -338,15 +338,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn save_same_package_different_targets(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool.clone())
-            .await
-            .context("create test server")?;
+        let db = crate::db::Postgres { pool: pool.clone() };
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let targets = [
             "x86_64-unknown-linux-gnu",
@@ -375,14 +371,18 @@ mod tests {
 
             let response = server
                 .post("/api/v1/cache/cargo/save")
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .json(&request)
                 .await;
             response.assert_status(StatusCode::CREATED);
         }
 
         // Verify all targets were saved correctly for the same package
-        let db = crate::db::Postgres { pool };
+        let alice_validated = db
+            .validate(auth.token_alice())
+            .await
+            .expect("validate token")
+            .expect("token must exist");
         for (i, (target, key)) in keyed_targets.enumerate() {
             let restore_request = CargoRestoreRequest::builder()
                 .package_name("serde")
@@ -392,7 +392,7 @@ mod tests {
                 .build();
 
             let artifacts = db
-                .cargo_cache_restore(&acme_alice_auth(), restore_request)
+                .cargo_cache_restore(&alice_validated, restore_request)
                 .await?;
             let expected = vec![
                 ArtifactFile::builder()
@@ -408,15 +408,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn save_reuses_existing_objects(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool.clone())
-            .await
-            .context("create test server")?;
+        let db = crate::db::Postgres { pool: pool.clone() };
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (_, shared_object_key) = crate::api::test_helpers::test_blob(b"shared_object");
 
@@ -436,7 +432,7 @@ mod tests {
 
         let response1 = server
             .post("/api/v1/cache/cargo/save")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request1)
             .await;
         response1.assert_status(StatusCode::CREATED);
@@ -457,13 +453,17 @@ mod tests {
 
         let response2 = server
             .post("/api/v1/cache/cargo/save")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request2)
             .await;
         response2.assert_status(StatusCode::CREATED);
 
         // Verify both packages can restore with shared object
-        let db = crate::db::Postgres { pool };
+        let alice_validated = db
+            .validate(auth.token_alice())
+            .await
+            .expect("validate token")
+            .expect("token must exist");
 
         let restore_a = CargoRestoreRequest::builder()
             .package_name("dep-a")
@@ -472,9 +472,7 @@ mod tests {
             .library_crate_compilation_unit_hash("hash_a")
             .build();
 
-        let artifacts_a = db
-            .cargo_cache_restore(&acme_alice_auth(), restore_a)
-            .await?;
+        let artifacts_a = db.cargo_cache_restore(&alice_validated, restore_a).await?;
         let expected_a = vec![
             ArtifactFile::builder()
                 .object_key(&shared_object_key)
@@ -492,9 +490,7 @@ mod tests {
             .library_crate_compilation_unit_hash("hash_b")
             .build();
 
-        let artifacts_b = db
-            .cargo_cache_restore(&acme_alice_auth(), restore_b)
-            .await?;
+        let artifacts_b = db.cargo_cache_restore(&alice_validated, restore_b).await?;
         let expected_b = vec![
             ArtifactFile::builder()
                 .object_key(&shared_object_key)
@@ -508,15 +504,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn save_with_many_artifacts(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool.clone())
-            .await
-            .context("create test server")?;
+        let db = crate::db::Postgres { pool: pool.clone() };
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let artifacts = (0..20)
             .map(|i| {
@@ -541,13 +533,12 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request)
             .await;
         response.assert_status(StatusCode::CREATED);
 
         // Verify all artifacts were saved correctly
-        let db = crate::db::Postgres { pool };
         let restore_request = CargoRestoreRequest::builder()
             .package_name("large-crate")
             .package_version("1.0.0")
@@ -555,8 +546,13 @@ mod tests {
             .library_crate_compilation_unit_hash("large_hash")
             .build();
 
+        let alice_validated = db
+            .validate(auth.token_alice())
+            .await
+            .expect("validate token")
+            .expect("token must exist");
         let artifacts = db
-            .cargo_cache_restore(&acme_alice_auth(), restore_request)
+            .cargo_cache_restore(&alice_validated, restore_request)
             .await?;
         let expected = artifacts
             .iter()
@@ -576,15 +572,11 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn concurrent_saves_different_packages(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool.clone())
-            .await
-            .context("create test server")?;
+        let db = crate::db::Postgres { pool: pool.clone() };
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let requests = (0..10)
             .map(|i| {
@@ -608,43 +600,43 @@ mod tests {
         let (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10) = tokio::join!(
             server
                 .post("/api/v1/cache/cargo/save")
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .json(&requests[0]),
             server
                 .post("/api/v1/cache/cargo/save")
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .json(&requests[1]),
             server
                 .post("/api/v1/cache/cargo/save")
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .json(&requests[2]),
             server
                 .post("/api/v1/cache/cargo/save")
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .json(&requests[3]),
             server
                 .post("/api/v1/cache/cargo/save")
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .json(&requests[4]),
             server
                 .post("/api/v1/cache/cargo/save")
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .json(&requests[5]),
             server
                 .post("/api/v1/cache/cargo/save")
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .json(&requests[6]),
             server
                 .post("/api/v1/cache/cargo/save")
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .json(&requests[7]),
             server
                 .post("/api/v1/cache/cargo/save")
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .json(&requests[8]),
             server
                 .post("/api/v1/cache/cargo/save")
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .json(&requests[9]),
         );
 
@@ -653,7 +645,11 @@ mod tests {
         }
 
         // Verify all concurrent saves were correctly stored
-        let db = crate::db::Postgres { pool };
+        let alice_validated = db
+            .validate(auth.token_alice())
+            .await
+            .expect("validate token")
+            .expect("token must exist");
         for i in 0..10 {
             let restore_request = CargoRestoreRequest::builder()
                 .package_name(format!("crate-{i}"))
@@ -663,7 +659,7 @@ mod tests {
                 .build();
 
             let artifacts = db
-                .cargo_cache_restore(&acme_alice_auth(), restore_request)
+                .cargo_cache_restore(&alice_validated, restore_request)
                 .await?;
             let expected = artifacts
                 .iter()
@@ -682,15 +678,10 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn save_content_hash_mismatch_fails(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (_, key1) = crate::api::test_helpers::test_blob(b"content_v1");
         let (_, key2) = crate::api::test_helpers::test_blob(b"content_v2");
@@ -711,7 +702,7 @@ mod tests {
 
         let response1 = server
             .post("/api/v1/cache/cargo/save")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request1)
             .await;
         response1.assert_status(StatusCode::CREATED);
@@ -733,7 +724,7 @@ mod tests {
 
         let response2 = server
             .post("/api/v1/cache/cargo/save")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request2)
             .await;
         response2.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
@@ -741,15 +732,10 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn save_missing_auth_returns_401(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, _auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (_, key) = test_blob(b"artifact content");
         let request = CargoSaveRequest::builder()
@@ -773,15 +759,10 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn save_invalid_token_returns_401(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, _auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (_, key) = test_blob(b"artifact content");
         let request = CargoSaveRequest::builder()
@@ -809,15 +790,10 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn save_revoked_token_returns_401(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (_, key) = test_blob(b"artifact content");
         let request = CargoSaveRequest::builder()
@@ -836,7 +812,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
-            .authorization_bearer(REVOKED_TOKEN)
+            .authorization_bearer(auth.expect_token_revoked(TestAuth::ACCT_ALICE).expose())
             .json(&request)
             .await;
 

@@ -27,15 +27,12 @@ mod tests {
     use serde_json::json;
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::ACME_ALICE_TOKEN;
+    use crate::api::test_helpers::test_server;
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn resets_cache(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool.clone())
+        let (server, auth, _tmp) = test_server(pool.clone())
             .await
             .context("create test server")?;
 
@@ -58,7 +55,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request)
             .await;
         response.assert_status(StatusCode::CREATED);
@@ -76,7 +73,7 @@ mod tests {
         // Reset cache
         let response = server
             .post("/api/v1/cache/cargo/reset")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .await;
         response.assert_status(StatusCode::NO_CONTENT);
 

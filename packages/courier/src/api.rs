@@ -106,57 +106,199 @@ async fn trace_request(request: Request, next: Next) -> Response {
     .await
 }
 
-/// Create an isolated test server with the given database pool:
-/// - The database pool is intended to come from the [`sqlx::test`] macro
-/// - Creates a new [`Disk`](crate::storage::Disk) instance in a temp directory
-/// - Creates a new empty [`KeySets`](crate::auth::KeySets) instance
-#[cfg(test)]
-pub async fn test_server(
-    pool: sqlx::PgPool,
-) -> color_eyre::Result<(axum_test::TestServer, async_tempfile::TempDir)> {
-    use color_eyre::eyre::Context;
-
-    let db = crate::db::Postgres { pool };
-    let (storage, temp) = crate::storage::Disk::new_temp()
-        .await
-        .context("create temp storage")?;
-    let state = Aero::new().with(storage).with(db);
-    let router = crate::api::router(state);
-    axum_test::TestServerConfig::default()
-        .build(router)
-        .map_err(|e| color_eyre::eyre::eyre!("create test server: {e}"))
-        .map(|server| (server, temp))
-}
-
 #[cfg(test)]
 pub(crate) mod test_helpers {
+    use std::collections::HashMap;
+
+    use aerosol::Aero;
+    use async_tempfile::TempDir;
     use axum::body::Bytes;
     use axum::http::StatusCode;
-    use axum_test::TestServer;
+    use axum_test::{TestServer, TestServerConfig};
     use clients::courier::v1::Key;
-    use color_eyre::Result;
+    use color_eyre::eyre::Context;
+    use color_eyre::{Result, eyre::eyre};
+    use futures::{StreamExt, TryStreamExt, stream};
+    use sqlx::PgPool;
 
-    use crate::auth::{AccountId, AuthenticatedToken, OrgId};
+    use crate::auth::{AccountId, OrgId, RawToken};
+    use crate::db::Postgres;
+    use crate::{api, crypto::TokenHash, db, storage};
 
-    /// Token constant used in the `auth.sql` fixture.
-    pub const ACME_ALICE_TOKEN: &str = "acme-alice-token-001";
+    /// Create an isolated test server with the given database pool:
+    /// - The database pool is intended to come from the [`sqlx::test`] macro
+    /// - Creates a new [`Disk`](crate::storage::Disk) instance in a temp
+    ///   directory
+    /// - Seeds test authentication data and returns the plaintext tokens
+    pub async fn test_server(pool: PgPool) -> Result<(TestServer, TestAuth, TempDir)> {
+        let db = db::Postgres { pool };
+        let auth = TestAuth::seed(&db).await?;
+        let (storage, temp) = storage::Disk::new_temp()
+            .await
+            .context("create temp storage")?;
+        let state = Aero::new().with(storage).with(db);
+        let router = api::router(state);
+        let server = TestServerConfig::default()
+            .build(router)
+            .map_err(|e| eyre!("create test server: {e}"))?;
+        Ok((server, auth, temp))
+    }
 
-    /// Token constant used in the `auth.sql` fixture.
-    pub const ACME_BOB_TOKEN: &str = "acme-bob-token-001";
+    /// Fixture authentication information.
+    /// Use the associated constants for this type to select supported data.
+    #[derive(Debug, Clone)]
+    pub struct TestAuth {
+        pub org_ids: HashMap<String, OrgId>,
+        pub account_ids: HashMap<String, AccountId>,
+        pub tokens: HashMap<String, RawToken>,
+        pub revoked_tokens: HashMap<String, RawToken>,
+    }
 
-    /// Token constant used in the `auth.sql` fixture.
-    pub const WIDGET_CHARLIE_TOKEN: &str = "widget-charlie-token-001";
+    impl TestAuth {
+        pub const ORG_ACME: &str = "Acme Corp";
+        pub const ORG_WIDGET: &str = "Widget Inc";
 
-    /// Token constant used in the `auth.sql` fixture.
-    pub const REVOKED_TOKEN: &str = "acme-alice-token-revoked";
+        pub const ACCT_ALICE: &str = "alice@acme.com";
+        pub const ACCT_BOB: &str = "bob@acme.com";
+        pub const ACCT_CHARLIE: &str = "charlie@widget.com";
 
-    /// Create an authenticated token for testing.
-    /// This corresponds to alice@acme.com (account_id=1, org_id=2) from
-    /// auth.sql fixture.
-    pub fn acme_alice_auth() -> AuthenticatedToken {
-        AuthenticatedToken {
-            account_id: AccountId::from_i64(1),
-            org_id: OrgId::from_u64(2),
+        #[track_caller]
+        pub fn org_acme(&self) -> OrgId {
+            self.expect_org_id(Self::ORG_ACME)
+        }
+
+        #[track_caller]
+        pub fn org_widget(&self) -> OrgId {
+            self.expect_org_id(Self::ORG_WIDGET)
+        }
+
+        #[track_caller]
+        pub fn token_alice(&self) -> &RawToken {
+            self.expect_token(Self::ACCT_ALICE)
+        }
+
+        #[track_caller]
+        pub fn token_bob(&self) -> &RawToken {
+            self.expect_token(Self::ACCT_BOB)
+        }
+
+        #[track_caller]
+        pub fn token_charlie(&self) -> &RawToken {
+            self.expect_token(Self::ACCT_CHARLIE)
+        }
+
+        #[track_caller]
+        pub fn expect_account_id(&self, account: &str) -> AccountId {
+            self.account_ids
+                .get(account)
+                .copied()
+                .unwrap_or_else(|| panic!("unknown user: {account}"))
+        }
+
+        #[track_caller]
+        pub fn expect_org_id(&self, org: &str) -> OrgId {
+            self.org_ids
+                .get(org)
+                .copied()
+                .unwrap_or_else(|| panic!("unknown org: {org}"))
+        }
+
+        #[track_caller]
+        pub fn expect_token(&self, account: &str) -> &RawToken {
+            self.tokens
+                .get(account)
+                .unwrap_or_else(|| panic!("unknown account: {account}"))
+        }
+
+        #[track_caller]
+        pub fn expect_token_revoked(&self, account: &str) -> &RawToken {
+            self.revoked_tokens
+                .get(account)
+                .unwrap_or_else(|| panic!("unknown account: {account}"))
+        }
+
+        /// Seed the database with test authentication data, then return it.
+        pub async fn seed(db: &Postgres) -> Result<TestAuth> {
+            // Insert organizations; skip ID 1 as that's the "default" org.
+            let org_ids = sqlx::query!(
+                r#"
+                INSERT INTO organization (name, created_at) VALUES
+                    ($1, now()),
+                    ($2, now())
+                RETURNING id, name
+                "#,
+                TestAuth::ORG_ACME,
+                TestAuth::ORG_WIDGET
+            )
+            .fetch_all(&db.pool)
+            .await
+            .context("insert organizations")?
+            .into_iter()
+            .map(|row| (row.name, OrgId::from_i64(row.id)))
+            .collect::<HashMap<_, _>>();
+
+            // Insert accounts
+            let account_ids = sqlx::query!(
+                r#"
+                INSERT INTO account (organization_id, email, created_at) VALUES
+                    (2, $1, now()),
+                    (2, $2, now()),
+                    (3, $3, now())
+                RETURNING id, email
+                "#,
+                TestAuth::ACCT_ALICE,
+                TestAuth::ACCT_BOB,
+                TestAuth::ACCT_CHARLIE
+            )
+            .fetch_all(&db.pool)
+            .await
+            .context("insert accounts")?
+            .into_iter()
+            .map(|row| (row.email, AccountId::from_i64(row.id)))
+            .collect::<HashMap<_, _>>();
+
+            let tokens = stream::iter(&account_ids)
+                .then(|(account, &account_id)| async move {
+                    let hash = db
+                        .create_token(account_id)
+                        .await
+                        .with_context(|| format!("set up {account}"))?;
+                    Result::<_>::Ok((account.to_string(), hash))
+                })
+                .try_collect::<HashMap<_, _>>()
+                .await?;
+            let revoked_tokens = stream::iter(&account_ids)
+                .then(|(account, &account_id)| async move {
+                    let hash = db
+                        .create_token(account_id)
+                        .await
+                        .with_context(|| format!("set up {account}"))?;
+                    db.revoke_token(&hash)
+                        .await
+                        .with_context(|| format!("revoke token for {account}"))?;
+                    Result::<_>::Ok((account.to_string(), hash))
+                })
+                .try_collect::<HashMap<_, _>>()
+                .await?;
+
+            // Reset sequences to avoid conflicts
+            sqlx::query!(
+                "SELECT setval('organization_id_seq', (SELECT MAX(id) FROM organization))"
+            )
+            .fetch_one(&db.pool)
+            .await
+            .context("reset organization sequence")?;
+            sqlx::query!("SELECT setval('account_id_seq', (SELECT MAX(id) FROM account))")
+                .fetch_one(&db.pool)
+                .await
+                .context("reset account sequence")?;
+
+            Ok(TestAuth {
+                org_ids,
+                account_ids,
+                tokens,
+                revoked_tokens,
+            })
         }
     }
 

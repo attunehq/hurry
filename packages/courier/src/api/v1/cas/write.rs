@@ -189,12 +189,11 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn basic_write_flow(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"hello world";
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -212,12 +211,11 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn idempotent_writes(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"idempotent test";
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -254,11 +252,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn idempotent_write_large_blob(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -298,13 +295,12 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn invalid_key_hash(pool: PgPool) -> Result<()> {
         const ACTUAL_CONTENT: &[u8] = b"actual content";
         const WRONG_CONTENT: &[u8] = b"different content";
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -322,11 +318,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn large_blob_write(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -348,12 +343,11 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn concurrent_writes_same_blob(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"concurrent write test content";
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -422,11 +416,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn concurrent_writes_different_blobs(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -508,12 +501,11 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn write_compressed(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"test content for compression";
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -542,12 +534,11 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn write_compressed_idempotent(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"idempotent compressed test";
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -583,13 +574,12 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn write_compressed_invalid_hash(pool: PgPool) -> Result<()> {
         const ACTUAL_CONTENT: &[u8] = b"actual content";
         const WRONG_CONTENT: &[u8] = b"different content";
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -610,12 +600,11 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn write_compressed_roundtrip(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"roundtrip test content";
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -652,11 +641,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn write_missing_auth_returns_401(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -674,11 +662,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn write_invalid_token_returns_401(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -697,11 +684,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn write_revoked_token_returns_401(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 

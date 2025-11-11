@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                api_key.hash,\n                api_key.salt,\n                account.id,\n                account.organization_id\n            FROM api_key\n            JOIN account ON api_key.account_id = account.id\n            WHERE api_key.revoked_at IS NULL\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "salt",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "organization_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2c4c7dcfb366e53ee8647c1f3d18a0313e0d432a9ad7b6776ddbcba154e20ca8"
+}

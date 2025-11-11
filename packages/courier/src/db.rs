@@ -20,10 +20,14 @@ use color_eyre::{
 use derive_more::Debug;
 use futures::StreamExt;
 use num_traits::ToPrimitive;
+use rand::RngCore;
 use sqlx::{PgPool, migrate::Migrator};
 use tracing::{debug, warn};
 
-use crate::auth::{AccountId, AuthenticatedToken, OrgId};
+use crate::{
+    auth::{AccountId, AuthenticatedToken, OrgId, RawToken},
+    crypto::TokenHash,
+};
 
 /// A connected Postgres database instance.
 #[derive(Clone, Debug)]
@@ -501,31 +505,105 @@ impl Postgres {
         Ok(results_by_request_idx)
     }
 
+    /// Find the [`TokenHash`] with which the `RawToken` corresponds, if any.
+    #[tracing::instrument(name = "Postgres::token_hash", skip(token))]
+    async fn token_hash(
+        &self,
+        token: impl AsRef<RawToken>,
+    ) -> Result<Option<(AccountId, OrgId, TokenHash)>> {
+        let mut rows = sqlx::query!(
+            r#"
+            SELECT
+                api_key.hash as phc,
+                account.id as account_id,
+                account.organization_id
+            FROM api_key
+            JOIN account ON api_key.account_id = account.id
+            WHERE api_key.revoked_at IS NULL
+            "#
+        )
+        .fetch(&self.pool);
+
+        // TODO: today we check every single account's tokens so that users don't have
+        // to provide both a username and a password. We may want to change that
+        // in the future as we get more users, but for now this makes things simpler for
+        // onboarding.
+        let token = token.as_ref();
+        while let Some(row) = rows.next().await {
+            let row = row.context("read rows")?;
+            let hash = TokenHash::parse(row.phc).context("parse phc")?;
+            if hash.verify(token.expose()) {
+                return Ok(Some((
+                    AccountId::from_i64(row.account_id),
+                    OrgId::from_i64(row.organization_id),
+                    hash,
+                )));
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Validate a raw token against the database.
     ///
     /// Returns `Some(AuthenticatedToken)` if the token is valid and not
     /// revoked, otherwise returns `None`. Errors are only returned for
     /// database failures.
     #[tracing::instrument(name = "Postgres::validate", skip(token))]
-    pub async fn validate(&self, token: &str) -> Result<Option<AuthenticatedToken>> {
-        let result = sqlx::query!(
-            r#"
-            SELECT account.id, account.organization_id
-            FROM account
-            JOIN api_key ON account.id = api_key.account_id
-            WHERE api_key.content = $1
-            AND api_key.revoked_at IS NULL
-            "#,
-            token,
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .context("validate token")?;
+    pub async fn validate(&self, token: impl Into<RawToken>) -> Result<Option<AuthenticatedToken>> {
+        let token = token.into();
+        Ok(match self.token_hash(&token).await? {
+            Some((account_id, org_id, _)) => Some(AuthenticatedToken {
+                account_id,
+                org_id,
+                plaintext: token,
+            }),
+            None => None,
+        })
+    }
 
-        Ok(result.map(|row| AuthenticatedToken {
-            account_id: AccountId::from_i64(row.id),
-            org_id: OrgId::from_i64(row.organization_id),
-        }))
+    /// Generate a new token for the account in the database.
+    #[tracing::instrument(name = "Postgres::create_token")]
+    pub async fn create_token(&self, account: AccountId) -> Result<RawToken> {
+        let plaintext = {
+            let mut plaintext = [0u8; 16];
+            rand::thread_rng()
+                .try_fill_bytes(&mut plaintext)
+                .context("generate plaintext key")?;
+            hex::encode(plaintext)
+        };
+
+        let token = TokenHash::new(&plaintext).context("create token")?;
+        sqlx::query!(
+            r#"
+            INSERT INTO api_key (account_id, hash)
+            VALUES ($1, $2)
+            "#,
+            account.as_i64(),
+            token.as_str(),
+        )
+        .execute(&self.pool)
+        .await
+        .context("insert token")?;
+
+        Ok(RawToken::new(plaintext))
+    }
+
+    /// Revoke the specified token.
+    #[tracing::instrument(name = "Postgres::revoke_token", skip(token))]
+    pub async fn revoke_token(&self, token: impl AsRef<RawToken>) -> Result<()> {
+        sqlx::query!(
+            r#"
+            UPDATE api_key
+            SET revoked_at = now()
+            WHERE hash = $1
+            "#,
+            token.as_ref().expose(),
+        )
+        .execute(&self.pool)
+        .await
+        .context("delete token")
+        .map(drop)
     }
 
     /// Grant an organization access to a CAS key.

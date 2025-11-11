@@ -105,12 +105,11 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn check_exists(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"check exists test";
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -128,11 +127,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn check_doesnt_exist(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -150,12 +148,11 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn check_then_write_toctou_safety(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"toctou test";
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -183,11 +180,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn same_org_users_can_check_each_others_blobs(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 

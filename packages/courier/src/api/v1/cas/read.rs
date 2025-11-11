@@ -144,12 +144,11 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn read_after_write(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"read test content";
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -169,11 +168,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn read_nonexistent_key(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -190,11 +188,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn read_large_blob(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -216,12 +213,11 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn read_compressed(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"test content for compression";
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -249,12 +245,11 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn read_uncompressed_explicit(pool: PgPool) -> Result<()> {
         const CONTENT: &[u8] = b"test content without compression";
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -277,11 +272,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn read_compressed_nonexistent_key(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -299,11 +293,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn read_missing_auth_returns_401(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -318,11 +311,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn read_invalid_token_returns_401(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -340,13 +332,12 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn read_revoked_token_returns_401(pool: PgPool) -> Result<()> {
         use crate::api::test_helpers::REVOKED_TOKEN;
 
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -366,13 +357,12 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn org_cannot_read_other_orgs_blob(pool: PgPool) -> Result<()> {
         use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN};
 
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -403,13 +393,12 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn same_content_different_orgs_separate_access(pool: PgPool) -> Result<()> {
         use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN};
 
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -459,11 +448,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn same_org_users_can_access_each_others_blobs(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 

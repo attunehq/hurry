@@ -280,11 +280,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_read_multiple_blobs(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -337,11 +336,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_read_missing_keys(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -390,11 +388,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_read_empty_request(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -427,11 +424,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_read_invalid_keys(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -456,11 +452,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_read_compressed(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -517,11 +512,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_read_uncompressed_explicit(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -571,11 +565,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_read_compressed_missing_keys(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -627,13 +620,12 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_read_filters_inaccessible_blobs(pool: PgPool) -> Result<()> {
         use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN, write_cas};
 
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -690,11 +682,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn same_org_users_can_bulk_read_each_others_blobs(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 

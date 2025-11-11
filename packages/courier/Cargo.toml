@@ -18,7 +18,7 @@ tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["compat", "io"] }
 tower = { workspace = true, features = ["buffer", "limit", "load-shed"] }
 tower-http = { workspace = true, features = ["trace", "limit", "timeout", "compression-full", "decompression-full"] }
-sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate", "bigdecimal"] }
+sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate", "bigdecimal", "time"] }
 async-compression = { workspace = true, features = ["tokio", "zstd"] }
 blake3 = { workspace = true }
 hex = { workspace = true }
@@ -41,6 +41,8 @@ bigdecimal = { workspace = true }
 async-tar = { workspace = true }
 piper = { workspace = true }
 maplit = { workspace = true }
+argon2 = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 async-tempfile = { workspace = true }

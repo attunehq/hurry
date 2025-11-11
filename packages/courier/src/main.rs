@@ -19,6 +19,7 @@ use crate::db::Postgres;
 
 mod api;
 mod auth;
+mod crypto;
 mod db;
 mod storage;
 

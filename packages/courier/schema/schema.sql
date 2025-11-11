@@ -25,7 +25,10 @@ CREATE TABLE account (
 CREATE TABLE api_key (
   id BIGSERIAL PRIMARY KEY,
   account_id BIGINT NOT NULL REFERENCES account(id),
-  content TEXT NOT NULL UNIQUE,
+
+  -- Stores Argon2 PHC, which embeds algorithm and salt.
+  hash TEXT NOT NULL UNIQUE,
+
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   revoked_at TIMESTAMPTZ

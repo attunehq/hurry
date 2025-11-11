@@ -318,11 +318,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_write_multiple_blobs(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -367,11 +366,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_write_idempotent(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -411,11 +409,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_write_invalid_hash(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -447,11 +444,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_write_invalid_filename(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -469,11 +465,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_write_partial_success(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -517,11 +512,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_write_empty_tar(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -567,11 +561,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_write_compressed(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -616,11 +609,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_write_compressed_idempotent(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -658,11 +650,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_write_compressed_invalid_hash(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -693,11 +684,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_write_compressed_partial_success(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -739,11 +729,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_write_compressed_roundtrip(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
@@ -808,11 +797,10 @@ mod tests {
 
     #[sqlx::test(
         migrator = "crate::db::Postgres::MIGRATOR",
-        fixtures(path = "../../../../../schema/fixtures", scripts("auth"))
     )]
     #[test_log::test]
     async fn bulk_write_grants_access_when_blob_exists(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
+        let (server, _tmp, auth) = crate::api::test_server(pool)
             .await
             .context("create test server")?;
 
