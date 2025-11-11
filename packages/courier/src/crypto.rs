@@ -1,17 +1,13 @@
 //! Cryptographic utilities for token hashing and verification.
 
-use argon2::{
-    Argon2, PasswordHasher, PasswordVerifier,
-    password_hash::{PasswordHashString, SaltString, rand_core::OsRng},
-};
-use color_eyre::{Result, eyre::eyre};
+use sha2::{Sha256, Digest};
+use color_eyre::Result;
 
 /// A hashed API token.
 ///
-/// Hashed tokens use the Argon2 algorithm:
-/// - When you call `new`, a salt is generated and used for the token.
-/// - Serialization methods like `to_str` encode the algorithm and salt.
-/// - When you call `parse`, the algorithm and salt are parsed out.
+/// Hashed tokens use SHA2 (SHA256) algorithm: when you call `new`, the plaintext
+/// token is hashed to produce a deterministic hex string. Verification compares
+/// the hash of the provided plaintext token against the stored hash.
 ///
 /// Note: it's not a _security issue_ to leak this value, but they're not really
 /// _intended to be sent to clients_. Instead, the goal is to have clients send
@@ -21,41 +17,41 @@ use color_eyre::{Result, eyre::eyre};
 /// moment to think about why that is, because you probably aren't doing the
 /// right thing.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TokenHash(PasswordHashString);
+pub struct TokenHash(String);
 
 impl TokenHash {
-    /// Parse the instance from how it is stored.
-    pub fn parse(phc: impl AsRef<str>) -> Result<Self> {
-        PasswordHashString::new(phc.as_ref())
-            .map(Self)
-            .map_err(|err| eyre!("parse as argon2 phc: {err:?}"))
+    /// Currently only used in tests. If used elsewhere, feel free to make this generally available.
+    #[cfg(test)]
+    pub fn parse(hash: impl AsRef<str>) -> Result<Self> {
+        Ok(Self(String::from(hash.as_ref())))
     }
 
     /// Create a new instance from the given plaintext token.
     pub fn new(token: impl AsRef<str>) -> Result<Self> {
-        let salt = SaltString::generate(&mut OsRng);
-        Argon2::default()
-            .hash_password(token.as_ref().as_bytes(), &salt)
-            .map(PasswordHashString::from)
-            .map(Self)
-            .map_err(|err| eyre!("create argon2 phc: {err:?}"))
+        let mut hasher = Sha256::new();
+        hasher.update(token.as_ref().as_bytes());
+        let hash = hasher.finalize();
+        Ok(Self(format!("{:x}", hash)))
     }
 
-    /// Verify a plaintext token (e.g. provided by a user) against this hash.
+    /// Currently only used in tests. If used elsewhere, feel free to make this generally available.
+    #[cfg(test)]
     pub fn verify(&self, token: impl AsRef<str>) -> bool {
-        Argon2::default()
-            .verify_password(token.as_ref().as_bytes(), &self.0.password_hash())
-            .is_ok()
+        match Self::new(token) {
+            Ok(candidate) => candidate == *self,
+            Err(_) => false,
+        }
     }
 
     /// Get the hash as a string for storage or transmission.
     pub fn as_str(&self) -> &str {
-        self.0.as_str()
+        &self.0
     }
 
-    /// Create an owned string representing the token.
+    /// Currently only used in tests. If used elsewhere, feel free to make this generally available.
+    #[cfg(test)]
     pub fn to_string(&self) -> String {
-        self.0.to_string()
+        self.0.clone()
     }
 }
 
@@ -79,17 +75,15 @@ mod tests {
     }
 
     #[test]
-    fn different_salts() {
+    fn deterministic_hash() {
         let plain = "test-token-12345";
 
         let token1 = TokenHash::new(plain).expect("hash token");
         let token2 = TokenHash::new(plain).expect("hash token");
 
-        assert!(token1.verify(plain), "token1 validates");
-        assert!(token2.verify(plain), "token2 validates");
-        assert_ne!(
+        assert_eq!(
             token1, token2,
-            "two different salts create two different tokens"
+            "same plaintext produces same SHA256 hash"
         );
     }
 

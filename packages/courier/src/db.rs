@@ -15,12 +15,11 @@ use clients::courier::v1::{
 };
 use color_eyre::{
     Result, Section, SectionExt,
-    eyre::{Context, OptionExt, Report, bail},
+    eyre::{Context, Report, bail},
 };
 use derive_more::Debug;
 use futures::StreamExt;
 use num_traits::ToPrimitive;
-use rand::RngCore;
 use sqlx::{PgPool, migrate::Migrator};
 use tracing::{debug, warn};
 
@@ -505,43 +504,34 @@ impl Postgres {
         Ok(results_by_request_idx)
     }
 
-    /// Find the [`TokenHash`] with which the `RawToken` corresponds, if any.
-    #[tracing::instrument(name = "Postgres::token_hash", skip(token))]
-    async fn token_hash(
+    /// Lookup account and org for a raw token by direct hash comparison.
+    #[tracing::instrument(name = "Postgres::token_lookup", skip(token))]
+    async fn token_lookup(
         &self,
         token: impl AsRef<RawToken>,
-    ) -> Result<Option<(AccountId, OrgId, TokenHash)>> {
-        let mut rows = sqlx::query!(
+    ) -> Result<Option<(AccountId, OrgId)>> {
+        let hash = TokenHash::new(token.as_ref().expose()).context("hash token")?;
+        let row = sqlx::query!(
             r#"
             SELECT
-                api_key.hash as phc,
                 account.id as account_id,
                 account.organization_id
             FROM api_key
             JOIN account ON api_key.account_id = account.id
-            WHERE api_key.revoked_at IS NULL
-            "#
+            WHERE api_key.hash = $1 AND api_key.revoked_at IS NULL
+            "#,
+            hash.as_str(),
         )
-        .fetch(&self.pool);
+        .fetch_optional(&self.pool)
+        .await
+        .context("query for token")?;
 
-        // TODO: today we check every single account's tokens so that users don't have
-        // to provide both a username and a password. We may want to change that
-        // in the future as we get more users, but for now this makes things simpler for
-        // onboarding.
-        let token = token.as_ref();
-        while let Some(row) = rows.next().await {
-            let row = row.context("read rows")?;
-            let hash = TokenHash::parse(row.phc).context("parse phc")?;
-            if hash.verify(token.expose()) {
-                return Ok(Some((
-                    AccountId::from_i64(row.account_id),
-                    OrgId::from_i64(row.organization_id),
-                    hash,
-                )));
-            }
-        }
-
-        Ok(None)
+        Ok(row.map(|r| {
+            (
+                AccountId::from_i64(r.account_id),
+                OrgId::from_i64(r.organization_id),
+            )
+        }))
     }
 
     /// Validate a raw token against the database.
@@ -553,9 +543,9 @@ impl Postgres {
     pub async fn validate(&self, token: impl Into<RawToken>) -> Result<Option<AuthenticatedToken>> {
         let token = token.into();
         Ok(self
-            .token_hash(&token)
+            .token_lookup(&token)
             .await?
-            .map(|(account_id, org_id, _)| AuthenticatedToken {
+            .map(|(account_id, org_id)| AuthenticatedToken {
                 account_id,
                 org_id,
                 plaintext: token,
@@ -563,8 +553,12 @@ impl Postgres {
     }
 
     /// Generate a new token for the account in the database.
+    /// Currently only used in tests. If used elsewhere, feel free to make this generally available.
+    #[cfg(test)]
     #[tracing::instrument(name = "Postgres::create_token")]
     pub async fn create_token(&self, account: AccountId) -> Result<RawToken> {
+        use rand::RngCore;
+
         let plaintext = {
             let mut plaintext = [0u8; 16];
             rand::thread_rng()
@@ -590,13 +584,11 @@ impl Postgres {
     }
 
     /// Revoke the specified token.
+    /// Currently only used in tests. If used elsewhere, feel free to make this generally available.
+    #[cfg(test)]
     #[tracing::instrument(name = "Postgres::revoke_token", skip(token))]
     pub async fn revoke_token(&self, token: impl AsRef<RawToken>) -> Result<()> {
-        let (_, _, hash) = self
-            .token_hash(token)
-            .await
-            .context("find hashed token for raw token")?
-            .ok_or_eyre("token provided does not match a token in the database")?;
+        let hash = TokenHash::new(token.as_ref().expose()).context("hash token")?;
 
         let results = sqlx::query!(
             r#"
@@ -608,7 +600,7 @@ impl Postgres {
         )
         .execute(&self.pool)
         .await
-        .context("delete token")?;
+        .context("revoke token")?;
 
         if results.rows_affected() == 0 {
             bail!("no such token to revoke in the database");

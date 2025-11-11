@@ -41,9 +41,9 @@ bigdecimal = { workspace = true }
 async-tar = { workspace = true }
 piper = { workspace = true }
 maplit = { workspace = true }
-argon2 = { workspace = true }
 rand = { workspace = true }
 duplicate.workspace = true
+sha2 = "0.10.9"
 
 [dev-dependencies]
 async-tempfile = { workspace = true }
