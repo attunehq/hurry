@@ -49,7 +49,7 @@ mod tests {
     use pretty_assertions::assert_eq as pretty_assert_eq;
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::{TestAuth, test_blob, test_server};
+    use crate::api::test_helpers::{test_blob, test_server};
 
     #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
@@ -812,7 +812,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cache/cargo/save")
-            .authorization_bearer(auth.expect_token_revoked(TestAuth::ACCT_ALICE).expose())
+            .authorization_bearer(auth.token_alice_revoked().expose())
             .json(&request)
             .await;
 

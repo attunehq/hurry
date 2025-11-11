@@ -284,7 +284,7 @@ mod tests {
     use sqlx::PgPool;
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
-    use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN, test_blob};
+    use crate::api::test_helpers::{test_blob, test_server};
 
     #[track_caller]
     fn compress(data: impl AsRef<[u8]>) -> Vec<u8> {
@@ -316,14 +316,10 @@ mod tests {
         Ok(cursor.into_inner())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_write_multiple_blobs(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (content1, key1) = test_blob(b"first blob content");
         let (content2, key2) = test_blob(b"second blob content");
@@ -338,7 +334,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type("application/x-tar")
             .bytes(tar_data.into())
             .await;
@@ -354,7 +350,7 @@ mod tests {
         for (key, expected) in [(key1, content1), (key2, content2), (key3, content3)] {
             let read_response = server
                 .get(&format!("/api/v1/cas/{key}"))
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .await;
             read_response.assert_status_ok();
             let body = read_response.as_bytes();
@@ -364,21 +360,17 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_write_idempotent(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (content, key) = test_blob(b"idempotent blob");
         let tar_data = create_tar(vec![(key.to_hex(), content)]).await?;
 
         let response1 = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type("application/x-tar")
             .bytes(tar_data.clone().into())
             .await;
@@ -391,7 +383,7 @@ mod tests {
 
         let response2 = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type("application/x-tar")
             .bytes(tar_data.into())
             .await;
@@ -407,14 +399,10 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_write_invalid_hash(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (content, _) = test_blob(b"actual content");
         let (_, key) = test_blob(b"different content");
@@ -422,7 +410,7 @@ mod tests {
         let tar = create_tar(vec![(key.to_hex(), content)]).await?;
         let response = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type("application/x-tar")
             .bytes(tar.into())
             .await;
@@ -442,19 +430,15 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_write_invalid_filename(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let tar = create_tar(vec![("not-a-valid-hex-key", b"test content")]).await?;
         let response = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type("application/x-tar")
             .bytes(tar.into())
             .await;
@@ -463,14 +447,10 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_write_partial_success(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (valid_content, valid_key) = test_blob(b"valid content");
         let (wrong_content, _) = test_blob(b"actual content");
@@ -484,7 +464,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type("application/x-tar")
             .bytes(tar_data.into())
             .await;
@@ -502,7 +482,7 @@ mod tests {
 
         let response = server
             .get(&format!("/api/v1/cas/{valid_key}"))
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .await;
         response.assert_status_ok();
         pretty_assert_eq!(response.as_bytes().as_ref(), &valid_content);
@@ -510,19 +490,15 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_write_empty_tar(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let tar = create_tar(Vec::<(&str, &[u8])>::new()).await?;
         let response = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type("application/x-tar")
             .bytes(tar.into())
             .await;
@@ -559,14 +535,10 @@ mod tests {
         Ok(cursor.into_inner())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_write_compressed(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (content1, key1) = test_blob(b"first blob content");
         let (content2, key2) = test_blob(b"second blob content");
@@ -581,7 +553,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type(ContentType::TarZstd.to_str())
             .bytes(tar_data.into())
             .await;
@@ -597,7 +569,7 @@ mod tests {
         for (key, expected) in [(key1, content1), (key2, content2), (key3, content3)] {
             let read_response = server
                 .get(&format!("/api/v1/cas/{key}"))
-                .authorization_bearer(ACME_ALICE_TOKEN)
+                .authorization_bearer(auth.token_alice().expose())
                 .await;
             read_response.assert_status_ok();
             let body = read_response.as_bytes();
@@ -607,21 +579,17 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_write_compressed_idempotent(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (content, key) = test_blob(b"idempotent compressed blob");
         let tar_data = create_tar_compressed(vec![(key.to_hex(), content.clone())]).await?;
 
         let response1 = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type(ContentType::TarZstd.to_str())
             .bytes(tar_data.clone().into())
             .await;
@@ -634,7 +602,7 @@ mod tests {
 
         let response2 = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type(ContentType::TarZstd.to_str())
             .bytes(tar_data.into())
             .await;
@@ -648,14 +616,10 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_write_compressed_invalid_hash(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (content, _) = test_blob(b"actual content");
         let (_, key) = test_blob(b"different content");
@@ -663,7 +627,7 @@ mod tests {
         let tar = create_tar_compressed(vec![(key.to_hex(), content)]).await?;
         let response = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type(ContentType::TarZstd.to_str())
             .bytes(tar.into())
             .await;
@@ -682,14 +646,10 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_write_compressed_partial_success(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (valid_content, valid_key) = test_blob(b"valid content");
         let (wrong_content, _) = test_blob(b"actual content");
@@ -703,7 +663,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type(ContentType::TarZstd.to_str())
             .bytes(tar_data.into())
             .await;
@@ -719,7 +679,7 @@ mod tests {
 
         let response = server
             .get(&format!("/api/v1/cas/{valid_key}"))
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .await;
         response.assert_status_ok();
         pretty_assert_eq!(response.as_bytes().as_ref(), &valid_content);
@@ -727,14 +687,10 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_write_compressed_roundtrip(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (content1, key1) = test_blob(b"first blob");
         let (content2, key2) = test_blob(b"second blob");
@@ -747,7 +703,7 @@ mod tests {
 
         let write_response = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type(ContentType::TarZstd.to_str())
             .bytes(tar_data.into())
             .await;
@@ -760,7 +716,7 @@ mod tests {
 
         let read_response = server
             .post("/api/v1/cas/bulk/read")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .add_header(clients::ContentType::ACCEPT, ContentType::TarZstd.value())
             .json(&request)
             .await;
@@ -795,14 +751,10 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_write_grants_access_when_blob_exists(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (content, key) = test_blob(b"shared blob content");
 
@@ -810,7 +762,7 @@ mod tests {
         let tar_data_alice = create_tar(vec![(key.to_hex(), content.clone())]).await?;
         let response_alice = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .content_type("application/x-tar")
             .bytes(tar_data_alice.into())
             .await;
@@ -822,7 +774,7 @@ mod tests {
         // Charlie (different org) should not be able to read the blob yet
         let check_response = server
             .method(axum::http::Method::HEAD, &format!("/api/v1/cas/{key}"))
-            .authorization_bearer(WIDGET_CHARLIE_TOKEN)
+            .authorization_bearer(auth.token_charlie().expose())
             .await;
         check_response.assert_status(StatusCode::NOT_FOUND);
 
@@ -831,7 +783,7 @@ mod tests {
         let tar_data_charlie = create_tar(vec![(key.to_hex(), content.clone())]).await?;
         let response_charlie = server
             .post("/api/v1/cas/bulk/write")
-            .authorization_bearer(WIDGET_CHARLIE_TOKEN)
+            .authorization_bearer(auth.token_charlie().expose())
             .content_type("application/x-tar")
             .bytes(tar_data_charlie.into())
             .await;
@@ -848,7 +800,7 @@ mod tests {
         // Now Charlie should be able to read the blob
         let read_response = server
             .get(&format!("/api/v1/cas/{key}"))
-            .authorization_bearer(WIDGET_CHARLIE_TOKEN)
+            .authorization_bearer(auth.token_charlie().expose())
             .await;
         read_response.assert_status_ok();
         pretty_assert_eq!(read_response.as_bytes().as_ref(), content.as_slice());

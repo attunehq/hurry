@@ -21,7 +21,7 @@ mod tests {
     use pretty_assertions::{assert_eq as pretty_assert_eq, assert_ne as pretty_assert_ne};
     use sqlx::PgPool;
 
-    use crate::api::test_helpers::{TestAuth, test_blob, test_server};
+    use crate::api::test_helpers::{test_blob, test_server};
 
     #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]

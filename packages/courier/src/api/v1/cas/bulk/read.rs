@@ -271,30 +271,26 @@ mod tests {
     use tap::Pipe;
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
-    use crate::api::test_helpers::{ACME_ALICE_TOKEN, ACME_BOB_TOKEN, write_cas};
+    use crate::api::test_helpers::{test_server, write_cas};
 
     #[track_caller]
     fn decompress(data: impl AsRef<[u8]>) -> Vec<u8> {
         zstd::bulk::decompress(data.as_ref(), 10 * 1024 * 1024).expect("decompress")
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_read_multiple_blobs(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         // Write three blobs
         let content1 = b"first blob content";
         let content2 = b"second blob content";
         let content3 = b"third blob content";
 
-        let key1 = write_cas(&server, content1, ACME_ALICE_TOKEN).await?;
-        let key2 = write_cas(&server, content2, ACME_ALICE_TOKEN).await?;
-        let key3 = write_cas(&server, content3, ACME_ALICE_TOKEN).await?;
+        let key1 = write_cas(&server, content1, auth.token_alice().expose()).await?;
+        let key2 = write_cas(&server, content2, auth.token_alice().expose()).await?;
+        let key3 = write_cas(&server, content3, auth.token_alice().expose()).await?;
 
         let request = CasBulkReadRequest::builder()
             .keys([&key1, &key2, &key3])
@@ -302,7 +298,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/read")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request)
             .await;
 
@@ -334,18 +330,14 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_read_missing_keys(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         // Write one blob
         let content = b"existing blob";
-        let key = write_cas(&server, content, ACME_ALICE_TOKEN).await?;
+        let key = write_cas(&server, content, auth.token_alice().expose()).await?;
 
         // Request with one valid and one missing key
         let missing_key =
@@ -356,7 +348,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/read")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request)
             .await;
 
@@ -386,20 +378,16 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_read_empty_request(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let request = CasBulkReadRequest::default();
 
         let response = server
             .post("/api/v1/cas/bulk/read")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request)
             .await;
         response.assert_status_ok();
@@ -422,14 +410,10 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_read_invalid_keys(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         // Request with invalid keys should fail at deserialization.
         // We use raw JSON here since we can't construct invalid keys with the typed
@@ -440,7 +424,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/read")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request_body)
             .await;
 
@@ -450,22 +434,18 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_read_compressed(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let content1 = b"first blob content";
         let content2 = b"second blob content";
         let content3 = b"third blob content";
 
-        let key1 = write_cas(&server, content1, ACME_ALICE_TOKEN).await?;
-        let key2 = write_cas(&server, content2, ACME_ALICE_TOKEN).await?;
-        let key3 = write_cas(&server, content3, ACME_ALICE_TOKEN).await?;
+        let key1 = write_cas(&server, content1, auth.token_alice().expose()).await?;
+        let key2 = write_cas(&server, content2, auth.token_alice().expose()).await?;
+        let key3 = write_cas(&server, content3, auth.token_alice().expose()).await?;
 
         let request = CasBulkReadRequest::builder()
             .keys([&key1, &key2, &key3])
@@ -473,7 +453,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/read")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .add_header(ContentType::ACCEPT, ContentType::TarZstd.value())
             .json(&request)
             .await;
@@ -510,26 +490,22 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_read_uncompressed_explicit(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let content1 = b"first blob content";
         let content2 = b"second blob content";
 
-        let key1 = write_cas(&server, content1, ACME_ALICE_TOKEN).await?;
-        let key2 = write_cas(&server, content2, ACME_ALICE_TOKEN).await?;
+        let key1 = write_cas(&server, content1, auth.token_alice().expose()).await?;
+        let key2 = write_cas(&server, content2, auth.token_alice().expose()).await?;
 
         let request = CasBulkReadRequest::builder().keys([&key1, &key2]).build();
 
         let response = server
             .post("/api/v1/cas/bulk/read")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .add_header(ContentType::ACCEPT, ContentType::Tar.value())
             .json(&request)
             .await;
@@ -563,17 +539,13 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_read_compressed_missing_keys(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let content = b"existing blob";
-        let key = write_cas(&server, content, ACME_ALICE_TOKEN).await?;
+        let key = write_cas(&server, content, auth.token_alice().expose()).await?;
 
         let missing_key =
             Key::from_hex("0000000000000000000000000000000000000000000000000000000000000000")?;
@@ -583,7 +555,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/read")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .add_header(ContentType::ACCEPT, ContentType::TarZstd.value())
             .json(&request)
             .await;
@@ -618,27 +590,21 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn bulk_read_filters_inaccessible_blobs(pool: PgPool) -> Result<()> {
-        use crate::api::test_helpers::{ACME_ALICE_TOKEN, WIDGET_CHARLIE_TOKEN, write_cas};
-
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         // Org A writes two blobs
         let content_a1 = b"org A blob 1";
-        let key_a1 = write_cas(&server, content_a1, ACME_ALICE_TOKEN).await?;
+        let key_a1 = write_cas(&server, content_a1, auth.token_alice().expose()).await?;
 
         let content_a2 = b"org A blob 2";
-        let key_a2 = write_cas(&server, content_a2, ACME_ALICE_TOKEN).await?;
+        let key_a2 = write_cas(&server, content_a2, auth.token_alice().expose()).await?;
 
         // Org B writes one blob
         let content_b = b"org B blob";
-        let key_b = write_cas(&server, content_b, WIDGET_CHARLIE_TOKEN).await?;
+        let key_b = write_cas(&server, content_b, auth.token_charlie().expose()).await?;
 
         // Org A tries to bulk read all three keys
         let request = clients::courier::v1::cas::CasBulkReadRequest::builder()
@@ -647,7 +613,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/read")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request)
             .await;
 
@@ -680,26 +646,22 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(
-        migrator = "crate::db::Postgres::MIGRATOR",
-    )]
+    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn same_org_users_can_bulk_read_each_others_blobs(pool: PgPool) -> Result<()> {
-        let (server, _tmp, auth) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
+        let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         // Alice writes two blobs
         const ALICE_CONTENT_1: &[u8] = b"Alice's first blob";
         const ALICE_CONTENT_2: &[u8] = b"Alice's second blob";
-        let alice_key_1 = write_cas(&server, ALICE_CONTENT_1, ACME_ALICE_TOKEN).await?;
-        let alice_key_2 = write_cas(&server, ALICE_CONTENT_2, ACME_ALICE_TOKEN).await?;
+        let alice_key_1 = write_cas(&server, ALICE_CONTENT_1, auth.token_alice().expose()).await?;
+        let alice_key_2 = write_cas(&server, ALICE_CONTENT_2, auth.token_alice().expose()).await?;
 
         // Bob writes two blobs
         const BOB_CONTENT_1: &[u8] = b"Bob's first blob";
         const BOB_CONTENT_2: &[u8] = b"Bob's second blob";
-        let bob_key_1 = write_cas(&server, BOB_CONTENT_1, ACME_BOB_TOKEN).await?;
-        let bob_key_2 = write_cas(&server, BOB_CONTENT_2, ACME_BOB_TOKEN).await?;
+        let bob_key_1 = write_cas(&server, BOB_CONTENT_1, auth.token_bob().expose()).await?;
+        let bob_key_2 = write_cas(&server, BOB_CONTENT_2, auth.token_bob().expose()).await?;
 
         // Bob can bulk read Alice's blobs
         let request = CasBulkReadRequest::builder()
@@ -708,7 +670,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/read")
-            .authorization_bearer(ACME_BOB_TOKEN)
+            .authorization_bearer(auth.token_bob().expose())
             .json(&request)
             .await;
 
@@ -742,7 +704,7 @@ mod tests {
 
         let response = server
             .post("/api/v1/cas/bulk/read")
-            .authorization_bearer(ACME_ALICE_TOKEN)
+            .authorization_bearer(auth.token_alice().expose())
             .json(&request)
             .await;
 

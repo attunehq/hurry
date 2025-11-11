@@ -107,6 +107,10 @@ async fn trace_request(request: Request, next: Next) -> Response {
 }
 
 #[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "Helpers have lots of stuff we might not use right now"
+)]
 pub(crate) mod test_helpers {
     use std::collections::HashMap;
 
@@ -116,14 +120,17 @@ pub(crate) mod test_helpers {
     use axum::http::StatusCode;
     use axum_test::{TestServer, TestServerConfig};
     use clients::courier::v1::Key;
-    use color_eyre::eyre::Context;
-    use color_eyre::{Result, eyre::eyre};
+    use color_eyre::{
+        Result,
+        eyre::{Context, eyre},
+    };
+    use duplicate::duplicate_item;
     use futures::{StreamExt, TryStreamExt, stream};
     use sqlx::PgPool;
 
     use crate::auth::{AccountId, OrgId, RawToken};
     use crate::db::Postgres;
-    use crate::{api, crypto::TokenHash, db, storage};
+    use crate::{api, db, storage};
 
     /// Create an isolated test server with the given database pool:
     /// - The database pool is intended to come from the [`sqlx::test`] macro
@@ -162,59 +169,43 @@ pub(crate) mod test_helpers {
         pub const ACCT_BOB: &str = "bob@acme.com";
         pub const ACCT_CHARLIE: &str = "charlie@widget.com";
 
+        #[duplicate_item(
+            method constant;
+            [ org_acme ] [ ORG_ACME ];
+            [ org_widget ] [ ORG_WIDGET ];
+        )]
         #[track_caller]
-        pub fn org_acme(&self) -> OrgId {
-            self.expect_org_id(Self::ORG_ACME)
-        }
-
-        #[track_caller]
-        pub fn org_widget(&self) -> OrgId {
-            self.expect_org_id(Self::ORG_WIDGET)
-        }
-
-        #[track_caller]
-        pub fn token_alice(&self) -> &RawToken {
-            self.expect_token(Self::ACCT_ALICE)
-        }
-
-        #[track_caller]
-        pub fn token_bob(&self) -> &RawToken {
-            self.expect_token(Self::ACCT_BOB)
-        }
-
-        #[track_caller]
-        pub fn token_charlie(&self) -> &RawToken {
-            self.expect_token(Self::ACCT_CHARLIE)
-        }
-
-        #[track_caller]
-        pub fn expect_account_id(&self, account: &str) -> AccountId {
-            self.account_ids
-                .get(account)
-                .copied()
-                .unwrap_or_else(|| panic!("unknown user: {account}"))
-        }
-
-        #[track_caller]
-        pub fn expect_org_id(&self, org: &str) -> OrgId {
+        pub fn method(&self) -> OrgId {
             self.org_ids
-                .get(org)
+                .get(Self::constant)
                 .copied()
-                .unwrap_or_else(|| panic!("unknown org: {org}"))
+                .unwrap_or_else(|| panic!("unknown org: {}", Self::constant))
         }
 
+        #[duplicate_item(
+            method constant;
+            [ token_alice ] [ ACCT_ALICE ];
+            [ token_bob ] [ ACCT_BOB ];
+            [ token_charlie ] [ ACCT_CHARLIE ];
+        )]
         #[track_caller]
-        pub fn expect_token(&self, account: &str) -> &RawToken {
+        pub fn method(&self) -> &RawToken {
             self.tokens
-                .get(account)
-                .unwrap_or_else(|| panic!("unknown account: {account}"))
+                .get(Self::constant)
+                .unwrap_or_else(|| panic!("unknown account: {}", Self::constant))
         }
 
+        #[duplicate_item(
+            method constant;
+            [ token_alice_revoked ] [ ACCT_ALICE ];
+            [ token_bob_revoked ] [ ACCT_BOB ];
+            [ token_charlie_revoked ] [ ACCT_CHARLIE ];
+        )]
         #[track_caller]
-        pub fn expect_token_revoked(&self, account: &str) -> &RawToken {
+        pub fn method(&self) -> &RawToken {
             self.revoked_tokens
-                .get(account)
-                .unwrap_or_else(|| panic!("unknown account: {account}"))
+                .get(Self::constant)
+                .unwrap_or_else(|| panic!("unknown account: {}", Self::constant))
         }
 
         /// Seed the database with test authentication data, then return it.
