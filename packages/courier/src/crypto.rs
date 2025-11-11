@@ -12,6 +12,14 @@ use color_eyre::{Result, eyre::eyre};
 /// - When you call `new`, a salt is generated and used for the token.
 /// - Serialization methods like `to_str` encode the algorithm and salt.
 /// - When you call `parse`, the algorithm and salt are parsed out.
+///
+/// Note: it's not a _security issue_ to leak this value, but they're not really
+/// _intended to be sent to clients_. Instead, the goal is to have clients send
+/// the plaintext forms and then we fetch these types from the database to
+/// validate the plaintext form of the token. For this reason, this type does
+/// not implement `Serialize` or `Deserialize`- if you want to add them, take a
+/// moment to think about why that is, because you probably aren't doing the
+/// right thing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TokenHash(PasswordHashString);
 
