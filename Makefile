@@ -42,7 +42,7 @@ release:
 	cargo build --release
 
 sqlx-prepare:
-	cd packages/courier && cargo sqlx prepare --database-url $(COURIER_DATABASE_URL)
+	cargo sqlx prepare --database-url $(COURIER_DATABASE_URL) --workspace
 
 install:
 	@CARGO_HOME=$${CARGO_HOME:-$$HOME/.cargo} && \
