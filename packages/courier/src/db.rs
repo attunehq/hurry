@@ -552,14 +552,14 @@ impl Postgres {
     #[tracing::instrument(name = "Postgres::validate", skip(token))]
     pub async fn validate(&self, token: impl Into<RawToken>) -> Result<Option<AuthenticatedToken>> {
         let token = token.into();
-        Ok(match self.token_hash(&token).await? {
-            Some((account_id, org_id, _)) => Some(AuthenticatedToken {
+        Ok(self
+            .token_hash(&token)
+            .await?
+            .map(|(account_id, org_id, _)| AuthenticatedToken {
                 account_id,
                 org_id,
                 plaintext: token,
-            }),
-            None => None,
-        })
+            }))
     }
 
     /// Generate a new token for the account in the database.
