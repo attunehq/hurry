@@ -15,7 +15,7 @@ use clients::courier::v1::{
 };
 use color_eyre::{
     Result, Section, SectionExt,
-    eyre::{Context, Report, bail},
+    eyre::{Context, OptionExt, Report, bail},
 };
 use derive_more::Debug;
 use futures::StreamExt;
@@ -592,18 +592,29 @@ impl Postgres {
     /// Revoke the specified token.
     #[tracing::instrument(name = "Postgres::revoke_token", skip(token))]
     pub async fn revoke_token(&self, token: impl AsRef<RawToken>) -> Result<()> {
-        sqlx::query!(
+        let (_, _, hash) = self
+            .token_hash(token)
+            .await
+            .context("find hashed token for raw token")?
+            .ok_or_eyre("token provided does not match a token in the database")?;
+
+        let results = sqlx::query!(
             r#"
             UPDATE api_key
             SET revoked_at = now()
             WHERE hash = $1
             "#,
-            token.as_ref().expose(),
+            hash.as_str(),
         )
         .execute(&self.pool)
         .await
-        .context("delete token")
-        .map(drop)
+        .context("delete token")?;
+
+        if results.rows_affected() == 0 {
+            bail!("no such token to revoke in the database");
+        }
+
+        Ok(())
     }
 
     /// Grant an organization access to a CAS key.

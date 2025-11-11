@@ -77,8 +77,8 @@ mod tests {
         let token1 = TokenHash::new(plain).expect("hash token");
         let token2 = TokenHash::new(plain).expect("hash token");
 
-        assert!(token1.verify(plain), "token validates");
-        assert!(!token2.verify(plain), "token validates");
+        assert!(token1.verify(plain), "token1 validates");
+        assert!(token2.verify(plain), "token2 validates");
         assert_ne!(
             token1, token2,
             "two different salts create two different tokens"
