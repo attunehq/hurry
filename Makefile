@@ -84,6 +84,10 @@ reset-local-cache:
 	@rm -rf .hurrydata
 	@echo "Starting postgres..."
 	@docker compose up -d postgres
+	@echo "Waiting for postgres to be ready..."
+	@until docker compose exec -T postgres pg_isready -U courier > /dev/null 2>&1; do \
+		sleep 0.5; \
+	done
 	@echo "Running migrations..."
 	@cargo sqlx migrate run --source packages/courier/schema/migrations --database-url $(COURIER_DATABASE_URL)
 	@$(MAKE) courier-local-auth
