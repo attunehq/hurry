@@ -7,26 +7,31 @@ if [ -z "${COURIER_DATABASE_URL:-}" ]; then
 fi
 
 if [ $# -ne 1 ]; then
-  echo "Usage: $0 <token-id>" >&2
-  echo "Revoke an API token" >&2
+  echo "Usage: $0 <token-id-or-plaintext-token>" >&2
+  echo "Revoke an API token by ID or plaintext token value" >&2
   exit 1
 fi
 
-TOKEN_ID="$1"
+TOKEN_INPUT="$1"
 
-if ! [[ "$TOKEN_ID" =~ ^[0-9]+$ ]]; then
-  echo "Error: Token ID must be a number" >&2
-  exit 1
+# Check if input is a numeric ID or plaintext token
+if [[ "$TOKEN_INPUT" =~ ^[0-9]+$ ]]; then
+  # Input is a token ID
+  WHERE_CLAUSE="id = $TOKEN_INPUT"
+else
+  # Input is a plaintext token - hash it
+  TOKEN_HASH=$(echo -n "$TOKEN_INPUT" | openssl dgst -sha256 -binary | xxd -p -c 256)
+  WHERE_CLAUSE="hash = '\\x$TOKEN_HASH'"
 fi
 
-if ! RESULT=$(psql "$COURIER_DATABASE_URL" -t -c "UPDATE api_key SET revoked_at = NOW() WHERE id = $TOKEN_ID AND revoked_at IS NULL RETURNING id, account_id, revoked_at;" 2>&1); then
+if ! RESULT=$(psql "$COURIER_DATABASE_URL" -t -c "UPDATE api_key SET revoked_at = NOW() WHERE $WHERE_CLAUSE AND revoked_at IS NULL RETURNING id, account_id, revoked_at;" 2>&1); then
   echo "Error: Failed to revoke API token" >&2
   echo "$RESULT" >&2
   exit 1
 fi
 
 if [ -z "$(echo "$RESULT" | tr -d '[:space:]')" ]; then
-  echo "Error: Token with ID $TOKEN_ID not found or already revoked" >&2
+  echo "Error: Token not found or already revoked" >&2
   exit 1
 fi
 

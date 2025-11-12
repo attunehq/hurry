@@ -85,10 +85,21 @@ This generates a new API token and displays it. **Save the token immediately** a
 ./scripts/db/token-list <account-id>
 ```
 
+### Lookup Token
+```bash
+./scripts/db/token-lookup <plaintext-token>
+```
+Look up token information using the plaintext token value. Shows token ID, associated account, organization, and revocation status.
+
 ### Revoke Token
 ```bash
+# Revoke by token ID
 ./scripts/db/token-revoke <token-id>
+
+# Revoke by plaintext token
+./scripts/db/token-revoke <plaintext-token>
 ```
+Accepts either a numeric token ID or the plaintext token value.
 
 ## Example Workflow
 
@@ -115,8 +126,14 @@ This generates a new API token and displays it. **Save the token immediately** a
 ./scripts/db/token-list
 # Shows token ID, account ID, email, creation time, last access, and revocation status
 
-# Revoke a token when done
+# Look up a token by its plaintext value
+./scripts/db/token-lookup "a3f8b9c..."
+# Shows token info including ID, account, and organization
+
+# Revoke a token when done (by ID or plaintext)
 ./scripts/db/token-revoke 1
+# or
+./scripts/db/token-revoke "a3f8b9c..."
 ```
 
 ## Error Handling
