@@ -20,6 +20,40 @@ Alternatively, run it in Docker:
 docker compose up
 ```
 
+### Local Development Setup
+
+For local development with authentication enabled, use:
+```sh
+make reset-local-cache
+```
+
+This will:
+1. Stop any running containers
+2. Clear local data
+3. Start PostgreSQL
+4. Apply all migrations
+5. Load test auth fixtures
+
+After running, you'll see available test tokens:
+```
+Local auth fixture loaded. Available tokens:
+  acme-alice-token-001         (alice@acme.com, Acme Corp)
+  acme-bob-token-001           (bob@acme.com, Acme Corp)
+  widget-charlie-token-001     (charlie@widget.com, Widget Inc)
+```
+
+You can then use these tokens to test authenticated requests:
+```sh
+hurry cargo build \
+  --hurry-courier-url http://localhost:3000 \
+  --hurry-courier-token acme-alice-token-001
+```
+
+To load just the auth fixtures without resetting everything:
+```sh
+make courier-local-auth
+```
+
 ## Migrations
 
 The canonical database state is at `schema/schema.sql`.
