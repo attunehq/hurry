@@ -85,12 +85,29 @@ impl RustcArguments {
 
     /// The path to the source file being compiled.
     pub fn src_path(&self) -> &str {
-        let positional_arguments = self.0.iter().filter_map(|arg| match arg {
-            RustcArgument::Positional(p) => Some(p.as_str()),
+        let positional_arguments = self
+            .0
+            .iter()
+            .filter_map(|arg| match arg {
+                RustcArgument::Positional(p) => Some(p.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        debug_assert_eq!(
+            positional_arguments.len(),
+            1,
+            "expected one rustc positional argument"
+        );
+        positional_arguments
+            .first()
+            .expect("rustc arguments should have one positional argument")
+    }
+
+    pub fn extra_filename(&self) -> Option<&str> {
+        self.0.iter().find_map(|arg| match arg {
+            RustcArgument::Codegen(RustcCodegenOption::ExtraFilename(s)) => Some(s.as_str()),
             _ => None,
-        }).collect::<Vec<_>>();
-        debug_assert_eq!(positional_arguments.len(), 1, "expected one rustc positional argument");
-        positional_arguments.first().expect("rustc arguments should have one positional argument")
+        })
     }
 }
 
@@ -1024,8 +1041,7 @@ mod tests {
     #[test]
     fn parse_lib_build_args() -> Result<()> {
         let json = include_str!("build_plan/fixtures/lib_build.json");
-        let args = serde_json::from_str::<RustcArguments>(json)
-            .context("parse lib build args")?;
+        let args = serde_json::from_str::<RustcArguments>(json).context("parse lib build args")?;
 
         let expected = vec![
             RustcArgument::CrateName(String::from("base64")),
@@ -1046,9 +1062,7 @@ mod tests {
                 ],
                 file: None,
             }),
-            RustcArgument::Codegen(RustcCodegenOption::EmbedBitcode(
-                RustcEmbedBitcode::No,
-            )),
+            RustcArgument::Codegen(RustcCodegenOption::EmbedBitcode(RustcEmbedBitcode::No)),
             RustcArgument::Codegen(RustcCodegenOption::Debuginfo(String::from("2"))),
             RustcArgument::Codegen(RustcCodegenOption::SplitDebuginfo(
                 RustcSplitDebuginfo::Unpacked,
@@ -1075,9 +1089,7 @@ mod tests {
             RustcArgument::Codegen(RustcCodegenOption::ExtraFilename(String::from(
                 "-ac0e04d584580346",
             ))),
-            RustcArgument::OutDir(String::from(
-                "/Users/jess/projects/hurry/target/debug/deps",
-            )),
+            RustcArgument::OutDir(String::from("/Users/jess/projects/hurry/target/debug/deps")),
             RustcArgument::LibrarySearchPath(RustcLibrarySearchPath(
                 RustcLibrarySearchPathKind::Dependency,
                 String::from("/Users/jess/projects/hurry/target/debug/deps"),
@@ -1093,8 +1105,8 @@ mod tests {
     #[test]
     fn parse_build_script_args() -> Result<()> {
         let json = include_str!("build_plan/fixtures/build_script.json");
-        let args = serde_json::from_str::<RustcArguments>(json)
-            .context("parse build script args")?;
+        let args =
+            serde_json::from_str::<RustcArguments>(json).context("parse build script args")?;
 
         let expected = vec![
             RustcArgument::CrateName(String::from("build_script_build")),
@@ -1111,9 +1123,7 @@ mod tests {
                 formats: vec![RustcEmitFormat::DepInfo, RustcEmitFormat::Link],
                 file: None,
             }),
-            RustcArgument::Codegen(RustcCodegenOption::EmbedBitcode(
-                RustcEmbedBitcode::No,
-            )),
+            RustcArgument::Codegen(RustcCodegenOption::EmbedBitcode(RustcEmbedBitcode::No)),
             RustcArgument::Cfg(RustcCfgSpec(
                 RustcCfgSpecKey::Feature,
                 RustcCfgSpecValue(String::from("alloc")),
@@ -1166,15 +1176,12 @@ mod tests {
     #[test]
     fn parse_bin_target_args() -> Result<()> {
         let json = include_str!("build_plan/fixtures/bin_target.json");
-        let args = serde_json::from_str::<RustcArguments>(json)
-            .context("parse bin target args")?;
+        let args = serde_json::from_str::<RustcArguments>(json).context("parse bin target args")?;
 
         let expected = vec![
             RustcArgument::CrateName(String::from("hurry")),
             RustcArgument::Edition(RustcEdition::Edition2024),
-            RustcArgument::Positional(String::from(
-                "packages/hurry/src/bin/hurry/main.rs",
-            )),
+            RustcArgument::Positional(String::from("packages/hurry/src/bin/hurry/main.rs")),
             RustcArgument::ErrorFormat(RustcErrorFormat::Json),
             RustcArgument::Json(String::from(
                 "diagnostic-rendered-ansi,artifacts,future-incompat",
@@ -1184,9 +1191,7 @@ mod tests {
                 formats: vec![RustcEmitFormat::DepInfo, RustcEmitFormat::Link],
                 file: None,
             }),
-            RustcArgument::Codegen(RustcCodegenOption::EmbedBitcode(
-                RustcEmbedBitcode::No,
-            )),
+            RustcArgument::Codegen(RustcCodegenOption::EmbedBitcode(RustcEmbedBitcode::No)),
             RustcArgument::Codegen(RustcCodegenOption::Debuginfo(String::from("2"))),
             RustcArgument::Codegen(RustcCodegenOption::SplitDebuginfo(
                 RustcSplitDebuginfo::Unpacked,
@@ -1205,9 +1210,7 @@ mod tests {
             RustcArgument::Codegen(RustcCodegenOption::ExtraFilename(String::from(
                 "-e1b02ccff50f16f0",
             ))),
-            RustcArgument::OutDir(String::from(
-                "/Users/jess/projects/hurry/target/debug/deps",
-            )),
+            RustcArgument::OutDir(String::from("/Users/jess/projects/hurry/target/debug/deps")),
             RustcArgument::Codegen(RustcCodegenOption::Other(
                 String::from("incremental"),
                 Some(String::from(
@@ -1241,8 +1244,7 @@ mod tests {
     #[test]
     fn parse_proc_macro_args() -> Result<()> {
         let json = include_str!("build_plan/fixtures/proc_macro.json");
-        let args = serde_json::from_str::<RustcArguments>(json)
-            .context("parse proc-macro args")?;
+        let args = serde_json::from_str::<RustcArguments>(json).context("parse proc-macro args")?;
 
         let expected = vec![
             RustcArgument::CrateName(String::from("serde_derive")),
@@ -1260,9 +1262,7 @@ mod tests {
                 file: None,
             }),
             RustcArgument::Codegen(RustcCodegenOption::PreferDynamic),
-            RustcArgument::Codegen(RustcCodegenOption::EmbedBitcode(
-                RustcEmbedBitcode::No,
-            )),
+            RustcArgument::Codegen(RustcCodegenOption::EmbedBitcode(RustcEmbedBitcode::No)),
             RustcArgument::Cfg(RustcCfgSpec(
                 RustcCfgSpecKey::Feature,
                 RustcCfgSpecValue(String::from("default")),
@@ -1277,9 +1277,7 @@ mod tests {
             RustcArgument::Codegen(RustcCodegenOption::ExtraFilename(String::from(
                 "-1fa31a1e1f706456",
             ))),
-            RustcArgument::OutDir(String::from(
-                "/Users/jess/projects/hurry/target/debug/deps",
-            )),
+            RustcArgument::OutDir(String::from("/Users/jess/projects/hurry/target/debug/deps")),
             RustcArgument::LibrarySearchPath(RustcLibrarySearchPath(
                 RustcLibrarySearchPathKind::Dependency,
                 String::from("/Users/jess/projects/hurry/target/debug/deps"),
@@ -1317,8 +1315,8 @@ mod tests {
     #[test]
     fn parse_short_flag_aliases() -> Result<()> {
         let json = r#"["-A","unused","-W","dead-code","-D","warnings","-F","unsafe-code"]"#;
-        let args = serde_json::from_str::<RustcArguments>(json)
-            .context("parse short flag aliases")?;
+        let args =
+            serde_json::from_str::<RustcArguments>(json).context("parse short flag aliases")?;
 
         let expected = vec![
             RustcArgument::Allow(String::from("unused")),
@@ -1335,8 +1333,7 @@ mod tests {
     #[test]
     fn parse_codegen_aliases() -> Result<()> {
         let json = r#"["-C","opt-level=3","-g","-O"]"#;
-        let args = serde_json::from_str::<RustcArguments>(json)
-            .context("parse codegen aliases")?;
+        let args = serde_json::from_str::<RustcArguments>(json).context("parse codegen aliases")?;
 
         let expected = vec![
             RustcArgument::Codegen(RustcCodegenOption::OptLevel(String::from("3"))),
@@ -1352,15 +1349,13 @@ mod tests {
     #[test]
     fn parse_library_search_alias() -> Result<()> {
         let json = r#"["-L","dependency=/path/to/deps"]"#;
-        let args = serde_json::from_str::<RustcArguments>(json)
-            .context("parse library search alias")?;
+        let args =
+            serde_json::from_str::<RustcArguments>(json).context("parse library search alias")?;
 
-        let expected = vec![RustcArgument::LibrarySearchPath(
-            RustcLibrarySearchPath(
-                RustcLibrarySearchPathKind::Dependency,
-                String::from("/path/to/deps"),
-            ),
-        )];
+        let expected = vec![RustcArgument::LibrarySearchPath(RustcLibrarySearchPath(
+            RustcLibrarySearchPathKind::Dependency,
+            String::from("/path/to/deps"),
+        ))];
 
         pretty_assert_eq!(args.0, expected);
 
@@ -1370,8 +1365,7 @@ mod tests {
     #[test]
     fn parse_link_alias() -> Result<()> {
         let json = r#"["-l","static:+whole-archive=mylib"]"#;
-        let args =
-            serde_json::from_str::<RustcArguments>(json).context("parse link alias")?;
+        let args = serde_json::from_str::<RustcArguments>(json).context("parse link alias")?;
 
         let expected = vec![RustcArgument::Link(RustcLinkSpec {
             kind: Some(RustcLinkKind::Static),
@@ -1390,8 +1384,7 @@ mod tests {
     #[test]
     fn parse_verbose_alias() -> Result<()> {
         let json = r#"["-v"]"#;
-        let args = serde_json::from_str::<RustcArguments>(json)
-            .context("parse verbose alias")?;
+        let args = serde_json::from_str::<RustcArguments>(json).context("parse verbose alias")?;
 
         let expected = vec![RustcArgument::Verbose];
 

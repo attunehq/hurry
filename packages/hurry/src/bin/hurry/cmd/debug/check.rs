@@ -23,7 +23,11 @@ use url::Url;
 use hurry::{
     cargo::{
         self, BuiltArtifact, CargoBuildArguments, CargoCache, Fingerprint, Handles, Profile,
-        QualifiedPath, Workspace, build_script2, dep_info2, path2, workspace2,
+        QualifiedPath, Workspace, build_script2, dep_info2, path2,
+        workspace2::{
+            self, BuildScriptCompilationUnitPlan, BuildScriptExecutionUnitPlan,
+            LibraryCrateUnitPlan,
+        },
     },
     cas::FsCas,
     fs, mk_rel_dir,
@@ -87,8 +91,19 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Save artifacts.
     for unit in unit_plan {
-        let saved: SavedUnit = match &unit.mode {
-            workspace2::UnitPlanMode::LibraryCrate { src_path, outputs } => {
+        // Support cross-compilation. Note that some library crates may be built
+        // on the host even when `--target` is set (e.g. proc macros and build
+        // script dependencies). This field already correctly sets the
+        // `target_arch` value taking that into account.
+        let profile_dir = match &unit.target_arch {
+            Some(_) => workspace.target_profile_dir(),
+            None => workspace.host_profile_dir(),
+        };
+
+        let files = match &unit.mode {
+            workspace2::UnitPlanMode::LibraryCrate(
+                unit_plan @ LibraryCrateUnitPlan { src_path, outputs },
+            ) => {
                 let output_files = {
                     let mut output_files = Vec::new();
                     for output_file_path in outputs.into_iter() {
@@ -109,20 +124,10 @@ pub async fn exec(options: Options) -> Result<()> {
                     output_files
                 };
 
-                // Support cross-compilation. Note that some library crates may
-                // be built on the host even when `--target` is set (e.g. proc
-                // macros and build script dependencies). This field already
-                // correctly sets the `target_arch` value taking that into
-                // account.
-                let profile_dir = match &unit.target_arch {
-                    Some(_) => workspace.target_profile_dir(),
-                    None => workspace.host_profile_dir(),
-                };
-
                 let dep_info_file = {
                     let deps_dir = profile_dir.join(mk_rel_dir!("deps"));
                     let dep_info_file_path = deps_dir
-                        .try_join_file(format!("{}-{}.d", unit.package_name, unit.unit_hash))?;
+                        .try_join_file(format!("{}-{}.d", unit.crate_name, unit.unit_hash))?;
                     dep_info2::DepInfo::from_file(&workspace, &unit, &dep_info_file_path).await?
                 };
 
@@ -156,23 +161,148 @@ pub async fn exec(options: Options) -> Result<()> {
                     fingerprint
                 };
 
-                SavedUnit::LibraryCrate(LibraryFiles {
+                UnitFiles::LibraryCrate(LibraryFiles {
                     output_files,
                     dep_info_file,
                     fingerprint,
                     encoded_dep_info_file,
                 })
             }
-            workspace2::UnitPlanMode::CompileBuildScript { src_path, outputs } => {
-                todo!()
+            workspace2::UnitPlanMode::BuildScriptCompilation(
+                unit_plan @ BuildScriptCompilationUnitPlan {
+                    src_path,
+                    program,
+                    linked_program,
+                },
+            ) => {
+                let compiled_program = fs::must_read_buffered(&program).await?;
+
+                let dep_info_file = {
+                    let program_filename = program
+                        .file_name_str_lossy()
+                        .ok_or_eyre("build script program has no name")?;
+                    let dep_info_file_path = program
+                        .parent()
+                        .ok_or_eyre("build script program not in directory")?
+                        .try_join_file(format!("{}.d", program_filename))?;
+                    dep_info2::DepInfo::from_file(&workspace, &unit, &dep_info_file_path).await?
+                };
+
+                let fingerprint_dir = profile_dir.try_join_dirs(&[
+                    String::from(".fingerprint"),
+                    format!("{}-{}", unit.package_name, unit.unit_hash),
+                ])?;
+                let linked_filename = linked_program
+                    .file_name_str_lossy()
+                    .ok_or_eyre("build script hard link has no name")?;
+
+                let encoded_dep_info_file = {
+                    let encoded_dep_info_file_path = fingerprint_dir
+                        .try_join_file(format!("dep-build-script-{}", linked_filename))?;
+                    fs::must_read_buffered(&encoded_dep_info_file_path).await?
+                };
+
+                let fingerprint = {
+                    let fingerprint_file_path = fingerprint_dir
+                        .try_join_file(format!("build-script-{}.json", linked_filename))?;
+                    let content = fs::must_read_buffered_utf8(&fingerprint_file_path).await?;
+                    let fingerprint: Fingerprint = serde_json::from_str(&content)?;
+
+                    let fingerprint_hash_file_path = fingerprint_dir
+                        .try_join_file(format!("build-script-{}", linked_filename))?;
+                    let fingerprint_hash =
+                        fs::must_read_buffered_utf8(&fingerprint_hash_file_path).await?;
+
+                    // Sanity check that the fingerprint hashes match.
+                    if hex::encode(fingerprint.hash_u64().to_le_bytes()) != fingerprint_hash {
+                        bail!("fingerprint hash mismatch");
+                    }
+
+                    fingerprint
+                };
+
+                UnitFiles::BuildScriptCompilation(BuildScriptCompiledFiles {
+                    compiled_program,
+                    dep_info_file,
+                    encoded_dep_info_file,
+                    fingerprint,
+                })
             }
-            workspace2::UnitPlanMode::RunBuildScript { out_dir } => {
-                todo!()
+            workspace2::UnitPlanMode::BuildScriptExecution(
+                unit_plan @ BuildScriptExecutionUnitPlan { program, out_dir },
+            ) => {
+                let build_script_output_dir = profile_dir.try_join_dirs(&[
+                    String::from("build"),
+                    format!("{}-{}", unit.package_name, unit.unit_hash),
+                ])?;
+
+                let stdout = build_script2::BuildScriptOutput::from_file(
+                    &workspace,
+                    &unit,
+                    &build_script_output_dir.try_join_file("output")?,
+                )
+                .await?;
+                let stderr =
+                    fs::must_read_buffered(&build_script_output_dir.try_join_file("stderr")?)
+                        .await?;
+                let out_dir_files = {
+                    let files = fs::walk_files(&out_dir).try_collect::<Vec<_>>().await?;
+                    let mut out_dir_files = Vec::new();
+                    for file in files {
+                        let path =
+                            path2::QualifiedPath::parse(&workspace, &unit, file.as_std_path())
+                                .await?;
+                        let executable = fs::is_executable(file.as_std_path()).await;
+                        let contents = fs::must_read_buffered(&file).await?;
+                        out_dir_files.push(SavedFile {
+                            path,
+                            executable,
+                            contents,
+                        });
+                    }
+                    out_dir_files
+                };
+
+                let fingerprint = {
+                    let fingerprint_dir = profile_dir.try_join_dirs(&[
+                        String::from(".fingerprint"),
+                        format!("{}-{}", unit.package_name, unit.unit_hash),
+                    ])?;
+                    let program_filename = program
+                        .file_name_str_lossy()
+                        .ok_or_eyre("build script program has no name")?;
+
+                    let fingerprint_file_path = fingerprint_dir
+                        .try_join_file(format!("run-build-script-{}.json", program_filename))?;
+                    let content = fs::must_read_buffered_utf8(&fingerprint_file_path).await?;
+                    let fingerprint: Fingerprint = serde_json::from_str(&content)?;
+
+                    let fingerprint_hash_file_path = fingerprint_dir
+                        .try_join_file(format!("run-build-script-{}", program_filename))?;
+                    let fingerprint_hash =
+                        fs::must_read_buffered_utf8(&fingerprint_hash_file_path).await?;
+
+                    // Sanity check that the fingerprint hashes match.
+                    if hex::encode(fingerprint.hash_u64().to_le_bytes()) != fingerprint_hash {
+                        bail!("fingerprint hash mismatch");
+                    }
+
+                    fingerprint
+                };
+
+                UnitFiles::BuildScriptExecution(BuildScriptOutputFiles {
+                    fingerprint,
+                    out_dir_files,
+                    stdout,
+                    stderr,
+                })
             }
         };
 
+        let unit_hash = unit.unit_hash.clone();
+        let saved = SavedUnit { files, unit };
         fs::write(
-            &cache_path.try_join_file(format!("{}.json", unit.unit_hash))?,
+            &cache_path.try_join_file(format!("{}.json", unit_hash))?,
             serde_json::to_string_pretty(&saved)?,
         )
         .await?;
@@ -182,17 +312,16 @@ pub async fn exec(options: Options) -> Result<()> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct SavedFile {
-    path: path2::QualifiedPath,
-    contents: Vec<u8>,
-    executable: bool,
+struct SavedUnit {
+    files: UnitFiles,
+    unit: workspace2::UnitPlan,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-enum SavedUnit {
+enum UnitFiles {
     LibraryCrate(LibraryFiles),
-    CompileBuildScript(CompiledBuildScriptFiles),
-    RunBuildScript(BuildScriptOutputFiles),
+    BuildScriptCompilation(BuildScriptCompiledFiles),
+    BuildScriptExecution(BuildScriptOutputFiles),
 }
 
 /// Libraries are usually associated with 7 files:
@@ -211,8 +340,10 @@ enum SavedUnit {
 #[derive(Debug, Serialize, Deserialize)]
 struct LibraryFiles {
     /// These files come from the build plan's `outputs` field.
-    // TODO: We could even more narrowly specify this field as the rmeta and
-    // rlib.
+    // TODO: Can we specify this even more narrowly (e.g. with an `rmeta` and
+    // `rlib` field)? I know there are other possible output files (e.g. `.so`
+    // for proc macros on Linux and `.dylib` for something on macOS), but I
+    // don't know what the enumerated list is.
     output_files: Vec<SavedFile>,
     /// This file is always at a known path in
     /// `deps/{package_name}-{unit_hash}.d`.
@@ -229,22 +360,21 @@ struct LibraryFiles {
     /// `BuildRootRelative`)[^1].
     ///
     /// [^1]: https://github.com/rust-lang/cargo/blob/df07b394850b07348c918703054712e3427715cf/src/cargo/core/compiler/fingerprint/dep_info.rs#L112
+    #[serde(with = "base64")]
     encoded_dep_info_file: Vec<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct CompiledBuildScriptFiles {
-    /// This field contains the absolute path to the
+struct BuildScriptCompiledFiles {
+    /// This field contains the contents of the compiled build script program at
     /// `build_script_{build_script_entrypoint}-{build_script_compilation_unit_hash}`
-    /// compiled program, and the corresponding hard link to
-    /// `build-script-{build_script_entrypoint}`.
+    /// and hard linked at `build-script-{build_script_entrypoint}`.
     ///
     /// We need both of these files: the hard link is the file that's actually
     /// executed in the build plan, but the full path with the unit hash is the
     /// file that's tracked by the fingerprint.
-    // TODO: We could even more narrowly specify this field as program contents
-    // with the expected entrypoint name.
-    program_paths: Vec<SavedFile>,
+    #[serde(with = "base64")]
+    compiled_program: Vec<u8>,
     /// This is the path to the rustc dep-info file in the build directory.
     dep_info_file: dep_info2::DepInfo,
     /// This fingerprint is stored in `.fingerprint`, and is used to derive the
@@ -252,14 +382,41 @@ struct CompiledBuildScriptFiles {
     fingerprint: Fingerprint,
     /// This `EncodedDepInfo` (i.e. Cargo dep-info) file is stored in
     /// `.fingerprint`, and is directly saved and restored.
+    #[serde(with = "base64")]
     encoded_dep_info_file: Vec<u8>,
 }
 
+// Note that we don't save
+// `{profile_dir}/.fingerprint/{package_name}-{unit_hash}/root-output` because
+// it is fully reconstructible from the workspace and the unit plan.
 #[derive(Debug, Serialize, Deserialize)]
 struct BuildScriptOutputFiles {
     out_dir_files: Vec<SavedFile>,
-    output_file: build_script2::BuildScriptOutput,
-    root_output_file: build_script2::RootOutput,
-    stderr_file: Vec<u8>,
+    stdout: build_script2::BuildScriptOutput,
+    #[serde(with = "base64")]
+    stderr: Vec<u8>,
     fingerprint: Fingerprint,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SavedFile {
+    path: path2::QualifiedPath,
+    #[serde(with = "base64")]
+    contents: Vec<u8>,
+    executable: bool,
+}
+
+mod base64 {
+    use serde::{Deserialize, Serialize};
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
+        let base64 = base64::encode(v);
+        String::serialize(&base64, s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let base64 = String::deserialize(d)?;
+        base64::decode(base64.as_bytes()).map_err(|e| serde::de::Error::custom(e))
+    }
 }

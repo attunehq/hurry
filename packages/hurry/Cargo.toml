@@ -71,6 +71,7 @@ is_executable = { workspace = true }
 directories = { workspace = true }
 rustc-stable-hash = "0.1.2"
 hex.workspace = true
+base64 = "0.22.1"
 
 [dev-dependencies]
 async-walkdir.workspace = true

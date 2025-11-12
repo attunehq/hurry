@@ -322,24 +322,36 @@ impl Workspace {
             let unit = if invocation.target_kind == [TargetKind::CustomBuild] {
                 match invocation.compile_mode {
                     CargoCompileMode::Build => {
-                        // Filter out DWARF debugging files, which Cargo removes
-                        // anyway.
-                        let outputs = invocation
+                        let compiled_program = invocation
                             .outputs
                             .into_iter()
+                            // Filter out DWARF debugging files, which Cargo removes
+                            // anyway.
                             .filter(|o| !o.ends_with(".dwp"))
                             .map(|o| AbsFilePath::try_from(o))
-                            .collect::<Result<Vec<_>>>()?;
-                        // TODO: Resolve `links`.
-                        let program_file = outputs
-                            .clone()
-                            .into_iter()
                             .exactly_one()
-                            .context("build script compilation should produce exactly one output")?
-                            .pipe(AbsFilePath::try_from)?;
+                            .unwrap_or_else(|_| {
+                                bail!("build script compilation should produce exactly one output");
+                            })?;
+                        // Resolve `links`. We can just take the keys because we
+                        // know they point to valid target files, and there's
+                        // only one target file (the compiled program) that we
+                        // care about anyway.
+                        let linked_program = invocation
+                            .links
+                            .keys()
+                            .into_iter()
+                            .filter(|l| !l.ends_with(".dwp"))
+                            .map(|l| AbsFilePath::try_from(l))
+                            .exactly_one()
+                            .unwrap_or_else(|_| {
+                                bail!("build script compilation should produce exactly one output");
+                            })?;
                         // Parse unit hash from file name of
                         // `build_script_{entrypoint_module_name}-{hash}`.
-                        let unit_hash = program_file
+                        //
+                        // We could also parse this from `-C extra-filename`.
+                        let unit_hash = compiled_program
                             .file_name_str_lossy()
                             .ok_or_eyre("program file has no name")?
                             .rsplit_once('-')
@@ -358,10 +370,17 @@ impl Workspace {
                             crate_name,
                             target_arch,
                             deps,
-                            mode: UnitPlanMode::CompileBuildScript { src_path, outputs },
+                            mode: UnitPlanMode::BuildScriptCompilation(
+                                BuildScriptCompilationUnitPlan {
+                                    src_path,
+                                    program: compiled_program,
+                                    linked_program,
+                                },
+                            ),
                         }
                     }
                     CargoCompileMode::RunCustomBuild => {
+                        let program = invocation.program.pipe(AbsFilePath::try_from)?;
                         let out_dir = invocation
                             .env
                             .remove("OUT_DIR")
@@ -379,9 +398,7 @@ impl Workspace {
                         // execution as the crate name of the build script being
                         // executed, which we infer from the name of the
                         // compiled program.
-                        let crate_name = invocation
-                            .program
-                            .pipe(AbsFilePath::try_from)?
+                        let crate_name = program
                             .file_name_str_lossy()
                             .ok_or_eyre("build script program should have name")?
                             .to_string()
@@ -395,7 +412,9 @@ impl Workspace {
                             crate_name,
                             target_arch,
                             deps,
-                            mode: UnitPlanMode::RunBuildScript { out_dir },
+                            mode: UnitPlanMode::BuildScriptExecution(
+                                BuildScriptExecutionUnitPlan { program, out_dir },
+                            ),
                         }
                     }
                     _ => bail!(
@@ -420,10 +439,18 @@ impl Workspace {
                     );
                 }
 
-                let outputs: Vec<AbsFilePath> = invocation
+                // Filter out DWARF debugging files, which Cargo removes anyway.
+                // These are created for proc macros and cdylibs on Linux (they
+                // are `.so.dwp` files).
+                //
+                // Note there is no need to resolve `links` for library crates.
+                // They are never linked unless they are first-party, and we are
+                // skipping first-party crates for now anyway.
+                let outputs = invocation
                     .outputs
                     .into_iter()
-                    .map(|f| AbsFilePath::try_from(f).context("parsing build plan output file"))
+                    .filter(|o| !o.ends_with(".dwp"))
+                    .map(|o| AbsFilePath::try_from(o))
                     .collect::<Result<Vec<_>>>()?;
                 let crate_name = invocation
                     .args
@@ -431,6 +458,7 @@ impl Workspace {
                     .ok_or_eyre("no crate name")?
                     .to_owned();
                 let src_path = invocation.args.src_path().pipe(AbsFilePath::try_from)?;
+                // We could also parse this from `-C extra-filename`.
                 let unit_hash = {
                     let compiled_file = outputs.first().ok_or_eyre("no compiled files")?;
                     let filename = compiled_file
@@ -454,7 +482,7 @@ impl Workspace {
                     crate_name,
                     target_arch,
                     deps,
-                    mode: UnitPlanMode::LibraryCrate { src_path, outputs },
+                    mode: UnitPlanMode::LibraryCrate(LibraryCrateUnitPlan { src_path, outputs }),
                 }
             } else {
                 bail!("unsupported target kind: {:?}", invocation.target_kind);
@@ -466,7 +494,7 @@ impl Workspace {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct UnitPlan {
     /// The directory hash of the unit, which is used to construct the unit's
     /// file directories.
@@ -488,10 +516,14 @@ pub struct UnitPlan {
     ///
     /// Note that this is not necessarily the _extern_ crate name, which can be
     /// affected by directives like `replace` and `patch`, and that the crate
-    /// name used in fingerprints is the extern crate name[^1], not the canonical
-    /// crate name.
+    /// name used in fingerprints is the extern crate name[^1], not the
+    /// canonical crate name.
     ///
     /// [^1]: https://github.com/attunehq/cargo/blob/7a93b36f1ae2f524d93efd16cd42864675f3e15b/src/cargo/core/compiler/fingerprint/mod.rs#L1366
+    // FIXME: To properly support `replace` and `patch` directives, we need to
+    // also calculate an extern_crate_name for each edge in the dependency
+    // graph. Note that this is a per-edge value, not a per-unit value. Perhaps
+    // we can derive this from the unit graph?
     pub crate_name: String,
 
     // TODO: Add target architecture, which is needed to compute the unit's
@@ -535,47 +567,74 @@ pub struct UnitPlan {
     pub mode: UnitPlanMode,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum UnitPlanMode {
-    LibraryCrate {
-        src_path: AbsFilePath,
-        outputs: Vec<AbsFilePath>,
-    },
-    CompileBuildScript {
-        /// The path to the build script's main entrypoint source file. This is
-        /// usually `build.rs` within the package's source code, but can vary if
-        /// the package author sets `package.build` in the package's
-        /// `Cargo.toml`, which changes the build script's name[^1].
-        ///
-        /// This is parsed from the rustc invocation arguments in the unit's
-        /// build plan invocation.
-        ///
-        /// This is used to rewrite the build script compilation's fingerprint
-        /// on restore.
-        ///
-        /// [^1]: https://doc.rust-lang.org/cargo/reference/manifest.html#the-build-field
-        src_path: AbsFilePath,
+    LibraryCrate(LibraryCrateUnitPlan),
+    BuildScriptCompilation(BuildScriptCompilationUnitPlan),
+    BuildScriptExecution(BuildScriptExecutionUnitPlan),
+}
 
-        /// The path to the compiled outputs of this build script.
-        ///
-        /// This is parsed from the output paths in the unit's build plan
-        /// invocation.
-        ///
-        /// These file paths must have their mtimes modified to be later than
-        /// the fingerprint's invoked timestamp for the unit to be marked fresh.
-        outputs: Vec<AbsFilePath>,
-    },
-    RunBuildScript {
-        /// The OUT_DIR where user-defined build script output files should be
-        /// written.
-        ///
-        /// This is parsed from the environment variables in the unit's
-        /// execution.
-        ///
-        /// This folder must have its mtime modified to be later than the
-        /// fingerprint's invoked timestamp for the unit to be marked fresh.
-        out_dir: AbsDirPath,
-    },
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct LibraryCrateUnitPlan {
+    pub src_path: AbsFilePath,
+    pub outputs: Vec<AbsFilePath>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct BuildScriptCompilationUnitPlan {
+    /// The path to the build script's main entrypoint source file. This is
+    /// usually `build.rs` within the package's source code, but can vary if
+    /// the package author sets `package.build` in the package's
+    /// `Cargo.toml`, which changes the build script's name[^1].
+    ///
+    /// This is parsed from the rustc invocation arguments in the unit's
+    /// build plan invocation.
+    ///
+    /// This is used to rewrite the build script compilation's fingerprint
+    /// on restore.
+    ///
+    /// [^1]: https://doc.rust-lang.org/cargo/reference/manifest.html#the-build-field
+    pub src_path: AbsFilePath,
+
+    /// Build scripts always compile to a single program and a renamed hard
+    /// link to the same program.
+    ///
+    /// This is parsed from the `outputs` and `links` paths in the unit's
+    /// build plan invocation.
+    ///
+    /// These file paths must have their mtimes modified to be later than
+    /// the fingerprint's invoked timestamp for the unit to be marked fresh.
+    // TODO: We could simplify this struct. You can actually derive both of
+    // these paths from the build script entrypoint module name and the unit
+    // hash, and you can derive the build script entrypoint module name from the
+    // src_path. So really, the only field we _need_ is `src_path`.
+    //
+    // TODO: Add impls on these unit plan structs to construct relevant paths?
+    pub program: AbsFilePath,
+    pub linked_program: AbsFilePath,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct BuildScriptExecutionUnitPlan {
+    // Note that we don't save src_path for build script execution because this
+    // field is always set to `""` in the fingerprint for build script execution
+    // units[^1].
+    //
+    // [^1]: https://github.com/attunehq/cargo/blob/7a93b36f1ae2f524d93efd16cd42864675f3e15b/src/cargo/core/compiler/fingerprint/mod.rs#L1665
+
+    /// The compiled build script program being executed.
+    pub program: AbsFilePath,
+    /// The OUT_DIR where user-defined build script output files should be
+    /// written.
+    ///
+    /// This is parsed from the environment variables in the unit's
+    /// execution.
+    ///
+    /// This folder must have its mtime modified to be later than the
+    /// fingerprint's invoked timestamp for the unit to be marked fresh.
+    // TODO: We don't actually need this field given that we've already parsed
+    // the unit hash out, right? Because we can reconstruct this path.
+    pub out_dir: AbsDirPath,
 }
 
 #[cfg(test)]
