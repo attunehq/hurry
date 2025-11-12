@@ -1,4 +1,4 @@
--- Destructive migration: hash API keys with argon2
+-- Destructive migration: hash API keys with sha256
 -- All existing tokens will be invalidated and must be regenerated
 
 -- Delete all existing tokens
