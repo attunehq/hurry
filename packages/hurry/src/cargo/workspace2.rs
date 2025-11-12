@@ -10,6 +10,7 @@ use color_eyre::{
     eyre::{Context, OptionExt as _, bail, eyre},
 };
 use derive_more::Debug as DebugExt;
+use itertools::Itertools as _;
 use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use tap::{Pipe as _, Tap as _, TapFallible as _};
@@ -205,6 +206,10 @@ impl Workspace {
         }
     }
 
+    // TODO: Rather than returning an `AbsDirPath`, maybe the `*_profile_dir`
+    // methods should return a `ProfileDir` struct with `fingerprint_dir`,
+    // `build_script_dir`, `deps_dir`, etc. methods? Would that simplify things?
+
     /// Get the build plan by running `cargo build --build-plan` with the
     /// provided arguments.
     #[instrument(name = "Workspace::build_plan")]
@@ -262,11 +267,12 @@ impl Workspace {
             })
     }
 
-    #[instrument(name = "Workspace::artifact_plan")]
-    pub async fn artifact_plan(
+    #[instrument(name = "Workspace::unit_plan")]
+    pub async fn unit_plan(
         &self,
+        // TODO: These should just use self.args.
         args: impl AsRef<CargoBuildArguments> + std::fmt::Debug,
-    ) -> Result<ArtifactPlan> {
+    ) -> Result<Vec<UnitPlan>> {
         let rustc = RustcMetadata::from_argv(&self.root, &args)
             .await
             .context("parsing rustc metadata")?;
@@ -289,103 +295,287 @@ impl Workspace {
         let build_plan = self.build_plan(&args).await?;
         trace!(?build_plan, "build plan");
 
-        let mut units = BTreeMap::new();
-        for (i, invocation) in build_plan.invocations.into_iter().enumerate() {}
+        let mut units: Vec<UnitPlan> = Vec::new();
+        for mut invocation in build_plan.invocations {
+            trace!(?invocation, "build plan invocation");
 
-        Ok(ArtifactPlan { units })
+            // Skip first-party workspace members. We only cache third-party
+            // dependencies. `CARGO_PRIMARY_PACKAGE` is set if the user
+            // specifically requested the item to be built[^1]; while it's
+            // technically possible for the user to do so for a third-party
+            // dependency that's relatively rare (and arguably if they're asking
+            // to compile it specifically, it _should_ probably be exempt from
+            // cache).
+            //
+            // [^1]: https://doc.rust-lang.org/cargo/reference/environment-variables.html#:~:text=CARGO_PRIMARY_PACKAGE
+            if let Some(v) = invocation.env.get("CARGO_PRIMARY_PACKAGE")
+                && v == "1"
+            {
+                trace!("skipping: first party workspace member");
+                continue;
+            }
+
+            // Figure out what kind of unit this invocation is.
+            let package_name = invocation.package_name;
+            let target_arch = invocation.target_arch;
+            let deps = invocation.deps.into_iter().map(|d| d as u32).collect();
+            let unit = if invocation.target_kind == [TargetKind::CustomBuild] {
+                match invocation.compile_mode {
+                    CargoCompileMode::Build => {
+                        // Filter out DWARF debugging files, which Cargo removes
+                        // anyway.
+                        let outputs = invocation
+                            .outputs
+                            .into_iter()
+                            .filter(|o| !o.ends_with(".dwp"))
+                            .map(|o| AbsFilePath::try_from(o))
+                            .collect::<Result<Vec<_>>>()?;
+                        // TODO: Resolve `links`.
+                        let program_file = outputs
+                            .clone()
+                            .into_iter()
+                            .exactly_one()
+                            .context("build script compilation should produce exactly one output")?
+                            .pipe(AbsFilePath::try_from)?;
+                        // Parse unit hash from file name of
+                        // `build_script_{entrypoint_module_name}-{hash}`.
+                        let unit_hash = program_file
+                            .file_name_str_lossy()
+                            .ok_or_eyre("program file has no name")?
+                            .rsplit_once('-')
+                            .ok_or_eyre("program file has no unit hash")?
+                            .1
+                            .to_string();
+                        let crate_name = invocation
+                            .args
+                            .crate_name()
+                            .ok_or_eyre("build script compilation should have a crate name")?
+                            .to_string();
+                        let src_path = invocation.args.src_path().pipe(AbsFilePath::try_from)?;
+                        UnitPlan {
+                            unit_hash,
+                            package_name,
+                            crate_name,
+                            target_arch,
+                            deps,
+                            mode: UnitPlanMode::CompileBuildScript { src_path, outputs },
+                        }
+                    }
+                    CargoCompileMode::RunCustomBuild => {
+                        let out_dir = invocation
+                            .env
+                            .remove("OUT_DIR")
+                            .ok_or_eyre("build script execution should set OUT_DIR")?
+                            .pipe(AbsDirPath::try_from)?;
+                        let unit_dir = out_dir.parent().ok_or_eyre("OUT_DIR should have parent")?;
+                        let unit_hash = unit_dir
+                            .file_name_str_lossy()
+                            .ok_or_eyre("build script execution directory should have name")?
+                            .rsplit_once('-')
+                            .ok_or_eyre("build script execution directory should have unit hash")?
+                            .1
+                            .to_string();
+                        // Cargo defines the "crate name" of build script
+                        // execution as the crate name of the build script being
+                        // executed, which we infer from the name of the
+                        // compiled program.
+                        let crate_name = invocation
+                            .program
+                            .pipe(AbsFilePath::try_from)?
+                            .file_name_str_lossy()
+                            .ok_or_eyre("build script program should have name")?
+                            .to_string()
+                            // This is from Cargo's normalization logic.[^1]
+                            //
+                            // [^1]: https://github.com/attunehq/cargo/blob/7a93b36f1ae2f524d93efd16cd42864675f3e15b/src/cargo/core/manifest.rs#L961
+                            .replace("-", "_");
+                        UnitPlan {
+                            unit_hash,
+                            package_name,
+                            crate_name,
+                            target_arch,
+                            deps,
+                            mode: UnitPlanMode::RunBuildScript { out_dir },
+                        }
+                    }
+                    _ => bail!(
+                        "unknown compile mode for build script: {:?}",
+                        invocation.compile_mode
+                    ),
+                }
+            } else if invocation.target_kind == [TargetKind::Bin] {
+                // Binaries are _always_ first-party code. Do nothing for now.
+                continue;
+            } else if invocation.target_kind.contains(&TargetKind::Lib)
+                || invocation.target_kind.contains(&TargetKind::RLib)
+                || invocation.target_kind.contains(&TargetKind::CDyLib)
+                || invocation.target_kind.contains(&TargetKind::ProcMacro)
+            {
+                // Sanity check: everything here should be a dependency being
+                // compiled.
+                if invocation.compile_mode != CargoCompileMode::Build {
+                    bail!(
+                        "unknown compile mode for dependency: {:?}",
+                        invocation.compile_mode
+                    );
+                }
+
+                let outputs: Vec<AbsFilePath> = invocation
+                    .outputs
+                    .into_iter()
+                    .map(|f| AbsFilePath::try_from(f).context("parsing build plan output file"))
+                    .collect::<Result<Vec<_>>>()?;
+                let crate_name = invocation
+                    .args
+                    .crate_name()
+                    .ok_or_eyre("no crate name")?
+                    .to_owned();
+                let src_path = invocation.args.src_path().pipe(AbsFilePath::try_from)?;
+                let unit_hash = {
+                    let compiled_file = outputs.first().ok_or_eyre("no compiled files")?;
+                    let filename = compiled_file
+                        .file_name()
+                        .ok_or_eyre("no filename")?
+                        .to_string_lossy();
+                    let filename = filename.split_once('.').ok_or_eyre("no extension")?.0;
+
+                    filename
+                        .rsplit_once('-')
+                        .ok_or_eyre(format!(
+                            "no unit hash suffix in filename: {filename} (all files: {outputs:?})"
+                        ))?
+                        .1
+                        .to_string()
+                };
+
+                UnitPlan {
+                    unit_hash,
+                    package_name,
+                    crate_name,
+                    target_arch,
+                    deps,
+                    mode: UnitPlanMode::LibraryCrate { src_path, outputs },
+                }
+            } else {
+                bail!("unsupported target kind: {:?}", invocation.target_kind);
+            };
+            units.push(unit);
+        }
+
+        Ok(units)
     }
 }
 
-/// An ArtifactPlan represents information known about cacheable artifacts that
-/// can be known before a build.
-pub struct ArtifactPlan {
-    // TODO: How to handle fingerprint reconstruction when units can depend on
-    // arbitrary other units, even piercing package units?
+#[derive(Debug)]
+pub struct UnitPlan {
+    /// The directory hash of the unit, which is used to construct the unit's
+    /// file directories.
+    ///
+    /// See the `*_dir` methods on `CompilationFiles`[^1] for details.
+    ///
+    /// [^1]: https://github.com/attunehq/cargo/blob/7a93b36f1ae2f524d93efd16cd42864675f3e15b/src/cargo/core/compiler/build_runner/compilation_files.rs#L117
+    pub unit_hash: String,
 
-    // What if we had a separate map for each supported unit type, so we can still
-    // have different unit type structs?
-
-    // Or we can just fold it all into one unit type like Cargo does and call it a day.
-    units: BTreeMap<u32, PackageUnitPlans>,
-}
-
-pub struct PackageUnitPlans {
+    /// The package name of this unit.
+    ///
+    /// This is used to reconstruct expected output directories. See the `*_dir`
+    /// methods on `CompilationFiles`[^1] for details.
+    ///
+    /// [^1]: https://github.com/attunehq/cargo/blob/7a93b36f1ae2f524d93efd16cd42864675f3e15b/src/cargo/core/compiler/build_runner/compilation_files.rs#L117
     pub package_name: String,
-    pub package_version: String,
 
-    library_crate: LibraryCrateUnitPlan,
-    build_script: Option<BuildScriptUnitPlans>,
-    // TODO: In the future, add more supported unit types in a package here
-    // (e.g. tests and examples).
-}
-
-pub struct LibraryCrateUnitPlan {
-    unit_hash: String,
-    crate_name: String,
-    src_path: AbsFilePath,
-    outputs: Vec<AbsFilePath>,
-    deps: Vec<u32>,
-}
-
-pub struct BuildScriptUnitPlans {
-    compilation: BuildScriptCompilationUnitPlan,
-    execution: BuildScriptExecutionUnitPlan,
-}
-
-pub struct BuildScriptCompilationUnitPlan {
-    /// The unit hash of the build script compilation. This is parsed from the
-    /// output paths in the unit's build plan invocation.
-    unit_hash: String,
-
-    /// The path to the build script's main entrypoint source file. This is
-    /// usually `build.rs` within the package's source code, but can vary if the
-    /// package author sets `package.build` in the package's `Cargo.toml`, which
-    /// changes the build script's name[^1].
+    /// The crate name of this unit.
     ///
-    /// This is parsed from the rustc invocation arguments in the unit's build
-    /// plan invocation.
+    /// Note that this is not necessarily the _extern_ crate name, which can be
+    /// affected by directives like `replace` and `patch`, and that the crate
+    /// name used in fingerprints is the extern crate name[^1], not the canonical
+    /// crate name.
     ///
-    /// This is used to rewrite the build script compilation's fingerprint on
-    /// restore.
-    ///
-    /// [^1]: https://doc.rust-lang.org/cargo/reference/manifest.html#the-build-field
-    src_path: AbsFilePath,
+    /// [^1]: https://github.com/attunehq/cargo/blob/7a93b36f1ae2f524d93efd16cd42864675f3e15b/src/cargo/core/compiler/fingerprint/mod.rs#L1366
+    pub crate_name: String,
 
-    /// The path to the compiled outputs of this build script.
+    // TODO: Add target architecture, which is needed to compute the unit's
+    // profile directory. Add it as an `Option<TargetArch>`, or similar. And maybe
+    // add some helper `*_dir` methods?
+    /// The unit's target architecture, if set.
     ///
-    /// This is parsed from the output paths in the unit's build plan
-    /// invocation.
+    /// When None, this unit is not being compiled with a specific `--target` in
+    /// mind, and therefore is being compiled for the host architecture.
     ///
-    /// These file paths must have their mtimes modified to match the
-    /// fingerprint's invoked timestamp for the unit to be marked fresh.
-    outputs: Vec<AbsFilePath>,
+    /// Note that some units (e.g. proc macros, build script compilations, and
+    /// dependencies thereof) are compiled for the host architecture even when
+    /// `--target` is set to a different architecture. This field already takes
+    /// that into account.
+    pub target_arch: Option<String>,
 
-    /// The dependencies of this build script compilation.
+    /// The dependencies of this unit.
     ///
     /// This is parsed from the dependencies in the unit's build plan
-    /// invocation.
+    /// invocation. Note that units can depend on arbitrary other units. For
+    /// example, build script executions can depend on other build script
+    /// executions because of the `links` field[^1] or library crates if they
+    /// use those libraries.
     ///
-    /// This is used to rewrite the build script compilation's fingerprint on
-    /// restore.
-    deps: Vec<u32>,
+    /// This is used to rewrite the unit's fingerprint on restore by rewriting
+    /// the fingerprints in the `deps` field.
+    ///
+    /// [^1]: https://doc.rust-lang.org/cargo/reference/build-scripts.html#the-links-manifest-key
+    pub deps: Vec<u32>,
+
+    /// Mode-specific information about this unit.
+    ///
+    /// This is similar to an amalgamation of TargetKind[^1] and
+    /// CompileMode[^2].
+    ///
+    /// Note that we separate compiling library crates from build scripts
+    /// because they store artifacts at different paths in the build directory.
+    ///
+    /// [^1]: https://github.com/attunehq/cargo/blob/7a93b36f1ae2f524d93efd16cd42864675f3e15b/src/cargo/core/manifest.rs#L215
+    /// [^2]: https://github.com/attunehq/cargo/blob/7a93b36f1ae2f524d93efd16cd42864675f3e15b/src/cargo/core/compiler/build_config.rs#L171
+    pub mode: UnitPlanMode,
 }
 
-pub struct BuildScriptExecutionUnitPlan {
-    /// The unit hash of the build script execution. This is parsed from the
-    /// OUT_DIR in the unit's build plan invocation.
-    unit_hash: String,
+#[derive(Debug)]
+pub enum UnitPlanMode {
+    LibraryCrate {
+        src_path: AbsFilePath,
+        outputs: Vec<AbsFilePath>,
+    },
+    CompileBuildScript {
+        /// The path to the build script's main entrypoint source file. This is
+        /// usually `build.rs` within the package's source code, but can vary if
+        /// the package author sets `package.build` in the package's
+        /// `Cargo.toml`, which changes the build script's name[^1].
+        ///
+        /// This is parsed from the rustc invocation arguments in the unit's
+        /// build plan invocation.
+        ///
+        /// This is used to rewrite the build script compilation's fingerprint
+        /// on restore.
+        ///
+        /// [^1]: https://doc.rust-lang.org/cargo/reference/manifest.html#the-build-field
+        src_path: AbsFilePath,
 
-    /// The OUT_DIR where user-defined build script output files should be
-    /// written.
-    out_dir: AbsDirPath,
-
-    deps: Vec<u32>,
-}
-
-impl BuildScriptExecutionUnitPlan {
-    pub fn from_out_dir(out_dir: AbsDirPath) -> Self {
-        todo!()
-    }
+        /// The path to the compiled outputs of this build script.
+        ///
+        /// This is parsed from the output paths in the unit's build plan
+        /// invocation.
+        ///
+        /// These file paths must have their mtimes modified to be later than
+        /// the fingerprint's invoked timestamp for the unit to be marked fresh.
+        outputs: Vec<AbsFilePath>,
+    },
+    RunBuildScript {
+        /// The OUT_DIR where user-defined build script output files should be
+        /// written.
+        ///
+        /// This is parsed from the environment variables in the unit's
+        /// execution.
+        ///
+        /// This folder must have its mtime modified to be later than the
+        /// fingerprint's invoked timestamp for the unit to be marked fresh.
+        out_dir: AbsDirPath,
+    },
 }
 
 #[cfg(test)]

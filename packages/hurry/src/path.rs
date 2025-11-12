@@ -683,6 +683,8 @@ pub trait JoinWith<Other> {
     [ &TypedPath<Rel, Dir> ] [ TypedPath<Abs, Dir> ];
     [ TypedPath<Rel, File> ] [ TypedPath<Abs, File> ];
     [ &TypedPath<Rel, File> ] [ TypedPath<Abs, File> ];
+    [ TypedPath<Rel, SomeType> ] [ TypedPath<Abs, SomeType> ];
+    [ &TypedPath<Rel, SomeType> ] [ TypedPath<Abs, SomeType> ];
 )]
 impl JoinWith<ty_other> for TypedPath<Abs, Dir> {
     type Output = ty_output;

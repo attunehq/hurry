@@ -23,7 +23,8 @@ pub struct BuildPlanInvocation {
     pub package_name: String,
     pub package_version: String,
     pub target_kind: Vec<cargo_metadata::TargetKind>,
-    pub kind: Option<String>,
+    #[serde(rename = "kind")]
+    pub target_arch: Option<String>,
     pub compile_mode: CargoCompileMode,
     pub deps: Vec<usize>,
     pub outputs: Vec<String>,
@@ -32,6 +33,8 @@ pub struct BuildPlanInvocation {
     // enumerate libraries being linked in.
     pub links: HashMap<String, String>,
     pub program: String,
+    // FIXME: These aren't technically _always_ `RustcArguments` e.g. in
+    // RunCustomBuild invocations.
     pub args: RustcArguments,
     pub env: HashMap<String, String>,
     pub cwd: String,
