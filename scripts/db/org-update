@@ -20,7 +20,7 @@ if ! [[ "$ORG_ID" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-if ! RESULT=$(psql "$COURIER_DATABASE_URL" -t -c "UPDATE organization SET name = '$NEW_NAME' WHERE id = $ORG_ID RETURNING id, name, created_at;" 2>&1); then
+if ! RESULT=$(echo "UPDATE organization SET name = :'new_name' WHERE id = :org_id RETURNING id, name, created_at;" | psql "$COURIER_DATABASE_URL" -v org_id="$ORG_ID" -v new_name="$NEW_NAME" -t 2>&1); then
   echo "Error: Failed to update organization" >&2
   echo "$RESULT" >&2
   exit 1

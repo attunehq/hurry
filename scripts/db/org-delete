@@ -19,7 +19,7 @@ if ! [[ "$ORG_ID" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-if ! RESULT=$(psql "$COURIER_DATABASE_URL" -t -c "DELETE FROM organization WHERE id = $ORG_ID RETURNING id, name;" 2>&1); then
+if ! RESULT=$(echo "DELETE FROM organization WHERE id = :org_id RETURNING id, name;" | psql "$COURIER_DATABASE_URL" -v org_id="$ORG_ID" -t 2>&1); then
   echo "Error: Failed to delete organization" >&2
   echo "$RESULT" >&2
   exit 1

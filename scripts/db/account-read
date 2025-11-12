@@ -19,7 +19,7 @@ if ! [[ "$ACCOUNT_ID" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-if ! RESULT=$(psql "$COURIER_DATABASE_URL" -c "SELECT a.id, a.organization_id, o.name as org_name, a.email, a.created_at FROM account a JOIN organization o ON a.organization_id = o.id WHERE a.id = $ACCOUNT_ID;" 2>&1); then
+if ! RESULT=$(echo "SELECT a.id, a.organization_id, o.name as org_name, a.email, a.created_at FROM account a JOIN organization o ON a.organization_id = o.id WHERE a.id = :account_id;" | psql "$COURIER_DATABASE_URL" -v account_id="$ACCOUNT_ID" 2>&1); then
   echo "Error: Failed to read account" >&2
   echo "$RESULT" >&2
   exit 1

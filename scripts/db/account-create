@@ -20,7 +20,7 @@ if ! [[ "$ORG_ID" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-if ! RESULT=$(psql "$COURIER_DATABASE_URL" -t -c "INSERT INTO account (organization_id, email) VALUES ($ORG_ID, '$EMAIL') RETURNING id, organization_id, email, created_at;" 2>&1); then
+if ! RESULT=$(echo "INSERT INTO account (organization_id, email) VALUES (:org_id, :'email') RETURNING id, organization_id, email, created_at;" | psql "$COURIER_DATABASE_URL" -v org_id="$ORG_ID" -v email="$EMAIL" -t 2>&1); then
   echo "Error: Failed to create account" >&2
   echo "$RESULT" >&2
   exit 1

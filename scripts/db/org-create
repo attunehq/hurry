@@ -14,7 +14,7 @@ fi
 
 ORG_NAME="$1"
 
-if ! RESULT=$(psql "$COURIER_DATABASE_URL" -t -c "INSERT INTO organization (name) VALUES ('$ORG_NAME') RETURNING id, name, created_at;" 2>&1); then
+if ! RESULT=$(echo "INSERT INTO organization (name) VALUES (:'org_name') RETURNING id, name, created_at;" | psql "$COURIER_DATABASE_URL" -v org_name="$ORG_NAME" -t 2>&1); then
   echo "Error: Failed to create organization" >&2
   echo "$RESULT" >&2
   exit 1
