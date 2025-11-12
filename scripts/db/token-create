@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -z "${COURIER_DATABASE_URL:-}" ]; then
+  echo "Error: COURIER_DATABASE_URL environment variable is not set" >&2
+  exit 1
+fi
+
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <account-id>" >&2
+  echo "Create a new API token for an account" >&2
+  exit 1
+fi
+
+ACCOUNT_ID="$1"
+
+if ! [[ "$ACCOUNT_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Account ID must be a number" >&2
+  exit 1
+fi
+
+# Generate a random 32-byte token and encode as hex
+TOKEN=$(openssl rand -hex 32)
+
+# Hash the token using SHA-256 and convert to bytea format
+TOKEN_HASH=$(echo -n "$TOKEN" | openssl dgst -sha256 -binary | xxd -p -c 256)
+
+if ! RESULT=$(psql "$COURIER_DATABASE_URL" -t -c "INSERT INTO api_key (account_id, hash) VALUES ($ACCOUNT_ID, '\\x$TOKEN_HASH') RETURNING id, account_id, created_at;" 2>&1); then
+  echo "Error: Failed to create API token" >&2
+  echo "$RESULT" >&2
+  exit 1
+fi
+
+echo "API token created successfully:"
+echo "$RESULT" | sed 's/^/  /'
+echo ""
+echo "TOKEN (save this, it will not be shown again):"
+echo "  $TOKEN"

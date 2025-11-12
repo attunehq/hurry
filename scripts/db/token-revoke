@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -z "${COURIER_DATABASE_URL:-}" ]; then
+  echo "Error: COURIER_DATABASE_URL environment variable is not set" >&2
+  exit 1
+fi
+
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <token-id>" >&2
+  echo "Revoke an API token" >&2
+  exit 1
+fi
+
+TOKEN_ID="$1"
+
+if ! [[ "$TOKEN_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Token ID must be a number" >&2
+  exit 1
+fi
+
+if ! RESULT=$(psql "$COURIER_DATABASE_URL" -t -c "UPDATE api_key SET revoked_at = NOW() WHERE id = $TOKEN_ID AND revoked_at IS NULL RETURNING id, account_id, revoked_at;" 2>&1); then
+  echo "Error: Failed to revoke API token" >&2
+  echo "$RESULT" >&2
+  exit 1
+fi
+
+if [ -z "$(echo "$RESULT" | tr -d '[:space:]')" ]; then
+  echo "Error: Token with ID $TOKEN_ID not found or already revoked" >&2
+  exit 1
+fi
+
+echo "API token revoked successfully:"
+echo "$RESULT" | sed 's/^/  /'
