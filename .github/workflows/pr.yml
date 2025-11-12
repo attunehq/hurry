@@ -46,10 +46,13 @@ jobs:
                   rustup toolchain install nightly
                   rustup component add --toolchain nightly rustfmt
                   rustup show
-            - uses: taiki-e/install-action@nextest
+            - uses: taiki-e/install-action@v2
+              with:
+                  tool: nextest,sqlx-cli
             - uses: actions/checkout@v4
 
             - uses: Swatinem/rust-cache@v2
+            - run: cargo sqlx migrate run --source packages/courier/schema/migrations/ --database-url $COURIER_DATABASE_URL
 
             - name: Check format
               run: cargo +nightly fmt --all --check
