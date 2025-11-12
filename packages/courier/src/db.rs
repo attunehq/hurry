@@ -510,7 +510,7 @@ impl Postgres {
         &self,
         token: impl AsRef<RawToken>,
     ) -> Result<Option<(AccountId, OrgId)>> {
-        let hash = TokenHash::new(token.as_ref().expose()).context("hash token")?;
+        let hash = TokenHash::new(token.as_ref().expose());
         let row = sqlx::query!(
             r#"
             SELECT
@@ -520,7 +520,7 @@ impl Postgres {
             JOIN account ON api_key.account_id = account.id
             WHERE api_key.hash = $1 AND api_key.revoked_at IS NULL
             "#,
-            hash.as_str(),
+            hash.as_bytes(),
         )
         .fetch_optional(&self.pool)
         .await
@@ -568,14 +568,14 @@ impl Postgres {
             hex::encode(plaintext)
         };
 
-        let token = TokenHash::new(&plaintext).context("create token")?;
+        let token = TokenHash::new(&plaintext);
         sqlx::query!(
             r#"
             INSERT INTO api_key (account_id, hash)
             VALUES ($1, $2)
             "#,
             account.as_i64(),
-            token.as_str(),
+            token.as_bytes(),
         )
         .execute(&self.pool)
         .await
@@ -590,7 +590,7 @@ impl Postgres {
     #[cfg(test)]
     #[tracing::instrument(name = "Postgres::revoke_token", skip(token))]
     pub async fn revoke_token(&self, token: impl AsRef<RawToken>) -> Result<()> {
-        let hash = TokenHash::new(token.as_ref().expose()).context("hash token")?;
+        let hash = TokenHash::new(token.as_ref().expose());
 
         let results = sqlx::query!(
             r#"
@@ -598,7 +598,7 @@ impl Postgres {
             SET revoked_at = now()
             WHERE hash = $1
             "#,
-            hash.as_str(),
+            hash.as_bytes(),
         )
         .execute(&self.pool)
         .await

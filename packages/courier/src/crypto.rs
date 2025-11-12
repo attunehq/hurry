@@ -1,12 +1,11 @@
 //! Cryptographic utilities for token hashing and verification.
 
-use color_eyre::Result;
 use sha2::{Digest, Sha256};
 
 /// A hashed API token.
 ///
 /// Hashed tokens use SHA2 (SHA256) algorithm: when you call `new`, the
-/// plaintext token is hashed to produce a deterministic hex string.
+/// plaintext token is hashed to produce a deterministic binary hash.
 /// Verification compares the hash of the provided plaintext token against the
 /// stored hash.
 ///
@@ -18,44 +17,34 @@ use sha2::{Digest, Sha256};
 /// moment to think about why that is, because you probably aren't doing the
 /// right thing.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TokenHash(String);
+pub struct TokenHash(Vec<u8>);
 
 impl TokenHash {
     /// Currently only used in tests. If used elsewhere, feel free to make this
     /// generally available.
     #[cfg(test)]
-    pub fn parse(hash: impl AsRef<str>) -> Result<Self> {
-        Ok(Self(String::from(hash.as_ref())))
+    pub fn parse(hash: impl Into<Vec<u8>>) -> Self {
+        Self(hash.into())
     }
 
     /// Create a new instance from the given plaintext token.
-    pub fn new(token: impl AsRef<str>) -> Result<Self> {
+    pub fn new(token: impl AsRef<[u8]>) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(token.as_ref().as_bytes());
+        hasher.update(token.as_ref());
         let hash = hasher.finalize();
-        Ok(Self(format!("{:x}", hash)))
+        Self(hash.to_vec())
     }
 
     /// Currently only used in tests. If used elsewhere, feel free to make this
     /// generally available.
     #[cfg(test)]
-    pub fn verify(&self, token: impl AsRef<str>) -> bool {
-        match Self::new(token) {
-            Ok(candidate) => candidate == *self,
-            Err(_) => false,
-        }
+    pub fn verify(&self, token: impl AsRef<[u8]>) -> bool {
+        Self::new(token) == *self
     }
 
-    /// Get the hash as a string for storage or transmission.
-    pub fn as_str(&self) -> &str {
+    /// Get the hash as bytes for storage or transmission.
+    pub fn as_bytes(&self) -> &[u8] {
         &self.0
-    }
-
-    /// Currently only used in tests. If used elsewhere, feel free to make this
-    /// generally available.
-    #[cfg(test)]
-    pub fn to_string(&self) -> String {
-        self.0.clone()
     }
 }
 
@@ -72,7 +61,7 @@ mod tests {
     #[test]
     fn verify() {
         let plain = "test-token-12345";
-        let token = TokenHash::new(plain).expect("hash token");
+        let token = TokenHash::new(plain);
 
         assert!(token.verify(plain), "valid token verifies");
         assert!(!token.verify("abcd"), "invalid token fails");
@@ -82,8 +71,8 @@ mod tests {
     fn deterministic_hash() {
         let plain = "test-token-12345";
 
-        let token1 = TokenHash::new(plain).expect("hash token");
-        let token2 = TokenHash::new(plain).expect("hash token");
+        let token1 = TokenHash::new(plain);
+        let token2 = TokenHash::new(plain);
 
         assert_eq!(token1, token2, "same plaintext produces same SHA256 hash");
     }
@@ -91,11 +80,11 @@ mod tests {
     #[test]
     fn roundtrip() {
         let plain = "test-token-12345";
-        let token = TokenHash::new(plain).expect("hash token");
+        let token = TokenHash::new(plain);
 
         // Simulate database roundtrip
-        let encoded = token.to_string();
-        let parsed = TokenHash::parse(&encoded).expect("parse encoded token");
+        let bytes = token.as_bytes();
+        let parsed = TokenHash::parse(bytes);
 
         assert_eq!(token, parsed, "decoded token should match original");
         assert!(token.verify(plain), "original token should validate");

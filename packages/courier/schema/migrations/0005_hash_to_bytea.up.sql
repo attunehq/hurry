@@ -4,5 +4,6 @@
 -- Delete all existing tokens
 TRUNCATE api_key CASCADE;
 
--- Change hash column from TEXT to BYTEA
-ALTER TABLE api_key ALTER COLUMN hash TYPE BYTEA;
+-- Drop and recreate hash column as BYTEA
+ALTER TABLE api_key DROP COLUMN hash;
+ALTER TABLE api_key ADD COLUMN hash BYTEA NOT NULL UNIQUE;
