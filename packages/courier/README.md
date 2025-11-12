@@ -3,6 +3,10 @@
 
 Courier is the API service for Hurry, providing CAS functionality (and in the future, caching functionality as well).
 
+## Account management
+
+See `scripts/db` for account management scripts; these are intended for use in any environment.
+
 ## Running Courier
 
 Run Courier with the `serve` subcommand:
