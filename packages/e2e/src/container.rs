@@ -171,14 +171,18 @@ impl Container {
         let docker = Docker::connect_with_defaults().context("connect to docker daemon")?;
         let reference = format!("{repo}:{tag}");
 
-        let image = CreateImageOptionsBuilder::new()
-            .from_image(&reference)
-            .build();
-        docker
-            .create_image(Some(image), None, None)
-            .inspect_ok(|msg| println!("[IMAGE] {msg:?}"))
-            .try_collect::<Vec<_>>()
-            .await?;
+        // Only pull images from registries (e.g., docker.io/library/rust).
+        // Skip pulling for locally-built images (e.g., hurry-courier:test).
+        if repo.contains('/') {
+            let image = CreateImageOptionsBuilder::new()
+                .from_image(&reference)
+                .build();
+            docker
+                .create_image(Some(image), None, None)
+                .inspect_ok(|msg| println!("[IMAGE] {msg:?}"))
+                .try_collect::<Vec<_>>()
+                .await?;
+        }
 
         let container_opts = if let Some(name) = container_name {
             CreateContainerOptionsBuilder::default()
