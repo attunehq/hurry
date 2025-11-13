@@ -158,6 +158,53 @@ This is a Rust codebase. Always follow these conventions when writing or reviewi
 - Auto-fix lints: `make check-fix`
 - Pre-commit checks: `make precommit` (runs machete-fix, autoinherit, check-fix, format, sqlx-prepare)
 
+### Using Library Documentation and Source Code
+
+When planning features, debugging issues, or understanding how to use third-party crates, check their source code and documentation in `~/.cargo/`:
+
+**Finding Registry Crates (from crates.io)**
+- **Source location**: `~/.cargo/registry/src/index.crates.io-*/`
+  - The hash suffix may vary, use `ls ~/.cargo/registry/src` to find the active directory
+  - Typically looks like `index.crates.io-1949cf8c6b5b557f`
+- **Search pattern**: `find ~/.cargo/registry/src -type d -name '{crate}-{version}'`
+- **Quick search**: `ls ~/.cargo/registry/src/index.crates.io-*/ | grep '^{crate}-'`
+
+**Finding Git Dependencies**
+- **Checkouts location**: `~/.cargo/git/checkouts/{repo-hash}/{commit-short}/`
+- **Search pattern**: `ls ~/.cargo/git/checkouts | grep {repo-name}`
+
+**What to Look For**
+- `src/lib.rs`: Main entry point with module documentation and public API
+- `README.md`: Usage examples and overview
+- `CHANGELOG.md`: Recent changes and migration guides
+- `src/` subdirectories: Implementation details and patterns
+- `Cargo.toml`: Feature flags and dependencies
+- Test files: Usage examples and edge cases
+
+**When to Use This**
+- **Before implementation**: Check API patterns, available features, and recommended usage
+- **During debugging**: Understand internal behavior, error conditions, and edge cases
+- **For error messages**: Find the source of error types and what triggers them
+- **Learning patterns**: See how library authors structure code and handle common scenarios
+
+**Example Workflow**
+```bash
+# Find the registry directory
+REGISTRY_SRC=$(ls -d ~/.cargo/registry/src/index.crates.io-* | head -1)
+
+# Find available versions of a crate
+ls $REGISTRY_SRC | grep '^axum-'
+
+# Or use find to search across all registries
+find ~/.cargo/registry/src -type d -name 'axum-*' -maxdepth 2
+
+# Read the main documentation
+cat $REGISTRY_SRC/axum-0.7.9/README.md
+
+# Check specific module implementation
+cat $REGISTRY_SRC/axum-0.7.9/src/extract/mod.rs
+```
+
 ## Context-Specific Guides
 
 For additional patterns and examples beyond the core guidelines above, load these guides:
