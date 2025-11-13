@@ -1538,6 +1538,7 @@ dependencies = [
  "test-log",
  "tokio",
  "tracing",
+ "uuid",
  "walkdir",
  "workspace_root",
 ]
