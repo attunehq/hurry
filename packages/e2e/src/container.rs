@@ -164,7 +164,14 @@ impl Container {
     /// Start the container and return a reference to it.
     #[builder(start_fn = new, finish_fn = start)]
     pub async fn build(
-        /// Commands to run when the container is started.
+        /// Commands to run via exec after the container is started.
+        ///
+        /// These are executed by calling `command.run_docker()` after the container
+        /// is running. Use this for setup tasks, initialization scripts, or any
+        /// commands that need to run in an already-running container.
+        ///
+        /// This is different from `entrypoint`: commands run after the container's
+        /// main process has started, while entrypoint replaces the main process.
         #[builder(field)]
         commands: Vec<Command>,
 
@@ -193,6 +200,22 @@ impl Container {
         /// Optional container name for DNS resolution within Docker networks.
         #[builder(into)]
         container_name: Option<String>,
+
+        /// Override the container's CMD (the command that runs as the main process).
+        ///
+        /// This replaces the CMD specified in the Docker image. The container will
+        /// run this command as its main process and exit when it completes.
+        ///
+        /// This is different from `commands`: entrypoint is the main process that
+        /// determines the container's lifecycle, while commands are executed via
+        /// exec in an already-running container.
+        ///
+        /// Example: To run migrations in a courier container:
+        /// ```ignore
+        /// .entrypoint(["migrate", "--database-url", "postgres://..."])
+        /// ```
+        #[builder(default, with = |i: impl IntoIterator<Item = impl Into<String>>| i.into_iter().map(Into::into).collect())]
+        entrypoint: Vec<String>,
     ) -> Result<Container> {
         let docker = Docker::connect_with_defaults().context("connect to docker daemon")?;
         let reference = format!("{repo}:{tag}");
@@ -263,12 +286,19 @@ impl Container {
             }
         });
 
+        let cmd = if entrypoint.is_empty() {
+            None
+        } else {
+            Some(entrypoint)
+        };
+
         let container_body = ContainerCreateBody {
             image: Some(reference),
             tty: Some(true),
             host_config,
             env,
             networking_config,
+            cmd,
             ..Default::default()
         };
         let id = docker

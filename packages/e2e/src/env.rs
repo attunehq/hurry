@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use color_eyre::{Result, eyre::Context};
+use futures::TryStreamExt;
 
 use crate::{Command, Container, Network};
 
@@ -23,7 +24,7 @@ impl TestEnv {
     /// - Wait for Postgres to be ready
     pub async fn new() -> Result<Self> {
         // Build courier image (returns full tag like "hurry-courier:abc1234")
-        let _image_tag = Container::ensure_built(
+        let image_tag = Container::ensure_built(
             "hurry-courier",
             "docker/courier/Dockerfile",
             ".",
@@ -38,6 +39,9 @@ impl TestEnv {
 
         // Wait for Postgres to be ready
         wait_for_postgres(&postgres, &network).await?;
+
+        // Run migrations
+        run_migrations(&network, &image_tag).await?;
 
         Ok(TestEnv { network, postgres })
     }
@@ -104,4 +108,50 @@ async fn wait_for_postgres(postgres: &Container, _network: &Network) -> Result<(
             }
         }
     }
+}
+
+/// Run database migrations using the courier binary.
+///
+/// This creates an ephemeral container that runs `courier migrate` and waits
+/// for it to complete. The container exits after migrations are applied.
+async fn run_migrations(network: &Network, courier_image_tag: &str) -> Result<()> {
+    let (repo, tag) = courier_image_tag
+        .split_once(':')
+        .ok_or_else(|| color_eyre::eyre::eyre!("invalid image tag format"))?;
+
+    // Start courier container with migrate command as entrypoint
+    let migrate_container = Container::new()
+        .repo(repo)
+        .tag(tag)
+        .network(network.id())
+        .entrypoint([
+            "migrate",
+            "--database-url",
+            "postgres://courier:courier@postgres:5432/courier",
+        ])
+        .start()
+        .await
+        .context("start migration container")?;
+
+    // Wait for the migration container to exit
+    let mut wait_stream = migrate_container
+        .docker()
+        .wait_container(migrate_container.id(), None::<bollard::query_parameters::WaitContainerOptions>);
+
+    // Get the exit status
+    let wait_response = wait_stream
+        .try_next()
+        .await
+        .context("wait for migration container")?
+        .ok_or_else(|| color_eyre::eyre::eyre!("no wait response from migration container"))?;
+
+    // Check that migrations succeeded
+    if wait_response.status_code != 0 {
+        color_eyre::eyre::bail!(
+            "migrations failed with exit code: {}",
+            wait_response.status_code
+        );
+    }
+
+    Ok(())
 }
