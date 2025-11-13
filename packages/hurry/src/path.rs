@@ -454,19 +454,26 @@ duplicate! {
         from_base;
         [ Abs ];
         [ Rel ];
-        [ SomeBase ];
     ]
     duplicate!{
         [
             from_ty;
             [ Dir ];
             [ File ];
-            [ SomeType ];
         ]
-        impl TypedPath<from_base, from_ty> {
-            /// Convert the type to a generic path.
-            pub fn as_generic(&self) -> TypedPath<SomeBase, SomeType> {
-                TypedPath::<SomeBase, SomeType>::new_unchecked(&self.inner)
+        impl From<TypedPath<from_base, from_ty>> for TypedPath<from_base, SomeType> {
+            fn from(path: TypedPath<from_base, from_ty>) -> Self {
+                TypedPath::<from_base, SomeType>::new_unchecked(&path.inner)
+            }
+        }
+        impl From<TypedPath<from_base, from_ty>> for TypedPath<SomeBase, from_ty> {
+            fn from(path: TypedPath<from_base, from_ty>) -> Self {
+                TypedPath::<SomeBase, from_ty>::new_unchecked(&path.inner)
+            }
+        }
+        impl From<TypedPath<from_base, from_ty>> for TypedPath<SomeBase, SomeType> {
+            fn from(path: TypedPath<from_base, from_ty>) -> Self {
+                TypedPath::<SomeBase, SomeType>::new_unchecked(&path.inner)
             }
         }
     }
@@ -739,5 +746,61 @@ impl Validator for Abs {
 impl Validator for ty_self {
     fn validate(_: &Path) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn into_sometype() {
+        let abs = AbsDirPath::current().expect("current dir");
+        let _ = AbsSomePath::from(abs);
+
+        let abs = AbsDirPath::current()
+            .expect("current dir")
+            .join(mk_rel_file!("somefile"));
+        let _ = AbsSomePath::from(abs);
+
+        let rel = mk_rel_dir!("somedir");
+        let _ = RelSomePath::from(rel);
+
+        let rel = mk_rel_file!("somefile");
+        let _ = RelSomePath::from(rel);
+    }
+
+    #[test]
+    fn into_somebase() {
+        let abs = AbsDirPath::current().expect("current dir");
+        let _ = SomeDirPath::from(abs);
+
+        let abs = AbsDirPath::current()
+            .expect("current dir")
+            .join(mk_rel_file!("somefile"));
+        let _ = SomeFilePath::from(abs);
+
+        let rel = mk_rel_dir!("somedir");
+        let _ = SomeDirPath::from(rel);
+
+        let rel = mk_rel_file!("somefile");
+        let _ = SomeFilePath::from(rel);
+    }
+
+    #[test]
+    fn into_generic() {
+        let abs = AbsDirPath::current().expect("current dir");
+        let _ = GenericPath::from(abs);
+
+        let abs = AbsDirPath::current()
+            .expect("current dir")
+            .join(mk_rel_file!("somefile"));
+        let _ = GenericPath::from(abs);
+
+        let rel = mk_rel_dir!("somedir");
+        let _ = GenericPath::from(rel);
+
+        let rel = mk_rel_file!("somefile");
+        let _ = GenericPath::from(rel);
     }
 }
