@@ -470,17 +470,17 @@ duplicate! {
         ]
         impl From<TypedPath<from_base, from_ty>> for TypedPath<from_base, SomeType> {
             fn from(path: TypedPath<from_base, from_ty>) -> Self {
-                TypedPath::<from_base, SomeType>::new_unchecked(&path.inner)
+                TypedPath::<from_base, SomeType>::new_unchecked(path.inner)
             }
         }
         impl From<TypedPath<from_base, from_ty>> for TypedPath<SomeBase, from_ty> {
             fn from(path: TypedPath<from_base, from_ty>) -> Self {
-                TypedPath::<SomeBase, from_ty>::new_unchecked(&path.inner)
+                TypedPath::<SomeBase, from_ty>::new_unchecked(path.inner)
             }
         }
         impl From<TypedPath<from_base, from_ty>> for TypedPath<SomeBase, SomeType> {
             fn from(path: TypedPath<from_base, from_ty>) -> Self {
-                TypedPath::<SomeBase, SomeType>::new_unchecked(&path.inner)
+                TypedPath::<SomeBase, SomeType>::new_unchecked(path.inner)
             }
         }
     }
@@ -495,7 +495,7 @@ duplicate! {
     ]
     impl From<TypedPath<from_base, SomeType>> for TypedPath<SomeBase, SomeType> {
         fn from(path: TypedPath<from_base, SomeType>) -> Self {
-            TypedPath::<SomeBase, SomeType>::new_unchecked(&path.inner)
+            TypedPath::<SomeBase, SomeType>::new_unchecked(path.inner)
         }
     }
 }
@@ -509,7 +509,7 @@ duplicate! {
     ]
     impl From<TypedPath<SomeBase, from_ty>> for TypedPath<SomeBase, SomeType> {
         fn from(path: TypedPath<SomeBase, from_ty>) -> Self {
-            TypedPath::<SomeBase, SomeType>::new_unchecked(&path.inner)
+            TypedPath::<SomeBase, SomeType>::new_unchecked(path.inner)
         }
     }
 }
