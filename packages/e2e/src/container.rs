@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::{Path, PathBuf}, sync::Arc};
 
 use bollard::{
     Docker,
@@ -11,8 +11,9 @@ use bollard::{
 use bon::bon;
 use color_eyre::{
     Result,
-    eyre::{Context, OptionExt},
+    eyre::{Context, OptionExt, bail},
 };
+use fslock::LockFile;
 use futures::TryStreamExt;
 
 use crate::Command;
@@ -40,6 +41,95 @@ impl Container {
     /// The ID of the container running in the docker context.
     pub fn id(&self) -> &str {
         &self.inner.id
+    }
+
+    /// Ensure a Docker image is built from a Dockerfile.
+    ///
+    /// Uses file-based locking to coordinate builds across multiple test processes.
+    /// Only builds the image once, even when tests run in parallel via cargo nextest.
+    ///
+    /// # Arguments
+    /// - `image_tag`: The tag to apply to the built image (e.g., "hurry-courier:test")
+    /// - `dockerfile`: Path to the Dockerfile relative to workspace root (e.g., "docker/courier/Dockerfile")
+    /// - `context`: Build context directory relative to workspace root (typically ".")
+    ///
+    /// # Example
+    /// ```ignore
+    /// Container::ensure_built(
+    ///     "hurry-courier:test",
+    ///     "docker/courier/Dockerfile",
+    ///     ".",
+    /// ).await?;
+    /// ```
+    pub async fn ensure_built(
+        image_tag: impl AsRef<str>,
+        dockerfile: impl AsRef<Path>,
+        context: impl AsRef<Path>,
+    ) -> Result<()> {
+        let image_tag = image_tag.as_ref();
+        let dockerfile = dockerfile.as_ref();
+        let context = context.as_ref();
+
+        let workspace_root = workspace_root::get_workspace_root();
+        let target_dir = workspace_root.join("target");
+
+        let sanitized_tag = image_tag.replace(':', "_").replace('/', "_");
+        let marker_path = target_dir.join(format!(".{sanitized_tag}.built"));
+        let lock_path = target_dir.join(format!(".{sanitized_tag}.lock"));
+
+        // Fast path: check if marker file exists
+        if marker_path.exists() {
+            return Ok(());
+        }
+
+        // Slow path: acquire lock and build if needed
+        eprintln!("[BUILD] Waiting for exclusive lock to build {image_tag}...");
+        let mut lock = LockFile::open(&lock_path)
+            .with_context(|| format!("open lock file {lock_path:?}"))?;
+        lock.lock()
+            .with_context(|| format!("acquire lock for {image_tag}"))?;
+
+        eprintln!("[BUILD] Lock acquired, checking if image needs building...");
+
+        // Double-check marker after acquiring lock
+        if marker_path.exists() {
+            eprintln!("[BUILD] Image {image_tag} was built by another process");
+            return Ok(());
+        }
+
+        // Build the image
+        eprintln!("[BUILD] Building Docker image {image_tag}...");
+
+        let dockerfile_path = workspace_root.join(dockerfile);
+        let context_path = workspace_root.join(context);
+
+        let status = std::process::Command::new("docker")
+            .args([
+                "build",
+                "-t",
+                image_tag,
+                "-f",
+                dockerfile_path
+                    .to_str()
+                    .ok_or_else(|| color_eyre::eyre::eyre!("invalid dockerfile path"))?,
+                context_path
+                    .to_str()
+                    .ok_or_else(|| color_eyre::eyre::eyre!("invalid context path"))?,
+            ])
+            .status()
+            .context("execute docker build")?;
+
+        if !status.success() {
+            bail!("docker build failed with status: {status}");
+        }
+
+        eprintln!("[BUILD] Successfully built {image_tag}");
+
+        // Create marker file
+        std::fs::write(&marker_path, "")
+            .with_context(|| format!("create marker file {marker_path:?}"))?;
+
+        Ok(())
     }
 }
 

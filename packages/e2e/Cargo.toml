@@ -17,6 +17,7 @@ cargo_metadata.workspace = true
 color-eyre.workspace = true
 escargot = { workspace = true }
 filetime.workspace = true
+fslock.workspace = true
 futures.workspace = true
 itertools.workspace = true
 tempfile.workspace = true
@@ -24,6 +25,7 @@ tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 walkdir.workspace = true
+workspace_root.workspace = true
 
 [dev-dependencies]
 itertools.workspace = true

@@ -1530,6 +1530,7 @@ dependencies = [
  "color-eyre",
  "escargot",
  "filetime",
+ "fslock",
  "futures",
  "itertools",
  "pretty_assertions",
