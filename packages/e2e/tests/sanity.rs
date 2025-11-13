@@ -25,7 +25,7 @@ async fn builds_courier_image() -> Result<()> {
     ).await?;
 
     // Parse the returned tag into repo:tag format
-    // e.g., "hurry-courier:test-abc1234" -> repo="hurry-courier", tag="test-abc1234"
+    // e.g., "hurry-courier:abc1234" -> repo="hurry-courier", tag="abc1234"
     let (repo, tag) = image_tag
         .split_once(':')
         .expect("image tag should contain ':'");

@@ -48,8 +48,8 @@ impl Container {
     /// Uses file-based locking to coordinate builds across multiple test processes.
     /// Only builds the image once, even when tests run in parallel via cargo nextest.
     ///
-    /// The image is automatically tagged with "test-{git-sha}" to ensure tests use fresh
-    /// images when code changes. For example, "hurry-courier" becomes "hurry-courier:test-abc1234".
+    /// The image is automatically tagged with the current git commit SHA to ensure
+    /// fresh images when code changes. For example, "hurry-courier" becomes "hurry-courier:abc1234".
     ///
     /// # Arguments
     /// - `image_name`: The name of the image (e.g., "hurry-courier")
@@ -57,7 +57,7 @@ impl Container {
     /// - `context`: Build context directory relative to workspace root (typically ".")
     ///
     /// # Returns
-    /// The full image tag including git SHA (e.g., "hurry-courier:test-abc1234")
+    /// The full image tag including git SHA (e.g., "hurry-courier:abc1234")
     ///
     /// # Example
     /// ```ignore
@@ -66,7 +66,7 @@ impl Container {
     ///     "docker/courier/Dockerfile",
     ///     ".",
     /// ).await?;
-    /// // full_tag is now "hurry-courier:test-abc1234"
+    /// // full_tag is now "hurry-courier:abc1234"
     /// ```
     pub async fn ensure_built(
         image_name: impl AsRef<str>,
@@ -96,8 +96,8 @@ impl Container {
             .trim()
             .to_string();
 
-        // Build full image tag with test prefix and git SHA
-        let image_tag = format!("{image_name}:test-{sha}");
+        // Build full image tag with git SHA
+        let image_tag = format!("{image_name}:{sha}");
 
         let sanitized_tag = image_tag.replace(':', "_").replace('/', "_");
         let marker_path = target_dir.join(format!(".{sanitized_tag}.built"));
