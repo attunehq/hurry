@@ -80,21 +80,50 @@ impl Container {
         let workspace_root = workspace_root::get_workspace_root();
         let target_dir = workspace_root.join("target");
 
-        // Get current git commit SHA
-        let git_sha = std::process::Command::new("git")
+        // Get a SHA representing the current working tree state (including uncommitted changes)
+        // First, get the commit SHA
+        let commit_sha = std::process::Command::new("git")
             .args(["rev-parse", "--short", "HEAD"])
             .current_dir(&workspace_root)
             .output()
             .context("execute git rev-parse")?;
 
-        if !git_sha.status.success() {
-            bail!("git rev-parse failed with status: {}", git_sha.status);
+        if !commit_sha.status.success() {
+            bail!("git rev-parse failed with status: {}", commit_sha.status);
         }
 
-        let sha = String::from_utf8(git_sha.stdout)
+        let sha = String::from_utf8(commit_sha.stdout)
             .context("parse git SHA as UTF-8")?
             .trim()
             .to_string();
+
+        // Check if there are any uncommitted changes (staged or unstaged)
+        // Use git diff to get a hash of the actual content changes
+        let git_diff = std::process::Command::new("git")
+            .args(["diff", "HEAD"])
+            .current_dir(&workspace_root)
+            .output()
+            .context("execute git diff")?;
+
+        if !git_diff.status.success() {
+            bail!("git diff failed with status: {}", git_diff.status);
+        }
+
+        // If there are uncommitted changes, create a unique hash by combining
+        // the commit SHA with a hash of the diff
+        let sha = if !git_diff.stdout.is_empty() {
+            // Compute a hash of the diff output (captures actual content changes)
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+
+            let mut hasher = DefaultHasher::new();
+            git_diff.stdout.hash(&mut hasher);
+            let dirty_hash = hasher.finish();
+
+            format!("{sha}-{dirty_hash:x}")
+        } else {
+            sha
+        };
 
         // Build full image tag with git SHA
         let image_tag = format!("{image_name}:{sha}");
