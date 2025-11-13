@@ -325,6 +325,12 @@ impl Workspace {
             // Figure out what kind of unit this invocation is.
             let package_name = invocation.package_name;
             let target_arch = invocation.target_arch;
+            // FIXME: To support `patch` and `replace` directives when rewriting
+            // fingerprints, we need to know the extern_crate_name for each
+            // dependency edge of the unit. It is not sufficient to merely know
+            // the declared crate_name of the dependency. But we should be able
+            // to parse out an extern_crate_name by parsing the `--extern` flags
+            // in the invocation rustc arguments for known library output paths.
             let deps = invocation.deps.into_iter().map(|d| d as u32).collect();
             let unit = if invocation.target_kind == [TargetKind::CustomBuild] {
                 match invocation.compile_mode {

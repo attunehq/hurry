@@ -21,7 +21,7 @@ mod cache;
 mod dep_info;
 pub mod dep_info2;
 mod dependency;
-mod fingerprint;
+pub mod fingerprint;
 mod path;
 pub mod path2;
 mod profile;

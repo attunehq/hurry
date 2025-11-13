@@ -571,6 +571,12 @@ pub async fn set_executable(path: &AbsFilePath, executable: bool) -> Result<()> 
     Ok(())
 }
 
+pub async fn hard_link(original: &AbsFilePath, link: &AbsFilePath) -> Result<()> {
+    tokio::fs::hard_link(original.as_std_path(), link.as_std_path())
+        .await
+        .context(format!("hard link {original:?} -> {link:?}"))
+}
+
 /// Return whether the path represents a directory.
 ///
 /// Returns `false` if the directory doesn't exist

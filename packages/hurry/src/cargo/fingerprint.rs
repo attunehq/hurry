@@ -58,9 +58,9 @@ pub struct Fingerprint {
     profile: u64,
     /// Hash of the path to the base source file. This is relative to the
     /// workspace root for path members, or absolute for other sources.
-    path: u64,
+    pub path: u64,
     /// Fingerprints of dependencies.
-    deps: Vec<DepFingerprint>,
+    pub deps: Vec<DepFingerprint>,
     /// Information about the inputs that affect this Unit (such as source
     /// file mtimes or build script environment variables).
     local: Mutex<Vec<LocalFingerprint>>,
@@ -181,17 +181,17 @@ pub fn util_hash_u64<H: Hash>(hashable: H) -> u64 {
 ///
 /// [^1]: https://github.com/rust-lang/cargo/blob/df07b394850b07348c918703054712e3427715cf/src/cargo/core/compiler/fingerprint/mod.rs#L557
 #[derive(Debug, Clone)]
-struct DepFingerprint {
+pub struct DepFingerprint {
     /// The hash of the package id that this dependency points to
-    pkg_id: u64,
+    pub pkg_id: u64,
     /// The crate name we're using for this dependency, which if we change we'll
     /// need to recompile!
-    name: String,
+    pub name: String,
     /// Whether or not this dependency is flagged as a public dependency or not.
-    public: bool,
+    pub public: bool,
     /// The dependency's fingerprint we recursively point to, containing all the
     /// other hash information we'd otherwise need.
-    fingerprint: Arc<Fingerprint>,
+    pub fingerprint: Arc<Fingerprint>,
 }
 
 impl Serialize for DepFingerprint {
