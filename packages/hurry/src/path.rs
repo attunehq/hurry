@@ -448,7 +448,8 @@ impl<B> TypedPath<B, ty> {
     }
 }
 
-// All paths can be converted to generic paths infallibly.
+// All paths can be converted to more generic types infallibly.
+// Abs/Rel + Dir/File -> SomeBase + SomeType (fully generic)
 duplicate! {
     [
         from_base;
@@ -479,42 +480,155 @@ duplicate! {
     }
 }
 
-// All combinations of bases and types can be _fallibly_ converted to
-// `Abs`/`Rel` bases and `Dir`/`File` types.
+// Abs/Rel + SomeType -> SomeBase + SomeType
 duplicate! {
     [
         from_base;
         [ Abs ];
         [ Rel ];
-        [ SomeBase ];
     ]
-    duplicate!{
+    impl From<TypedPath<from_base, SomeType>> for TypedPath<SomeBase, SomeType> {
+        fn from(path: TypedPath<from_base, SomeType>) -> Self {
+            TypedPath::<SomeBase, SomeType>::new_unchecked(&path.inner)
+        }
+    }
+}
+
+// SomeBase + Dir/File -> SomeBase + SomeType
+duplicate! {
+    [
+        from_ty;
+        [ Dir ];
+        [ File ];
+    ]
+    impl From<TypedPath<SomeBase, from_ty>> for TypedPath<SomeBase, SomeType> {
+        fn from(path: TypedPath<SomeBase, from_ty>) -> Self {
+            TypedPath::<SomeBase, SomeType>::new_unchecked(&path.inner)
+        }
+    }
+}
+
+// All combinations of bases and types can be _fallibly_ converted to
+// `Abs`/`Rel` bases and `Dir`/`File` types.
+// SomeBase -> Abs/Rel
+duplicate! {
+    [
+        from_ty;
+        [ Dir ];
+        [ File ];
+        [ SomeType ];
+    ]
+    duplicate! {
         [
-            from_ty;
+            to_base;
+            [ Abs ];
+            [ Rel ];
+        ]
+        duplicate!{
+            [
+                to_ty;
+                [ Dir ];
+                [ File ];
+            ]
+            impl TryFrom<TypedPath<SomeBase, from_ty>> for TypedPath<to_base, to_ty> {
+                type Error = Report;
+
+                fn try_from(path: TypedPath<SomeBase, from_ty>) -> Result<Self, Self::Error> {
+                    Self::try_from(&path.inner)
+                }
+            }
+
+            impl TryFrom<&TypedPath<SomeBase, from_ty>> for TypedPath<to_base, to_ty> {
+                type Error = Report;
+
+                fn try_from(path: &TypedPath<SomeBase, from_ty>) -> Result<Self, Self::Error> {
+                    Self::try_from(&path.inner)
+                }
+            }
+        }
+    }
+}
+
+// Abs/Rel + SomeType -> Abs/Rel + Dir/File
+duplicate! {
+    [
+        from_base;
+        [ Abs ];
+        [ Rel ];
+    ]
+    duplicate! {
+        [
+            to_base;
+            [ Abs ];
+            [ Rel ];
+        ]
+        duplicate!{
+            [
+                to_ty;
+                [ Dir ];
+                [ File ];
+            ]
+            impl TryFrom<TypedPath<from_base, SomeType>> for TypedPath<to_base, to_ty> {
+                type Error = Report;
+
+                fn try_from(path: TypedPath<from_base, SomeType>) -> Result<Self, Self::Error> {
+                    Self::try_from(&path.inner)
+                }
+            }
+
+            impl TryFrom<&TypedPath<from_base, SomeType>> for TypedPath<to_base, to_ty> {
+                type Error = Report;
+
+                fn try_from(path: &TypedPath<from_base, SomeType>) -> Result<Self, Self::Error> {
+                    Self::try_from(&path.inner)
+                }
+            }
+        }
+    }
+}
+
+// Abs/Rel + Dir/File cross-conversions (e.g., Abs+Dir -> Rel+File)
+duplicate! {
+    [
+        from_ty;
+        [ Dir ];
+        [ File ];
+    ]
+    duplicate! {
+        [
+            to_ty;
             [ Dir ];
             [ File ];
-            [ SomeType ];
         ]
-        duplicate! {
-            [
-                to_base to_base_name;
-                [ Abs ] [ abs ];
-                [ Rel ] [ rel ];
-            ]
-            duplicate!{
-                [
-                    to_ty to_ty_name;
-                    [ Dir ] [ dir ];
-                    [ File ] [ file ];
-                ]
-                impl TypedPath<from_base, from_ty> {
-                    paste! {
-                        /// Try to convert into the specified type.
-                        pub fn [<try_as_ to_base_name _ to_ty_name>](&self) -> Result<TypedPath<to_base, to_ty>> {
-                            TypedPath::<to_base, to_ty>::try_from(&self.inner)
-                        }
-                    }
-                }
+        impl TryFrom<TypedPath<Abs, from_ty>> for TypedPath<Rel, to_ty> {
+            type Error = Report;
+
+            fn try_from(path: TypedPath<Abs, from_ty>) -> Result<Self, Self::Error> {
+                Self::try_from(&path.inner)
+            }
+        }
+
+        impl TryFrom<&TypedPath<Abs, from_ty>> for TypedPath<Rel, to_ty> {
+            type Error = Report;
+
+            fn try_from(path: &TypedPath<Abs, from_ty>) -> Result<Self, Self::Error> {
+                Self::try_from(&path.inner)
+            }
+        }
+
+        impl TryFrom<TypedPath<Rel, from_ty>> for TypedPath<Abs, to_ty> {
+            type Error = Report;
+
+            fn try_from(path: TypedPath<Rel, from_ty>) -> Result<Self, Self::Error> {
+                Self::try_from(&path.inner)
+            }
+        }
+
+        impl TryFrom<&TypedPath<Rel, from_ty>> for TypedPath<Abs, to_ty> {
+            type Error = Report;
+
+            fn try_from(path: &TypedPath<Rel, from_ty>) -> Result<Self, Self::Error> {
+                Self::try_from(&path.inner)
             }
         }
     }
@@ -754,7 +868,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn into_sometype() {
+    fn from_into_sometype() {
         let abs = AbsDirPath::current().expect("current dir");
         let _ = AbsSomePath::from(abs);
 
@@ -771,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn into_somebase() {
+    fn from_into_somebase() {
         let abs = AbsDirPath::current().expect("current dir");
         let _ = SomeDirPath::from(abs);
 
@@ -788,7 +902,7 @@ mod tests {
     }
 
     #[test]
-    fn into_generic() {
+    fn from_into_generic() {
         let abs = AbsDirPath::current().expect("current dir");
         let _ = GenericPath::from(abs);
 
@@ -802,5 +916,65 @@ mod tests {
 
         let rel = mk_rel_file!("somefile");
         let _ = GenericPath::from(rel);
+    }
+
+    #[test]
+    fn try_from_narrows_successfully() {
+        let abs_dir = AbsDirPath::current().expect("current dir");
+        let generic = GenericPath::from(abs_dir.clone());
+
+        let narrowed = AbsDirPath::try_from(generic).expect("should narrow successfully");
+        assert_eq!(narrowed.as_std_path(), abs_dir.as_std_path());
+
+        let rel_file = mk_rel_file!("src/main.rs");
+        let some_path = RelSomePath::from(rel_file.clone());
+
+        let narrowed = RelFilePath::try_from(some_path).expect("should narrow successfully");
+        assert_eq!(narrowed.as_std_path(), rel_file.as_std_path());
+    }
+
+    #[test]
+    fn try_from_fails_when_validators_fail() {
+        let abs_dir = AbsDirPath::current().expect("current dir");
+        let generic = GenericPath::from(abs_dir);
+
+        let result = RelDirPath::try_from(generic);
+        assert!(
+            result.is_err(),
+            "should fail to convert absolute to relative"
+        );
+
+        let rel_dir = mk_rel_dir!("src");
+        let some_path = SomeDirPath::from(rel_dir);
+
+        let result = AbsDirPath::try_from(some_path);
+        assert!(
+            result.is_err(),
+            "should fail to convert relative to absolute"
+        );
+    }
+
+    #[test]
+    fn try_from_with_reference() {
+        let abs_dir = AbsDirPath::current().expect("current dir");
+        let generic = GenericPath::from(abs_dir.clone());
+
+        let narrowed = AbsDirPath::try_from(&generic).expect("should narrow from reference");
+        assert_eq!(narrowed.as_std_path(), abs_dir.as_std_path());
+    }
+
+    // While this is semantically a bug, the types in this module are intended to
+    // _document intent_, not _validate what is actually true_ on disk. As such,
+    // this is actually an unfortunate but valid conversion to make.
+    //
+    // That said, the conversion is still fallible because we may change that in the
+    // future by adding validators that check the item on disk.
+    #[test]
+    fn try_from_cross_type_conversions() {
+        let abs_dir = AbsDirPath::current().expect("current dir");
+        let generic = GenericPath::from(abs_dir.clone());
+
+        let as_file = AbsFilePath::try_from(generic);
+        assert!(as_file.is_ok());
     }
 }
