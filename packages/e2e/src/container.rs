@@ -48,30 +48,56 @@ impl Container {
     /// Uses file-based locking to coordinate builds across multiple test processes.
     /// Only builds the image once, even when tests run in parallel via cargo nextest.
     ///
+    /// The image is automatically tagged with "test-{git-sha}" to ensure tests use fresh
+    /// images when code changes. For example, "hurry-courier" becomes "hurry-courier:test-abc1234".
+    ///
     /// # Arguments
-    /// - `image_tag`: The tag to apply to the built image (e.g., "hurry-courier:test")
+    /// - `image_name`: The name of the image (e.g., "hurry-courier")
     /// - `dockerfile`: Path to the Dockerfile relative to workspace root (e.g., "docker/courier/Dockerfile")
     /// - `context`: Build context directory relative to workspace root (typically ".")
     ///
+    /// # Returns
+    /// The full image tag including git SHA (e.g., "hurry-courier:test-abc1234")
+    ///
     /// # Example
     /// ```ignore
-    /// Container::ensure_built(
-    ///     "hurry-courier:test",
+    /// let full_tag = Container::ensure_built(
+    ///     "hurry-courier",
     ///     "docker/courier/Dockerfile",
     ///     ".",
     /// ).await?;
+    /// // full_tag is now "hurry-courier:test-abc1234"
     /// ```
     pub async fn ensure_built(
-        image_tag: impl AsRef<str>,
+        image_name: impl AsRef<str>,
         dockerfile: impl AsRef<Path>,
         context: impl AsRef<Path>,
-    ) -> Result<()> {
-        let image_tag = image_tag.as_ref();
+    ) -> Result<String> {
+        let image_name = image_name.as_ref();
         let dockerfile = dockerfile.as_ref();
         let context = context.as_ref();
 
         let workspace_root = workspace_root::get_workspace_root();
         let target_dir = workspace_root.join("target");
+
+        // Get current git commit SHA
+        let git_sha = std::process::Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .current_dir(&workspace_root)
+            .output()
+            .context("execute git rev-parse")?;
+
+        if !git_sha.status.success() {
+            bail!("git rev-parse failed with status: {}", git_sha.status);
+        }
+
+        let sha = String::from_utf8(git_sha.stdout)
+            .context("parse git SHA as UTF-8")?
+            .trim()
+            .to_string();
+
+        // Build full image tag with test prefix and git SHA
+        let image_tag = format!("{image_name}:test-{sha}");
 
         let sanitized_tag = image_tag.replace(':', "_").replace('/', "_");
         let marker_path = target_dir.join(format!(".{sanitized_tag}.built"));
@@ -79,7 +105,7 @@ impl Container {
 
         // Fast path: check if marker file exists
         if marker_path.exists() {
-            return Ok(());
+            return Ok(image_tag);
         }
 
         // Slow path: acquire lock and build if needed
@@ -94,7 +120,7 @@ impl Container {
         // Double-check marker after acquiring lock
         if marker_path.exists() {
             eprintln!("[BUILD] Image {image_tag} was built by another process");
-            return Ok(());
+            return Ok(image_tag);
         }
 
         // Build the image
@@ -107,7 +133,7 @@ impl Container {
             .args([
                 "build",
                 "-t",
-                image_tag,
+                &image_tag,
                 "-f",
                 dockerfile_path
                     .to_str()
@@ -129,7 +155,7 @@ impl Container {
         std::fs::write(&marker_path, "")
             .with_context(|| format!("create marker file {marker_path:?}"))?;
 
-        Ok(())
+        Ok(image_tag)
     }
 }
 

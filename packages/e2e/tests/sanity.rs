@@ -17,20 +17,26 @@ use e2e::{Container, Network};
 async fn builds_courier_image() -> Result<()> {
     color_eyre::install()?;
 
-    // Validate Container::ensure_built works
-    Container::ensure_built(
-        "hurry-courier:test",
+    // Validate Container::ensure_built works and get the full image tag with git SHA
+    let image_tag = Container::ensure_built(
+        "hurry-courier",
         "docker/courier/Dockerfile",
         ".",
     ).await?;
+
+    // Parse the returned tag into repo:tag format
+    // e.g., "hurry-courier:test-abc1234" -> repo="hurry-courier", tag="test-abc1234"
+    let (repo, tag) = image_tag
+        .split_once(':')
+        .expect("image tag should contain ':'");
 
     // Validate Network works
     let network = Network::create().await?;
 
     // Validate we can start a simple container on the network
     let container = Container::new()
-        .repo("hurry-courier")
-        .tag("test")
+        .repo(repo)
+        .tag(tag)
         .network(network.id())
         .container_name("test-courier")
         .start()
