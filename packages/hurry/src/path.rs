@@ -371,6 +371,12 @@ impl<B, T> AsRef<TypedPath<B, T>> for TypedPath<B, T> {
     }
 }
 
+impl<B, T> AsRef<Path> for TypedPath<B, T> {
+    fn as_ref(&self) -> &Path {
+        &self.inner
+    }
+}
+
 impl<B, T> From<TypedPath<B, T>> for std::path::PathBuf {
     fn from(value: TypedPath<B, T>) -> Self {
         value.inner
@@ -976,5 +982,27 @@ mod tests {
 
         let as_file = AbsFilePath::try_from(generic);
         assert!(as_file.is_ok());
+    }
+
+    #[test]
+    fn as_ref_path() {
+        let abs_dir = AbsDirPath::current().expect("current dir");
+        let path_ref: &Path = abs_dir.as_ref();
+        assert_eq!(path_ref, abs_dir.as_std_path());
+
+        let rel_file = mk_rel_file!("src/main.rs");
+        let path_ref: &Path = rel_file.as_ref();
+        assert_eq!(path_ref, rel_file.as_std_path());
+
+        fn accepts_path_like(p: impl AsRef<Path>) -> String {
+            p.as_ref().display().to_string()
+        }
+
+        let generic = GenericPath::from(abs_dir.clone());
+        let display = accepts_path_like(&generic);
+        assert!(display.len() > 0);
+
+        let display = accepts_path_like(rel_file);
+        assert!(display.len() > 0);
     }
 }
