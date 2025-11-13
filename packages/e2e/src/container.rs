@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use bollard::{
     Docker,
@@ -6,7 +6,7 @@ use bollard::{
         CreateContainerOptionsBuilder, CreateImageOptionsBuilder, RemoveContainerOptionsBuilder,
         StartContainerOptionsBuilder,
     },
-    secret::{ContainerCreateBody, HostConfig},
+    secret::{ContainerCreateBody, EndpointSettings, HostConfig, NetworkingConfig},
 };
 use bon::bon;
 use color_eyre::{
@@ -57,6 +57,11 @@ impl Container {
         #[builder(field)]
         volume_binds: Vec<(PathBuf, PathBuf)>,
 
+        /// Environment variables to set in the container.
+        /// Each tuple represents (key, value).
+        #[builder(field)]
+        env_vars: Vec<(String, String)>,
+
         /// The repository to use, in OCI format.
         #[builder(into)]
         repo: String,
@@ -64,6 +69,14 @@ impl Container {
         /// The tag to use.
         #[builder(into)]
         tag: String,
+
+        /// Optional Docker network ID to attach the container to.
+        #[builder(into)]
+        network: Option<String>,
+
+        /// Optional container name for DNS resolution within Docker networks.
+        #[builder(into)]
+        container_name: Option<String>,
     ) -> Result<Container> {
         let docker = Docker::connect_with_defaults().context("connect to docker daemon")?;
         let reference = format!("{repo}:{tag}");
@@ -77,7 +90,14 @@ impl Container {
             .try_collect::<Vec<_>>()
             .await?;
 
-        let container_opts = CreateContainerOptionsBuilder::default().build();
+        let container_opts = if let Some(name) = container_name {
+            CreateContainerOptionsBuilder::default()
+                .name(&name)
+                .build()
+        } else {
+            CreateContainerOptionsBuilder::default().build()
+        };
+
         let host_config = if volume_binds.is_empty() {
             None
         } else {
@@ -103,10 +123,32 @@ impl Container {
                 ..Default::default()
             })
         };
+
+        let env = if env_vars.is_empty() {
+            None
+        } else {
+            Some(
+                env_vars
+                    .into_iter()
+                    .map(|(key, value)| format!("{key}={value}"))
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        let networking_config = network.map(|network_id| {
+            let mut endpoints = HashMap::new();
+            endpoints.insert(network_id, EndpointSettings::default());
+            NetworkingConfig {
+                endpoints_config: Some(endpoints),
+            }
+        });
+
         let container_body = ContainerCreateBody {
             image: Some(reference),
             tty: Some(true),
             host_config,
+            env,
+            networking_config,
             ..Default::default()
         };
         let id = docker
@@ -142,12 +184,18 @@ impl Container {
     pub async fn debian_rust(
         #[builder(field)] commands: Vec<Command>,
         #[builder(field)] volume_binds: Vec<(PathBuf, PathBuf)>,
+        #[builder(field)] env_vars: Vec<(String, String)>,
+        #[builder(into)] network: Option<String>,
+        #[builder(into)] container_name: Option<String>,
     ) -> Result<Container> {
         Container::new()
             .repo("docker.io/library/rust")
             .tag("latest")
             .commands(commands)
             .volume_binds(volume_binds)
+            .env_vars(env_vars)
+            .maybe_network(network)
+            .maybe_container_name(container_name)
             .start()
             .await
     }
@@ -187,6 +235,23 @@ impl<S: container_build_builder::State> ContainerBuildBuilder<S> {
             .push((host_path.into(), container_path.into()));
         self
     }
+
+    /// Add environment variables to set in the container.
+    /// Each tuple represents (key, value).
+    pub fn env_vars(
+        mut self,
+        vars: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.env_vars
+            .extend(vars.into_iter().map(|(k, v)| (k.into(), v.into())));
+        self
+    }
+
+    /// Add a single environment variable to set in the container.
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env_vars.push((key.into(), value.into()));
+        self
+    }
 }
 
 impl<S: container_debian_rust_builder::State> ContainerDebianRustBuilder<S> {
@@ -222,6 +287,23 @@ impl<S: container_debian_rust_builder::State> ContainerDebianRustBuilder<S> {
     ) -> Self {
         self.volume_binds
             .push((host_path.into(), container_path.into()));
+        self
+    }
+
+    /// Add environment variables to set in the container.
+    /// Each tuple represents (key, value).
+    pub fn env_vars(
+        mut self,
+        vars: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.env_vars
+            .extend(vars.into_iter().map(|(k, v)| (k.into(), v.into())));
+        self
+    }
+
+    /// Add a single environment variable to set in the container.
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env_vars.push((key.into(), value.into()));
         self
     }
 }
