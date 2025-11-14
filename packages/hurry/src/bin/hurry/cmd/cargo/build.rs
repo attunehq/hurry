@@ -81,6 +81,7 @@ pub struct Options {
     // argument and chokes if it's not present.
     #[arg(
         long = "hurry-wait-for-upload",
+        env = "HURRY_WAIT_FOR_UPLOAD",
         num_args = 0..=1,
         default_value = None,
         default_missing_value = "true",

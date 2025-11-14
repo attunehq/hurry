@@ -76,7 +76,7 @@ impl Build {
     pub const HURRY_NAME: &str = "hurry";
 
     /// The default set of arguments that are always provided to build commands.
-    pub const DEFAULT_ARGS: [&str; 2] = ["build", "-v"];
+    pub const DEFAULT_ARGS: [&str; 3] = ["build", "-v", "--message-format=json-render-diagnostics"];
 
     /// Run the build locally.
     #[instrument]
@@ -135,6 +135,7 @@ impl Build {
         cmd = cmd
             .arg("build")
             .arg("-v")
+            .arg("--message-format=json-render-diagnostics")
             .arg_maybe("--bin", self.bin.as_ref())
             .arg_maybe("--package", self.package.as_ref())
             .arg_if(self.release, "--release")
@@ -155,6 +156,10 @@ impl Build {
         if let Some(token) = &self.courier_token {
             cmd = cmd.env("HURRY_COURIER_TOKEN", token);
         }
+
+        // Always wait for uploads in tests to ensure artifacts are available for
+        // subsequent builds.
+        cmd = cmd.env("HURRY_WAIT_FOR_UPLOAD", "true");
 
         cmd.pwd(&self.pwd).finish()
     }
