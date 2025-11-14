@@ -4,12 +4,14 @@ use color_eyre::{Result, eyre::Context};
 use fslock::LockFile;
 use testcontainers::compose::DockerCompose;
 
-/// Test environment with ephemeral Docker Compose stack (Postgres + Courier).
+/// Test environment with ephemeral Docker Compose stack (Postgres + Courier + Hurry).
 ///
 /// This environment is fully isolated and cleaned up automatically via Drop.
 /// Each test can create its own TestEnv without interfering with other tests.
 pub struct TestEnv {
+    #[allow(dead_code)]
     compose: DockerCompose,
+    hurry_id: String,
 }
 
 impl TestEnv {
@@ -101,7 +103,13 @@ impl TestEnv {
 
         tracing::info!("docker compose stack ready");
 
-        Ok(TestEnv { compose })
+        let hurry_id = compose
+            .service("hurry")
+            .ok_or_else(|| color_eyre::eyre::eyre!("hurry service not found"))?
+            .id()
+            .to_string();
+
+        Ok(TestEnv { compose, hurry_id })
     }
 
     /// Get the URL to access Courier from the host machine.
@@ -125,5 +133,25 @@ impl TestEnv {
     /// - Account: alice@acme.com
     pub fn test_token(&self) -> &str {
         "acme-alice-token-001"
+    }
+
+    /// Get the hurry container ID for running commands.
+    ///
+    /// This returns the Docker container ID of the "hurry" service, which is a
+    /// Debian-based container with Rust and hurry installed. Use this with
+    /// `Command::run_compose()` to execute commands inside the container.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let env = TestEnv::new().await?;
+    /// Command::new()
+    ///     .name("hurry")
+    ///     .arg("--version")
+    ///     .finish()
+    ///     .run_compose(&env.hurry_container_id())
+    ///     .await?;
+    /// ```
+    pub fn hurry_container_id(&self) -> &str {
+        &self.hurry_id
     }
 }

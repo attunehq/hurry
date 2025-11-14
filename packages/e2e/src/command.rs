@@ -332,6 +332,122 @@ impl Command {
         })
     }
 
+    /// Run the command inside a testcontainers compose container.
+    ///
+    /// This method integrates with Docker exec API, allowing commands
+    /// to be run in containers managed by Docker Compose via testcontainers.
+    ///
+    /// The command's pwd and environment variables are handled by wrapping the
+    /// command in a shell invocation.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let env = TestEnv::new().await?;
+    /// Command::new()
+    ///     .name("hurry")
+    ///     .arg("--version")
+    ///     .pwd("/workspace")
+    ///     .finish()
+    ///     .run_compose(&env.hurry_container_id())
+    ///     .await?;
+    /// ```
+    #[instrument]
+    pub async fn run_compose(self, container_id: &str) -> Result<()> {
+        use bollard::Docker;
+        use tokio::io::AsyncWriteExt;
+
+        fn try_as_unicode(s: impl AsRef<OsStr>) -> Result<String> {
+            let s = s.as_ref();
+            s.to_str()
+                .map(String::from)
+                .ok_or_eyre("invalid unicode")
+                .with_context(|| format!("parse as unicode: {s:?}"))
+        }
+
+        let name = try_as_unicode(&self.name).context("convert process name")?;
+        let args = self
+            .args
+            .iter()
+            .map(try_as_unicode)
+            .collect::<Result<Vec<_>>>()
+            .context("convert args")?;
+
+        let mut cmd_parts = vec![name];
+        cmd_parts.extend(args);
+
+        let shell_cmd = if !self.envs.is_empty() {
+            let env_exports = self
+                .envs
+                .iter()
+                .map(|(k, v)| -> Result<String> {
+                    let k = try_as_unicode(k).context("convert env key")?;
+                    let v = try_as_unicode(v).context("convert env value")?;
+                    Ok(format!("export {k}={v:?}"))
+                })
+                .collect::<Result<Vec<_>>>()
+                .context("convert envs")?
+                .join(" && ");
+
+            let pwd = try_as_unicode(&self.pwd).context("convert pwd")?;
+            let cmd_str = cmd_parts.join(" ");
+            format!("{env_exports} && cd {pwd:?} && {cmd_str}")
+        } else {
+            let pwd = try_as_unicode(&self.pwd).context("convert pwd")?;
+            let cmd_str = cmd_parts.join(" ");
+            format!("cd {pwd:?} && {cmd_str}")
+        };
+
+        // Create Docker client
+        let docker = Docker::connect_with_local_defaults()
+            .context("connect to Docker")?;
+
+        // Create exec instance
+        let exec_config = bollard::exec::CreateExecOptions {
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            cmd: Some(vec!["sh", "-c", &shell_cmd]),
+            ..Default::default()
+        };
+
+        let exec_id = docker
+            .create_exec(container_id, exec_config)
+            .await
+            .context("create exec")?
+            .id;
+
+        // Start the exec and stream output
+        let mut stdout = tokio::io::stdout();
+        let mut stderr = tokio::io::stderr();
+
+        match docker.start_exec(&exec_id, None).await {
+            Ok(StartExecResults::Attached { mut output, .. }) => {
+                while let Some(line) = output.next().await {
+                    match line.context("read line")? {
+                        LogOutput::StdIn { .. } => {}
+                        LogOutput::Console { .. } => {}
+                        LogOutput::StdErr { message } => {
+                            stderr.write_all(&message).await.context("write stderr")?;
+                        }
+                        LogOutput::StdOut { message } => {
+                            stdout.write_all(&message).await.context("write stdout")?;
+                        }
+                    }
+                }
+            }
+            Ok(StartExecResults::Detached) => unreachable!("we don't use a detached API"),
+            Err(err) => bail!("run command: {err:?}"),
+        }
+
+        // Check exit code
+        let info = docker
+            .inspect_exec(&exec_id)
+            .await
+            .context("inspect exec")?;
+        let code = info.exit_code.map(|code| code as i32).unwrap_or_default();
+
+        ParsedOutput::parse_status(ExitStatus::from_raw(code)).map(drop)
+    }
+
     pub(super) fn as_container_exec(&self) -> Result<ExecConfig> {
         fn try_as_unicode(s: impl AsRef<OsStr>) -> Result<String> {
             let s = s.as_ref();

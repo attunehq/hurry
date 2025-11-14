@@ -4,7 +4,7 @@
 //! Run with: `cargo nextest run -p e2e sanity`
 
 use color_eyre::Result;
-use e2e::TestEnv;
+use e2e::{Command, TestEnv};
 
 /// Validates that the TestEnv Docker Compose stack starts successfully.
 ///
@@ -43,6 +43,34 @@ async fn compose_stack_starts() -> Result<()> {
         "health check should succeed, got status: {}",
         response.status()
     );
+
+    Ok(())
+}
+
+/// Validates that the hurry container can execute commands.
+///
+/// This test validates:
+/// - Hurry service container is running
+/// - Commands can be executed in the hurry container via run_compose
+/// - Hurry binary is installed and accessible
+#[test_log::test(tokio::test)]
+async fn hurry_container_runs_commands() -> Result<()> {
+    color_eyre::install()?;
+
+    // Ensure images are built
+    TestEnv::ensure_built().await?;
+
+    // Start the test environment
+    let env = TestEnv::new().await?;
+
+    // Run a simple command to verify hurry is installed
+    Command::new()
+        .name("hurry")
+        .arg("--version")
+        .pwd("/workspace")
+        .finish()
+        .run_compose(env.hurry_container_id())
+        .await?;
 
     Ok(())
 }
