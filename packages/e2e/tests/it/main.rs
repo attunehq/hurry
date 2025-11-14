@@ -10,9 +10,6 @@ pub mod thirdparty;
 async fn run_compose() -> Result<()> {
     color_eyre::install()?;
 
-    // Ensure compose images are built
-    TestEnv::ensure_built().await?;
-
     // Start test environment
     let env = TestEnv::new().await?;
 
@@ -33,9 +30,6 @@ async fn run_compose() -> Result<()> {
 #[test_log::test(tokio::test)]
 async fn build_hurry_in_compose() -> Result<()> {
     color_eyre::install()?;
-
-    // Ensure compose images are built
-    TestEnv::ensure_built().await?;
 
     // Start test environment
     let env = TestEnv::new().await?;

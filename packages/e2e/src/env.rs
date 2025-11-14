@@ -1,8 +1,12 @@
 use std::{fs::File, process::Command};
 
-use color_eyre::{Result, eyre::Context};
+use color_eyre::{
+    Result,
+    eyre::{Context, bail, eyre},
+};
 use fslock::LockFile;
 use testcontainers::compose::DockerCompose;
+use tracing::{debug, info, instrument};
 
 /// Test environment with ephemeral Docker Compose stack (Postgres + Courier +
 /// Hurry).
@@ -37,10 +41,8 @@ impl TestEnv {
     /// Uses file-based locking to coordinate builds across multiple test
     /// processes. Only builds images once, even when tests run in parallel
     /// via cargo nextest.
-    ///
-    /// This should be called before `new()` to avoid redundant builds when
-    /// running tests in parallel.
-    pub async fn ensure_built() -> Result<()> {
+    #[instrument]
+    async fn ensure_built() -> Result<()> {
         let workspace_root = workspace_root::get_workspace_root();
         let compose_file = workspace_root.join("docker-compose.e2e.yml");
 
@@ -54,12 +56,12 @@ impl TestEnv {
 
         // Fast path: check if already built for this hash
         if marker_file.exists() {
-            tracing::debug!("docker compose images already built for hash {hash}");
+            debug!("docker compose images already built for hash {hash}");
             return Ok(());
         }
 
         // Acquire exclusive lock
-        tracing::info!("acquiring lock for docker compose build...");
+        info!("acquiring lock for docker compose build...");
         let mut lock =
             LockFile::open(&lock_file_path).context("open lock file for docker compose build")?;
         lock.lock()
@@ -68,14 +70,14 @@ impl TestEnv {
         // Double-check after acquiring lock (another process might have built while we
         // waited)
         if marker_file.exists() {
-            tracing::debug!(
+            debug!(
                 "docker compose images already built for hash {hash} (built by another process)"
             );
             return Ok(());
         }
 
         // Build images using docker compose
-        tracing::info!("building docker compose images for hash {hash}...");
+        info!("building docker compose images for hash {hash}...");
         let status = Command::new("docker")
             .arg("compose")
             .arg("-f")
@@ -85,7 +87,7 @@ impl TestEnv {
             .context("execute docker compose build")?;
 
         if !status.success() {
-            color_eyre::eyre::bail!(
+            bail!(
                 "docker compose build failed with exit code: {}",
                 status.code().unwrap_or(-1)
             );
@@ -93,7 +95,7 @@ impl TestEnv {
 
         // Create marker file for this hash
         File::create(&marker_file).context("create marker file for docker compose build")?;
-        tracing::info!("docker compose images built successfully for hash {hash}");
+        info!("docker compose images built successfully for hash {hash}");
 
         Ok(())
     }
@@ -101,6 +103,7 @@ impl TestEnv {
     /// Create a new test environment.
     ///
     /// This will:
+    /// - Build Docker Compose images if needed (coordinated across parallel tests)
     /// - Start a Docker Compose stack with Postgres, migrations, fixtures, and
     ///   Courier
     /// - Wait for all services to be healthy (using Docker Compose's built-in
@@ -108,34 +111,35 @@ impl TestEnv {
     /// - Return once all services are ready
     ///
     /// The entire stack is automatically cleaned up when TestEnv is dropped.
-    ///
-    /// **Tip**: Call `TestEnv::ensure_built().await?` before this to coordinate
-    /// image builds across parallel tests.
+    #[instrument]
     pub async fn new() -> Result<Self> {
-        tracing::info!("starting docker compose stack...");
+        // Ensure images are built before starting compose stack
+        Self::ensure_built().await.context("build compose stack")?;
+
+        info!("starting docker compose stack...");
 
         // Get workspace root and construct path to compose file
         let workspace_root = workspace_root::get_workspace_root();
         let compose_file = workspace_root.join("docker-compose.e2e.yml");
         let compose_file_str = compose_file
             .to_str()
-            .ok_or_else(|| color_eyre::eyre::eyre!("invalid compose file path"))?;
+            .ok_or_else(|| eyre!("invalid compose file path"))?;
 
         // Start compose stack (images should already be built via ensure_built)
         let mut compose = DockerCompose::with_local_client(&[compose_file_str]);
         compose.up().await?; // Waits for health checks automatically
 
-        tracing::info!("docker compose stack ready");
+        info!("docker compose stack ready");
 
         let hurry_1_id = compose
             .service("hurry-1")
-            .ok_or_else(|| color_eyre::eyre::eyre!("hurry-1 service not found"))?
+            .ok_or_else(|| eyre!("hurry-1 service not found"))?
             .id()
             .to_string();
 
         let hurry_2_id = compose
             .service("hurry-2")
-            .ok_or_else(|| color_eyre::eyre::eyre!("hurry-2 service not found"))?
+            .ok_or_else(|| eyre!("hurry-2 service not found"))?
             .id()
             .to_string();
 

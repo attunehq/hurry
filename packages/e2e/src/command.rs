@@ -6,13 +6,14 @@ use std::{
     process::{ExitStatus, Output},
 };
 
-use bollard::{container::LogOutput, exec::StartExecResults};
+use bollard::{container::LogOutput, exec::{CreateExecOptions, StartExecResults}, Docker};
 use bon::{Builder, bon};
 use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context, OptionExt, bail, eyre},
 };
 use futures::StreamExt;
+use tokio::io::{stderr, stdout};
 use tracing::instrument;
 
 use crate::GITHUB_TOKEN;
@@ -112,9 +113,8 @@ impl Command {
     ///     .run_compose(&env.hurry_container_id())
     ///     .await?;
     /// ```
-    #[instrument]
+    #[instrument(skip(self, container_id), fields(name = ?self.name, pwd = ?self.pwd))]
     pub async fn run_compose(self, container_id: &str) -> Result<()> {
-        use bollard::Docker;
         use tokio::io::AsyncWriteExt;
 
         fn try_as_unicode(s: impl AsRef<OsStr>) -> Result<String> {
@@ -162,7 +162,7 @@ impl Command {
         let docker = Docker::connect_with_local_defaults().context("connect to Docker")?;
 
         // Create exec instance
-        let exec_config = bollard::exec::CreateExecOptions {
+        let exec_config = CreateExecOptions {
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             cmd: Some(vec!["sh", "-c", &shell_cmd]),
@@ -176,8 +176,8 @@ impl Command {
             .id;
 
         // Start the exec and stream output
-        let mut stdout = tokio::io::stdout();
-        let mut stderr = tokio::io::stderr();
+        let mut stdout = stdout();
+        let mut stderr = stderr();
 
         match docker.start_exec(&exec_id, None).await {
             Ok(StartExecResults::Attached { mut output, .. }) => {
@@ -212,9 +212,8 @@ impl Command {
     /// output.
     ///
     /// Similar to `run_compose()` but also captures and returns stdout/stderr.
-    #[instrument]
+    #[instrument(skip(self, container_id), fields(name = ?self.name, pwd = ?self.pwd))]
     pub async fn run_compose_with_output(self, container_id: &str) -> Result<ParsedOutput> {
-        use bollard::Docker;
         use tokio::io::AsyncWriteExt;
 
         fn try_as_unicode(s: impl AsRef<OsStr>) -> Result<String> {
@@ -262,7 +261,7 @@ impl Command {
         let docker = Docker::connect_with_local_defaults().context("connect to Docker")?;
 
         // Create exec instance
-        let exec_config = bollard::exec::CreateExecOptions {
+        let exec_config = CreateExecOptions {
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             cmd: Some(vec!["sh", "-c", &shell_cmd]),
@@ -276,8 +275,8 @@ impl Command {
             .id;
 
         // Start the exec and collect output
-        let mut stdout = tokio::io::stdout();
-        let mut stderr = tokio::io::stderr();
+        let mut stdout = stdout();
+        let mut stderr = stderr();
         let mut stdout_buf = Vec::<u8>::new();
         let mut stderr_buf = Vec::<u8>::new();
 

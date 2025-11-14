@@ -18,9 +18,6 @@ use e2e::{Command, TestEnv};
 async fn compose_stack_starts() -> Result<()> {
     color_eyre::install()?;
 
-    // Ensure images are built (with cross-process coordination)
-    TestEnv::ensure_built().await?;
-
     // Start the ephemeral test environment
     let env = TestEnv::new().await?;
 
@@ -44,9 +41,6 @@ async fn compose_stack_starts() -> Result<()> {
 #[test_log::test(tokio::test)]
 async fn hurry_container_runs_commands() -> Result<()> {
     color_eyre::install()?;
-
-    // Ensure images are built
-    TestEnv::ensure_built().await?;
 
     // Start the test environment
     let env = TestEnv::new().await?;

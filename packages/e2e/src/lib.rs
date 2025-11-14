@@ -28,7 +28,7 @@
 //! that are `info!` will still only be emitted in test logs since this library
 //! is only used in tests.
 
-use std::sync::LazyLock;
+use std::{env::var, sync::LazyLock};
 
 pub mod build;
 pub mod command;
@@ -40,5 +40,4 @@ pub use build::*;
 pub use command::*;
 pub use env::*;
 
-static GITHUB_TOKEN: LazyLock<Option<String>> =
-    LazyLock::new(|| std::env::var("GITHUB_TOKEN").ok());
+static GITHUB_TOKEN: LazyLock<Option<String>> = LazyLock::new(|| var("GITHUB_TOKEN").ok());

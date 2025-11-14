@@ -27,9 +27,6 @@ async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         );
     }
 
-    // Ensure compose images are built
-    TestEnv::ensure_built().await?;
-
     // Start test environment with courier
     let env = TestEnv::new().await?;
 
@@ -132,9 +129,6 @@ async fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
              Please set it to a personal access token with 'repo' scope."
         );
     }
-
-    // Ensure compose images are built
-    TestEnv::ensure_built().await?;
 
     // Start test environment with courier
     let env = TestEnv::new().await?;
@@ -244,9 +238,6 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
              Please set it to a personal access token with 'repo' scope."
         );
     }
-
-    // Ensure compose images are built
-    TestEnv::ensure_built().await?;
 
     // Start test environment with courier
     let env = TestEnv::new().await?;
@@ -409,9 +400,6 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         );
     }
 
-    // Ensure compose images are built
-    TestEnv::ensure_built().await?;
-
     // Start test environment with courier
     let env = TestEnv::new().await?;
 
@@ -552,9 +540,6 @@ async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()>
         );
     }
 
-    // Ensure compose images are built
-    TestEnv::ensure_built().await?;
-
     // Start test environment with courier
     let env = TestEnv::new().await?;
 
@@ -688,9 +673,6 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
              Please set it to a personal access token with 'repo' scope."
         );
     }
-
-    // Ensure compose images are built
-    TestEnv::ensure_built().await?;
 
     // Start test environment with courier
     let env = TestEnv::new().await?;

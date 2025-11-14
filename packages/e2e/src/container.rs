@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, process::Command};
 
 use color_eyre::{Result, eyre::bail};
 
@@ -30,7 +30,7 @@ use color_eyre::{Result, eyre::bail};
 /// ```
 pub(crate) fn working_tree_hash(workspace_root: &Path) -> Result<String> {
     // Get the current commit SHA
-    let commit_sha = std::process::Command::new("git")
+    let commit_sha = Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])
         .current_dir(workspace_root)
         .output()
@@ -47,7 +47,7 @@ pub(crate) fn working_tree_hash(workspace_root: &Path) -> Result<String> {
 
     // Check if there are any uncommitted changes (staged or unstaged)
     // Use git diff to get a hash of the actual content changes
-    let git_diff = std::process::Command::new("git")
+    let git_diff = Command::new("git")
         .args(["diff", "HEAD"])
         .current_dir(workspace_root)
         .output()
