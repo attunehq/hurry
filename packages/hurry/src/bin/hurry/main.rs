@@ -19,7 +19,8 @@ mod log;
 // Version is sourced directly from the git tag at build time.
 // In development, this will show the commit hash; in releases, it will show the
 // tag (e.g., "v0.3.0").
-// Falls back to "unknown" when git metadata is unavailable (e.g., in Docker builds).
+// Falls back to "unknown" when git metadata is unavailable (e.g., in Docker
+// builds).
 #[derive(Clone, Debug, Parser)]
 #[command(
     name = "hurry",
