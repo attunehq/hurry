@@ -315,7 +315,6 @@ impl Command {
             stderr: stderr_buf,
         })
     }
-
 }
 
 impl<S: command_builder::State> CommandBuilder<S> {
