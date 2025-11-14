@@ -49,13 +49,14 @@ async fn builds_courier_image() -> Result<()> {
 /// Validates that we can create a TestEnv with Postgres and that Postgres
 /// is ready to accept connections and can execute queries.
 ///
-/// This test validates infrastructure built in Step 6a-6b:
+/// This test validates infrastructure built in Step 6a-6c:
 /// - TestEnv::new() works and creates isolated environment
 /// - Postgres container starts successfully
 /// - Postgres becomes ready within timeout (pg_isready returns success)
 /// - Migrations run successfully
+/// - Fixtures load successfully
 /// - We can execute SQL queries against Postgres
-/// - Migration tables exist (organization, account, api_key)
+/// - Migration tables exist with fixture data (organization, account, api_key)
 #[test_log::test(tokio::test)]
 async fn starts_postgres() -> Result<()> {
     color_eyre::install()?;
@@ -82,7 +83,7 @@ async fn starts_postgres() -> Result<()> {
         output.stdout_lossy()
     );
 
-    // Verify migrations ran by checking for a table created by migrations
+    // Verify migrations ran and fixtures loaded by checking organization table
     let output = Command::new()
         .pwd("/")
         .name("psql")
@@ -99,10 +100,34 @@ async fn starts_postgres() -> Result<()> {
         !output.stdout.is_empty(),
         "organization table query should return output"
     );
-    // Should have 0 rows (no fixtures loaded yet)
+    // Should have 2 rows from fixtures (Acme Corp, Widget Inc)
     assert!(
-        output.stdout_lossy().contains("0") || output.stdout_lossy().contains("count"),
-        "should be able to query organization table: {}",
+        output.stdout_lossy().contains("2"),
+        "should have 2 organizations from fixtures: {}",
+        output.stdout_lossy()
+    );
+
+    // Verify API keys table has fixture data
+    let output = Command::new()
+        .pwd("/")
+        .name("psql")
+        .arg("-U")
+        .arg("courier")
+        .arg("-d")
+        .arg("courier")
+        .arg("-c")
+        .arg("SELECT COUNT(*) FROM api_key")
+        .finish()
+        .run_docker_with_output(&env.postgres)
+        .await?;
+    assert!(
+        !output.stdout.is_empty(),
+        "api_key table query should return output"
+    );
+    // Should have 4 rows from fixtures (3 active tokens + 1 revoked)
+    assert!(
+        output.stdout_lossy().contains("4"),
+        "should have 4 API keys from fixtures: {}",
         output.stdout_lossy()
     );
 
