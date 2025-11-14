@@ -55,6 +55,18 @@ pub struct Build {
     /// Whether to build in release mode.
     #[builder(default)]
     release: bool,
+
+    /// The Courier API URL for distributed caching.
+    ///
+    /// If provided, this is passed to hurry via `--hurry-courier-url`.
+    #[builder(into)]
+    courier_url: Option<String>,
+
+    /// The Courier API token for authentication.
+    ///
+    /// If provided, this is passed to hurry via `--hurry-courier-token`.
+    #[builder(into)]
+    courier_token: Option<String>,
 }
 
 impl Build {
@@ -93,11 +105,43 @@ impl Build {
             })
     }
 
+    /// Run the build inside a compose container.
+    ///
+    /// This is similar to `run_docker()` but uses the Docker container ID
+    /// from a Docker Compose stack managed by testcontainers.
+    ///
+    /// Note: The `pwd` and other paths/binaries/etc specified in the command
+    /// are all inside the _container_ context, not the host machine.
+    #[instrument]
+    pub async fn run_compose(&self, container_id: &str) -> Result<Vec<Message>> {
+        Self::capture_compose(self.as_command(), container_id)
+            .await
+            .with_context(|| {
+                format!(
+                    "'cargo build' {:?}/{:?} in {:?}",
+                    self.package, self.bin, self.pwd
+                )
+            })
+    }
+
     fn as_command(&self) -> Command {
-        let cmd = match &self.wrapper {
+        let mut cmd = match &self.wrapper {
             Some(wrapper) => Command::new().name(wrapper).arg("cargo"),
             None => Command::new().name("cargo"),
         };
+
+        // Add courier parameters if wrapper is hurry
+        if let Some(wrapper) = &self.wrapper {
+            if wrapper == Self::HURRY_NAME {
+                if let Some(url) = &self.courier_url {
+                    cmd = cmd.arg("--hurry-courier-url").arg(url);
+                }
+                if let Some(token) = &self.courier_token {
+                    cmd = cmd.arg("--hurry-courier-token").arg(token);
+                }
+            }
+        }
+
         cmd.args(Self::DEFAULT_ARGS)
             .arg_maybe("--bin", self.bin.as_ref())
             .arg_maybe("--package", self.package.as_ref())
@@ -127,6 +171,19 @@ impl Build {
             .run_docker_with_output(container)
             .await
             .context("run command in docker")?;
+        let reader = Cursor::new(&output.stdout);
+        Message::parse_stream(reader)
+            .map(|m| m.context("parse message"))
+            .collect::<Result<Vec<_>>>()
+            .context("parse messages")
+            .with_section(|| output.stdout_lossy_string().header("Stdout:"))
+    }
+
+    async fn capture_compose(cmd: Command, container_id: &str) -> Result<Vec<Message>> {
+        let output = cmd
+            .run_compose_with_output(container_id)
+            .await
+            .context("run command in compose container")?;
         let reader = Cursor::new(&output.stdout);
         Message::parse_stream(reader)
             .map(|m| m.context("parse message"))
