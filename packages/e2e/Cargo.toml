@@ -21,6 +21,7 @@ fslock.workspace = true
 futures.workspace = true
 itertools.workspace = true
 tempfile.workspace = true
+testcontainers = { git = "https://github.com/testcontainers/testcontainers-rs.git", branch = "main", features = ["docker-compose"] }
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
@@ -30,6 +31,7 @@ workspace_root.workspace = true
 [dev-dependencies]
 itertools.workspace = true
 pretty_assertions.workspace = true
+reqwest.workspace = true
 simple_test_case = { workspace = true }
 test-log.workspace = true
 workspace_root = { workspace = true, features = ["tokio"] }

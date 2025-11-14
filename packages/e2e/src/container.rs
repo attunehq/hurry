@@ -43,7 +43,7 @@ use crate::Command;
 /// // tag might be "abc1234" or "abc1234-f1e2d3c4b5a6"
 /// let image_name = format!("my-image:{tag}");
 /// ```
-fn working_tree_hash(workspace_root: &Path) -> Result<String> {
+pub(crate) fn working_tree_hash(workspace_root: &Path) -> Result<String> {
     // Get the current commit SHA
     let commit_sha = std::process::Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])

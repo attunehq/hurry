@@ -1,134 +1,47 @@
-//! Sanity tests that validate E2E test infrastructure as we build it.
+//! Sanity tests that validate E2E test infrastructure.
 //!
 //! These tests are designed to provide fast feedback during development.
 //! Run with: `cargo nextest run -p e2e sanity`
 
 use color_eyre::Result;
-use e2e::{Command, Container, Network, TestEnv};
+use e2e::TestEnv;
 
-/// Validates that we can build the courier Docker image, create a network,
-/// and start a courier container on that network.
+/// Validates that the TestEnv Docker Compose stack starts successfully.
 ///
-/// This test validates infrastructure built in Steps 1-4:
-/// - Container::ensure_built() works for building courier image
-/// - Network::create() works for creating Docker networks
-/// - Starting a simple courier container on the network works
+/// This test validates:
+/// - Docker Compose images are built (coordinated across parallel tests)
+/// - All services start (postgres, migrate, fixtures, courier)
+/// - All health checks pass
+/// - Courier service is accessible via host-mapped port
+/// - Test authentication token is available
 #[test_log::test(tokio::test)]
-async fn builds_courier_image() -> Result<()> {
+async fn compose_stack_starts() -> Result<()> {
     color_eyre::install()?;
 
-    // Validate Container::ensure_built works and get the full image tag with git
-    // SHA
-    let image_tag =
-        Container::ensure_built("hurry-courier", "docker/courier/Dockerfile", ".").await?;
+    // Ensure images are built (with cross-process coordination)
+    TestEnv::ensure_built().await?;
 
-    // Parse the returned tag into repo:tag format
-    // e.g., "hurry-courier:abc1234" -> repo="hurry-courier", tag="abc1234"
-    let (repo, tag) = image_tag
-        .split_once(':')
-        .expect("image tag should contain ':'");
-
-    // Validate Network works
-    let network = Network::create().await?;
-
-    // Validate we can start a simple container on the network
-    let container = Container::new()
-        .repo(repo)
-        .tag(tag)
-        .network(network.id())
-        .container_name("test-courier")
-        .start()
-        .await?;
-
-    // Just check it exists
-    assert!(!container.id().is_empty());
-
-    Ok(())
-}
-
-/// Validates that we can create a TestEnv with Postgres and that Postgres
-/// is ready to accept connections and can execute queries.
-///
-/// This test validates infrastructure built in Step 6a-6c:
-/// - TestEnv::new() works and creates isolated environment
-/// - Postgres container starts successfully
-/// - Postgres becomes ready within timeout (pg_isready returns success)
-/// - Migrations run successfully
-/// - Fixtures load successfully
-/// - We can execute SQL queries against Postgres
-/// - Migration tables exist with fixture data (organization, account, api_key)
-#[test_log::test(tokio::test)]
-async fn starts_postgres() -> Result<()> {
-    color_eyre::install()?;
-
+    // Start the ephemeral test environment
     let env = TestEnv::new().await?;
 
-    // Verify basic query works
-    let output = Command::new()
-        .pwd("/")
-        .name("psql")
-        .arg("-U")
-        .arg("courier")
-        .arg("-d")
-        .arg("courier")
-        .arg("-c")
-        .arg("SELECT 1")
-        .finish()
-        .run_docker_with_output(&env.postgres)
-        .await?;
-    assert!(!output.stdout.is_empty(), "query should return output");
+    // Verify we can get the courier URL (requires service to be running)
+    let courier_url = env.courier_url().await?;
     assert!(
-        output.stdout_lossy().contains("1 row"),
-        "output should contain '1 row': {}",
-        output.stdout_lossy()
+        courier_url.starts_with("http://localhost:"),
+        "courier URL should be host-mapped: {courier_url}"
     );
 
-    // Verify migrations ran and fixtures loaded by checking organization table
-    let output = Command::new()
-        .pwd("/")
-        .name("psql")
-        .arg("-U")
-        .arg("courier")
-        .arg("-d")
-        .arg("courier")
-        .arg("-c")
-        .arg("SELECT COUNT(*) FROM organization")
-        .finish()
-        .run_docker_with_output(&env.postgres)
-        .await?;
-    assert!(
-        !output.stdout.is_empty(),
-        "organization table query should return output"
-    );
-    // Should have 2 rows from fixtures (Acme Corp, Widget Inc)
-    assert!(
-        output.stdout_lossy().contains("2"),
-        "should have 2 organizations from fixtures: {}",
-        output.stdout_lossy()
-    );
+    // Verify we can get the test token
+    let token = env.test_token();
+    assert_eq!(token, "acme-alice-token-001");
 
-    // Verify API keys table has fixture data
-    let output = Command::new()
-        .pwd("/")
-        .name("psql")
-        .arg("-U")
-        .arg("courier")
-        .arg("-d")
-        .arg("courier")
-        .arg("-c")
-        .arg("SELECT COUNT(*) FROM api_key")
-        .finish()
-        .run_docker_with_output(&env.postgres)
-        .await?;
+    // Verify courier health endpoint responds
+    let health_url = format!("{courier_url}/api/v1/health");
+    let response = reqwest::get(&health_url).await?;
     assert!(
-        !output.stdout.is_empty(),
-        "api_key table query should return output"
-    );
-    // Should have 4 rows from fixtures (3 active tokens + 1 revoked)
-    assert!(
-        output.stdout_lossy().contains("4"),
-        "should have 4 API keys from fixtures: {}",
-        output.stdout_lossy()
+        response.status().is_success(),
+        "health check should succeed, got status: {}",
+        response.status()
     );
 
     Ok(())

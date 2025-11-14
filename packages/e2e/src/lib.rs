@@ -32,13 +32,11 @@ pub mod command;
 pub mod container;
 pub mod env;
 pub mod ext;
-pub mod network;
 
 pub use build::*;
 pub use command::*;
 pub use container::*;
 pub use env::*;
-pub use network::*;
 use walkdir::WalkDir;
 
 static GITHUB_TOKEN: LazyLock<Option<String>> =
