@@ -675,17 +675,10 @@ async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()>
 /// current design of `hurry` only checks and restores from the cache at the
 /// very beginning of the build so it does not benefit from running builds
 /// concurrently.
-///
-/// IGNORED: This test currently fails because artifacts uploaded by concurrent
-/// builds are not consistently available for subsequent builds, even with
-/// HURRY_WAIT_FOR_UPLOAD=true. Some artifacts (libc, getrandom, ahash) show as
-/// fresh=false when they should be fresh=true on the second round of builds.
-/// This appears to be a race condition in courier or the upload/commit process.
-/// Expected to be fixed by PR #212 (distributed caching improvements).
 #[test_case("attunehq", "hurry-tests", "test/tiny"; "attunehq/hurry-tests:test/tiny")]
 #[cfg_attr(feature = "ci", test_case("attunehq", "attune", "main"; "attunehq/attune:main"))]
 #[cfg_attr(feature = "ci", test_case("attunehq", "hurry", "main"; "attunehq/hurry:main"))]
-#[ignore = "race condition with concurrent uploads, expected fix in PR #212"]
+#[ignore = "This test has issues with mtime not matching up, which we've seen in actual real world use and should be solved by PR 212."]
 #[test_log::test(tokio::test)]
 async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) -> Result<()> {
     color_eyre::install()?;
