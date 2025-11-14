@@ -8,6 +8,7 @@ use color_eyre::Result;
 use derive_more::Debug;
 use rustc_stable_hash::StableSipHasher128;
 use serde::{Deserialize, Serialize, de, ser};
+use tracing::debug;
 
 /// A Cargo fingerprint. This struct is vendored and modified from the Cargo
 /// source code. In particular, some `serde(skip)`ed fields are elided. For
@@ -135,6 +136,7 @@ impl Hash for Fingerprint {
             ref rustflags,
             ..
         } = *self;
+        debug!(?path, "hashing fingerprint");
         let local = local.lock().unwrap();
         (
             rustc,

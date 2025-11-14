@@ -12,7 +12,7 @@ use cargo_metadata::Message;
 use clap::Args;
 use color_eyre::{
     Result,
-    eyre::{Context, OptionExt as _, bail},
+    eyre::{Context, OptionExt as _, bail, eyre},
 };
 use derive_more::Debug;
 use futures::TryStreamExt as _;
@@ -40,14 +40,10 @@ use hurry::{
 
 #[derive(Clone, Args, Debug)]
 pub struct Options {
-    /// Base URL for the Courier instance.
-    #[arg(
-        long = "hurry-courier-url",
-        env = "HURRY_COURIER_URL",
-        default_value = "https://courier.staging.corp.attunehq.com"
-    )]
-    #[debug("{courier_url}")]
-    courier_url: Url,
+    #[arg(long)]
+    restore_only: bool,
+    #[arg(long)]
+    skip_restore: bool,
 
     /// These arguments are passed directly to `cargo build` as provided.
     #[arg(
@@ -86,282 +82,316 @@ pub async fn exec(options: Options) -> Result<()> {
     fs::create_dir_all(&cache_path).await?;
 
     // Restore artifacts.
-    let mut rewritten_fingerprints: HashMap<u64, Arc<Fingerprint>> = HashMap::new();
-    for unit in unit_plan.clone() {
-        let info = unit.info();
-        let profile_dir = match info.target_arch {
-            Some(_) => workspace.target_profile_dir(),
-            None => workspace.host_profile_dir(),
-        };
-        let saved: SavedUnit = {
-            let contents = fs::must_read_buffered(
-                &cache_path.try_join_file(format!("{}.json", info.unit_hash))?,
-            )
-            .await?;
-            serde_json::from_slice(&contents)?
-        };
-        match (saved, unit) {
-            (
-                SavedUnit::LibraryCrate(lib_files, saved_unit),
-                workspace2::UnitPlan::LibraryCrate(lib_unit),
-            ) => {
-                // TODO: Is this overly strict? For example, is it possible to
-                // have a hash mismatch if the dep indexes are different, but
-                // still have a valid restore?
-                if saved_unit != lib_unit {
-                    bail!("restored unit mismatch");
+    if !options.skip_restore {
+        let mut rewritten_fingerprints: HashMap<u64, Arc<Fingerprint>> = HashMap::new();
+        for unit in unit_plan.clone() {
+            debug!(?unit, "restoring unit");
+
+            let info = unit.info();
+            let profile_dir = match info.target_arch {
+                Some(_) => workspace.target_profile_dir(),
+                None => workspace.host_profile_dir(),
+            };
+
+            // TODO: Check whether the unit is fresh on disk. If so, skip restoring
+            // it.
+
+            let saved: SavedUnit = {
+                let contents = fs::must_read_buffered(
+                    &cache_path.try_join_file(format!("{}.json", info.unit_hash))?,
+                )
+                .await?;
+                serde_json::from_slice(&contents)?
+            };
+            match (saved, unit) {
+                (
+                    SavedUnit::LibraryCrate(lib_files, saved_unit),
+                    workspace2::UnitPlan::LibraryCrate(lib_unit),
+                ) => {
+                    // TODO: Is this overly strict? For example, is it possible to
+                    // have a hash mismatch if the dep indexes are different, but
+                    // still have a valid restore?
+                    if saved_unit.info != lib_unit.info {
+                        bail!("restored unit mismatch");
+                    }
+
+                    // Restore output files.
+                    for saved_file in lib_files.output_files {
+                        let path = saved_file
+                            .path
+                            .reconstruct(&workspace, &lib_unit.info)
+                            .try_as_abs_file()?;
+                        fs::write(&path, saved_file.contents).await?;
+                        fs::set_executable(&path, saved_file.executable).await?;
+                    }
+
+                    // Restore encoded Cargo dep-info file.
+                    fs::write(
+                        &profile_dir.join(&lib_unit.encoded_dep_info_file()?),
+                        lib_files.encoded_dep_info_file,
+                    )
+                    .await?;
+
+                    // Reconstruct and restore rustc dep-info file.
+                    fs::write(
+                        &profile_dir.join(&lib_unit.dep_info_file()?),
+                        lib_files
+                            .dep_info_file
+                            .reconstruct(&workspace, &lib_unit.info),
+                    )
+                    .await?;
+
+                    // Reconstruct and restore fingerprint.
+                    let mut saved_fingerprint = lib_files.fingerprint;
+                    let old_fingerprint_hash = saved_fingerprint.hash_u64();
+
+                    // First, rewrite the `path` field.
+                    saved_fingerprint.path =
+                        fingerprint::util_hash_u64(PathBuf::from(&lib_unit.src_path));
+                    debug!(path = ?PathBuf::from(&lib_unit.src_path), path_hash = ?saved_fingerprint.path, "rewritten fingerprint");
+
+                    // Then, rewrite the `deps` field.
+                    //
+                    // We don't actually have enough information to synthesize our
+                    // own DepFingerprints (in particular, it would be very annoying
+                    // to derive `only_requires_rmeta` independently). But the old
+                    // fingerprint hashes are unique, and we know our old
+                    // fingerprint hash! So we save a map of the old fingerprint
+                    // hashes to the replacement fingerprint hashes, and use that to
+                    // look up the correct replacement fingerprint hash in future
+                    // DepFingerprints, leaving all other fields untouched.
+                    //
+                    // This works because we know the units are in dependency order,
+                    // so previous replacement fingerprint hashes will always have
+                    // already been calculated when we need them.
+                    debug!("rewrite fingerprint deps: start");
+                    for dep in saved_fingerprint.deps.iter_mut() {
+                        debug!(?dep, "rewriting fingerprint dep");
+                        let old_dep_fingerprint = dep.fingerprint.hash_u64();
+                        dep.fingerprint = rewritten_fingerprints
+                            .get(&old_dep_fingerprint)
+                            .ok_or_eyre("dependency fingerprint hash not found")?
+                            .clone();
+                    }
+                    debug!("rewrite fingerprint deps: done");
+
+                    // Clear and recalculate fingerprint hash.
+                    saved_fingerprint.clear_memoized();
+                    let fingerprint_hash = saved_fingerprint.fingerprint_hash();
+                    debug!(old = ?old_fingerprint_hash, new = ?saved_fingerprint.hash_u64(), "rewritten fingerprint hash");
+
+                    // Finally, write the reconstructed fingerprint.
+                    fs::write(
+                        &profile_dir.join(&lib_unit.fingerprint_hash_file()?),
+                        fingerprint_hash,
+                    )
+                    .await?;
+                    fs::write(
+                        &profile_dir.join(&lib_unit.fingerprint_json_file()?),
+                        serde_json::to_vec(&saved_fingerprint)?,
+                    )
+                    .await?;
+
+                    // Save unit fingerprint (for future dependents).
+                    rewritten_fingerprints
+                        .insert(old_fingerprint_hash, Arc::new(saved_fingerprint));
+
+                    // TODO: Set timestamps.
                 }
+                (
+                    SavedUnit::BuildScriptCompilation(bsc_files, saved_unit),
+                    workspace2::UnitPlan::BuildScriptCompilation(bsc_unit),
+                ) => {
+                    if saved_unit.info != bsc_unit.info {
+                        bail!("restored unit mismatch");
+                    }
 
-                // Restore output files.
-                for saved_file in lib_files.output_files {
-                    let path = saved_file
-                        .path
-                        .reconstruct(&workspace, &lib_unit.info)
-                        .try_as_abs_file()?;
-                    fs::write(&path, saved_file.contents).await?;
-                    fs::set_executable(&path, saved_file.executable).await?;
+                    // Restore compiled build script program.
+                    let program_file = profile_dir.join(bsc_unit.program_file()?);
+                    fs::write(&program_file, bsc_files.compiled_program).await?;
+                    fs::set_executable(&program_file, true).await?;
+                    fs::hard_link(
+                        &program_file,
+                        &profile_dir.join(bsc_unit.linked_program_file()?),
+                    )
+                    .await?;
+
+                    // Restore encoded Cargo dep-info file.
+                    fs::write(
+                        &profile_dir.join(&bsc_unit.encoded_dep_info_file()?),
+                        bsc_files.encoded_dep_info_file,
+                    )
+                    .await?;
+
+                    // Reconstruct and restore rustc dep-info file.
+                    fs::write(
+                        &profile_dir.join(&bsc_unit.dep_info_file()?),
+                        bsc_files
+                            .dep_info_file
+                            .reconstruct(&workspace, &bsc_unit.info),
+                    )
+                    .await?;
+
+                    // Reconstruct and restore fingerprint.
+                    let mut saved_fingerprint = bsc_files.fingerprint;
+                    let old_fingerprint_hash = saved_fingerprint.hash_u64();
+
+                    // First, rewrite the `path` field.
+                    saved_fingerprint.path =
+                        fingerprint::util_hash_u64(PathBuf::from(&bsc_unit.src_path));
+                    debug!(path = ?PathBuf::from(&bsc_unit.src_path), path_hash = ?saved_fingerprint.path, "rewritten fingerprint");
+
+                    // Then, rewrite the `deps` field.
+                    //
+                    // We don't actually have enough information to synthesize our
+                    // own DepFingerprints (in particular, it would be very annoying
+                    // to derive `only_requires_rmeta` independently). But the old
+                    // fingerprint hashes are unique, and we know our old
+                    // fingerprint hash! So we save a map of the old fingerprint
+                    // hashes to the replacement fingerprint hashes, and use that to
+                    // look up the correct replacement fingerprint hash in future
+                    // DepFingerprints, leaving all other fields untouched.
+                    //
+                    // This works because we know the units are in dependency order,
+                    // so previous replacement fingerprint hashes will always have
+                    // already been calculated when we need them.
+                    debug!("rewrite fingerprint deps: start");
+                    for dep in saved_fingerprint.deps.iter_mut() {
+                        debug!(?dep, "rewriting fingerprint dep");
+                        let old_dep_fingerprint = dep.fingerprint.hash_u64();
+                        dep.fingerprint = rewritten_fingerprints
+                            .get(&old_dep_fingerprint)
+                            .ok_or_eyre("dependency fingerprint hash not found")?
+                            .clone();
+                    }
+                    debug!("rewrite fingerprint deps: done");
+
+                    // Clear and recalculate fingerprint hash.
+                    saved_fingerprint.clear_memoized();
+                    let fingerprint_hash = saved_fingerprint.fingerprint_hash();
+                    debug!(old = ?old_fingerprint_hash, new = ?saved_fingerprint.hash_u64(), "rewritten fingerprint hash");
+
+                    // Finally, write the reconstructed fingerprint.
+                    fs::write(
+                        &profile_dir.join(&bsc_unit.fingerprint_hash_file()?),
+                        fingerprint_hash,
+                    )
+                    .await?;
+                    fs::write(
+                        &profile_dir.join(&bsc_unit.fingerprint_json_file()?),
+                        serde_json::to_vec(&saved_fingerprint)?,
+                    )
+                    .await?;
+
+                    // Save unit fingerprint (for future dependents).
+                    rewritten_fingerprints
+                        .insert(old_fingerprint_hash, Arc::new(saved_fingerprint));
                 }
+                (
+                    SavedUnit::BuildScriptExecution(bse_files, saved_unit),
+                    workspace2::UnitPlan::BuildScriptExecution(bse_unit),
+                ) => {
+                    if saved_unit.info != bse_unit.info {
+                        bail!("restored unit mismatch");
+                    }
 
-                // Restore encoded Cargo dep-info file.
-                fs::write(
-                    &profile_dir.join(&lib_unit.encoded_dep_info_file()?),
-                    lib_files.encoded_dep_info_file,
-                )
-                .await?;
+                    // Restore OUT_DIR files.
+                    for saved_file in bse_files.out_dir_files {
+                        let path = saved_file
+                            .path
+                            .reconstruct(&workspace, &bse_unit.info)
+                            .try_as_abs_file()?;
+                        fs::write(&path, saved_file.contents).await?;
+                        fs::set_executable(&path, saved_file.executable).await?;
+                    }
 
-                // Reconstruct and restore rustc dep-info file.
-                fs::write(
-                    &profile_dir.join(&lib_unit.dep_info_file()?),
-                    lib_files
-                        .dep_info_file
-                        .reconstruct(&workspace, &lib_unit.info),
-                )
-                .await?;
+                    // Reconstruct and restore build script STDOUT.
+                    fs::write(
+                        &profile_dir.join(&bse_unit.stdout_file()?),
+                        bse_files.stdout.reconstruct(&workspace, &bse_unit.info),
+                    )
+                    .await?;
 
-                // Reconstruct and restore fingerprint.
-                let mut saved_fingerprint = lib_files.fingerprint;
-                let old_fingerprint_hash = saved_fingerprint.hash_u64();
+                    // Restore build script STDERR.
+                    fs::write(
+                        &profile_dir.join(&bse_unit.stderr_file()?),
+                        bse_files.stderr,
+                    )
+                    .await?;
 
-                // First, rewrite the `path` field.
-                saved_fingerprint.path =
-                    fingerprint::util_hash_u64(lib_unit.src_path.as_str_lossy());
+                    // Generate `root-output` file.
+                    fs::write(
+                        &profile_dir.join(&bse_unit.root_output_file()?),
+                        bse_unit.out_dir()?.as_os_str().as_encoded_bytes(),
+                    )
+                    .await?;
 
-                // Then, rewrite the `deps` field.
-                //
-                // We don't actually have enough information to synthesize our
-                // own DepFingerprints (in particular, it would be very annoying
-                // to derive `only_requires_rmeta` independently). But the old
-                // fingerprint hashes are unique, and we know our old
-                // fingerprint hash! So we save a map of the old fingerprint
-                // hashes to the replacement fingerprint hashes, and use that to
-                // look up the correct replacement fingerprint hash in future
-                // DepFingerprints, leaving all other fields untouched.
-                //
-                // This works because we know the units are in dependency order,
-                // so previous replacement fingerprint hashes will always have
-                // already been calculated when we need them.
-                for dep in saved_fingerprint.deps.iter_mut() {
-                    let old_dep_fingerprint = dep.fingerprint.hash_u64();
-                    dep.fingerprint = rewritten_fingerprints
-                        .get(&old_dep_fingerprint)
-                        .ok_or_eyre("dependency fingerprint hash not found")?
-                        .clone();
+                    // Reconstruct and restore fingerprint.
+                    let mut saved_fingerprint = bse_files.fingerprint;
+                    let old_fingerprint_hash = saved_fingerprint.hash_u64();
+
+                    // Rewrite the `deps` field. Note that we never need to rewrite
+                    // the `path` field for build script execution units, since it's
+                    // always unset[^1].
+                    //
+                    // We don't actually have enough information to synthesize our
+                    // own DepFingerprints (in particular, it would be very annoying
+                    // to derive `only_requires_rmeta` independently). But the old
+                    // fingerprint hashes are unique, and we know our old
+                    // fingerprint hash! So we save a map of the old fingerprint
+                    // hashes to the replacement fingerprint hashes, and use that to
+                    // look up the correct replacement fingerprint hash in future
+                    // DepFingerprints, leaving all other fields untouched.
+                    //
+                    // This works because we know the units are in dependency order,
+                    // so previous replacement fingerprint hashes will always have
+                    // already been calculated when we need them.
+                    //
+                    // [^1]: https://github.com/attunehq/cargo/blob/21f1bfe23aa3fafd6205b8e3368a499466336bb9/src/cargo/core/compiler/fingerprint/mod.rs#L1696
+                    debug!("rewrite fingerprint deps: start");
+                    for dep in saved_fingerprint.deps.iter_mut() {
+                        debug!(?dep, "rewriting fingerprint dep");
+                        let old_dep_fingerprint = dep.fingerprint.hash_u64();
+                        dep.fingerprint = rewritten_fingerprints
+                            .get(&old_dep_fingerprint)
+                            .ok_or_else(|| {
+                                eyre!("dependency fingerprint hash not found").wrap_err(format!(
+                                    "rewriting fingerprint {} for unit {}",
+                                    old_dep_fingerprint, bse_unit.info.unit_hash
+                                ))
+                            })?
+                            .clone();
+                    }
+                    debug!("rewrite fingerprint deps: done");
+
+                    // Clear and recalculate fingerprint hash.
+                    saved_fingerprint.clear_memoized();
+                    let fingerprint_hash = saved_fingerprint.fingerprint_hash();
+                    debug!(old = ?old_fingerprint_hash, new = ?saved_fingerprint.hash_u64(), "rewritten fingerprint hash");
+
+                    // Finally, write the reconstructed fingerprint.
+                    fs::write(
+                        &profile_dir.join(&bse_unit.fingerprint_hash_file()?),
+                        fingerprint_hash,
+                    )
+                    .await?;
+                    fs::write(
+                        &profile_dir.join(&bse_unit.fingerprint_json_file()?),
+                        serde_json::to_vec(&saved_fingerprint)?,
+                    )
+                    .await?;
+
+                    // Save unit fingerprint (for future dependents).
+                    rewritten_fingerprints
+                        .insert(old_fingerprint_hash, Arc::new(saved_fingerprint));
                 }
-
-                // Clear and recalculate fingerprint hash.
-                saved_fingerprint.clear_memoized();
-                let fingerprint_hash = saved_fingerprint.fingerprint_hash();
-
-                // Finally, write the reconstructed fingerprint.
-                fs::write(
-                    &profile_dir.join(&lib_unit.fingerprint_hash_file()?),
-                    fingerprint_hash,
-                )
-                .await?;
-                fs::write(
-                    &profile_dir.join(&lib_unit.fingerprint_json_file()?),
-                    serde_json::to_vec(&saved_fingerprint)?,
-                )
-                .await?;
-
-                // Save unit fingerprint (for future dependents).
-                rewritten_fingerprints.insert(old_fingerprint_hash, Arc::new(saved_fingerprint));
-
-                // TODO: Set timestamps.
+                _ => bail!("restored unit mismatch"),
             }
-            (
-                SavedUnit::BuildScriptCompilation(bsc_files, saved_unit),
-                workspace2::UnitPlan::BuildScriptCompilation(bsc_unit),
-            ) => {
-                if saved_unit != bsc_unit {
-                    bail!("restored unit mismatch");
-                }
-
-                // Restore compiled build script program.
-                let program_file = profile_dir.join(bsc_unit.program_file()?);
-                fs::write(&program_file, bsc_files.compiled_program).await?;
-                fs::set_executable(&program_file, true).await?;
-                fs::hard_link(
-                    &program_file,
-                    &profile_dir.join(bsc_unit.linked_program_file()?),
-                )
-                .await?;
-
-                // Restore encoded Cargo dep-info file.
-                fs::write(
-                    &profile_dir.join(&bsc_unit.encoded_dep_info_file()?),
-                    bsc_files.encoded_dep_info_file,
-                )
-                .await?;
-
-                // Reconstruct and restore rustc dep-info file.
-                fs::write(
-                    &profile_dir.join(&bsc_unit.dep_info_file()?),
-                    bsc_files
-                        .dep_info_file
-                        .reconstruct(&workspace, &bsc_unit.info),
-                )
-                .await?;
-
-                // Reconstruct and restore fingerprint.
-                let mut saved_fingerprint = bsc_files.fingerprint;
-                let old_fingerprint_hash = saved_fingerprint.hash_u64();
-
-                // First, rewrite the `path` field.
-                saved_fingerprint.path =
-                    fingerprint::util_hash_u64(bsc_unit.src_path.as_str_lossy());
-
-                // Then, rewrite the `deps` field.
-                //
-                // We don't actually have enough information to synthesize our
-                // own DepFingerprints (in particular, it would be very annoying
-                // to derive `only_requires_rmeta` independently). But the old
-                // fingerprint hashes are unique, and we know our old
-                // fingerprint hash! So we save a map of the old fingerprint
-                // hashes to the replacement fingerprint hashes, and use that to
-                // look up the correct replacement fingerprint hash in future
-                // DepFingerprints, leaving all other fields untouched.
-                //
-                // This works because we know the units are in dependency order,
-                // so previous replacement fingerprint hashes will always have
-                // already been calculated when we need them.
-                for dep in saved_fingerprint.deps.iter_mut() {
-                    let old_dep_fingerprint = dep.fingerprint.hash_u64();
-                    dep.fingerprint = rewritten_fingerprints
-                        .get(&old_dep_fingerprint)
-                        .ok_or_eyre("dependency fingerprint hash not found")?
-                        .clone();
-                }
-
-                // Clear and recalculate fingerprint hash.
-                saved_fingerprint.clear_memoized();
-                let fingerprint_hash = saved_fingerprint.fingerprint_hash();
-
-                // Finally, write the reconstructed fingerprint.
-                fs::write(
-                    &profile_dir.join(&bsc_unit.fingerprint_hash_file()?),
-                    fingerprint_hash,
-                )
-                .await?;
-                fs::write(
-                    &profile_dir.join(&bsc_unit.fingerprint_json_file()?),
-                    serde_json::to_vec(&saved_fingerprint)?,
-                )
-                .await?;
-
-                // Save unit fingerprint (for future dependents).
-                rewritten_fingerprints.insert(old_fingerprint_hash, Arc::new(saved_fingerprint));
-            }
-            (
-                SavedUnit::BuildScriptExecution(bse_files, saved_unit),
-                workspace2::UnitPlan::BuildScriptExecution(bse_unit),
-            ) => {
-                if saved_unit != bse_unit {
-                    bail!("restored unit mismatch");
-                }
-
-                // Restore OUT_DIR files.
-                for saved_file in bse_files.out_dir_files {
-                    let path = saved_file
-                        .path
-                        .reconstruct(&workspace, &bse_unit.info)
-                        .try_as_abs_file()?;
-                    fs::write(&path, saved_file.contents).await?;
-                    fs::set_executable(&path, saved_file.executable).await?;
-                }
-
-                // Reconstruct and restore build script STDOUT.
-                fs::write(
-                    &profile_dir.join(&bse_unit.stdout_file()?),
-                    bse_files.stdout.reconstruct(&workspace, &bse_unit.info),
-                )
-                .await?;
-
-                // Restore build script STDERR.
-                fs::write(
-                    &profile_dir.join(&bse_unit.stderr_file()?),
-                    bse_files.stderr,
-                )
-                .await?;
-
-                // Generate `root-output` file.
-                fs::write(
-                    &profile_dir.join(&bse_unit.root_output_file()?),
-                    bse_unit.out_dir()?.as_os_str().as_encoded_bytes(),
-                )
-                .await?;
-
-                // Reconstruct and restore fingerprint.
-                let mut saved_fingerprint = bse_files.fingerprint;
-                let old_fingerprint_hash = saved_fingerprint.hash_u64();
-
-                // Rewrite the `deps` field. Note that we never need to rewrite
-                // the `path` field for build script execution units, since it's
-                // always unset[^1].
-                //
-                // We don't actually have enough information to synthesize our
-                // own DepFingerprints (in particular, it would be very annoying
-                // to derive `only_requires_rmeta` independently). But the old
-                // fingerprint hashes are unique, and we know our old
-                // fingerprint hash! So we save a map of the old fingerprint
-                // hashes to the replacement fingerprint hashes, and use that to
-                // look up the correct replacement fingerprint hash in future
-                // DepFingerprints, leaving all other fields untouched.
-                //
-                // This works because we know the units are in dependency order,
-                // so previous replacement fingerprint hashes will always have
-                // already been calculated when we need them.
-                //
-                // [^1]: https://github.com/attunehq/cargo/blob/21f1bfe23aa3fafd6205b8e3368a499466336bb9/src/cargo/core/compiler/fingerprint/mod.rs#L1696
-                for dep in saved_fingerprint.deps.iter_mut() {
-                    let old_dep_fingerprint = dep.fingerprint.hash_u64();
-                    dep.fingerprint = rewritten_fingerprints
-                        .get(&old_dep_fingerprint)
-                        .ok_or_eyre("dependency fingerprint hash not found")?
-                        .clone();
-                }
-
-                // Clear and recalculate fingerprint hash.
-                saved_fingerprint.clear_memoized();
-                let fingerprint_hash = saved_fingerprint.fingerprint_hash();
-
-                // Finally, write the reconstructed fingerprint.
-                fs::write(
-                    &profile_dir.join(&bse_unit.fingerprint_hash_file()?),
-                    fingerprint_hash,
-                )
-                .await?;
-                fs::write(
-                    &profile_dir.join(&bse_unit.fingerprint_json_file()?),
-                    serde_json::to_vec(&saved_fingerprint)?,
-                )
-                .await?;
-
-                // Save unit fingerprint (for future dependents).
-                rewritten_fingerprints.insert(old_fingerprint_hash, Arc::new(saved_fingerprint));
-            }
-            _ => bail!("restored unit mismatch"),
         }
+    }
+
+    if options.restore_only {
+        return Ok(());
     }
 
     // Run build.

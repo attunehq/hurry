@@ -322,6 +322,21 @@ impl Workspace {
                 continue;
             }
 
+            // But also, `CARGO_PRIMARY_PACKAGE` is not set for execution (as
+            // opposed to compilation) units[^1]! So we use this heuristic as a
+            // fallback.
+            //
+            // [^1]: https://doc.rust-lang.org/cargo/reference/environment-variables.html#:~:text=This%20is%20only%20set%20when%20compiling%20the%20package%20(not%20when%20running%20binaries%20or%20tests).
+            if invocation
+                .cwd
+                .pipe(AbsFilePath::try_from)?
+                .relative_to(&self.cargo_home)
+                .is_err()
+            {
+                trace!("skipping: package outside of $CARGO_HOME");
+                continue;
+            }
+
             // Figure out what kind of unit this invocation is.
             let package_name = invocation.package_name;
             let target_arch = invocation.target_arch;
