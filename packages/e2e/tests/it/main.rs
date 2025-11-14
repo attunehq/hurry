@@ -4,7 +4,6 @@ use e2e::{Build, Command, Container};
 
 use color_eyre::{Result, eyre::Context};
 
-pub mod experimental;
 pub mod thirdparty;
 
 #[test_log::test(tokio::test)]

@@ -667,13 +667,14 @@ async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()>
 }
 
 /// Exercises building and caching the project concurrently across containers
-/// with shared cache (courier). This test verifies that courier and hurry handle
-/// concurrent builds correctly without corruption.
+/// with shared cache (courier). This test verifies that courier and hurry
+/// handle concurrent builds correctly without corruption.
 ///
 /// Important distinction: this test validates that the cache being shared and
 /// built concurrently doesn't result in any corruption or failed builds. The
-/// current design of `hurry` only checks and restores from the cache at the very
-/// beginning of the build so it does not benefit from running builds concurrently.
+/// current design of `hurry` only checks and restores from the cache at the
+/// very beginning of the build so it does not benefit from running builds
+/// concurrently.
 ///
 /// IGNORED: This test currently fails because artifacts uploaded by concurrent
 /// builds are not consistently available for subsequent builds, even with
