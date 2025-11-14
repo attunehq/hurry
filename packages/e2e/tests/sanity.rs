@@ -69,7 +69,7 @@ async fn hurry_container_runs_commands() -> Result<()> {
         .arg("--version")
         .pwd("/workspace")
         .finish()
-        .run_compose(env.hurry_container_id())
+        .run_compose(env.hurry_container_id(1))
         .await?;
 
     Ok(())

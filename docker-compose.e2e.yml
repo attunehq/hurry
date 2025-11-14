@@ -62,7 +62,25 @@ services:
             timeout: 5s
             retries: 30
 
-    hurry:
+    # Hurry containers: debian-based with Rust toolchain and hurry installed
+    #
+    # We define two identical hurry services to support tests that need multiple
+    # isolated containers (e.g., testing cache sharing across containers). Each test
+    # gets its own ephemeral compose stack, so there's no risk of interference between
+    # parallel tests.
+    #
+    # Single-container tests use hurry-1; multi-container tests use both hurry-1 and hurry-2.
+    # All hurry containers share the same compose network and can communicate with courier.
+    hurry-1:
+        build:
+            context: .
+            dockerfile: ./docker/debian-rust/Dockerfile
+        depends_on:
+            courier:
+                condition: service_healthy
+        command: ["sleep", "infinity"]
+
+    hurry-2:
         build:
             context: .
             dockerfile: ./docker/debian-rust/Dockerfile

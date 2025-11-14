@@ -8,10 +8,24 @@ use testcontainers::compose::DockerCompose;
 ///
 /// This environment is fully isolated and cleaned up automatically via Drop.
 /// Each test can create its own TestEnv without interfering with other tests.
+///
+/// ## Multi-container support
+///
+/// The compose stack includes two hurry containers (`hurry-1` and `hurry-2`) to support
+/// tests that need multiple isolated containers (e.g., testing cache sharing across
+/// containers). Access them via `hurry_container_id(1)` and `hurry_container_id(2)`.
+///
+/// Both containers:
+/// - Use the same debian-rust image with hurry installed
+/// - Share the compose network (can communicate with courier/postgres)
+/// - Are fully isolated from other parallel tests (each TestEnv gets its own stack)
+///
+/// Single-container tests should use `hurry_container_id(1)`.
 pub struct TestEnv {
     #[allow(dead_code)]
     compose: DockerCompose,
-    hurry_id: String,
+    hurry_1_id: String,
+    hurry_2_id: String,
 }
 
 impl TestEnv {
@@ -103,13 +117,23 @@ impl TestEnv {
 
         tracing::info!("docker compose stack ready");
 
-        let hurry_id = compose
-            .service("hurry")
-            .ok_or_else(|| color_eyre::eyre::eyre!("hurry service not found"))?
+        let hurry_1_id = compose
+            .service("hurry-1")
+            .ok_or_else(|| color_eyre::eyre::eyre!("hurry-1 service not found"))?
             .id()
             .to_string();
 
-        Ok(TestEnv { compose, hurry_id })
+        let hurry_2_id = compose
+            .service("hurry-2")
+            .ok_or_else(|| color_eyre::eyre::eyre!("hurry-2 service not found"))?
+            .id()
+            .to_string();
+
+        Ok(TestEnv {
+            compose,
+            hurry_1_id,
+            hurry_2_id,
+        })
     }
 
     /// Get the URL to access Courier from the host machine.
@@ -135,11 +159,20 @@ impl TestEnv {
         "acme-alice-token-001"
     }
 
-    /// Get the hurry container ID for running commands.
+    /// Get a hurry container ID for running commands.
     ///
-    /// This returns the Docker container ID of the "hurry" service, which is a
-    /// Debian-based container with Rust and hurry installed. Use this with
-    /// `Command::run_compose()` to execute commands inside the container.
+    /// Returns the Docker container ID of the specified hurry service (1 or 2).
+    /// Each hurry container is a Debian-based container with Rust and hurry installed.
+    /// Use this with `Command::run_compose()` to execute commands inside the container.
+    ///
+    /// The compose stack provides two hurry containers to support tests that need
+    /// multiple isolated containers (e.g., testing cache sharing across containers).
+    ///
+    /// # Arguments
+    /// * `index` - Which hurry container to use (1 or 2)
+    ///
+    /// # Panics
+    /// Panics if index is not 1 or 2.
     ///
     /// # Example
     /// ```ignore
@@ -148,10 +181,14 @@ impl TestEnv {
     ///     .name("hurry")
     ///     .arg("--version")
     ///     .finish()
-    ///     .run_compose(&env.hurry_container_id())
+    ///     .run_compose(env.hurry_container_id(1))
     ///     .await?;
     /// ```
-    pub fn hurry_container_id(&self) -> &str {
-        &self.hurry_id
+    pub fn hurry_container_id(&self, index: u8) -> &str {
+        match index {
+            1 => &self.hurry_1_id,
+            2 => &self.hurry_2_id,
+            _ => panic!("hurry container index must be 1 or 2, got {index}"),
+        }
     }
 }
