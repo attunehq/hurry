@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use color_eyre::Result;
 use e2e::{
-    Build, Command, Container,
+    Build, Command, Container, TestEnv,
     ext::{ArtifactIterExt, MessageIterExt},
     temporary_directory,
 };
@@ -21,12 +21,21 @@ use workspace_root::get_workspace_root;
 async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
     color_eyre::install()?;
 
-    let pwd = PathBuf::from("/");
-    let container = Container::debian_rust()
-        .volume_bind(get_workspace_root(), "/hurry-workspace")
-        .command(Command::install_hurry("/hurry-workspace"))
-        .start()
-        .await?;
+    // Check for GITHUB_TOKEN early to fail fast with a clear error message
+    if std::env::var("GITHUB_TOKEN").is_err() {
+        color_eyre::eyre::bail!(
+            "GITHUB_TOKEN environment variable is required to clone repositories from GitHub. \
+             Please set it to a personal access token with 'repo' scope."
+        );
+    }
+
+    // Ensure compose images are built
+    TestEnv::ensure_built().await?;
+
+    // Start test environment with courier
+    let env = TestEnv::new().await?;
+
+    let pwd = PathBuf::from("/workspace");
 
     // Nothing should be cached on the first build.
     let repo_root = pwd.join(repo);
@@ -36,14 +45,21 @@ async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         .repo(repo)
         .branch(branch)
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
     let messages = Build::new()
         .pwd(&repo_root)
         .wrapper(Build::HURRY_NAME)
+        .courier_url(env.courier_url())
+        .courier_token(env.test_token())
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
+
+    assert!(
+        !messages.is_empty(),
+        "build should produce cargo messages (this likely means --message-format is missing)"
+    );
 
     let expected = messages
         .iter()
@@ -63,18 +79,30 @@ async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         freshness,
         "no artifacts should be fresh: {messages:?}"
     );
+    assert!(
+        !expected.is_empty(),
+        "build should have third-party artifacts"
+    );
 
     // Now if we delete the `target/` directory and rebuild, `hurry` should
     // reuse the cache and enable fresh artifacts.
     Command::cargo_clean(&repo_root)
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
     let messages = Build::new()
         .pwd(&repo_root)
         .wrapper(Build::HURRY_NAME)
+        .courier_url(env.courier_url())
+        .courier_token(env.test_token())
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
+
+    assert!(
+        !messages.is_empty(),
+        "build should produce cargo messages (this likely means --message-format is missing)"
+    );
+
     let expected = messages
         .iter()
         .thirdparty_artifacts()
@@ -92,6 +120,10 @@ async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         expected,
         freshness,
         "all artifacts should be fresh: {messages:?}"
+    );
+    assert!(
+        !expected.is_empty(),
+        "build should have third-party artifacts"
     );
 
     Ok(())

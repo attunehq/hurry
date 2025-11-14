@@ -58,13 +58,15 @@ pub struct Build {
 
     /// The Courier API URL for distributed caching.
     ///
-    /// If provided, this is passed to hurry via `--hurry-courier-url`.
+    /// If provided, this is passed to hurry via the `HURRY_COURIER_URL`
+    /// environment variable.
     #[builder(into)]
     courier_url: Option<String>,
 
     /// The Courier API token for authentication.
     ///
-    /// If provided, this is passed to hurry via `--hurry-courier-token`.
+    /// If provided, this is passed to hurry via the `HURRY_COURIER_TOKEN`
+    /// environment variable.
     #[builder(into)]
     courier_token: Option<String>,
 }
@@ -74,7 +76,7 @@ impl Build {
     pub const HURRY_NAME: &str = "hurry";
 
     /// The default set of arguments that are always provided to build commands.
-    pub const DEFAULT_ARGS: [&str; 3] = ["build", "-v", "--message-format=json-render-diagnostics"];
+    pub const DEFAULT_ARGS: [&str; 2] = ["build", "-v"];
 
     /// Run the build locally.
     #[instrument]
@@ -130,19 +132,9 @@ impl Build {
             None => Command::new().name("cargo"),
         };
 
-        // Add courier parameters if wrapper is hurry
-        if let Some(wrapper) = &self.wrapper
-            && wrapper == Self::HURRY_NAME
-        {
-            if let Some(url) = &self.courier_url {
-                cmd = cmd.arg("--hurry-courier-url").arg(url);
-            }
-            if let Some(token) = &self.courier_token {
-                cmd = cmd.arg("--hurry-courier-token").arg(token);
-            }
-        }
-
-        cmd.args(Self::DEFAULT_ARGS)
+        cmd = cmd
+            .arg("build")
+            .arg("-v")
             .arg_maybe("--bin", self.bin.as_ref())
             .arg_maybe("--package", self.package.as_ref())
             .arg_if(self.release, "--release")
@@ -151,9 +143,20 @@ impl Build {
                 format!("--features={}", self.features.join(",")),
             )
             .args(&self.additional_args)
-            .envs(self.envs.iter().map(|(k, v)| (k, v)))
-            .pwd(&self.pwd)
-            .finish()
+            .envs(self.envs.iter().map(|(k, v)| (k, v)));
+
+        // We pass these as environment variables so that we can avoid the annoyance
+        // around argument ordering; see https://github.com/attunehq/hurry/issues/170
+        // This also lets us not have to worry about whether we're using a wrapper or
+        // not, since non-hurry binaries will just ignore these.
+        if let Some(url) = &self.courier_url {
+            cmd = cmd.env("HURRY_COURIER_URL", url);
+        }
+        if let Some(token) = &self.courier_token {
+            cmd = cmd.env("HURRY_COURIER_TOKEN", token);
+        }
+
+        cmd.pwd(&self.pwd).finish()
     }
 
     fn capture_local(cmd: Command) -> Result<Vec<Message>> {

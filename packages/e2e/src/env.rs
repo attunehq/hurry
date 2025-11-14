@@ -146,17 +146,12 @@ impl TestEnv {
         })
     }
 
-    /// Get the URL to access Courier from the host machine.
+    /// Get the URL to access Courier from within the Docker Compose network.
     ///
-    /// This returns the host-mapped port (e.g., "http://localhost:54321")
-    pub async fn courier_url(&self) -> Result<String> {
-        let courier = self
-            .compose
-            .service("courier")
-            .ok_or_else(|| color_eyre::eyre::eyre!("courier service not found"))?;
-
-        let port = courier.get_host_port_ipv4(3000).await?;
-        Ok(format!("http://localhost:{port}"))
+    /// Returns the internal service URL (e.g., "http://courier:3000") that
+    /// containers can use to communicate with courier over the shared network.
+    pub fn courier_url(&self) -> String {
+        "http://courier:3000".to_string()
     }
 
     /// Get the test API token for authentication.
