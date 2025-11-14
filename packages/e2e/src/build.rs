@@ -5,12 +5,12 @@ use cargo_metadata::Message;
 use color_eyre::{Result, Section, SectionExt, eyre::Context};
 use tracing::instrument;
 
-use crate::{Command, Container};
+use crate::Command;
 
 /// Construct a command for building a package with Cargo.
 ///
-/// This type provides an abstracted interface for running the build locally or
-/// in a docker context.
+/// This type provides an abstracted interface for running the build in
+/// testcontainers compose environments.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Builder)]
 #[builder(start_fn = new, finish_fn = finish)]
 pub struct Build {
@@ -78,39 +78,10 @@ impl Build {
     /// The default set of arguments that are always provided to build commands.
     pub const DEFAULT_ARGS: [&str; 3] = ["build", "-v", "--message-format=json-render-diagnostics"];
 
-    /// Run the build locally.
-    #[instrument]
-    pub fn run_local(&self) -> Result<Vec<Message>> {
-        Self::capture_local(self.as_command()).with_context(|| {
-            format!(
-                "'cargo build' {:?}/{:?} in {:?}",
-                self.package, self.bin, self.pwd
-            )
-        })
-    }
-
-    /// Run the build inside the container.
-    ///
-    /// Note: The `pwd` and other paths/binaries/etc specified in the command
-    /// are all inside the _container_ context, not the host machine; this
-    /// command does nothing to e.g. move the working directory to the container
-    /// or anything similar.
-    #[instrument]
-    pub async fn run_docker(&self, container: &Container) -> Result<Vec<Message>> {
-        Self::capture_docker(self.as_command(), container)
-            .await
-            .with_context(|| {
-                format!(
-                    "'cargo build' {:?}/{:?} in {:?}",
-                    self.package, self.bin, self.pwd
-                )
-            })
-    }
-
     /// Run the build inside a compose container.
     ///
-    /// This is similar to `run_docker()` but uses the Docker container ID
-    /// from a Docker Compose stack managed by testcontainers.
+    /// Uses the Docker container ID from a Docker Compose stack managed by
+    /// testcontainers.
     ///
     /// Note: The `pwd` and other paths/binaries/etc specified in the command
     /// are all inside the _container_ context, not the host machine.
@@ -162,29 +133,6 @@ impl Build {
         cmd = cmd.env("HURRY_WAIT_FOR_UPLOAD", "true");
 
         cmd.pwd(&self.pwd).finish()
-    }
-
-    fn capture_local(cmd: Command) -> Result<Vec<Message>> {
-        let output = cmd.run_local_with_output().context("run build command")?;
-        let reader = Cursor::new(&output.stdout);
-        Message::parse_stream(reader)
-            .map(|m| m.context("parse message"))
-            .collect::<Result<Vec<_>>>()
-            .context("parse messages")
-            .with_section(|| output.stdout_lossy_string().header("Stdout:"))
-    }
-
-    async fn capture_docker(cmd: Command, container: &Container) -> Result<Vec<Message>> {
-        let output = cmd
-            .run_docker_with_output(container)
-            .await
-            .context("run command in docker")?;
-        let reader = Cursor::new(&output.stdout);
-        Message::parse_stream(reader)
-            .map(|m| m.context("parse message"))
-            .collect::<Result<Vec<_>>>()
-            .context("parse messages")
-            .with_section(|| output.stdout_lossy_string().header("Stdout:"))
     }
 
     async fn capture_compose(cmd: Command, container_id: &str) -> Result<Vec<Message>> {

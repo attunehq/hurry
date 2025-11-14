@@ -5,13 +5,11 @@ use std::path::PathBuf;
 
 use color_eyre::Result;
 use e2e::{
-    Build, Command, Container, TestEnv,
+    Build, Command, TestEnv,
     ext::{ArtifactIterExt, MessageIterExt},
-    temporary_directory,
 };
 use itertools::Itertools;
 use simple_test_case::test_case;
-use workspace_root::get_workspace_root;
 
 /// Exercises building and caching the project in a single directory.
 #[test_case("attunehq", "hurry-tests", "test/tiny"; "attunehq/hurry-tests:test/tiny")]

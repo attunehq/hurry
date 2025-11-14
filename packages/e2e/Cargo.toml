@@ -15,15 +15,12 @@ bollard = { workspace = true }
 bon.workspace = true
 cargo_metadata.workspace = true
 color-eyre.workspace = true
-filetime.workspace = true
 fslock.workspace = true
 futures.workspace = true
 itertools.workspace = true
-tempfile.workspace = true
 testcontainers = { workspace = true, features = ["docker-compose"] }
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
-walkdir.workspace = true
 workspace_root.workspace = true
 
 [dev-dependencies]
