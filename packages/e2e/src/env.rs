@@ -103,7 +103,8 @@ impl TestEnv {
     /// Create a new test environment.
     ///
     /// This will:
-    /// - Build Docker Compose images if needed (coordinated across parallel tests)
+    /// - Build Docker Compose images if needed (coordinated across parallel
+    ///   tests)
     /// - Start a Docker Compose stack with Postgres, migrations, fixtures, and
     ///   Courier
     /// - Wait for all services to be healthy (using Docker Compose's built-in

@@ -6,7 +6,11 @@ use std::{
     process::{ExitStatus, Output},
 };
 
-use bollard::{container::LogOutput, exec::{CreateExecOptions, StartExecResults}, Docker};
+use bollard::{
+    Docker,
+    container::LogOutput,
+    exec::{CreateExecOptions, StartExecResults},
+};
 use bon::{Builder, bon};
 use color_eyre::{
     Result, Section, SectionExt,
