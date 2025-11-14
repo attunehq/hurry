@@ -1,4 +1,9 @@
-use std::{path::Path, process::Command};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    path::Path,
+    process::Command,
+};
 
 use color_eyre::{Result, eyre::bail};
 
@@ -61,9 +66,6 @@ pub(crate) fn working_tree_hash(workspace_root: &Path) -> Result<String> {
     // the commit SHA with a hash of the diff
     if !git_diff.stdout.is_empty() {
         // Compute a hash of the diff output (captures actual content changes)
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         let mut hasher = DefaultHasher::new();
         git_diff.stdout.hash(&mut hasher);
         let dirty_hash = hasher.finish();

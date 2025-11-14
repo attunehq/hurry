@@ -17,7 +17,7 @@ use color_eyre::{
     eyre::{Context, OptionExt, bail, eyre},
 };
 use futures::StreamExt;
-use tokio::io::{stderr, stdout};
+use tokio::io::{stderr, stdout, AsyncWriteExt};
 use tracing::instrument;
 
 use crate::GITHUB_TOKEN;
@@ -119,8 +119,6 @@ impl Command {
     /// ```
     #[instrument(skip(self, container_id), fields(name = ?self.name, pwd = ?self.pwd))]
     pub async fn run_compose(self, container_id: &str) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-
         fn try_as_unicode(s: impl AsRef<OsStr>) -> Result<String> {
             let s = s.as_ref();
             s.to_str()
@@ -218,8 +216,6 @@ impl Command {
     /// Similar to `run_compose()` but also captures and returns stdout/stderr.
     #[instrument(skip(self, container_id), fields(name = ?self.name, pwd = ?self.pwd))]
     pub async fn run_compose_with_output(self, container_id: &str) -> Result<ParsedOutput> {
-        use tokio::io::AsyncWriteExt;
-
         fn try_as_unicode(s: impl AsRef<OsStr>) -> Result<String> {
             let s = s.as_ref();
             s.to_str()
