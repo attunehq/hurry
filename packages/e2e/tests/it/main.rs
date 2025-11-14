@@ -1,57 +1,62 @@
 use std::path::PathBuf;
 
-use e2e::{Build, Command, Container};
+use e2e::{Build, Command, TestEnv};
 
 use color_eyre::{Result, eyre::Context};
 
 pub mod thirdparty;
 
 #[test_log::test(tokio::test)]
-async fn run_docker() -> Result<()> {
+async fn run_compose() -> Result<()> {
     color_eyre::install()?;
 
-    let container = Container::new()
-        .repo("docker.io/library/ubuntu")
-        .tag("latest")
-        .start()
-        .await
-        .context("start container")?;
+    // Ensure compose images are built
+    TestEnv::ensure_built().await?;
+
+    // Start test environment
+    let env = TestEnv::new().await?;
+
+    // Run a simple command in the hurry container
     Command::new()
-        .pwd("/")
+        .pwd("/workspace")
         .name("ls")
         .arg("-alh")
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await
-        .context("run command in docker context")?;
+        .context("run command in compose context")?;
 
     println!("finished test");
     Ok(())
 }
 
 #[test_log::test(tokio::test)]
-async fn build_in_docker() -> Result<()> {
+async fn build_hurry_in_compose() -> Result<()> {
     color_eyre::install()?;
 
-    let pwd = PathBuf::from("/");
-    let hurry_root = pwd.join("hurry");
-    let container = Container::debian_rust()
-        .command(Command::clone_hurry(pwd))
-        .start()
-        .await?;
+    // Ensure compose images are built
+    TestEnv::ensure_built().await?;
 
+    // Start test environment
+    let env = TestEnv::new().await?;
+
+    let pwd = PathBuf::from("/hurry-src");
+
+    // Build hurry (it's already installed in the image, but we can rebuild it)
     Build::new()
-        .pwd(&hurry_root)
+        .pwd(&pwd)
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await
         .context("build hurry")?;
+
+    // Run hurry --version to verify it works
     Command::new()
-        .pwd(&hurry_root)
-        .name("./target/debug/hurry")
+        .pwd(&pwd)
+        .name("hurry")
         .arg("--version")
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await
         .context("run hurry --version")?;
 
