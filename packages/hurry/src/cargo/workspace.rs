@@ -211,13 +211,26 @@ impl Workspace {
         let output = cargo::invoke_output("build", build_args, [("RUSTC_BOOTSTRAP", "1")])
             .await
             .context("run cargo command")?;
-        serde_json::from_slice::<BuildPlan>(&output.stdout)
+
+        // When users pass flags like
+        // `--message-format=json`, cargo outputs NDJSON (newline-delimited JSON)
+        // where the build plan is one of multiple JSON objects. We try parsing
+        // each line until we find one with the `invocations` field.
+        //
+        // We do this instead of e.g. filtering the `--message-format` field because we
+        // think that this is less error-prone. If that changes in the future, let's
+        // revisit.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+            if let Ok(plan) = serde_json::from_str::<BuildPlan>(line) {
+                return Ok(plan);
+            }
+        }
+
+        // If we didn't find a valid build plan, return an error with context
+        Err(eyre!("no valid build plan found in output"))
             .context("parse build plan")
-            .with_section(move || {
-                String::from_utf8_lossy(&output.stdout)
-                    .to_string()
-                    .header("Stdout:")
-            })
+            .with_section(move || stdout.to_string().header("Stdout:"))
             .with_section(move || {
                 String::from_utf8_lossy(&output.stderr)
                     .to_string()
@@ -707,5 +720,25 @@ mod tests {
             tool_plan,
             "both orderings should produce same build plan"
         );
+    }
+
+    #[tokio::test]
+    async fn build_plan_with_message_format_json() {
+        // When --message-format=json is passed, cargo outputs NDJSON
+        // (newline-delimited JSON) where the build plan is one of multiple
+        // JSON objects. We should still be able to parse it.
+        let args = CargoBuildArguments::from_iter(vec!["--message-format=json-render-diagnostics"]);
+        let workspace = Workspace::from_argv(&args)
+            .await
+            .expect("should open workspace");
+
+        let plan = workspace
+            .build_plan(&args)
+            .await
+            .expect("should parse build plan from NDJSON output");
+
+        // Basic sanity checks that we got a valid build plan
+        assert!(!plan.invocations.is_empty(), "should have invocations");
+        assert!(!plan.inputs.is_empty(), "should have inputs");
     }
 }
