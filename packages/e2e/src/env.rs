@@ -4,21 +4,24 @@ use color_eyre::{Result, eyre::Context};
 use fslock::LockFile;
 use testcontainers::compose::DockerCompose;
 
-/// Test environment with ephemeral Docker Compose stack (Postgres + Courier + Hurry).
+/// Test environment with ephemeral Docker Compose stack (Postgres + Courier +
+/// Hurry).
 ///
 /// This environment is fully isolated and cleaned up automatically via Drop.
 /// Each test can create its own TestEnv without interfering with other tests.
 ///
 /// ## Multi-container support
 ///
-/// The compose stack includes two hurry containers (`hurry-1` and `hurry-2`) to support
-/// tests that need multiple isolated containers (e.g., testing cache sharing across
-/// containers). Access them via `hurry_container_id(1)` and `hurry_container_id(2)`.
+/// The compose stack includes two hurry containers (`hurry-1` and `hurry-2`) to
+/// support tests that need multiple isolated containers (e.g., testing cache
+/// sharing across containers). Access them via `hurry_container_id(1)` and
+/// `hurry_container_id(2)`.
 ///
 /// Both containers:
 /// - Use the same debian-rust image with hurry installed
 /// - Share the compose network (can communicate with courier/postgres)
-/// - Are fully isolated from other parallel tests (each TestEnv gets its own stack)
+/// - Are fully isolated from other parallel tests (each TestEnv gets its own
+///   stack)
 ///
 /// Single-container tests should use `hurry_container_id(1)`.
 pub struct TestEnv {
@@ -31,11 +34,12 @@ pub struct TestEnv {
 impl TestEnv {
     /// Ensure Docker Compose images are built.
     ///
-    /// Uses file-based locking to coordinate builds across multiple test processes.
-    /// Only builds images once, even when tests run in parallel via cargo nextest.
+    /// Uses file-based locking to coordinate builds across multiple test
+    /// processes. Only builds images once, even when tests run in parallel
+    /// via cargo nextest.
     ///
-    /// This should be called before `new()` to avoid redundant builds when running
-    /// tests in parallel.
+    /// This should be called before `new()` to avoid redundant builds when
+    /// running tests in parallel.
     pub async fn ensure_built() -> Result<()> {
         let workspace_root = workspace_root::get_workspace_root();
         let compose_file = workspace_root.join("docker-compose.e2e.yml");
@@ -56,13 +60,17 @@ impl TestEnv {
 
         // Acquire exclusive lock
         tracing::info!("acquiring lock for docker compose build...");
-        let mut lock = LockFile::open(&lock_file_path)
-            .context("open lock file for docker compose build")?;
-        lock.lock().context("acquire lock for docker compose build")?;
+        let mut lock =
+            LockFile::open(&lock_file_path).context("open lock file for docker compose build")?;
+        lock.lock()
+            .context("acquire lock for docker compose build")?;
 
-        // Double-check after acquiring lock (another process might have built while we waited)
+        // Double-check after acquiring lock (another process might have built while we
+        // waited)
         if marker_file.exists() {
-            tracing::debug!("docker compose images already built for hash {hash} (built by another process)");
+            tracing::debug!(
+                "docker compose images already built for hash {hash} (built by another process)"
+            );
             return Ok(());
         }
 
@@ -93,14 +101,16 @@ impl TestEnv {
     /// Create a new test environment.
     ///
     /// This will:
-    /// - Start a Docker Compose stack with Postgres, migrations, fixtures, and Courier
-    /// - Wait for all services to be healthy (using Docker Compose's built-in health checks)
+    /// - Start a Docker Compose stack with Postgres, migrations, fixtures, and
+    ///   Courier
+    /// - Wait for all services to be healthy (using Docker Compose's built-in
+    ///   health checks)
     /// - Return once all services are ready
     ///
     /// The entire stack is automatically cleaned up when TestEnv is dropped.
     ///
-    /// **Tip**: Call `TestEnv::ensure_built().await?` before this to coordinate image
-    /// builds across parallel tests.
+    /// **Tip**: Call `TestEnv::ensure_built().await?` before this to coordinate
+    /// image builds across parallel tests.
     pub async fn new() -> Result<Self> {
         tracing::info!("starting docker compose stack...");
 
@@ -162,11 +172,13 @@ impl TestEnv {
     /// Get a hurry container ID for running commands.
     ///
     /// Returns the Docker container ID of the specified hurry service (1 or 2).
-    /// Each hurry container is a Debian-based container with Rust and hurry installed.
-    /// Use this with `Command::run_compose()` to execute commands inside the container.
+    /// Each hurry container is a Debian-based container with Rust and hurry
+    /// installed. Use this with `Command::run_compose()` to execute
+    /// commands inside the container.
     ///
-    /// The compose stack provides two hurry containers to support tests that need
-    /// multiple isolated containers (e.g., testing cache sharing across containers).
+    /// The compose stack provides two hurry containers to support tests that
+    /// need multiple isolated containers (e.g., testing cache sharing
+    /// across containers).
     ///
     /// # Arguments
     /// * `index` - Which hurry container to use (1 or 2)

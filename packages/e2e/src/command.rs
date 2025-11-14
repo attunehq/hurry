@@ -398,8 +398,7 @@ impl Command {
         };
 
         // Create Docker client
-        let docker = Docker::connect_with_local_defaults()
-            .context("connect to Docker")?;
+        let docker = Docker::connect_with_local_defaults().context("connect to Docker")?;
 
         // Create exec instance
         let exec_config = bollard::exec::CreateExecOptions {
@@ -448,7 +447,8 @@ impl Command {
         ParsedOutput::parse_status(ExitStatus::from_raw(code)).map(drop)
     }
 
-    /// Run the command inside a testcontainers compose container, capturing output.
+    /// Run the command inside a testcontainers compose container, capturing
+    /// output.
     ///
     /// Similar to `run_compose()` but also captures and returns stdout/stderr.
     #[instrument]
@@ -498,8 +498,7 @@ impl Command {
         };
 
         // Create Docker client
-        let docker = Docker::connect_with_local_defaults()
-            .context("connect to Docker")?;
+        let docker = Docker::connect_with_local_defaults().context("connect to Docker")?;
 
         // Create exec instance
         let exec_config = bollard::exec::CreateExecOptions {

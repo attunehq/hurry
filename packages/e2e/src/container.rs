@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::{Path, PathBuf}, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use bollard::{
     Docker,
@@ -27,7 +31,8 @@ use crate::Command;
 ///
 /// The returned format is:
 /// - Clean tree (no uncommitted changes): `"abc1234"` (short commit SHA)
-/// - Dirty tree (uncommitted changes): `"abc1234-f1e2d3c4b5a6"` (commit SHA + diff hash)
+/// - Dirty tree (uncommitted changes): `"abc1234-f1e2d3c4b5a6"` (commit SHA +
+///   diff hash)
 ///
 /// This prevents surprising behavior where making changes doesn't trigger a
 /// rebuild until after committing. With this approach, any content change to
@@ -116,16 +121,20 @@ impl Container {
 
     /// Ensure a Docker image is built from a Dockerfile.
     ///
-    /// Uses file-based locking to coordinate builds across multiple test processes.
-    /// Only builds the image once, even when tests run in parallel via cargo nextest.
+    /// Uses file-based locking to coordinate builds across multiple test
+    /// processes. Only builds the image once, even when tests run in
+    /// parallel via cargo nextest.
     ///
-    /// The image is automatically tagged with the current git commit SHA to ensure
-    /// fresh images when code changes. For example, "hurry-courier" becomes "hurry-courier:abc1234".
+    /// The image is automatically tagged with the current git commit SHA to
+    /// ensure fresh images when code changes. For example, "hurry-courier"
+    /// becomes "hurry-courier:abc1234".
     ///
     /// # Arguments
     /// - `image_name`: The name of the image (e.g., "hurry-courier")
-    /// - `dockerfile`: Path to the Dockerfile relative to workspace root (e.g., "docker/courier/Dockerfile")
-    /// - `context`: Build context directory relative to workspace root (typically ".")
+    /// - `dockerfile`: Path to the Dockerfile relative to workspace root (e.g.,
+    ///   "docker/courier/Dockerfile")
+    /// - `context`: Build context directory relative to workspace root
+    ///   (typically ".")
     ///
     /// # Returns
     /// The full image tag including git SHA (e.g., "hurry-courier:abc1234")
@@ -158,7 +167,7 @@ impl Container {
         // Build full image tag with working tree hash
         let image_tag = format!("{image_name}:{sha}");
 
-        let sanitized_tag = image_tag.replace(':', "_").replace('/', "_");
+        let sanitized_tag = image_tag.replace([':', '/'], "_");
         let marker_path = target_dir.join(format!(".{sanitized_tag}.built"));
         let lock_path = target_dir.join(format!(".{sanitized_tag}.lock"));
 
@@ -169,8 +178,8 @@ impl Container {
 
         // Slow path: acquire lock and build if needed
         eprintln!("[BUILD] Waiting for exclusive lock to build {image_tag}...");
-        let mut lock = LockFile::open(&lock_path)
-            .with_context(|| format!("open lock file {lock_path:?}"))?;
+        let mut lock =
+            LockFile::open(&lock_path).with_context(|| format!("open lock file {lock_path:?}"))?;
         lock.lock()
             .with_context(|| format!("acquire lock for {image_tag}"))?;
 
@@ -225,12 +234,14 @@ impl Container {
     pub async fn build(
         /// Commands to run via exec after the container is started.
         ///
-        /// These are executed by calling `command.run_docker()` after the container
-        /// is running. Use this for setup tasks, initialization scripts, or any
-        /// commands that need to run in an already-running container.
+        /// These are executed by calling `command.run_docker()` after the
+        /// container is running. Use this for setup tasks,
+        /// initialization scripts, or any commands that need to run in
+        /// an already-running container.
         ///
-        /// This is different from `entrypoint`: commands run after the container's
-        /// main process has started, while entrypoint replaces the main process.
+        /// This is different from `entrypoint`: commands run after the
+        /// container's main process has started, while entrypoint
+        /// replaces the main process.
         #[builder(field)]
         commands: Vec<Command>,
 
@@ -260,14 +271,16 @@ impl Container {
         #[builder(into)]
         container_name: Option<String>,
 
-        /// Override the container's CMD (the command that runs as the main process).
+        /// Override the container's CMD (the command that runs as the main
+        /// process).
         ///
-        /// This replaces the CMD specified in the Docker image. The container will
-        /// run this command as its main process and exit when it completes.
+        /// This replaces the CMD specified in the Docker image. The container
+        /// will run this command as its main process and exit when it
+        /// completes.
         ///
-        /// This is different from `commands`: entrypoint is the main process that
-        /// determines the container's lifecycle, while commands are executed via
-        /// exec in an already-running container.
+        /// This is different from `commands`: entrypoint is the main process
+        /// that determines the container's lifecycle, while commands
+        /// are executed via exec in an already-running container.
         ///
         /// Example: To run migrations in a courier container:
         /// ```ignore
@@ -293,9 +306,7 @@ impl Container {
         }
 
         let container_opts = if let Some(name) = container_name {
-            CreateContainerOptionsBuilder::default()
-                .name(&name)
-                .build()
+            CreateContainerOptionsBuilder::default().name(&name).build()
         } else {
             CreateContainerOptionsBuilder::default().build()
         };

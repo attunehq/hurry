@@ -131,14 +131,14 @@ impl Build {
         };
 
         // Add courier parameters if wrapper is hurry
-        if let Some(wrapper) = &self.wrapper {
-            if wrapper == Self::HURRY_NAME {
-                if let Some(url) = &self.courier_url {
-                    cmd = cmd.arg("--hurry-courier-url").arg(url);
-                }
-                if let Some(token) = &self.courier_token {
-                    cmd = cmd.arg("--hurry-courier-token").arg(token);
-                }
+        if let Some(wrapper) = &self.wrapper
+            && wrapper == Self::HURRY_NAME
+        {
+            if let Some(url) = &self.courier_url {
+                cmd = cmd.arg("--hurry-courier-url").arg(url);
+            }
+            if let Some(token) = &self.courier_token {
+                cmd = cmd.arg("--hurry-courier-token").arg(token);
             }
         }
 
