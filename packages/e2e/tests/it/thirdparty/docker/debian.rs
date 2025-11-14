@@ -237,46 +237,68 @@ async fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 #[cfg_attr(feature = "ci", test_case("attunehq", "attune", "main", "attune"; "attunehq/attune:main"))]
 #[test_log::test(tokio::test)]
 async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<()> {
-    let pwd = PathBuf::from("/");
-    let container = Container::debian_rust()
-        .command(
-            Command::new()
-                .pwd(&pwd)
-                .name("apt-get")
-                .arg("update")
-                .finish(),
-        )
-        .command(
-            Command::new()
-                .pwd(&pwd)
-                .name("apt-get")
-                .arg("install")
-                .arg("-y")
-                .arg("libgpg-error-dev")
-                .arg("libgpgme-dev")
-                .arg("pkg-config")
-                .finish(),
-        )
-        .volume_bind(get_workspace_root(), "/hurry-workspace")
-        .command(Command::install_hurry("/hurry-workspace"))
-        .start()
+    color_eyre::install()?;
+
+    // Check for GITHUB_TOKEN early to fail fast with a clear error message
+    if std::env::var("GITHUB_TOKEN").is_err() {
+        color_eyre::eyre::bail!(
+            "GITHUB_TOKEN environment variable is required to clone repositories from GitHub. \
+             Please set it to a personal access token with 'repo' scope."
+        );
+    }
+
+    // Ensure compose images are built
+    TestEnv::ensure_built().await?;
+
+    // Start test environment with courier
+    let env = TestEnv::new().await?;
+
+    let pwd = PathBuf::from("/workspace");
+
+    // Install native dependencies required for building with native libs
+    Command::new()
+        .pwd(&pwd)
+        .name("apt-get")
+        .arg("update")
+        .finish()
+        .run_compose(env.hurry_container_id(1))
+        .await?;
+    Command::new()
+        .pwd(&pwd)
+        .name("apt-get")
+        .arg("install")
+        .arg("-y")
+        .arg("libgpg-error-dev")
+        .arg("libgpgme-dev")
+        .arg("pkg-config")
+        .finish()
+        .run_compose(env.hurry_container_id(1))
         .await?;
 
     // Nothing should be cached on the first build.
+    let repo_root = pwd.join(repo);
     Command::clone_github()
         .pwd(&pwd)
         .user(username)
         .repo(repo)
         .branch(branch)
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
     let messages = Build::new()
-        .pwd(pwd.join(repo))
+        .pwd(&repo_root)
         .wrapper(Build::HURRY_NAME)
+        .courier_url(env.courier_url())
+        .courier_token(env.test_token())
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
+
+    assert!(
+        !messages.is_empty(),
+        "build should produce cargo messages (this likely means --message-format is missing)"
+    );
+
     let expected = messages
         .iter()
         .thirdparty_artifacts()
@@ -295,20 +317,24 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
         freshness,
         "no artifacts should be fresh: {messages:?}"
     );
+    assert!(
+        !expected.is_empty(),
+        "build should have third-party artifacts"
+    );
 
     // We test that we can actually run the binary because the test cases
     // contain dynamically linked native libraries.
     Command::new()
         .pwd(&pwd)
-        .name(pwd.join(repo).join("target").join("debug").join(bin))
+        .name(repo_root.join("target").join("debug").join(bin))
         .arg("--help")
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
 
     // Now if we clone the repo to a new directory and rebuild, `hurry` should
     // reuse the cache and enable fresh artifacts.
-    let repo2 = format!("{repo}-2");
+    let repo2 = pwd.join(format!("{repo}-2"));
     Command::clone_github()
         .pwd(&pwd)
         .user(username)
@@ -316,14 +342,22 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
         .branch(branch)
         .dir(&repo2)
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
     let messages = Build::new()
-        .pwd(pwd.join(&repo2))
+        .pwd(&repo2)
         .wrapper(Build::HURRY_NAME)
+        .courier_url(env.courier_url())
+        .courier_token(env.test_token())
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
+
+    assert!(
+        !messages.is_empty(),
+        "build should produce cargo messages (this likely means --message-format is missing)"
+    );
+
     let expected = messages
         .iter()
         .thirdparty_artifacts()
@@ -342,14 +376,18 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
         freshness,
         "all artifacts should be fresh: {messages:?}"
     );
+    assert!(
+        !expected.is_empty(),
+        "build should have third-party artifacts"
+    );
 
     // And we should still be able to run the binary.
     Command::new()
         .pwd(&pwd)
-        .name(pwd.join(&repo2).join("target").join("debug").join(bin))
+        .name(repo2.join("target").join("debug").join(bin))
         .arg("--help")
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
 
     Ok(())
@@ -363,46 +401,68 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
 #[cfg_attr(feature = "ci", test_case("attunehq", "attune", "main", "attune"; "attunehq/attune:main"))]
 #[test_log::test(tokio::test)]
 async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str) -> Result<()> {
-    let pwd = PathBuf::from("/");
-    let container = Container::debian_rust()
-        .command(
-            Command::new()
-                .pwd(&pwd)
-                .name("apt-get")
-                .arg("update")
-                .finish(),
-        )
-        .command(
-            Command::new()
-                .pwd(&pwd)
-                .name("apt-get")
-                .arg("install")
-                .arg("-y")
-                .arg("libgpg-error-dev")
-                .arg("libgpgme-dev")
-                .arg("pkg-config")
-                .finish(),
-        )
-        .volume_bind(get_workspace_root(), "/hurry-workspace")
-        .command(Command::install_hurry("/hurry-workspace"))
-        .start()
+    color_eyre::install()?;
+
+    // Check for GITHUB_TOKEN early to fail fast with a clear error message
+    if std::env::var("GITHUB_TOKEN").is_err() {
+        color_eyre::eyre::bail!(
+            "GITHUB_TOKEN environment variable is required to clone repositories from GitHub. \
+             Please set it to a personal access token with 'repo' scope."
+        );
+    }
+
+    // Ensure compose images are built
+    TestEnv::ensure_built().await?;
+
+    // Start test environment with courier
+    let env = TestEnv::new().await?;
+
+    let pwd = PathBuf::from("/workspace");
+
+    // Install native dependencies required for building with native libs
+    Command::new()
+        .pwd(&pwd)
+        .name("apt-get")
+        .arg("update")
+        .finish()
+        .run_compose(env.hurry_container_id(1))
+        .await?;
+    Command::new()
+        .pwd(&pwd)
+        .name("apt-get")
+        .arg("install")
+        .arg("-y")
+        .arg("libgpg-error-dev")
+        .arg("libgpgme-dev")
+        .arg("pkg-config")
+        .finish()
+        .run_compose(env.hurry_container_id(1))
         .await?;
 
     // Nothing should be cached on the first build.
+    let repo_root = pwd.join(repo);
     Command::clone_github()
         .pwd(&pwd)
         .user(username)
         .repo(repo)
         .branch(branch)
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
     let messages = Build::new()
-        .pwd(pwd.join(repo))
+        .pwd(&repo_root)
         .wrapper(Build::HURRY_NAME)
+        .courier_url(env.courier_url())
+        .courier_token(env.test_token())
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
+
+    assert!(
+        !messages.is_empty(),
+        "build should produce cargo messages (this likely means --message-format is missing)"
+    );
+
     let expected = messages
         .iter()
         .thirdparty_artifacts()
@@ -421,15 +481,19 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         freshness,
         "no artifacts should be fresh: {messages:?}"
     );
+    assert!(
+        !expected.is_empty(),
+        "build should have third-party artifacts"
+    );
 
     // We test that we can actually run the binary because the test cases
     // contain dynamically linked native libraries.
     Command::new()
         .pwd(&pwd)
-        .name(pwd.join(repo).join("target").join("debug").join(bin))
+        .name(repo_root.join("target").join("debug").join(bin))
         .arg("--help")
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
 
     // We uninstall the native dependencies we installed earlier.
@@ -442,12 +506,12 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         .arg("libgpgme-dev")
         .arg("pkg-config")
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
 
     // Now if we clone the repo to a new directory and rebuild, `hurry` should
     // reuse the cache, which theoretically would enable fresh artifacts...
-    let repo2 = format!("{repo}-2");
+    let repo2 = pwd.join(format!("{repo}-2"));
     Command::clone_github()
         .pwd(&pwd)
         .user(username)
@@ -455,16 +519,18 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         .branch(branch)
         .dir(&repo2)
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await?;
 
     // ... but since we uninstalled the native dependencies, the build should
     // actually fail to compile.
     let build = Build::new()
-        .pwd(pwd.join(&repo2))
+        .pwd(&repo2)
         .wrapper(Build::HURRY_NAME)
+        .courier_url(env.courier_url())
+        .courier_token(env.test_token())
         .finish()
-        .run_docker(&container)
+        .run_compose(env.hurry_container_id(1))
         .await;
     assert!(build.is_err(), "build should fail: {build:?}");
 
