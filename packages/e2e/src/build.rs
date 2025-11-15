@@ -86,8 +86,8 @@ impl Build {
     /// Note: The `pwd` and other paths/binaries/etc specified in the command
     /// are all inside the _container_ context, not the host machine.
     #[instrument(skip(self, container_id), fields(package = ?self.package, bin = ?self.bin, pwd = ?self.pwd))]
-    pub async fn run_compose(&self, container_id: &str) -> Result<Vec<Message>> {
-        Self::capture_compose(self.as_command(), container_id)
+    pub async fn run_compose(&self, container_id: impl AsRef<str> + Debug) -> Result<Vec<Message>> {
+        Self::capture_compose(self.as_command(), container_id.as_ref())
             .await
             .with_context(|| {
                 format!(
