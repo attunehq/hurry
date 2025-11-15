@@ -700,7 +700,10 @@ pub trait TryJoinWith {
 
     /// Join multiple directories to `self`.
     /// The overall path is checked at the end instead of piece by piece.
-    fn try_join_dirs(&self, dirs: impl IntoIterator<Item = impl AsRef<str>>) -> Result<TypedPath<Self::OutputBase, Dir>>;
+    fn try_join_dirs(
+        &self,
+        dirs: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<TypedPath<Self::OutputBase, Dir>>;
 
     /// Join multiple directories, followed by a file, to `self`.
     /// The overall path is checked at the end instead of piece by piece.
