@@ -1,0 +1,45 @@
+# End-to-end integration tests using testcontainers and Docker Compose.
+# These tests run in isolated Docker environments and validate full workflows.
+name: E2E
+
+on:
+    pull_request:
+        branches: [main]
+        paths-ignore:
+            - "**/*.md"
+    merge_group:
+        types: [checks_requested]
+    workflow_dispatch:
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-e2e
+    cancel-in-progress: true
+
+env:
+    CARGO_TERM_COLOR: always
+
+jobs:
+    e2e:
+        name: hurry+courier
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+
+        steps:
+            - name: Install Rust
+              run: |
+                  rustup toolchain install nightly
+                  rustup component add --toolchain nightly rustfmt
+                  rustup show
+
+            - uses: taiki-e/install-action@v2
+              with:
+                  tool: nextest
+
+            - uses: actions/checkout@v4
+            - uses: Swatinem/rust-cache@v2
+
+            - name: Run e2e tests
+              run: cargo nextest run -p e2e
+              env:
+                  GITHUB_TOKEN: ${{ secrets.ATTUNE_REPOSITORY_TOKEN }}
