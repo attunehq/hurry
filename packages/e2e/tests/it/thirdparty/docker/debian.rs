@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use color_eyre::Result;
+use color_eyre::{Result, eyre::bail};
 use e2e::{
     Build, Command, TestEnv,
     ext::{ArtifactIterExt, MessageIterExt},
@@ -22,7 +22,7 @@ async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 
     // Check for GITHUB_TOKEN early to fail fast with a clear error message
     if std::env::var("GITHUB_TOKEN").is_err() {
-        color_eyre::eyre::bail!(
+        bail!(
             "GITHUB_TOKEN environment variable is required to clone repositories from GitHub. \
              Please set it to a personal access token with 'repo' scope."
         );
@@ -125,7 +125,7 @@ async fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
 
     // Check for GITHUB_TOKEN early to fail fast with a clear error message
     if std::env::var("GITHUB_TOKEN").is_err() {
-        color_eyre::eyre::bail!(
+        bail!(
             "GITHUB_TOKEN environment variable is required to clone repositories from GitHub. \
              Please set it to a personal access token with 'repo' scope."
         );
@@ -234,7 +234,7 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
 
     // Check for GITHUB_TOKEN early to fail fast with a clear error message
     if std::env::var("GITHUB_TOKEN").is_err() {
-        color_eyre::eyre::bail!(
+        bail!(
             "GITHUB_TOKEN environment variable is required to clone repositories from GitHub. \
              Please set it to a personal access token with 'repo' scope."
         );
@@ -395,7 +395,7 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
 
     // Check for GITHUB_TOKEN early to fail fast with a clear error message
     if std::env::var("GITHUB_TOKEN").is_err() {
-        color_eyre::eyre::bail!(
+        bail!(
             "GITHUB_TOKEN environment variable is required to clone repositories from GitHub. \
              Please set it to a personal access token with 'repo' scope."
         );
@@ -535,7 +535,7 @@ async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()>
 
     // Check for GITHUB_TOKEN early to fail fast with a clear error message
     if std::env::var("GITHUB_TOKEN").is_err() {
-        color_eyre::eyre::bail!(
+        bail!(
             "GITHUB_TOKEN environment variable is required to clone repositories from GitHub. \
              Please set it to a personal access token with 'repo' scope."
         );
@@ -669,7 +669,7 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
 
     // Check for GITHUB_TOKEN early to fail fast with a clear error message
     if std::env::var("GITHUB_TOKEN").is_err() {
-        color_eyre::eyre::bail!(
+        bail!(
             "GITHUB_TOKEN environment variable is required to clone repositories from GitHub. \
              Please set it to a personal access token with 'repo' scope."
         );
