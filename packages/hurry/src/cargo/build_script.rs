@@ -15,7 +15,7 @@ use tracing::{instrument, trace};
 use crate::{
     cargo::{QualifiedPath, Workspace},
     fs,
-    path::{AbsDirPath, AbsFilePath},
+    path::AbsFilePath,
 };
 
 /// Represents a "root output" file, used for build scripts.
@@ -52,13 +52,7 @@ impl RootOutput {
     /// Reconstruct the file in the context of the profile directory.
     #[instrument(name = "RootOutput::reconstruct")]
     pub fn reconstruct(&self, ws: &Workspace) -> String {
-        self.reconstruct_raw(&ws.profile_dir, &ws.cargo_home)
-    }
-
-    /// Reconstruct the file using owned path data.
-    #[instrument(name = "RootOutput::reconstruct_raw")]
-    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
-        self.0.reconstruct_raw_string(profile_root, cargo_home)
+        self.0.reconstruct_string(&ws)
     }
 }
 
@@ -104,15 +98,6 @@ impl BuildScriptOutput {
     #[instrument(name = "BuildScriptOutput::reconstruct")]
     pub fn reconstruct(&self, ws: &Workspace) -> String {
         self.0.iter().map(|line| line.reconstruct(ws)).join("\n")
-    }
-
-    /// Reconstruct the file using owned path data.
-    #[instrument(name = "BuildScriptOutput::reconstruct_raw")]
-    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
-        self.0
-            .iter()
-            .map(|line| line.reconstruct_raw(profile_root, cargo_home))
-            .join("\n")
     }
 }
 
@@ -348,18 +333,13 @@ impl BuildScriptOutputLine {
     /// Reconstruct the line in the current context.
     #[instrument(name = "BuildScriptOutputLine::reconstruct")]
     pub fn reconstruct(&self, ws: &Workspace) -> String {
-        self.reconstruct_raw(&ws.profile_dir, &ws.cargo_home)
-    }
-
-    #[instrument(name = "BuildScriptOutputLine::reconstruct_raw")]
-    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
         match self {
             Self::RerunIfChanged(style, path) => {
                 format!(
                     "{}{}={}",
                     style.as_str(),
                     Self::RERUN_IF_CHANGED,
-                    path.reconstruct_raw_string(profile_root, cargo_home)
+                    path.reconstruct_string(ws)
                 )
             }
             Self::RerunIfEnvChanged(style, var) => {
@@ -377,13 +357,13 @@ impl BuildScriptOutputLine {
                     style.as_str(),
                     Self::RUSTC_LINK_SEARCH,
                     kind,
-                    path.reconstruct_raw_string(profile_root, cargo_home)
+                    path.reconstruct_string(ws)
                 ),
                 None => format!(
                     "{}{}={}",
                     style.as_str(),
                     Self::RUSTC_LINK_SEARCH,
-                    path.reconstruct_raw_string(profile_root, cargo_home)
+                    path.reconstruct_string(ws)
                 ),
             },
             Self::RustcFlags(style, flags) => {

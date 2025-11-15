@@ -250,7 +250,7 @@ async fn process_files_for_upload(
             .await?
             .ok_or_eyre("could not stat file metadata")?;
         let mtime_nanos = metadata.mtime.duration_since(UNIX_EPOCH)?.as_nanos();
-        let qualified = QualifiedPath::parse(ws, path.as_std_path()).await?;
+        let qualified = QualifiedPath::parse(ws, &path.clone().into()).await?;
 
         library_unit_files.push((qualified.clone(), key.clone()));
         artifact_files.push(

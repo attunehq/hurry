@@ -487,6 +487,21 @@ duplicate! {
                 TypedPath::<SomeBase, SomeType>::new_unchecked(path.inner)
             }
         }
+        impl From<&TypedPath<from_base, from_ty>> for TypedPath<from_base, SomeType> {
+            fn from(path: &TypedPath<from_base, from_ty>) -> Self {
+                TypedPath::<from_base, SomeType>::new_unchecked(path.inner.clone())
+            }
+        }
+        impl From<&TypedPath<from_base, from_ty>> for TypedPath<SomeBase, from_ty> {
+            fn from(path: &TypedPath<from_base, from_ty>) -> Self {
+                TypedPath::<SomeBase, from_ty>::new_unchecked(path.inner.clone())
+            }
+        }
+        impl From<&TypedPath<from_base, from_ty>> for TypedPath<SomeBase, SomeType> {
+            fn from(path: &TypedPath<from_base, from_ty>) -> Self {
+                TypedPath::<SomeBase, SomeType>::new_unchecked(path.inner.clone())
+            }
+        }
     }
 }
 
