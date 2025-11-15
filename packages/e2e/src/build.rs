@@ -104,9 +104,7 @@ impl Build {
         };
 
         cmd = cmd
-            .arg("build")
-            .arg("-v")
-            .arg("--message-format=json-render-diagnostics")
+            .args(Self::DEFAULT_ARGS)
             .arg_maybe("--bin", self.bin.as_ref())
             .arg_maybe("--package", self.package.as_ref())
             .arg_if(self.release, "--release")
