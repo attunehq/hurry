@@ -74,7 +74,7 @@ services:
     hurry-1:
         build:
             context: .
-            dockerfile: ./docker/debian-rust/Dockerfile
+            dockerfile: ./docker/hurry/Dockerfile
         depends_on:
             courier:
                 condition: service_healthy
@@ -83,7 +83,7 @@ services:
     hurry-2:
         build:
             context: .
-            dockerfile: ./docker/debian-rust/Dockerfile
+            dockerfile: ./docker/hurry/Dockerfile
         depends_on:
             courier:
                 condition: service_healthy
