@@ -33,10 +33,7 @@ pub use dep_info::{DepInfo, DepInfoLine};
 pub use dependency::{Dependency, DependencyBuild, Optimizations};
 pub use path::QualifiedPath;
 pub use profile::Profile;
-pub use rustc::{
-    INVOCATION_LOG_DIR_ENV_VAR, RawRustcInvocation, RustcInvocation, RustcMetadata,
-    invocation_log_dir,
-};
+pub use rustc::{RustcArgument, RustcArguments, RustcMetadata};
 pub use unit_graph::{
     CargoCompileMode, UnitGraph, UnitGraphDependency, UnitGraphProfile,
     UnitGraphProfilePanicStrategy, UnitGraphUnit,
