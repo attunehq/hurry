@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::{
     cargo::{
         self, BuildPlan, BuildScriptOutput, CargoBuildArguments, CargoCompileMode, Profile,
-        RustcMetadata, build_plan::RustcInvocationArgument,
+        RustcArgument, RustcMetadata,
     },
     mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith as _, TryJoinWith as _},
@@ -494,7 +494,7 @@ impl Workspace {
                     "artifacts to save"
                 );
                 let target = invocation.args.iter().find_map(|arg| match arg {
-                    RustcInvocationArgument::Target(target) => Some(target.clone()),
+                    RustcArgument::Target(target) => Some(target.clone()),
                     _ => None,
                 });
 
