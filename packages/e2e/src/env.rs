@@ -7,6 +7,7 @@ use color_eyre::{
 use fslock::LockFile;
 use testcontainers::compose::DockerCompose;
 use tracing::{debug, info, instrument};
+use workspace_root::get_workspace_root;
 
 /// Test environment with ephemeral Docker Compose stack (Postgres + Courier +
 /// Hurry).
@@ -18,8 +19,9 @@ use tracing::{debug, info, instrument};
 ///
 /// The compose stack includes two hurry containers (`hurry-1` and `hurry-2`) to
 /// support tests that need multiple isolated containers (e.g., testing cache
-/// sharing across containers). Access them via `hurry_container_id(1)` and
-/// `hurry_container_id(2)`.
+/// sharing across containers). Access them via [`TestEnv::service`] with
+/// service names like [`TestEnv::HURRY_INSTANCE_1`] and
+/// [`TestEnv::HURRY_INSTANCE_2`].
 ///
 /// Both containers:
 /// - Use the same debian-rust image with hurry installed
@@ -27,15 +29,18 @@ use tracing::{debug, info, instrument};
 /// - Are fully isolated from other parallel tests (each TestEnv gets its own
 ///   stack)
 ///
-/// Single-container tests should use `hurry_container_id(1)`.
+/// Single-container tests should use [`TestEnv::HURRY_INSTANCE_1`].
 pub struct TestEnv {
-    #[allow(dead_code)]
     compose: DockerCompose,
-    hurry_1_id: String,
-    hurry_2_id: String,
 }
 
 impl TestEnv {
+    /// Service name for the first hurry container instance.
+    pub const HURRY_INSTANCE_1: &str = "hurry-1";
+
+    /// Service name for the second hurry container instance.
+    pub const HURRY_INSTANCE_2: &str = "hurry-2";
+
     /// Ensure Docker Compose images are built.
     ///
     /// Uses file-based locking to coordinate builds across multiple test
@@ -43,7 +48,7 @@ impl TestEnv {
     /// via cargo nextest.
     #[instrument]
     async fn ensure_built() -> Result<()> {
-        let workspace_root = workspace_root::get_workspace_root();
+        let workspace_root = get_workspace_root();
         let compose_file = workspace_root.join("docker-compose.e2e.yml");
 
         // Get working tree hash to include uncommitted changes
@@ -52,9 +57,10 @@ impl TestEnv {
         // Create marker and lock files in target directory with hash suffix
         let target_dir = workspace_root.join("target");
         let marker_file = target_dir.join(format!(".docker-compose-e2e_{hash}.built"));
-        let lock_file_path = target_dir.join(".docker-compose-e2e.lock");
+        let build_lockfile = target_dir.join(".docker-compose-e2e.lock");
 
-        // Fast path: check if already built for this hash
+        // Fast path: check if already built for this hash.
+        // The marker file isn't created until after the build finishes.
         if marker_file.exists() {
             debug!("docker compose images already built for hash {hash}");
             return Ok(());
@@ -62,21 +68,15 @@ impl TestEnv {
 
         // Acquire exclusive lock
         info!("acquiring lock for docker compose build...");
-        let mut lock =
-            LockFile::open(&lock_file_path).context("open lock file for docker compose build")?;
-        lock.lock()
-            .context("acquire lock for docker compose build")?;
+        let mut build = LockFile::open(&build_lockfile).context("open docker build lockfile")?;
+        build.lock().context("lock docker build")?;
 
-        // Double-check after acquiring lock (another process might have built while we
-        // waited)
+        // Another process may have built while we were waiting.
         if marker_file.exists() {
-            debug!(
-                "docker compose images already built for hash {hash} (built by another process)"
-            );
+            debug!("docker compose images already built for hash {hash}");
             return Ok(());
         }
 
-        // Build images using docker compose
         info!("building docker compose images for hash {hash}...");
         let status = Command::new("docker")
             .arg("compose")
@@ -85,7 +85,6 @@ impl TestEnv {
             .arg("build")
             .status()
             .context("execute docker compose build")?;
-
         if !status.success() {
             bail!(
                 "docker compose build failed with exit code: {}",
@@ -93,10 +92,11 @@ impl TestEnv {
             );
         }
 
-        // Create marker file for this hash
+        // Create marker file for this hash now that the images are built.
         File::create(&marker_file).context("create marker file for docker compose build")?;
         info!("docker compose images built successfully for hash {hash}");
 
+        // And we're done! The lock is dropped when we exit.
         Ok(())
     }
 
@@ -114,41 +114,24 @@ impl TestEnv {
     /// The entire stack is automatically cleaned up when TestEnv is dropped.
     #[instrument]
     pub async fn new() -> Result<Self> {
-        // Ensure images are built before starting compose stack
         Self::ensure_built().await.context("build compose stack")?;
 
-        info!("starting docker compose stack...");
-
         // Get workspace root and construct path to compose file
-        let workspace_root = workspace_root::get_workspace_root();
+        info!("starting docker compose stack...");
+        let workspace_root = get_workspace_root();
         let compose_file = workspace_root.join("docker-compose.e2e.yml");
-        let compose_file_str = compose_file
+        let compose_file = compose_file
             .to_str()
             .ok_or_else(|| eyre!("invalid compose file path"))?;
 
-        // Start compose stack (images should already be built via ensure_built)
-        let mut compose = DockerCompose::with_local_client(&[compose_file_str]);
-        compose.up().await?; // Waits for health checks automatically
+        // Images were already built via `ensure_built`, so we can just start.
+        let mut compose = DockerCompose::with_local_client(&[compose_file]);
+
+        // The compose file has health checks built in, so we don't have to.
+        compose.up().await?;
 
         info!("docker compose stack ready");
-
-        let hurry_1_id = compose
-            .service("hurry-1")
-            .ok_or_else(|| eyre!("hurry-1 service not found"))?
-            .id()
-            .to_string();
-
-        let hurry_2_id = compose
-            .service("hurry-2")
-            .ok_or_else(|| eyre!("hurry-2 service not found"))?
-            .id()
-            .to_string();
-
-        Ok(TestEnv {
-            compose,
-            hurry_1_id,
-            hurry_2_id,
-        })
+        Ok(TestEnv { compose })
     }
 
     /// Get the URL to access Courier from within the Docker Compose network.
@@ -169,38 +152,36 @@ impl TestEnv {
         "acme-alice-token-001"
     }
 
-    /// Get a hurry container ID for running commands.
+    /// Get the Docker container ID for a compose service.
     ///
-    /// Returns the Docker container ID of the specified hurry service (1 or 2).
-    /// Each hurry container is a Debian-based container with Rust and hurry
-    /// installed. Use this with `Command::run_compose()` to execute
+    /// Returns the Docker container ID for the specified service name from the
+    /// compose stack. Use this with `Command::run_compose()` to execute
     /// commands inside the container.
     ///
-    /// The compose stack provides two hurry containers to support tests that
-    /// need multiple isolated containers (e.g., testing cache sharing
-    /// across containers).
-    ///
     /// # Arguments
-    /// * `index` - Which hurry container to use (1 or 2)
+    /// * `service_name` - The service name from docker-compose.e2e.yml
     ///
-    /// # Panics
-    /// Panics if index is not 1 or 2.
+    /// # Returns
+    /// The Docker container ID as a string.
+    ///
+    /// # Errors
+    /// Returns an error if the service is not found in the compose stack.
     ///
     /// # Example
     /// ```ignore
     /// let env = TestEnv::new().await?;
+    /// let container_id = env.service(TestEnv::HURRY_INSTANCE_1)?;
     /// Command::new()
     ///     .name("hurry")
     ///     .arg("--version")
     ///     .finish()
-    ///     .run_compose(env.hurry_container_id(1))
+    ///     .run_compose(container_id)
     ///     .await?;
     /// ```
-    pub fn hurry_container_id(&self, index: u8) -> &str {
-        match index {
-            1 => &self.hurry_1_id,
-            2 => &self.hurry_2_id,
-            _ => panic!("hurry container index must be 1 or 2, got {index}"),
-        }
+    pub fn service(&self, name: &str) -> Result<String> {
+        self.compose
+            .service(name)
+            .ok_or_else(|| eyre!("service '{name}' not found in compose stack"))
+            .map(|container| container.id().to_string())
     }
 }

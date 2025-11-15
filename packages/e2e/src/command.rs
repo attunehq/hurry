@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     ffi::{OsStr, OsString},
+    fmt::Debug,
     os::unix::process::ExitStatusExt,
     path::PathBuf,
     process::{ExitStatus, Output},
@@ -17,7 +18,7 @@ use color_eyre::{
     eyre::{Context, OptionExt, bail, eyre},
 };
 use futures::StreamExt;
-use tokio::io::{stderr, stdout, AsyncWriteExt};
+use tokio::io::{AsyncWriteExt, stderr, stdout};
 use tracing::instrument;
 
 use crate::GITHUB_TOKEN;
@@ -109,16 +110,17 @@ impl Command {
     /// # Example
     /// ```ignore
     /// let env = TestEnv::new().await?;
+    /// let container_id = env.service(TestEnv::HURRY_INSTANCE_1)?;
     /// Command::new()
     ///     .name("hurry")
     ///     .arg("--version")
     ///     .pwd("/workspace")
     ///     .finish()
-    ///     .run_compose(&env.hurry_container_id())
+    ///     .run_compose(&container_id)
     ///     .await?;
     /// ```
     #[instrument(skip(self, container_id), fields(name = ?self.name, pwd = ?self.pwd))]
-    pub async fn run_compose(self, container_id: &str) -> Result<()> {
+    pub async fn run_compose(self, container_id: impl AsRef<str> + Debug) -> Result<()> {
         fn try_as_unicode(s: impl AsRef<OsStr>) -> Result<String> {
             let s = s.as_ref();
             s.to_str()
@@ -172,7 +174,7 @@ impl Command {
         };
 
         let exec_id = docker
-            .create_exec(container_id, exec_config)
+            .create_exec(container_id.as_ref(), exec_config)
             .await
             .context("create exec")?
             .id;

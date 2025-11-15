@@ -19,7 +19,7 @@ async fn run_compose() -> Result<()> {
         .name("ls")
         .arg("-alh")
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await
         .context("run command in compose context")?;
 
@@ -40,7 +40,7 @@ async fn build_hurry_in_compose() -> Result<()> {
     Build::new()
         .pwd(&pwd)
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await
         .context("build hurry")?;
 
@@ -50,7 +50,7 @@ async fn build_hurry_in_compose() -> Result<()> {
         .name("hurry")
         .arg("--version")
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await
         .context("run hurry --version")?;
 

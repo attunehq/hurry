@@ -9,6 +9,7 @@ use e2e::{
     ext::{ArtifactIterExt, MessageIterExt},
 };
 use itertools::Itertools;
+use pretty_assertions::assert_eq as pretty_assert_eq;
 use simple_test_case::test_case;
 
 /// Exercises building and caching the project in a single directory.
@@ -40,7 +41,7 @@ async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         .repo(repo)
         .branch(branch)
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
     let messages = Build::new()
         .pwd(&repo_root)
@@ -48,7 +49,7 @@ async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         .courier_url(env.courier_url())
         .courier_token(env.test_token())
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     let expected = messages
@@ -64,7 +65,7 @@ async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         .freshness()
         .sorted()
         .collect::<Vec<_>>();
-    pretty_assertions::assert_eq!(
+    pretty_assert_eq!(
         expected,
         freshness,
         "no artifacts should be fresh: {messages:?}"
@@ -77,7 +78,7 @@ async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
     // Now if we delete the `target/` directory and rebuild, `hurry` should
     // reuse the cache and enable fresh artifacts.
     Command::cargo_clean(&repo_root)
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
     let messages = Build::new()
         .pwd(&repo_root)
@@ -85,7 +86,7 @@ async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         .courier_url(env.courier_url())
         .courier_token(env.test_token())
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     let expected = messages
@@ -101,7 +102,7 @@ async fn same_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         .freshness()
         .sorted()
         .collect::<Vec<_>>();
-    pretty_assertions::assert_eq!(
+    pretty_assert_eq!(
         expected,
         freshness,
         "all artifacts should be fresh: {messages:?}"
@@ -143,7 +144,7 @@ async fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         .repo(repo)
         .branch(branch)
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
     let messages = Build::new()
         .pwd(&repo_root)
@@ -151,7 +152,7 @@ async fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         .courier_url(env.courier_url())
         .courier_token(env.test_token())
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     let expected = messages
@@ -167,7 +168,7 @@ async fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         .freshness()
         .sorted()
         .collect::<Vec<_>>();
-    pretty_assertions::assert_eq!(
+    pretty_assert_eq!(
         expected,
         freshness,
         "no artifacts should be fresh: {messages:?}"
@@ -187,7 +188,7 @@ async fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         .branch(branch)
         .dir(&repo2)
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
     let messages = Build::new()
         .pwd(&repo2)
@@ -195,7 +196,7 @@ async fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         .courier_url(env.courier_url())
         .courier_token(env.test_token())
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     let expected = messages
@@ -211,7 +212,7 @@ async fn cross_dir(username: &str, repo: &str, branch: &str) -> Result<()> {
         .freshness()
         .sorted()
         .collect::<Vec<_>>();
-    pretty_assertions::assert_eq!(
+    pretty_assert_eq!(
         expected,
         freshness,
         "all artifacts should be fresh: {messages:?}"
@@ -250,7 +251,7 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
         .name("apt-get")
         .arg("update")
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
     Command::new()
         .pwd(&pwd)
@@ -261,7 +262,7 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
         .arg("libgpgme-dev")
         .arg("pkg-config")
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     // Nothing should be cached on the first build.
@@ -272,7 +273,7 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
         .repo(repo)
         .branch(branch)
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
     let messages = Build::new()
         .pwd(&repo_root)
@@ -280,7 +281,7 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
         .courier_url(env.courier_url())
         .courier_token(env.test_token())
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     assert!(
@@ -301,7 +302,7 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
         .freshness()
         .sorted()
         .collect::<Vec<_>>();
-    pretty_assertions::assert_eq!(
+    pretty_assert_eq!(
         expected,
         freshness,
         "no artifacts should be fresh: {messages:?}"
@@ -318,7 +319,7 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
         .name(repo_root.join("target").join("debug").join(bin))
         .arg("--help")
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     // Now if we clone the repo to a new directory and rebuild, `hurry` should
@@ -331,7 +332,7 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
         .branch(branch)
         .dir(&repo2)
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
     let messages = Build::new()
         .pwd(&repo2)
@@ -339,7 +340,7 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
         .courier_url(env.courier_url())
         .courier_token(env.test_token())
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     assert!(
@@ -360,7 +361,7 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
         .freshness()
         .sorted()
         .collect::<Vec<_>>();
-    pretty_assertions::assert_eq!(
+    pretty_assert_eq!(
         expected,
         freshness,
         "all artifacts should be fresh: {messages:?}"
@@ -376,7 +377,7 @@ async fn native(username: &str, repo: &str, branch: &str, bin: &str) -> Result<(
         .name(repo2.join("target").join("debug").join(bin))
         .arg("--help")
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     Ok(())
@@ -411,7 +412,7 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         .name("apt-get")
         .arg("update")
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
     Command::new()
         .pwd(&pwd)
@@ -422,7 +423,7 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         .arg("libgpgme-dev")
         .arg("pkg-config")
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     // Nothing should be cached on the first build.
@@ -433,7 +434,7 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         .repo(repo)
         .branch(branch)
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
     let messages = Build::new()
         .pwd(&repo_root)
@@ -441,7 +442,7 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         .courier_url(env.courier_url())
         .courier_token(env.test_token())
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     assert!(
@@ -462,7 +463,7 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         .freshness()
         .sorted()
         .collect::<Vec<_>>();
-    pretty_assertions::assert_eq!(
+    pretty_assert_eq!(
         expected,
         freshness,
         "no artifacts should be fresh: {messages:?}"
@@ -479,7 +480,7 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         .name(repo_root.join("target").join("debug").join(bin))
         .arg("--help")
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     // We uninstall the native dependencies we installed earlier.
@@ -492,7 +493,7 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         .arg("libgpgme-dev")
         .arg("pkg-config")
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     // Now if we clone the repo to a new directory and rebuild, `hurry` should
@@ -505,7 +506,7 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         .branch(branch)
         .dir(&repo2)
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     // ... but since we uninstalled the native dependencies, the build should
@@ -516,7 +517,7 @@ async fn native_uninstalled(username: &str, repo: &str, branch: &str, bin: &str)
         .courier_url(env.courier_url())
         .courier_token(env.test_token())
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await;
     assert!(build.is_err(), "build should fail: {build:?}");
 
@@ -559,7 +560,7 @@ async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()>
         .branch(branch)
         .dir(&pwd_repo_a)
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
     let messages_a = Build::new()
         .pwd(&pwd_repo_a)
@@ -567,7 +568,7 @@ async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()>
         .courier_url(env.courier_url())
         .courier_token(env.test_token())
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     assert!(
@@ -588,7 +589,7 @@ async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()>
         .freshness()
         .sorted()
         .collect::<Vec<_>>();
-    pretty_assertions::assert_eq!(
+    pretty_assert_eq!(
         expected,
         freshness,
         "no artifacts should be fresh in container A: {messages_a:?}"
@@ -607,7 +608,7 @@ async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()>
         .branch(branch)
         .dir(&pwd_repo_b)
         .finish()
-        .run_compose(env.hurry_container_id(2))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_2)?)
         .await?;
     let messages_b = Build::new()
         .pwd(&pwd_repo_b)
@@ -615,7 +616,7 @@ async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()>
         .courier_url(env.courier_url())
         .courier_token(env.test_token())
         .finish()
-        .run_compose(env.hurry_container_id(2))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_2)?)
         .await?;
 
     assert!(
@@ -636,7 +637,7 @@ async fn cross_container(username: &str, repo: &str, branch: &str) -> Result<()>
         .freshness()
         .sorted()
         .collect::<Vec<_>>();
-    pretty_assertions::assert_eq!(
+    pretty_assert_eq!(
         expected,
         freshness,
         "all artifacts should be fresh in container B: {messages_b:?}"
@@ -685,6 +686,10 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
     let pwd_repo_a = pwd.join(format!("{repo}-concurrent-a"));
     let pwd_repo_b = pwd.join(format!("{repo}-concurrent-b"));
 
+    // Get container IDs upfront for use in concurrent operations
+    let container_1 = env.service(TestEnv::HURRY_INSTANCE_1)?;
+    let container_2 = env.service(TestEnv::HURRY_INSTANCE_2)?;
+
     // Clone repos in both containers concurrently
     tokio::try_join!(
         Command::clone_github()
@@ -694,7 +699,7 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
             .branch(branch)
             .dir(&pwd_repo_a)
             .finish()
-            .run_compose(env.hurry_container_id(1)),
+            .run_compose(&container_1),
         Command::clone_github()
             .pwd(&pwd)
             .user(username)
@@ -702,7 +707,7 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
             .branch(branch)
             .dir(&pwd_repo_b)
             .finish()
-            .run_compose(env.hurry_container_id(2))
+            .run_compose(&container_2)
     )?;
 
     // This is the main part of the test: both containers should be able to
@@ -720,8 +725,8 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
         .courier_token(env.test_token())
         .finish();
     let (messages_a, messages_b) = tokio::try_join!(
-        build_a.run_compose(env.hurry_container_id(1)),
-        build_b.run_compose(env.hurry_container_id(2))
+        build_a.run_compose(&container_1),
+        build_b.run_compose(&container_2)
     )?;
 
     assert!(
@@ -745,7 +750,7 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
         .package_ids()
         .sorted()
         .collect::<Vec<_>>();
-    pretty_assertions::assert_eq!(
+    pretty_assert_eq!(
         packages_a,
         packages_b,
         "both concurrent builds should have built the same packages"
@@ -773,8 +778,8 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
         .courier_token(env.test_token())
         .finish();
     let (messages_a, messages_b) = tokio::try_join!(
-        build_a.run_compose(env.hurry_container_id(1)),
-        build_b.run_compose(env.hurry_container_id(2))
+        build_a.run_compose(&container_1),
+        build_b.run_compose(&container_2)
     )?;
     let packages_a = messages_a
         .iter()
@@ -788,7 +793,7 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
         .package_ids()
         .sorted()
         .collect::<Vec<_>>();
-    pretty_assertions::assert_eq!(
+    pretty_assert_eq!(
         packages_a,
         packages_b,
         "both concurrent builds should have built the same packages"
@@ -807,7 +812,7 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
         .freshness()
         .sorted()
         .collect::<Vec<_>>();
-    pretty_assertions::assert_eq!(
+    pretty_assert_eq!(
         expected_a,
         freshness_a,
         "all artifacts should be fresh: {messages_a:?}"
@@ -826,7 +831,7 @@ async fn cross_container_concurrent(username: &str, repo: &str, branch: &str) ->
         .freshness()
         .sorted()
         .collect::<Vec<_>>();
-    pretty_assertions::assert_eq!(
+    pretty_assert_eq!(
         expected_b,
         freshness_b,
         "all artifacts should be fresh: {messages_b:?}"

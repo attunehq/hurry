@@ -5,6 +5,7 @@
 
 use color_eyre::Result;
 use e2e::{Command, TestEnv};
+use pretty_assertions::assert_eq as pretty_assert_eq;
 
 /// Validates that the TestEnv Docker Compose stack starts successfully.
 ///
@@ -23,11 +24,11 @@ async fn compose_stack_starts() -> Result<()> {
 
     // Verify we can get the courier URL (internal Docker network URL)
     let courier_url = env.courier_url();
-    assert_eq!(courier_url, "http://courier:3000");
+    pretty_assert_eq!(courier_url, "http://courier:3000");
 
     // Verify we can get the test token
     let token = env.test_token();
-    assert_eq!(token, "acme-alice-token-001");
+    pretty_assert_eq!(token, "acme-alice-token-001");
 
     Ok(())
 }
@@ -51,7 +52,7 @@ async fn hurry_container_runs_commands() -> Result<()> {
         .arg("--version")
         .pwd("/workspace")
         .finish()
-        .run_compose(env.hurry_container_id(1))
+        .run_compose(&env.service(TestEnv::HURRY_INSTANCE_1)?)
         .await?;
 
     Ok(())
