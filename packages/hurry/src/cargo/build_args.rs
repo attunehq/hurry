@@ -6,6 +6,8 @@ use itertools::PeekingNext;
 use parse_display::{Display as ParseDisplay, FromStr as ParseFromStr};
 use tracing::trace;
 
+use crate::cargo::rustc::RustcTarget;
+
 /// Parsed arguments for a `cargo build` invocation.
 ///
 /// ## Parsing
@@ -69,11 +71,14 @@ impl CargoBuildArguments {
     }
 
     /// The target triple if specified.
-    pub fn target(&self) -> Option<&str> {
-        self.0.iter().find_map(|arg| match arg {
-            CargoBuildArgument::Target(Some(t)) => Some(t.as_str()),
-            _ => None,
-        })
+    pub fn target(&self) -> RustcTarget {
+        self.0
+            .iter()
+            .find_map(|arg| match arg {
+                CargoBuildArgument::Target(Some(t)) => Some(RustcTarget::Target(t.clone())),
+                _ => None,
+            })
+            .unwrap_or(RustcTarget::Host)
     }
 
     /// The target directory if specified.
@@ -713,7 +718,10 @@ mod tests {
     #[test]
     fn parses_target(args: &[&str]) {
         let parsed = CargoBuildArguments::from_iter(args.to_vec());
-        pretty_assert_eq!(parsed.target(), Some("x86_64-unknown-linux-gnu"));
+        pretty_assert_eq!(
+            parsed.target(),
+            RustcTarget::Target(String::from("x86_64-unknown-linux-gnu"))
+        );
     }
 
     #[test_case(&["--target-dir", "/custom/target"]; "space_separated")]

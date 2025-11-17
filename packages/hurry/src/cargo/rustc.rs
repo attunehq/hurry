@@ -8,10 +8,25 @@ use derive_more::Display;
 use enum_assoc::Assoc;
 use itertools::PeekingNext;
 use parse_display::{Display as ParseDisplay, FromStr as ParseFromStr};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use tracing::{instrument, trace};
 
 use crate::{cargo::CargoBuildArguments, path::AbsDirPath};
+
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+pub enum RustcTarget {
+    Host,
+    Target(String),
+}
+
+impl From<RustcTarget> for Option<String> {
+    fn from(value: RustcTarget) -> Self {
+        match value {
+            RustcTarget::Host => None,
+            RustcTarget::Target(target) => Some(target),
+        }
+    }
+}
 
 /// Rust compiler metadata for cache key generation.
 ///
@@ -32,7 +47,7 @@ use crate::{cargo::CargoBuildArguments, path::AbsDirPath};
 //
 // TODO: Add output from `rustc -vV`, which is what Cargo invokes? How does
 // Cargo use this information?
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize)]
 pub struct RustcMetadata {
     /// The host target triple.
     #[serde(rename = "llvm-target")]
@@ -56,8 +71,8 @@ impl RustcMetadata {
         // Forward the user's --target flag to rustc to get metadata for the
         // correct target, not just the host.
         cmd.args(["-Z", "unstable-options", "--print", "target-spec-json"]);
-        if let Some(target) = args.as_ref().target() {
-            cmd.args(["--target", target]);
+        if let RustcTarget::Target(target) = args.as_ref().target() {
+            cmd.args(["--target", &target]);
         }
         cmd.current_dir(workspace_root.as_std_path());
         let output = cmd.output().await.context("run rustc")?;

@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    cargo::Workspace,
+    cargo::{RustcTarget, Workspace},
     fs,
-    path::{AbsFilePath, GenericPath, JoinWith as _, RelFilePath, RelativeTo as _},
+    path::{AbsDirPath, AbsFilePath, GenericPath, JoinWith as _, RelFilePath, RelativeTo as _},
 };
 
 /// A "qualified" path inside a Cargo project.
@@ -49,14 +49,15 @@ pub enum QualifiedPath {
 
 impl QualifiedPath {
     #[instrument(name = "QualifiedPath::parse_string")]
-    pub async fn parse_string(ws: &Workspace, path: &str) -> Result<Self> {
-        Self::parse(ws, &GenericPath::try_from(path)?).await
+    pub async fn parse_string(ws: &Workspace, target: &RustcTarget, path: &str) -> Result<Self> {
+        Self::parse(ws, target, &GenericPath::try_from(path)?).await
     }
 
     #[instrument(name = "QualifiedPath::parse")]
-    pub async fn parse(ws: &Workspace, path: &GenericPath) -> Result<Self> {
+    pub async fn parse(ws: &Workspace, target: &RustcTarget, path: &GenericPath) -> Result<Self> {
+        let profile_dir = Self::unit_profile_dir(ws, target)?;
         Ok(if let Ok(rel) = RelFilePath::try_from(path) {
-            if fs::exists(ws.profile_dir.join(&rel).as_std_path()).await {
+            if fs::exists(profile_dir.join(&rel).as_std_path()).await {
                 Self::RelativeTargetProfile(rel)
             } else if fs::exists(ws.cargo_home.join(&rel).as_std_path()).await {
                 Self::RelativeCargoHome(rel)
@@ -64,7 +65,7 @@ impl QualifiedPath {
                 Self::Rootless(rel)
             }
         } else if let Ok(abs) = AbsFilePath::try_from(path) {
-            if let Ok(rel) = abs.relative_to(&ws.profile_dir) {
+            if let Ok(rel) = abs.relative_to(&profile_dir) {
                 Self::RelativeTargetProfile(rel)
             } else if let Ok(rel) = abs.relative_to(&ws.cargo_home) {
                 Self::RelativeCargoHome(rel)
@@ -77,17 +78,30 @@ impl QualifiedPath {
     }
 
     #[instrument(name = "QualifiedPath::reconstruct_string")]
-    pub fn reconstruct_string(&self, ws: &Workspace) -> String {
-        Self::reconstruct(self, ws).to_string()
+    pub fn reconstruct_string(&self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
+        Self::reconstruct(self, ws, target).map(|p| p.to_string())
     }
 
     #[instrument(name = "QualifiedPath::reconstruct")]
-    pub fn reconstruct(&self, ws: &Workspace) -> GenericPath {
-        match self {
+    pub fn reconstruct(&self, ws: &Workspace, target: &RustcTarget) -> Result<GenericPath> {
+        let profile_dir = Self::unit_profile_dir(ws, target)?;
+        Ok(match self {
             QualifiedPath::Rootless(rel) => rel.into(),
-            QualifiedPath::RelativeTargetProfile(rel) => ws.profile_dir.join(rel).into(),
+            QualifiedPath::RelativeTargetProfile(rel) => profile_dir.join(rel).into(),
             QualifiedPath::RelativeCargoHome(rel) => ws.cargo_home.join(rel).into(),
             QualifiedPath::Absolute(abs) => abs.into(),
-        }
+        })
+    }
+
+    fn unit_profile_dir(ws: &Workspace, target: &RustcTarget) -> Result<AbsDirPath> {
+        Ok(match target {
+            RustcTarget::Target(_) if *target == ws.target_arch => ws.target_profile_dir(),
+            RustcTarget::Host => ws.host_profile_dir(),
+            RustcTarget::Target(_) => bail!(
+                "target triple {:?} does not match workspace target triple {:?}",
+                target,
+                ws.target_arch
+            ),
+        })
     }
 }
