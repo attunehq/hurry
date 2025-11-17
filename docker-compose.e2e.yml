@@ -1,0 +1,90 @@
+name: "courier-e2e"
+services:
+    postgres:
+        image: postgres:18
+        environment:
+            POSTGRES_USER: courier
+            POSTGRES_PASSWORD: courier
+            POSTGRES_DB: courier
+            POSTGRES_HOST_AUTH_METHOD: trust
+        healthcheck:
+            test: ["CMD", "pg_isready", "-U", "courier"]
+            interval: 1s
+            timeout: 5s
+            retries: 30
+        # No volumes: fully ephemeral
+
+    migrate:
+        build:
+            context: .
+            dockerfile: ./docker/courier/Dockerfile
+        environment:
+            COURIER_DATABASE_URL: postgres://courier:courier@postgres:5432/courier
+        command: ["migrate"]
+        depends_on:
+            postgres:
+                condition: service_healthy
+
+    fixtures:
+        image: postgres:18
+        volumes:
+            - ./packages/courier/schema/fixtures/auth.sql:/tmp/auth.sql:ro
+        environment:
+            PGPASSWORD: courier
+        command: ["psql", "-h", "postgres", "-U", "courier", "-d", "courier", "-f", "/tmp/auth.sql"]
+        depends_on:
+            migrate:
+                condition: service_completed_successfully
+
+    courier:
+        build:
+            context: .
+            dockerfile: ./docker/courier/Dockerfile
+        ports:
+            - "3000"  # Random host port mapped to container port 3000
+        environment:
+            COURIER_DATABASE_URL: postgres://courier:courier@postgres:5432/courier
+            CAS_ROOT: /tmp/cas
+            HOST: 0.0.0.0
+            PORT: 3000
+            RUST_LOG: courier=debug
+        command: ["serve"]
+        depends_on:
+            postgres:
+                condition: service_healthy
+            migrate:
+                condition: service_completed_successfully
+            fixtures:
+                condition: service_completed_successfully
+        healthcheck:
+            test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+            interval: 1s
+            timeout: 5s
+            retries: 30
+
+    # Hurry containers: debian-based with Rust toolchain and hurry installed
+    #
+    # We define two identical hurry services to support tests that need multiple
+    # isolated containers (e.g., testing cache sharing across containers). Each test
+    # gets its own ephemeral compose stack, so there's no risk of interference between
+    # parallel tests.
+    #
+    # Single-container tests use hurry-1; multi-container tests use both hurry-1 and hurry-2.
+    # All hurry containers share the same compose network and can communicate with courier.
+    hurry-1:
+        build:
+            context: .
+            dockerfile: ./docker/hurry/Dockerfile
+        depends_on:
+            courier:
+                condition: service_healthy
+        command: ["sleep", "infinity"]
+
+    hurry-2:
+        build:
+            context: .
+            dockerfile: ./docker/hurry/Dockerfile
+        depends_on:
+            courier:
+                condition: service_healthy
+        command: ["sleep", "infinity"]

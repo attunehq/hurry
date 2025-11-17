@@ -25,8 +25,7 @@
 )]
 
 use std::{
-    collections::HashSet, convert::identity, fmt::Debug as StdDebug, marker::PhantomData,
-    sync::Arc, time::SystemTime,
+    convert::identity, fmt::Debug as StdDebug, marker::PhantomData, sync::Arc, time::SystemTime,
 };
 
 use bon::Builder;
@@ -37,7 +36,7 @@ use color_eyre::{
 use derive_more::{Debug, Display};
 use filetime::FileTime;
 use fslock::LockFile as FsLockFile;
-use futures::{Stream, TryStreamExt, future};
+use futures::{Stream, TryStreamExt};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tap::{Pipe, TapFallible};
@@ -46,10 +45,7 @@ use tracing::{debug, error, instrument, trace};
 
 use clients::courier::v1::Key;
 
-use crate::{
-    ext::then_context,
-    path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, RelativeTo},
-};
+use crate::path::{Abs, AbsDirPath, AbsFilePath, JoinWith, RelativeTo, TypedPath};
 
 /// The default level of concurrency used in hurry `fs` operations.
 ///
@@ -140,58 +136,6 @@ impl LockFile<Locked> {
         .await
         .context("join task")?
         .tap_ok(|f| trace!(path = ?f.path, "unlocked file"))
-    }
-}
-
-/// File index of a directory.
-#[derive(Clone, Debug)]
-pub struct Index {
-    /// The root directory of the index.
-    pub root: AbsDirPath,
-
-    /// Files are relative to `root`.
-    //
-    // TODO: May want to make this a trie or something.
-    // https://docs.rs/fs-tree/0.2.2/fs_tree/ looked like it might work,
-    // but the API was sketchy so I didn't use it for now.
-    #[debug("{}", files.len())]
-    pub files: HashSet<RelFilePath>,
-}
-
-impl Index {
-    /// Index the provided path recursively.
-    #[instrument(name = "Index::recursive")]
-    pub async fn recursive(root: &AbsDirPath) -> Result<Self> {
-        let root = root.clone();
-        let files = walk_files(&root)
-            .and_then(|entry| future::ready(entry.relative_to(&root)))
-            .try_collect::<HashSet<_>>()
-            .await?;
-
-        Ok(Self { root, files })
-    }
-}
-
-/// An entry for a file that was indexed in [`Index`].
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub struct IndexEntry {
-    /// The hash of the file's contents.
-    pub hash: Key,
-
-    /// The metadata of the file.
-    pub metadata: Metadata,
-}
-
-impl IndexEntry {
-    /// Construct the entry from the provided file on disk.
-    #[instrument(name = "IndexEntry::from_file")]
-    pub async fn from_file(path: &AbsFilePath) -> Result<Self> {
-        let hash = hash_file(path).then_context("hash file").await?;
-        let metadata = Metadata::from_file(path)
-            .then_context("get metadata")
-            .await?
-            .ok_or_eyre(format!("file {path:?} should exist"))?;
-        Ok(Self { hash, metadata })
     }
 }
 
@@ -442,6 +386,15 @@ pub async fn remove_file(path: &AbsFilePath) -> Result<()> {
         .tap_ok(|_| trace!(?path, "remove file"))
 }
 
+/// Rename a file or folder, overwriting the destination if it already exists.
+#[instrument]
+pub async fn rename<T>(src: &TypedPath<Abs, T>, dst: &TypedPath<Abs, T>) -> Result<()> {
+    tokio::fs::rename(src.as_std_path(), dst.as_std_path())
+        .await
+        .with_context(|| format!("rename file: {src:?} -> {dst:?}"))
+        .tap_ok(|_| trace!(?src, ?dst, "rename file"))
+}
+
 /// Read directory entries.
 #[instrument]
 pub async fn read_dir(path: &AbsDirPath) -> Result<ReadDir> {
@@ -511,26 +464,7 @@ impl Metadata {
     /// the path extension or the file itself.
     #[instrument(name = "Metadata::set_file")]
     pub async fn set_file(&self, path: &AbsFilePath) -> Result<()> {
-        // We read the current metadata for the file so that we don't
-        // accidentally clobber other fields (although it's not clear
-        // that this is necessary- we mostly do this out of an abundance
-        // of caution as we want to avoid breaking things).
-        // If this ends up being too much of a performance hit we should
-        // revisit.
-        #[cfg(not(target_os = "windows"))]
-        if self.executable {
-            use std::os::unix::fs::PermissionsExt;
-
-            let metadata = tokio::fs::metadata(path.as_std_path())
-                .await
-                .context("get metadata")?;
-            let mut permissions = metadata.permissions();
-            permissions.set_mode(permissions.mode() | 0o111);
-            tokio::fs::set_permissions(path.as_std_path(), permissions.clone())
-                .await
-                .context("set permissions")
-                .tap_ok(|_| trace!(?path, ?permissions, "set permissions"))?;
-        }
+        set_executable(path, self.executable).await?;
 
         // Make sure to set the file times last so that other modifications to
         // the metadata don't mess with these.
@@ -583,7 +517,7 @@ pub async fn metadata(
 /// Check whether the file exists.
 ///
 /// Returns `false` if there is an error checking whether the path exists.
-/// Note that this sort of check is prone to race conditions- if you plan
+/// Note that this sort of check is prone to race conditions - if you plan
 /// to do anything with the file after checking, you should probably
 /// just try to do the operation and handle the case of the file not existing.
 #[instrument]
@@ -603,6 +537,46 @@ pub async fn is_executable(path: impl AsRef<std::path::Path> + StdDebug) -> bool
     spawn_blocking(move || is_executable::is_executable(path))
         .await
         .expect("join task")
+}
+
+/// Set the file to be executable.
+///
+/// ## Windows
+///
+/// This function does not attempt to set whether a file is executable on
+/// Windows: in Windows files do not have "executable bits" and
+/// therefore whether they are executable is an intrinsic property of either
+/// the path extension or the file itself.
+#[instrument]
+pub async fn set_executable(path: &AbsFilePath, executable: bool) -> Result<()> {
+    // We read the current metadata for the file so that we don't accidentally
+    // clobber other fields (although it's not clear that this is necessary - we
+    // mostly do this out of an abundance of caution as we want to avoid
+    // breaking things). If this ends up being too much of a performance hit we
+    // should revisit.
+    #[cfg(not(target_os = "windows"))]
+    if executable {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let metadata = tokio::fs::metadata(path.as_std_path())
+            .await
+            .context("get metadata")?;
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(permissions.mode() | 0o111);
+        tokio::fs::set_permissions(path.as_std_path(), permissions.clone())
+            .await
+            .context("set permissions")
+            .tap_ok(|_| trace!(?path, ?permissions, "set permissions"))?;
+    }
+    Ok(())
+}
+
+/// Create a hard link to the file.
+#[instrument]
+pub async fn hard_link(original: &AbsFilePath, link: &AbsFilePath) -> Result<()> {
+    tokio::fs::hard_link(original.as_std_path(), link.as_std_path())
+        .await
+        .context(format!("hard link {original:?} -> {link:?}"))
 }
 
 /// Return whether the path represents a directory.
