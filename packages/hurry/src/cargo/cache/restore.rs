@@ -16,7 +16,8 @@ use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     cargo::{
-        ArtifactKey, ArtifactPlan, BuildScriptOutput, DepInfo, QualifiedPath, RootOutput, Workspace,
+        ArtifactKey, ArtifactPlan, BuildScriptOutput, DepInfo, QualifiedPath, RootOutput,
+        RustcTarget, Workspace,
     },
     cas::CourierCas,
     fs,
@@ -116,7 +117,9 @@ async fn filter_files_need_restored(
             // Convert the artifact file path back to QualifiedPath and reconstruct it to an
             // absolute path for this machine.
             let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
-            let path = qualified.reconstruct(&ws).pipe(AbsFilePath::try_from)?;
+            let path = qualified
+                .reconstruct(ws, &RustcTarget::Host)?
+                .pipe(AbsFilePath::try_from)?;
 
             // Check if file already exists with correct content. If so, don't need to
             // restore it.
@@ -247,7 +250,7 @@ async fn restore_single_file(
     data: &[u8],
     restored: &Restored,
 ) -> Result<u64> {
-    let data = reconstruct(&ws, path, data).await?;
+    let data = reconstruct(ws, path, data).await?;
 
     let mtime = UNIX_EPOCH + Duration::from_nanos(file.mtime_nanos as u64);
     let metadata = fs::Metadata::builder()
@@ -286,17 +289,17 @@ async fn reconstruct(ws: &Workspace, path: &AbsFilePath, content: &[u8]) -> Resu
         Some("root-output") => {
             trace!(?path, "reconstructing root-output file");
             let parsed = serde_json::from_slice::<RootOutput>(content)?;
-            Ok(parsed.reconstruct(ws).into_bytes())
+            Ok(parsed.reconstruct(ws, &RustcTarget::Host)?.into_bytes())
         }
         Some("build-script-output") => {
             trace!(?path, "reconstructing build-script-output file");
             let parsed = serde_json::from_slice::<BuildScriptOutput>(content)?;
-            Ok(parsed.reconstruct(ws).into_bytes())
+            Ok(parsed.reconstruct(ws, &RustcTarget::Host)?.into_bytes())
         }
         Some("dep-info") => {
             trace!(?path, "reconstructing dep-info file");
             let parsed = serde_json::from_slice::<DepInfo>(content)?;
-            Ok(parsed.reconstruct(ws).into_bytes())
+            Ok(parsed.reconstruct(ws, &RustcTarget::Host)?.into_bytes())
         }
         None => {
             // No reconstruction needed, use as-is.

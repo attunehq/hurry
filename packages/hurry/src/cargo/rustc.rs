@@ -28,6 +28,17 @@ impl From<RustcTarget> for Option<String> {
     }
 }
 
+// TODO: Maybe get rid of this once we port over all the logic? After all, we
+// should really only be constructing these from explicit argv parsing.
+impl From<Option<String>> for RustcTarget {
+    fn from(value: Option<String>) -> Self {
+        match value {
+            Some(target) => RustcTarget::Target(target),
+            None => RustcTarget::Host,
+        }
+    }
+}
+
 /// Rust compiler metadata for cache key generation.
 ///
 /// Contains platform-specific compiler information needed to generate cache

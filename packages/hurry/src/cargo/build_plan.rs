@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::cargo::{RustcArguments, CargoCompileMode};
+use crate::cargo::{CargoCompileMode, RustcArguments};
 
 #[derive(Clone, Eq, PartialEq, Debug, Deserialize)]
 pub struct BuildPlan {

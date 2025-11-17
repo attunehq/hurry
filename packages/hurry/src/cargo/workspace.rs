@@ -689,11 +689,13 @@ impl BuiltArtifact {
         // Read the build script output from the build folders, and parse
         // the output for directives.
         let build_script_output = match &key.build_script_files {
-            Some(files) => {
-                BuildScriptOutput::from_file(ws, &files.output_dir.join(mk_rel_file!("output")))
-                    .await
-                    .map(Some)?
-            }
+            Some(files) => BuildScriptOutput::from_file(
+                ws,
+                &key.target.clone().into(),
+                &files.output_dir.join(mk_rel_file!("output")),
+            )
+            .await
+            .map(Some)?,
             None => None,
         };
 

@@ -55,6 +55,8 @@ impl QualifiedPath {
 
     #[instrument(name = "QualifiedPath::parse")]
     pub async fn parse(ws: &Workspace, target: &RustcTarget, path: &GenericPath) -> Result<Self> {
+        // TODO: Do we see repeated paths a lot? Should we cache the
+        // `fs::exists` calls?
         let profile_dir = Self::unit_profile_dir(ws, target)?;
         Ok(if let Ok(rel) = RelFilePath::try_from(path) {
             if fs::exists(profile_dir.join(&rel).as_std_path()).await {
