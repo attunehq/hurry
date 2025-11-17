@@ -18,7 +18,7 @@ use crate::{
         self, BuildPlan, BuildScriptOutput, CargoBuildArguments, CargoCompileMode, Profile,
         RustcArgument, RustcMetadata,
     },
-    mk_rel_file,
+    fs, mk_rel_file,
     path::{AbsDirPath, AbsFilePath, JoinWith as _, TryJoinWith as _},
 };
 
@@ -185,12 +185,9 @@ impl Workspace {
         // but at least won't break the build.
         let temp = self
             .root
-            .as_std_path()
-            .join(format!("target.backup.{}", Uuid::new_v4()));
+            .try_join_dir(format!("target.backup.{}", Uuid::new_v4()))?;
 
-        let renamed = tokio::fs::rename(self.target.as_std_path(), &temp)
-            .await
-            .is_ok();
+        let renamed = fs::rename(&self.target, &temp).await.is_ok();
 
         defer! {
             if renamed {
