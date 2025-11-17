@@ -55,7 +55,7 @@ impl RootOutput {
 
     /// Reconstruct the file in the context of the profile directory.
     #[instrument(name = "RootOutput::reconstruct")]
-    pub fn reconstruct(&self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
+    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
         self.0.reconstruct_string(ws, target)
     }
 }
@@ -104,9 +104,9 @@ impl BuildScriptOutput {
 
     /// Reconstruct the file in the context of the profile directory.
     #[instrument(name = "BuildScriptOutput::reconstruct")]
-    pub fn reconstruct(&self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
+    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
         self.0
-            .iter()
+            .into_iter()
             .map(|line| line.reconstruct(ws, target))
             .try_collect::<_, Vec<_>, _>()?
             .join("\n")
@@ -345,7 +345,7 @@ impl BuildScriptOutputLine {
 
     /// Reconstruct the line in the current context.
     #[instrument(name = "BuildScriptOutputLine::reconstruct")]
-    pub fn reconstruct(&self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
+    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
         Ok(match self {
             Self::RerunIfChanged(style, path) => {
                 format!(

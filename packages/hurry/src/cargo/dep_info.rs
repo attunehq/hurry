@@ -86,9 +86,9 @@ impl DepInfo {
 
     /// Reconstruct the "dep-info" file in the context of the profile directory.
     #[instrument(name = "DepInfo::reconstruct")]
-    pub fn reconstruct(&self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
+    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
         self.0
-            .iter()
+            .into_iter()
             .map(|line| line.reconstruct(ws, target))
             .try_collect::<_, Vec<_>, _>()?
             .join("\n")
@@ -186,12 +186,12 @@ impl DepInfoLine {
     }
 
     #[instrument(name = "DepInfoLine::reconstruct")]
-    pub fn reconstruct(&self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
+    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
         Ok(match self {
             Self::Build(output, inputs) => {
                 let output = output.reconstruct_string(ws, target)?;
                 let inputs = inputs
-                    .iter()
+                    .into_iter()
                     .map(|input| input.reconstruct_string(ws, target))
                     .try_collect::<_, Vec<_>, _>()?
                     .join(" ");

@@ -80,12 +80,12 @@ impl QualifiedPath {
     }
 
     #[instrument(name = "QualifiedPath::reconstruct_string")]
-    pub fn reconstruct_string(&self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
+    pub fn reconstruct_string(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
         Self::reconstruct(self, ws, target).map(|p| p.to_string())
     }
 
     #[instrument(name = "QualifiedPath::reconstruct")]
-    pub fn reconstruct(&self, ws: &Workspace, target: &RustcTarget) -> Result<GenericPath> {
+    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<GenericPath> {
         let profile_dir = Self::unit_profile_dir(ws, target)?;
         Ok(match self {
             QualifiedPath::Rootless(rel) => rel.into(),
