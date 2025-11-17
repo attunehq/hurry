@@ -11,10 +11,10 @@ use tap::Pipe;
 use tracing::{instrument, trace};
 
 use crate::{
-    cargo::{QualifiedPath, Workspace},
+    cargo::{QualifiedPath, RustcTarget, Workspace},
     ext::{then_context, then_with_context},
     fs::{self, DEFAULT_CONCURRENCY},
-    path::{AbsDirPath, AbsFilePath},
+    path::AbsFilePath,
 };
 
 /// A parsed "dep-info" file.
@@ -60,7 +60,11 @@ impl DepInfo {
     /// parses each line for the `output:` format, and filters for relevant
     /// file extensions. All returned paths are relative to the profile root.
     #[instrument(name = "DepInfo::from_file")]
-    pub async fn from_file(ws: &Workspace, dotd: &AbsFilePath) -> Result<Self> {
+    pub async fn from_file(
+        ws: &Workspace,
+        target: &RustcTarget,
+        dotd: &AbsFilePath,
+    ) -> Result<Self> {
         let content = fs::read_buffered_utf8(dotd)
             .await
             .context("read file")?
@@ -69,7 +73,7 @@ impl DepInfo {
         let lines = escaped_lines(&content)
             .pipe(stream::iter)
             .then(|line| async move {
-                DepInfoLine::parse(ws, &line)
+                DepInfoLine::parse(ws, target, &line)
                     .await
                     .with_context(|| format!("parse line: {line:?}"))
             })
@@ -82,17 +86,13 @@ impl DepInfo {
 
     /// Reconstruct the "dep-info" file in the context of the profile directory.
     #[instrument(name = "DepInfo::reconstruct")]
-    pub fn reconstruct(&self, ws: &Workspace) -> String {
-        self.reconstruct_raw(&ws.profile_dir, &ws.cargo_home)
-    }
-
-    /// Reconstruct the "dep-info" file using owned path data.
-    #[instrument(name = "DepInfo::reconstruct_raw")]
-    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
+    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
         self.0
-            .iter()
-            .map(|line| line.reconstruct_raw(profile_root, cargo_home))
+            .into_iter()
+            .map(|line| line.reconstruct(ws, target))
+            .try_collect::<_, Vec<_>, _>()?
             .join("\n")
+            .pipe(Ok)
     }
 
     /// Iterate over the lines in the file.
@@ -150,13 +150,13 @@ impl DepInfoLine {
     // [^3]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/struct.RustcDepInfo.html
     // [^4]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/fn.parse_rustc_dep_info.html
     #[instrument(name = "DepInfoLine::parse")]
-    pub async fn parse(ws: &Workspace, line: &str) -> Result<Self> {
+    pub async fn parse(ws: &Workspace, target: &RustcTarget, line: &str) -> Result<Self> {
         Ok(if line.is_empty() {
             Self::Space
         } else if let Some(comment) = line.strip_prefix('#') {
             Self::Comment(comment.to_string())
         } else if let Some(output) = line.strip_suffix(':') {
-            let output = QualifiedPath::parse_string(ws, output)
+            let output = QualifiedPath::parse_string(ws, target, output)
                 .then_with_context(move || format!("parse output path: {output:?}"))
                 .await?;
             Self::Build(output, Vec::new())
@@ -165,7 +165,7 @@ impl DepInfoLine {
                 bail!("no output/input separator");
             };
 
-            let output = QualifiedPath::parse_string(ws, output)
+            let output = QualifiedPath::parse_string(ws, target, output)
                 .then_with_context(move || format!("parse output path: {output:?}"));
             let inputs = inputs
                 .split_whitespace()
@@ -173,7 +173,7 @@ impl DepInfoLine {
                 .collect_vec()
                 .pipe(stream::iter)
                 .map(|input| async move {
-                    QualifiedPath::parse_string(ws, &input)
+                    QualifiedPath::parse_string(ws, target, &input)
                         .await
                         .with_context(move || format!("parse input path: {input:?}"))
                 })
@@ -186,24 +186,20 @@ impl DepInfoLine {
     }
 
     #[instrument(name = "DepInfoLine::reconstruct")]
-    pub fn reconstruct(&self, ws: &Workspace) -> String {
-        self.reconstruct_raw(&ws.profile_dir, &ws.cargo_home)
-    }
-
-    #[instrument(name = "DepInfoLine::reconstruct_raw")]
-    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
-        match self {
+    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
+        Ok(match self {
             Self::Build(output, inputs) => {
-                let output = output.reconstruct_raw_string(profile_root, cargo_home);
+                let output = output.reconstruct_string(ws, target)?;
                 let inputs = inputs
-                    .iter()
-                    .map(|input| input.reconstruct_raw_string(profile_root, cargo_home))
+                    .into_iter()
+                    .map(|input| input.reconstruct_string(ws, target))
+                    .try_collect::<_, Vec<_>, _>()?
                     .join(" ");
                 format!("{output}: {inputs}")
             }
             DepInfoLine::Space => String::new(),
             DepInfoLine::Comment(comment) => format!("#{comment}"),
-        }
+        })
     }
 }
 

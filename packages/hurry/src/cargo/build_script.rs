@@ -9,13 +9,13 @@ use enum_assoc::Assoc;
 use futures::{StreamExt, stream};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use tap::TapFallible;
+use tap::{Pipe as _, TapFallible};
 use tracing::{instrument, trace};
 
 use crate::{
-    cargo::{QualifiedPath, Workspace},
+    cargo::{QualifiedPath, RustcTarget, Workspace},
     fs,
-    path::{AbsDirPath, AbsFilePath},
+    path::AbsFilePath,
 };
 
 /// Represents a "root output" file, used for build scripts.
@@ -33,7 +33,11 @@ pub struct RootOutput(QualifiedPath);
 impl RootOutput {
     /// Parse a "root output" file.
     #[instrument(name = "RootOutput::from_file")]
-    pub async fn from_file(ws: &Workspace, file: &AbsFilePath) -> Result<Self> {
+    pub async fn from_file(
+        ws: &Workspace,
+        target: &RustcTarget,
+        file: &AbsFilePath,
+    ) -> Result<Self> {
         let content = fs::read_buffered_utf8(file)
             .await
             .context("read file")?
@@ -42,7 +46,7 @@ impl RootOutput {
             .lines()
             .exactly_one()
             .map_err(|_| eyre!("RootOutput file has more than one line: {content:?}"))?;
-        QualifiedPath::parse_string(ws, line)
+        QualifiedPath::parse_string(ws, target, line)
             .await
             .context("parse file")
             .map(Self)
@@ -51,14 +55,8 @@ impl RootOutput {
 
     /// Reconstruct the file in the context of the profile directory.
     #[instrument(name = "RootOutput::reconstruct")]
-    pub fn reconstruct(&self, ws: &Workspace) -> String {
-        self.reconstruct_raw(&ws.profile_dir, &ws.cargo_home)
-    }
-
-    /// Reconstruct the file using owned path data.
-    #[instrument(name = "RootOutput::reconstruct_raw")]
-    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
-        self.0.reconstruct_raw_string(profile_root, cargo_home)
+    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
+        self.0.reconstruct_string(ws, target)
     }
 }
 
@@ -86,13 +84,17 @@ pub struct BuildScriptOutput(Vec<BuildScriptOutputLine>);
 impl BuildScriptOutput {
     /// Parse a build script output file.
     #[instrument(name = "BuildScriptOutput::from_file")]
-    pub async fn from_file(ws: &Workspace, file: &AbsFilePath) -> Result<Self> {
+    pub async fn from_file(
+        ws: &Workspace,
+        target: &RustcTarget,
+        file: &AbsFilePath,
+    ) -> Result<Self> {
         let content = fs::read_buffered_utf8(file)
             .await
             .context("read file")?
             .ok_or_eyre("file does not exist")?;
         let lines = stream::iter(content.lines())
-            .then(|line| BuildScriptOutputLine::parse(ws, line))
+            .then(|line| BuildScriptOutputLine::parse(ws, target, line))
             .collect::<Vec<_>>()
             .await;
 
@@ -102,17 +104,13 @@ impl BuildScriptOutput {
 
     /// Reconstruct the file in the context of the profile directory.
     #[instrument(name = "BuildScriptOutput::reconstruct")]
-    pub fn reconstruct(&self, ws: &Workspace) -> String {
-        self.0.iter().map(|line| line.reconstruct(ws)).join("\n")
-    }
-
-    /// Reconstruct the file using owned path data.
-    #[instrument(name = "BuildScriptOutput::reconstruct_raw")]
-    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
+    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
         self.0
-            .iter()
-            .map(|line| line.reconstruct_raw(profile_root, cargo_home))
+            .into_iter()
+            .map(|line| line.reconstruct(ws, target))
+            .try_collect::<_, Vec<_>, _>()?
             .join("\n")
+            .pipe(Ok)
     }
 }
 
@@ -260,8 +258,8 @@ impl BuildScriptOutputLine {
 
     /// Parse a line of the build script file.
     #[instrument(name = "BuildScriptOutputLine::parse")]
-    pub async fn parse(ws: &Workspace, line: &str) -> Self {
-        match Self::parse_inner(ws, line).await {
+    pub async fn parse(ws: &Workspace, target: &RustcTarget, line: &str) -> Self {
+        match Self::parse_inner(ws, target, line).await {
             Ok(parsed) => parsed,
             Err(err) => {
                 trace!(?line, ?err, "failed to parse build script output line");
@@ -271,7 +269,7 @@ impl BuildScriptOutputLine {
     }
 
     /// Inner fallible parser for cargo directives.
-    async fn parse_inner(ws: &Workspace, line: &str) -> Result<Self> {
+    async fn parse_inner(ws: &Workspace, target: &RustcTarget, line: &str) -> Result<Self> {
         let (style, line) = BuildScriptOutputLineStyle::parse_line(line)?;
         let Some((key, value)) = line.split_once('=') else {
             return Err(eyre!("directive does not contain '='"));
@@ -279,7 +277,7 @@ impl BuildScriptOutputLine {
 
         match key {
             Self::RERUN_IF_CHANGED => {
-                let path = QualifiedPath::parse_string(ws, value).await?;
+                let path = QualifiedPath::parse_string(ws, target, value).await?;
                 Ok(Self::RerunIfChanged(style, path))
             }
             Self::RERUN_IF_ENV_CHANGED => Ok(Self::RerunIfEnvChanged(style, String::from(value))),
@@ -290,13 +288,13 @@ impl BuildScriptOutputLine {
                     Ok(Self::RustcLinkSearch {
                         style,
                         kind: Some(String::from(kind)),
-                        path: QualifiedPath::parse_string(ws, path).await?,
+                        path: QualifiedPath::parse_string(ws, target, path).await?,
                     })
                 } else {
                     Ok(Self::RustcLinkSearch {
                         style,
                         kind: None,
-                        path: QualifiedPath::parse_string(ws, value).await?,
+                        path: QualifiedPath::parse_string(ws, target, value).await?,
                     })
                 }
             }
@@ -347,19 +345,14 @@ impl BuildScriptOutputLine {
 
     /// Reconstruct the line in the current context.
     #[instrument(name = "BuildScriptOutputLine::reconstruct")]
-    pub fn reconstruct(&self, ws: &Workspace) -> String {
-        self.reconstruct_raw(&ws.profile_dir, &ws.cargo_home)
-    }
-
-    #[instrument(name = "BuildScriptOutputLine::reconstruct_raw")]
-    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> String {
-        match self {
+    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
+        Ok(match self {
             Self::RerunIfChanged(style, path) => {
                 format!(
                     "{}{}={}",
                     style.as_str(),
                     Self::RERUN_IF_CHANGED,
-                    path.reconstruct_raw_string(profile_root, cargo_home)
+                    path.reconstruct_string(ws, target)?
                 )
             }
             Self::RerunIfEnvChanged(style, var) => {
@@ -377,13 +370,13 @@ impl BuildScriptOutputLine {
                     style.as_str(),
                     Self::RUSTC_LINK_SEARCH,
                     kind,
-                    path.reconstruct_raw_string(profile_root, cargo_home)
+                    path.reconstruct_string(ws, target)?
                 ),
                 None => format!(
                     "{}{}={}",
                     style.as_str(),
                     Self::RUSTC_LINK_SEARCH,
-                    path.reconstruct_raw_string(profile_root, cargo_home)
+                    path.reconstruct_string(ws, target)?
                 ),
             },
             Self::RustcFlags(style, flags) => {
@@ -409,7 +402,7 @@ impl BuildScriptOutputLine {
                 format!("{}{}={}={}", style.as_str(), Self::METADATA, key, value)
             }
             Self::Other(s) => s.to_string(),
-        }
+        })
     }
 }
 
@@ -440,10 +433,15 @@ mod tests {
             .expect("open current workspace");
         let line = replace_path_placeholders(line, &workspace);
         let expected_path = replace_path_placeholders(expected_path, &workspace);
+        let target = RustcTarget::ImplicitHost;
 
-        match BuildScriptOutputLine::parse(&workspace, &line).await {
+        match BuildScriptOutputLine::parse(&workspace, &target, &line).await {
             BuildScriptOutputLine::RerunIfChanged(style, path) => {
-                pretty_assert_eq!(path.reconstruct_string(&workspace), expected_path);
+                pretty_assert_eq!(
+                    path.reconstruct_string(&workspace, &target)
+                        .expect("reconstruct path"),
+                    expected_path
+                );
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RerunIfChanged variant"),
@@ -461,8 +459,9 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
+        let target = RustcTarget::ImplicitHost;
 
-        match BuildScriptOutputLine::parse(&workspace, line).await {
+        match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RerunIfEnvChanged(style, var) => {
                 pretty_assert_eq!(var, expected_var);
                 pretty_assert_eq!(style, expected_style);
@@ -482,8 +481,9 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
+        let target = RustcTarget::ImplicitHost;
 
-        match BuildScriptOutputLine::parse(&workspace, line).await {
+        match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RustcLinkArg(style, flag) => {
                 pretty_assert_eq!(flag, expected_flag);
                 pretty_assert_eq!(style, expected_style);
@@ -503,7 +503,9 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        match BuildScriptOutputLine::parse(&workspace, line).await {
+        let target = RustcTarget::ImplicitHost;
+
+        match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RustcLinkLib(style, lib) => {
                 pretty_assert_eq!(lib, expected_lib);
                 pretty_assert_eq!(style, expected_style);
@@ -523,13 +525,18 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
+        let target = RustcTarget::ImplicitHost;
         let line = replace_path_placeholders(line, &workspace);
         let expected_path = replace_path_placeholders(expected_path, &workspace);
 
-        match BuildScriptOutputLine::parse(&workspace, &line).await {
+        match BuildScriptOutputLine::parse(&workspace, &target, &line).await {
             BuildScriptOutputLine::RustcLinkSearch { style, kind, path } => {
                 pretty_assert_eq!(kind, None);
-                pretty_assert_eq!(path.reconstruct_string(&workspace), expected_path);
+                pretty_assert_eq!(
+                    path.reconstruct_string(&workspace, &target)
+                        .expect("reconstruct path"),
+                    expected_path
+                );
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkSearch variant"),
@@ -548,13 +555,18 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
+        let target = RustcTarget::ImplicitHost;
         let line = replace_path_placeholders(line, &workspace);
         let expected_path = replace_path_placeholders(expected_path, &workspace);
 
-        match BuildScriptOutputLine::parse(&workspace, &line).await {
+        match BuildScriptOutputLine::parse(&workspace, &target, &line).await {
             BuildScriptOutputLine::RustcLinkSearch { style, kind, path } => {
                 pretty_assert_eq!(kind, Some(String::from(expected_kind)));
-                pretty_assert_eq!(path.reconstruct_string(&workspace), expected_path);
+                pretty_assert_eq!(
+                    path.reconstruct_string(&workspace, &target)
+                        .expect("reconstruct path"),
+                    expected_path
+                );
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkSearch variant"),
@@ -572,7 +584,9 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        match BuildScriptOutputLine::parse(&workspace, line).await {
+        let target = RustcTarget::ImplicitHost;
+
+        match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RustcFlags(style, flags) => {
                 pretty_assert_eq!(flags, expected_flags);
                 pretty_assert_eq!(style, expected_style);
@@ -595,7 +609,9 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        match BuildScriptOutputLine::parse(&workspace, line).await {
+        let target = RustcTarget::ImplicitHost;
+
+        match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RustcCfg { style, key, value } => {
                 pretty_assert_eq!(key, expected_key);
                 pretty_assert_eq!(value.as_deref(), expected_value);
@@ -616,7 +632,9 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        match BuildScriptOutputLine::parse(&workspace, line).await {
+        let target = RustcTarget::ImplicitHost;
+
+        match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RustcCheckCfg(style, check_cfg) => {
                 pretty_assert_eq!(check_cfg, expected_check_cfg);
                 pretty_assert_eq!(style, expected_style);
@@ -637,7 +655,9 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        match BuildScriptOutputLine::parse(&workspace, line).await {
+        let target = RustcTarget::ImplicitHost;
+
+        match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RustcEnv { style, var, value } => {
                 pretty_assert_eq!(var, expected_var);
                 pretty_assert_eq!(value, expected_value);
@@ -658,7 +678,9 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        match BuildScriptOutputLine::parse(&workspace, line).await {
+        let target = RustcTarget::ImplicitHost;
+
+        match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::Error(style, msg) => {
                 pretty_assert_eq!(msg, expected_msg);
                 pretty_assert_eq!(style, expected_style);
@@ -678,7 +700,9 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        match BuildScriptOutputLine::parse(&workspace, line).await {
+        let target = RustcTarget::ImplicitHost;
+
+        match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::Warning(style, msg) => {
                 pretty_assert_eq!(msg, expected_msg);
                 pretty_assert_eq!(style, expected_style);
@@ -699,7 +723,9 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        match BuildScriptOutputLine::parse(&workspace, line).await {
+        let target = RustcTarget::ImplicitHost;
+
+        match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::Metadata { style, key, value } => {
                 pretty_assert_eq!(key, expected_key);
                 pretty_assert_eq!(value, expected_value);
@@ -718,7 +744,9 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        match BuildScriptOutputLine::parse(&workspace, line).await {
+        let target = RustcTarget::ImplicitHost;
+
+        match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::Other(content) => {
                 pretty_assert_eq!(content, line);
             }
@@ -731,8 +759,9 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
+        let target = RustcTarget::ImplicitHost;
         let line = "cargo:rustc-env=INVALID";
-        let parsed = BuildScriptOutputLine::parse(&workspace, line).await;
+        let parsed = BuildScriptOutputLine::parse(&workspace, &target, line).await;
 
         match parsed {
             BuildScriptOutputLine::Other(content) => {
@@ -747,8 +776,9 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
+        let target = RustcTarget::ImplicitHost;
         let line = "cargo:metadata=INVALID";
-        let parsed = BuildScriptOutputLine::parse(&workspace, line).await;
+        let parsed = BuildScriptOutputLine::parse(&workspace, &target, line).await;
 
         match parsed {
             BuildScriptOutputLine::Other(content) => {
@@ -763,18 +793,21 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
+        let target = RustcTarget::ImplicitHost;
 
         let fixture = include_str!("fixtures/build_script_output_1.txt");
         let input = replace_path_placeholders(fixture, &workspace);
 
         let parsed = BuildScriptOutput(
             futures::stream::iter(input.lines())
-                .then(|line| BuildScriptOutputLine::parse(&workspace, line))
+                .then(|line| BuildScriptOutputLine::parse(&workspace, &target, line))
                 .collect::<Vec<_>>()
                 .await,
         );
 
-        let reconstructed = parsed.reconstruct(&workspace);
+        let reconstructed = parsed
+            .reconstruct(&workspace, &target)
+            .expect("reconstruct path");
         pretty_assert_eq!(reconstructed, input.trim_end());
     }
 
@@ -783,18 +816,21 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
+        let target = RustcTarget::ImplicitHost;
 
         let fixture = include_str!("fixtures/build_script_output_2.txt");
         let input = replace_path_placeholders(fixture, &workspace);
 
         let parsed = BuildScriptOutput(
             futures::stream::iter(input.lines())
-                .then(|line| BuildScriptOutputLine::parse(&workspace, line))
+                .then(|line| BuildScriptOutputLine::parse(&workspace, &target, line))
                 .collect::<Vec<_>>()
                 .await,
         );
 
-        let reconstructed = parsed.reconstruct(&workspace);
+        let reconstructed = parsed
+            .reconstruct(&workspace, &target)
+            .expect("reconstruct path");
         pretty_assert_eq!(reconstructed, input.trim_end());
     }
 
@@ -803,18 +839,21 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
+        let target = RustcTarget::ImplicitHost;
 
         let fixture = include_str!("fixtures/build_script_output_mixed.txt");
         let input = replace_path_placeholders(fixture, &workspace);
 
         let parsed = BuildScriptOutput(
             futures::stream::iter(input.lines())
-                .then(|line| BuildScriptOutputLine::parse(&workspace, line))
+                .then(|line| BuildScriptOutputLine::parse(&workspace, &target, line))
                 .collect::<Vec<_>>()
                 .await,
         );
 
-        let reconstructed = parsed.reconstruct(&workspace);
+        let reconstructed = parsed
+            .reconstruct(&workspace, &target)
+            .expect("reconstruct path");
         pretty_assert_eq!(reconstructed, input.trim_end());
     }
 
@@ -823,13 +862,14 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
+        let target = RustcTarget::ImplicitHost;
 
         let fixture = include_str!("fixtures/build_script_output_mixed_styles.txt");
         let input = replace_path_placeholders(fixture, &workspace);
 
         let parsed = BuildScriptOutput(
             futures::stream::iter(input.lines())
-                .then(|line| BuildScriptOutputLine::parse(&workspace, line))
+                .then(|line| BuildScriptOutputLine::parse(&workspace, &target, line))
                 .collect::<Vec<_>>()
                 .await,
         );
@@ -849,7 +889,9 @@ mod tests {
             _ => panic!("Expected RustcCfg with Current style"),
         }
 
-        let reconstructed = parsed.reconstruct(&workspace);
+        let reconstructed = parsed
+            .reconstruct(&workspace, &target)
+            .expect("reconstruct path");
         pretty_assert_eq!(reconstructed, input.trim_end());
     }
 }

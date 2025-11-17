@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+use crate::cargo::CargoCompileMode;
+
 /// A UnitGraph represents the output of `cargo build --unit-graph`. This output
 /// is documented here[^1] and defined in source code here[^2].
 ///
@@ -52,16 +54,4 @@ pub struct UnitGraphDependency {
     pub extern_crate_name: String,
     pub public: bool,
     pub noprelude: bool,
-}
-
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CargoCompileMode {
-    Test,
-    Build,
-    Check,
-    Doc,
-    Doctest,
-    Docscrape,
-    RunCustomBuild,
 }
