@@ -75,10 +75,10 @@ impl CargoBuildArguments {
         self.0
             .iter()
             .find_map(|arg| match arg {
-                CargoBuildArgument::Target(Some(t)) => Some(RustcTarget::Target(t.clone())),
+                CargoBuildArgument::Target(Some(t)) => Some(RustcTarget::Specified(t.clone())),
                 _ => None,
             })
-            .unwrap_or(RustcTarget::Host)
+            .unwrap_or(RustcTarget::ImplicitHost)
     }
 
     /// The target directory if specified.
@@ -720,7 +720,7 @@ mod tests {
         let parsed = CargoBuildArguments::from_iter(args.to_vec());
         pretty_assert_eq!(
             parsed.target(),
-            RustcTarget::Target(String::from("x86_64-unknown-linux-gnu"))
+            RustcTarget::Specified(String::from("x86_64-unknown-linux-gnu"))
         );
     }
 

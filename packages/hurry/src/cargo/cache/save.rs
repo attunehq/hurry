@@ -119,17 +119,17 @@ async fn rewrite(ws: &Workspace, path: &AbsFilePath, content: &[u8]) -> Result<V
     match file_type {
         Some("root-output") => {
             trace!(?path, "rewriting root-output file");
-            let parsed = RootOutput::from_file(ws, &RustcTarget::Host, path).await?;
+            let parsed = RootOutput::from_file(ws, &RustcTarget::ImplicitHost, path).await?;
             serde_json::to_vec(&parsed).context("serialize RootOutput")
         }
         Some("build-script-output") => {
             trace!(?path, "rewriting build-script-output file");
-            let parsed = BuildScriptOutput::from_file(ws, &RustcTarget::Host, path).await?;
+            let parsed = BuildScriptOutput::from_file(ws, &RustcTarget::ImplicitHost, path).await?;
             serde_json::to_vec(&parsed).context("serialize BuildScriptOutput")
         }
         Some("dep-info") => {
             trace!(?path, "rewriting dep-info file");
-            let parsed = DepInfo::from_file(ws, &RustcTarget::Host, path).await?;
+            let parsed = DepInfo::from_file(ws, &RustcTarget::ImplicitHost, path).await?;
             serde_json::to_vec(&parsed).context("serialize DepInfo")
         }
         None => {
@@ -250,7 +250,8 @@ async fn process_files_for_upload(
             .await?
             .ok_or_eyre("could not stat file metadata")?;
         let mtime_nanos = metadata.mtime.duration_since(UNIX_EPOCH)?.as_nanos();
-        let qualified = QualifiedPath::parse(ws, &RustcTarget::Host, &path.clone().into()).await?;
+        let qualified =
+            QualifiedPath::parse(ws, &RustcTarget::ImplicitHost, &path.clone().into()).await?;
 
         library_unit_files.push((qualified.clone(), key.clone()));
         artifact_files.push(

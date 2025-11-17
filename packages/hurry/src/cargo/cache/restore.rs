@@ -118,7 +118,7 @@ async fn filter_files_need_restored(
             // absolute path for this machine.
             let qualified = serde_json::from_str::<QualifiedPath>(&file.path)?;
             let path = qualified
-                .reconstruct(ws, &RustcTarget::Host)?
+                .reconstruct(ws, &RustcTarget::ImplicitHost)?
                 .pipe(AbsFilePath::try_from)?;
 
             // Check if file already exists with correct content. If so, don't need to
@@ -289,17 +289,23 @@ async fn reconstruct(ws: &Workspace, path: &AbsFilePath, content: &[u8]) -> Resu
         Some("root-output") => {
             trace!(?path, "reconstructing root-output file");
             let parsed = serde_json::from_slice::<RootOutput>(content)?;
-            Ok(parsed.reconstruct(ws, &RustcTarget::Host)?.into_bytes())
+            Ok(parsed
+                .reconstruct(ws, &RustcTarget::ImplicitHost)?
+                .into_bytes())
         }
         Some("build-script-output") => {
             trace!(?path, "reconstructing build-script-output file");
             let parsed = serde_json::from_slice::<BuildScriptOutput>(content)?;
-            Ok(parsed.reconstruct(ws, &RustcTarget::Host)?.into_bytes())
+            Ok(parsed
+                .reconstruct(ws, &RustcTarget::ImplicitHost)?
+                .into_bytes())
         }
         Some("dep-info") => {
             trace!(?path, "reconstructing dep-info file");
             let parsed = serde_json::from_slice::<DepInfo>(content)?;
-            Ok(parsed.reconstruct(ws, &RustcTarget::Host)?.into_bytes())
+            Ok(parsed
+                .reconstruct(ws, &RustcTarget::ImplicitHost)?
+                .into_bytes())
         }
         None => {
             // No reconstruction needed, use as-is.

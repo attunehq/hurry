@@ -13,17 +13,26 @@ use tracing::{instrument, trace};
 
 use crate::{cargo::CargoBuildArguments, path::AbsDirPath};
 
+/// These variants correspond to Cargo's internal `CompileKind`[^1].
+///
+/// [^1]: https://github.com/rust-lang/cargo/blob/b5354b56860cd74469be873eb06220a4a5137c99/src/cargo/core/compiler/compile_kind.rs#L21-L30
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum RustcTarget {
-    Host,
-    Target(String),
+    /// No `--target` flag was specified, and therefore the target architecture
+    /// is implicitly the host architecture.
+    ImplicitHost,
+    /// The `--target` flag was specified, and therefore Cargo will compile for
+    /// the specific target architecture. Note that this causes Cargo to run in
+    /// cross-compilation mode even if the specified target architecture is the
+    /// same as the host architecture.
+    Specified(String),
 }
 
 impl From<RustcTarget> for Option<String> {
     fn from(value: RustcTarget) -> Self {
         match value {
-            RustcTarget::Host => None,
-            RustcTarget::Target(target) => Some(target),
+            RustcTarget::ImplicitHost => None,
+            RustcTarget::Specified(target) => Some(target),
         }
     }
 }
@@ -33,8 +42,8 @@ impl From<RustcTarget> for Option<String> {
 impl From<Option<String>> for RustcTarget {
     fn from(value: Option<String>) -> Self {
         match value {
-            Some(target) => RustcTarget::Target(target),
-            None => RustcTarget::Host,
+            Some(target) => RustcTarget::Specified(target),
+            None => RustcTarget::ImplicitHost,
         }
     }
 }
@@ -82,7 +91,7 @@ impl RustcMetadata {
         // Forward the user's --target flag to rustc to get metadata for the
         // correct target, not just the host.
         cmd.args(["-Z", "unstable-options", "--print", "target-spec-json"]);
-        if let RustcTarget::Target(target) = args.as_ref().target() {
+        if let RustcTarget::Specified(target) = args.as_ref().target() {
             cmd.args(["--target", &target]);
         }
         cmd.current_dir(workspace_root.as_std_path());

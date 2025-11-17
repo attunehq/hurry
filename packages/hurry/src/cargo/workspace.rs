@@ -8,7 +8,7 @@ use color_eyre::{
 use derive_more::{Debug as DebugExt, Display};
 use scopeguard::defer;
 use serde::{Deserialize, Serialize};
-use tap::{Pipe as _, Tap as _, TapFallible as _};
+use tap::{Conv as _, Pipe as _, Tap as _, TapFallible as _};
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
 use uuid::Uuid;
@@ -204,11 +204,11 @@ impl Workspace {
     /// stored in the target profile directory.
     pub fn target_profile_dir(&self) -> AbsDirPath {
         match &self.target_arch {
-            RustcTarget::Target(target_arch) => self
+            RustcTarget::Specified(target_arch) => self
                 .build_dir()
                 .try_join_dirs(vec![target_arch.as_str(), self.profile.as_str()])
                 .expect("target arch and profile should be valid directory names"),
-            RustcTarget::Host => self.host_profile_dir(),
+            RustcTarget::ImplicitHost => self.host_profile_dir(),
         }
     }
 
@@ -563,10 +563,11 @@ impl Workspace {
         // Note: Individual artifacts may have different targets (some for host, some
         // for the specified target), but this represents the "effective target"
         // of the build for cache keying purposes.
-        let target = {
-            let t: Option<String> = args.as_ref().target().into();
-            t.unwrap_or_else(|| rustc.host_target.clone())
-        };
+        let target = args
+            .as_ref()
+            .target()
+            .conv::<Option<String>>()
+            .unwrap_or_else(|| rustc.host_target.clone());
 
         Ok(ArtifactPlan {
             artifacts,

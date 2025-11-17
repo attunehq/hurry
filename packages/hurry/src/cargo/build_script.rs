@@ -433,7 +433,7 @@ mod tests {
             .expect("open current workspace");
         let line = replace_path_placeholders(line, &workspace);
         let expected_path = replace_path_placeholders(expected_path, &workspace);
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         match BuildScriptOutputLine::parse(&workspace, &target, &line).await {
             BuildScriptOutputLine::RerunIfChanged(style, path) => {
@@ -459,7 +459,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RerunIfEnvChanged(style, var) => {
@@ -481,7 +481,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RustcLinkArg(style, flag) => {
@@ -503,7 +503,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RustcLinkLib(style, lib) => {
@@ -525,7 +525,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
         let line = replace_path_placeholders(line, &workspace);
         let expected_path = replace_path_placeholders(expected_path, &workspace);
 
@@ -555,7 +555,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
         let line = replace_path_placeholders(line, &workspace);
         let expected_path = replace_path_placeholders(expected_path, &workspace);
 
@@ -584,7 +584,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RustcFlags(style, flags) => {
@@ -609,7 +609,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RustcCfg { style, key, value } => {
@@ -632,7 +632,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RustcCheckCfg(style, check_cfg) => {
@@ -655,7 +655,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::RustcEnv { style, var, value } => {
@@ -678,7 +678,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::Error(style, msg) => {
@@ -700,7 +700,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::Warning(style, msg) => {
@@ -723,7 +723,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::Metadata { style, key, value } => {
@@ -744,7 +744,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         match BuildScriptOutputLine::parse(&workspace, &target, line).await {
             BuildScriptOutputLine::Other(content) => {
@@ -759,7 +759,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
         let line = "cargo:rustc-env=INVALID";
         let parsed = BuildScriptOutputLine::parse(&workspace, &target, line).await;
 
@@ -776,7 +776,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
         let line = "cargo:metadata=INVALID";
         let parsed = BuildScriptOutputLine::parse(&workspace, &target, line).await;
 
@@ -793,7 +793,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         let fixture = include_str!("fixtures/build_script_output_1.txt");
         let input = replace_path_placeholders(fixture, &workspace);
@@ -816,7 +816,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         let fixture = include_str!("fixtures/build_script_output_2.txt");
         let input = replace_path_placeholders(fixture, &workspace);
@@ -839,7 +839,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         let fixture = include_str!("fixtures/build_script_output_mixed.txt");
         let input = replace_path_placeholders(fixture, &workspace);
@@ -862,7 +862,7 @@ mod tests {
         let workspace = Workspace::from_argv(CargoBuildArguments::empty())
             .await
             .expect("open current workspace");
-        let target = RustcTarget::Host;
+        let target = RustcTarget::ImplicitHost;
 
         let fixture = include_str!("fixtures/build_script_output_mixed_styles.txt");
         let input = replace_path_placeholders(fixture, &workspace);

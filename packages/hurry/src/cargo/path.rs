@@ -97,9 +97,9 @@ impl QualifiedPath {
 
     fn unit_profile_dir(ws: &Workspace, target: &RustcTarget) -> Result<AbsDirPath> {
         Ok(match target {
-            RustcTarget::Target(_) if *target == ws.target_arch => ws.target_profile_dir(),
-            RustcTarget::Host => ws.host_profile_dir(),
-            RustcTarget::Target(_) => bail!(
+            RustcTarget::Specified(_) if *target == ws.target_arch => ws.target_profile_dir(),
+            RustcTarget::ImplicitHost => ws.host_profile_dir(),
+            RustcTarget::Specified(_) => bail!(
                 "target triple {:?} does not match workspace target triple {:?}",
                 target,
                 ws.target_arch
