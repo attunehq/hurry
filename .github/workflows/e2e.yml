@@ -1,0 +1,57 @@
+# End-to-end integration tests using testcontainers and Docker Compose.
+# These tests run in isolated Docker environments and validate full workflows.
+name: E2E
+
+on:
+    pull_request:
+        branches: [main]
+        paths-ignore:
+            - "**/*.md"
+    merge_group:
+        types: [checks_requested]
+    workflow_dispatch:
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-e2e
+    cancel-in-progress: true
+
+env:
+    CARGO_TERM_COLOR: always
+
+jobs:
+    e2e:
+        name: hurry+courier
+        runs-on: ubuntu-latest-l
+        permissions:
+            contents: read
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Cache Docker layers
+              uses: actions/cache@v4
+              with:
+                  path: /tmp/.buildx-cache
+                  key: ${{ runner.os }}-buildx-${{ github.sha }}
+                  restore-keys: |
+                      ${{ runner.os }}-buildx-
+
+            - name: Install Rust
+              run: |
+                  rustup toolchain install nightly
+                  rustup component add --toolchain nightly rustfmt
+                  rustup show
+
+            - uses: taiki-e/install-action@v2
+              with:
+                  tool: nextest
+
+            - uses: Swatinem/rust-cache@v2
+
+            - name: Run e2e tests
+              run: cargo nextest run -p e2e
+              env:
+                  GITHUB_TOKEN: ${{ secrets.ATTUNE_REPOSITORY_TOKEN }}

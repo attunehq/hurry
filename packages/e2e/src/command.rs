@@ -1,28 +1,32 @@
 use std::{
     borrow::Cow,
     ffi::{OsStr, OsString},
-    io::{Read, Write},
-    iter::once,
+    fmt::Debug,
     os::unix::process::ExitStatusExt,
     path::PathBuf,
-    process::{ExitStatus, Output, Stdio},
+    process::{ExitStatus, Output},
 };
 
-use bollard::{container::LogOutput, exec::StartExecResults, secret::ExecConfig};
+use bollard::{
+    Docker,
+    container::LogOutput,
+    exec::{CreateExecOptions, StartExecResults},
+};
 use bon::{Builder, bon};
 use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context, OptionExt, bail, eyre},
 };
 use futures::StreamExt;
+use tokio::io::{AsyncWriteExt, stderr, stdout};
 use tracing::instrument;
 
-use crate::{Container, GITHUB_TOKEN};
+use crate::GITHUB_TOKEN;
 
 /// Construct a command to run.
 ///
-/// This type provides an abstracted interface for running a command locally or
-/// in a docker context.
+/// This type provides an abstracted interface for running a command in
+/// testcontainers compose environments.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Builder)]
 #[builder(start_fn = new, finish_fn = finish)]
 pub struct Command {
@@ -49,43 +53,6 @@ impl Command {
     /// Clean the `cargo` workspace in the provided working directory.
     pub fn cargo_clean(pwd: impl Into<PathBuf>) -> Self {
         Self::new().pwd(pwd).name("cargo").arg("clean").finish()
-    }
-
-    /// Clone the `github.com/attunehq/hurry` repository.
-    pub fn clone_hurry(pwd: impl Into<PathBuf>) -> Self {
-        Self::clone_github()
-            .pwd(pwd)
-            .user("attunehq")
-            .repo("hurry")
-            .branch("main")
-            .finish()
-    }
-
-    /// Install the `hurry` binaries in the provided working directory.
-    pub fn install_hurry(pwd: impl Into<PathBuf>) -> Self {
-        Self::cargo_install()
-            .pwd(pwd)
-            .args(["--path", "packages/hurry"])
-            .finish()
-    }
-
-    /// Run `cargo install` in the provided working directory.
-    #[builder(finish_fn = finish)]
-    pub fn cargo_install(
-        /// Arguments for the command.
-        #[builder(field)]
-        args: Vec<OsString>,
-
-        /// The working directory in which to perform the install.
-        #[builder(into)]
-        pwd: PathBuf,
-    ) -> Self {
-        Self::new()
-            .pwd(pwd)
-            .name("cargo")
-            .arg("install")
-            .args(args)
-            .finish()
     }
 
     /// Clone a github repository.
@@ -132,207 +99,28 @@ impl Command {
             .finish()
     }
 
-    /// Run the command locally.
+    /// Run the command inside a testcontainers compose container.
     ///
-    /// The command stdio pipes are inherited from the parent (meaning, they
-    /// interact with the stdio pipes of the current process).
-    #[instrument]
-    pub fn run_local(self) -> Result<()> {
-        self.as_std()
-            .status()
-            .with_context(|| format!("exec: `{:?} {:?}` in {:?}", self.name, self.args, self.pwd))
-            .and_then(ParsedOutput::parse_status)
-            .map(drop)
-    }
-
-    /// Run the command locally, capturing the output.
+    /// This method integrates with Docker exec API, allowing commands
+    /// to be run in containers managed by Docker Compose via testcontainers.
     ///
-    /// The command stdout and stderr are written to the corresponding pipes of
-    /// the current process, and are also buffered into the returned value.
-    #[instrument]
-    pub fn run_local_with_output(self) -> Result<ParsedOutput> {
-        let mut child = self
-            .as_std()
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| {
-                format!("exec: `{:?} {:?}` in {:?}", self.name, self.args, self.pwd)
-            })?;
-
-        let mut read_stdout = child.stdout.take().ok_or_eyre("take stdout")?;
-        let mut read_stderr = child.stderr.take().ok_or_eyre("take stderr")?;
-        let mut write_stdout = std::io::stdout();
-        let mut write_stderr = std::io::stderr();
-        let mut buf_stdout = Vec::<u8>::new();
-        let mut buf_stderr = Vec::<u8>::new();
-
-        // We do this manually instead of using e.g. `std::io::copy` with
-        // `io_tee` so that we can drive both pipes concurrently without needing
-        // threads.
-        loop {
-            let mut buf = [0; 1024];
-            let stdout_read = read_stdout.read(&mut buf).context("read stdout")?;
-            if stdout_read > 0 {
-                write_stdout
-                    .write_all(&buf[..stdout_read])
-                    .context("write stdout")?;
-                buf_stdout.extend_from_slice(&buf[..stdout_read]);
-            }
-            let stderr_read = read_stderr.read(&mut buf).context("read stderr")?;
-            if stderr_read > 0 {
-                write_stderr
-                    .write_all(&buf[..stderr_read])
-                    .context("write stderr")?;
-                buf_stderr.extend_from_slice(&buf[..stderr_read]);
-            }
-            if stdout_read == 0 && stderr_read == 0 {
-                break;
-            }
-        }
-
-        let status = child
-            .wait()
-            .with_context(|| format!("run: `{:?} {:?}` in {:?}", self.name, self.args, self.pwd))
-            .with_section(|| {
-                String::from_utf8_lossy(&buf_stderr)
-                    .into_owned()
-                    .header("Stderr:")
-            })
-            .with_section(|| {
-                String::from_utf8_lossy(&buf_stdout)
-                    .into_owned()
-                    .header("Stdout:")
-            })?;
-
-        ParsedOutput::parse(Output {
-            status,
-            stdout: buf_stdout,
-            stderr: buf_stderr,
-        })
-    }
-
-    /// Run the command inside the container.
+    /// The command's pwd and environment variables are handled by wrapping the
+    /// command in a shell invocation.
     ///
-    /// Simulates stdout and stderr pipe inheritance from the parent: output to
-    /// each pipe by the command is emitted to the equivalent pipe for the
-    /// current process.
-    ///
-    /// Note: The `pwd` and other paths/binaries/etc specified in the command
-    /// are all inside the _container_ context, not the host machine; this
-    /// command does nothing to e.g. move the working directory to the container
-    /// or anything similar.
-    //
-    // TODO: When we run multiple commands concurrently, their outputs are
-    // interleaved in a way that makes it difficult to tell which container
-    // results in which output. We should fix this if we end up sticking with
-    // this approach longer term.
-    #[instrument]
-    pub async fn run_docker(self, container: &Container) -> Result<()> {
-        let config = self
-            .as_container_exec()
-            .context("build docker exec context")?;
-        let exec = container
-            .docker()
-            .create_exec(container.id(), config)
-            .await
-            .context("create exec")?
-            .id;
-        match container.docker().start_exec(&exec, None).await {
-            Ok(StartExecResults::Attached { mut output, .. }) => {
-                let mut stdout = std::io::stdout();
-                let mut stderr = std::io::stderr();
-                while let Some(line) = output.next().await {
-                    match line.context("read line")? {
-                        LogOutput::StdIn { .. } => {}
-                        LogOutput::Console { .. } => {}
-                        LogOutput::StdErr { message } => {
-                            stderr.write_all(&message).context("write stderr")?;
-                        }
-                        LogOutput::StdOut { message } => {
-                            stdout.write_all(&message).context("write stdout")?;
-                        }
-                    }
-                }
-            }
-            Ok(StartExecResults::Detached) => unreachable!("we don't use a detached API"),
-            Err(err) => bail!("run command: {err:?}"),
-        }
-
-        let info = container
-            .docker()
-            .inspect_exec(&exec)
-            .await
-            .context("inspect exec")?;
-        let code = info.exit_code.map(|code| code as i32).unwrap_or_default();
-        ParsedOutput::parse_status(ExitStatus::from_raw(code)).map(drop)
-    }
-
-    /// Run the command inside the container, capturing the output.
-    ///
-    /// The command stdout and stderr are written to the corresponding pipes of
-    /// the current process, and are also buffered into the returned value.
-    ///
-    /// Note: The `pwd` and other paths/binaries/etc specified in the command
-    /// are all inside the _container_ context, not the host machine; this
-    /// command does nothing to e.g. move the working directory to the container
-    /// or anything similar.
-    //
-    // TODO: When we run multiple commands concurrently, their outputs are
-    // interleaved in a way that makes it difficult to tell which container
-    // results in which output. We should fix this if we end up sticking with
-    // this approach longer term.
-    #[instrument]
-    pub async fn run_docker_with_output(self, container: &Container) -> Result<ParsedOutput> {
-        let config = self
-            .as_container_exec()
-            .context("build docker exec context")?;
-        let exec = container
-            .docker()
-            .create_exec(container.id(), config)
-            .await
-            .context("create exec")?
-            .id;
-
-        let mut stdout_buf = Vec::<u8>::new();
-        let mut stderr_buf = Vec::<u8>::new();
-        match container.docker().start_exec(&exec, None).await {
-            Ok(StartExecResults::Attached { mut output, .. }) => {
-                let mut stdout = std::io::stdout();
-                let mut stderr = std::io::stderr();
-                while let Some(line) = output.next().await {
-                    match line.context("read line")? {
-                        LogOutput::StdIn { .. } => {}
-                        LogOutput::Console { .. } => {}
-                        LogOutput::StdErr { message } => {
-                            stderr_buf.write_all(&message).context("buffer stderr")?;
-                            stderr.write_all(&message).context("write stderr")?;
-                        }
-                        LogOutput::StdOut { message } => {
-                            stdout_buf.write_all(&message).context("buffer stdout")?;
-                            stdout.write_all(&message).context("write stdout")?;
-                        }
-                    }
-                }
-            }
-            Ok(StartExecResults::Detached) => unreachable!("we don't use a detached API"),
-            Err(err) => bail!("run command: {err:?}"),
-        }
-
-        let info = container
-            .docker()
-            .inspect_exec(&exec)
-            .await
-            .context("inspect exec")?;
-        let code = info.exit_code.map(|code| code as i32).unwrap_or_default();
-        ParsedOutput::parse(Output {
-            status: ExitStatus::from_raw(code),
-            stdout: stdout_buf,
-            stderr: stderr_buf,
-        })
-    }
-
-    pub(super) fn as_container_exec(&self) -> Result<ExecConfig> {
+    /// # Example
+    /// ```ignore
+    /// let env = TestEnv::new().await?;
+    /// let container_id = env.service(TestEnv::HURRY_INSTANCE_1)?;
+    /// Command::new()
+    ///     .name("hurry")
+    ///     .arg("--version")
+    ///     .pwd("/workspace")
+    ///     .finish()
+    ///     .run_compose(&container_id)
+    ///     .await?;
+    /// ```
+    #[instrument(skip(self, container_id), fields(name = ?self.name, pwd = ?self.pwd))]
+    pub async fn run_compose(self, container_id: impl AsRef<str> + Debug) -> Result<()> {
         fn try_as_unicode(s: impl AsRef<OsStr>) -> Result<String> {
             let s = s.as_ref();
             s.to_str()
@@ -340,18 +128,6 @@ impl Command {
                 .ok_or_eyre("invalid unicode")
                 .with_context(|| format!("parse as unicode: {s:?}"))
         }
-
-        let pwd = try_as_unicode(&self.pwd).context("convert pwd")?;
-        let envs = self
-            .envs
-            .iter()
-            .map(|(k, v)| -> Result<String> {
-                let k = try_as_unicode(k).context("convert env key")?;
-                let v = try_as_unicode(v).context("convert env value")?;
-                Ok(format!("{k}={v}"))
-            })
-            .collect::<Result<Vec<_>>>()
-            .context("convert envs")?;
 
         let name = try_as_unicode(&self.name).context("convert process name")?;
         let args = self
@@ -361,36 +137,184 @@ impl Command {
             .collect::<Result<Vec<_>>>()
             .context("convert args")?;
 
-        Ok(ExecConfig {
-            attach_stderr: Some(true),
+        let mut cmd_parts = vec![name];
+        cmd_parts.extend(args);
+
+        let shell_cmd = if !self.envs.is_empty() {
+            let env_exports = self
+                .envs
+                .iter()
+                .map(|(k, v)| -> Result<String> {
+                    let k = try_as_unicode(k).context("convert env key")?;
+                    let v = try_as_unicode(v).context("convert env value")?;
+                    Ok(format!("export {k}={v:?}"))
+                })
+                .collect::<Result<Vec<_>>>()
+                .context("convert envs")?
+                .join(" && ");
+
+            let pwd = try_as_unicode(&self.pwd).context("convert pwd")?;
+            let cmd_str = cmd_parts.join(" ");
+            format!("{env_exports} && cd {pwd:?} && {cmd_str}")
+        } else {
+            let pwd = try_as_unicode(&self.pwd).context("convert pwd")?;
+            let cmd_str = cmd_parts.join(" ");
+            format!("cd {pwd:?} && {cmd_str}")
+        };
+
+        // Create Docker client
+        let docker = Docker::connect_with_local_defaults().context("connect to Docker")?;
+
+        // Create exec instance
+        let exec_config = CreateExecOptions {
             attach_stdout: Some(true),
-            working_dir: Some(pwd),
-            env: Some(envs),
-            cmd: Some(once(name).chain(args).collect()),
+            attach_stderr: Some(true),
+            cmd: Some(vec!["sh", "-c", &shell_cmd]),
             ..Default::default()
+        };
+
+        let exec_id = docker
+            .create_exec(container_id.as_ref(), exec_config)
+            .await
+            .context("create exec")?
+            .id;
+
+        // Start the exec and stream output
+        let mut stdout = stdout();
+        let mut stderr = stderr();
+
+        match docker.start_exec(&exec_id, None).await {
+            Ok(StartExecResults::Attached { mut output, .. }) => {
+                while let Some(line) = output.next().await {
+                    match line.context("read line")? {
+                        LogOutput::StdIn { .. } => {}
+                        LogOutput::Console { .. } => {}
+                        LogOutput::StdErr { message } => {
+                            stderr.write_all(&message).await.context("write stderr")?;
+                        }
+                        LogOutput::StdOut { message } => {
+                            stdout.write_all(&message).await.context("write stdout")?;
+                        }
+                    }
+                }
+            }
+            Ok(StartExecResults::Detached) => unreachable!("we don't use a detached API"),
+            Err(err) => bail!("run command: {err:?}"),
+        }
+
+        // Check exit code
+        let info = docker
+            .inspect_exec(&exec_id)
+            .await
+            .context("inspect exec")?;
+        let code = info.exit_code.map(|code| code as i32).unwrap_or_default();
+
+        ParsedOutput::parse_status(ExitStatus::from_raw(code)).map(drop)
+    }
+
+    /// Run the command inside a testcontainers compose container, capturing
+    /// output.
+    ///
+    /// Similar to `run_compose()` but also captures and returns stdout/stderr.
+    #[instrument(skip(self, container_id), fields(name = ?self.name, pwd = ?self.pwd))]
+    pub async fn run_compose_with_output(self, container_id: &str) -> Result<ParsedOutput> {
+        fn try_as_unicode(s: impl AsRef<OsStr>) -> Result<String> {
+            let s = s.as_ref();
+            s.to_str()
+                .map(String::from)
+                .ok_or_eyre("invalid unicode")
+                .with_context(|| format!("parse as unicode: {s:?}"))
+        }
+
+        let name = try_as_unicode(&self.name).context("convert process name")?;
+        let args = self
+            .args
+            .iter()
+            .map(try_as_unicode)
+            .collect::<Result<Vec<_>>>()
+            .context("convert args")?;
+
+        let mut cmd_parts = vec![name];
+        cmd_parts.extend(args);
+
+        let shell_cmd = if !self.envs.is_empty() {
+            let env_exports = self
+                .envs
+                .iter()
+                .map(|(k, v)| -> Result<String> {
+                    let k = try_as_unicode(k).context("convert env key")?;
+                    let v = try_as_unicode(v).context("convert env value")?;
+                    Ok(format!("export {k}={v:?}"))
+                })
+                .collect::<Result<Vec<_>>>()
+                .context("convert envs")?
+                .join(" && ");
+
+            let pwd = try_as_unicode(&self.pwd).context("convert pwd")?;
+            let cmd_str = cmd_parts.join(" ");
+            format!("{env_exports} && cd {pwd:?} && {cmd_str}")
+        } else {
+            let pwd = try_as_unicode(&self.pwd).context("convert pwd")?;
+            let cmd_str = cmd_parts.join(" ");
+            format!("cd {pwd:?} && {cmd_str}")
+        };
+
+        // Create Docker client
+        let docker = Docker::connect_with_local_defaults().context("connect to Docker")?;
+
+        // Create exec instance
+        let exec_config = CreateExecOptions {
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            cmd: Some(vec!["sh", "-c", &shell_cmd]),
+            ..Default::default()
+        };
+
+        let exec_id = docker
+            .create_exec(container_id, exec_config)
+            .await
+            .context("create exec")?
+            .id;
+
+        // Start the exec and collect output
+        let mut stdout = stdout();
+        let mut stderr = stderr();
+        let mut stdout_buf = Vec::<u8>::new();
+        let mut stderr_buf = Vec::<u8>::new();
+
+        match docker.start_exec(&exec_id, None).await {
+            Ok(StartExecResults::Attached { mut output, .. }) => {
+                while let Some(line) = output.next().await {
+                    match line.context("read line")? {
+                        LogOutput::StdIn { .. } => {}
+                        LogOutput::Console { .. } => {}
+                        LogOutput::StdErr { message } => {
+                            stderr_buf.extend_from_slice(&message);
+                            stderr.write_all(&message).await.context("write stderr")?;
+                        }
+                        LogOutput::StdOut { message } => {
+                            stdout_buf.extend_from_slice(&message);
+                            stdout.write_all(&message).await.context("write stdout")?;
+                        }
+                    }
+                }
+            }
+            Ok(StartExecResults::Detached) => unreachable!("we don't use a detached API"),
+            Err(err) => bail!("run command: {err:?}"),
+        }
+
+        // Check exit code
+        let info = docker
+            .inspect_exec(&exec_id)
+            .await
+            .context("inspect exec")?;
+        let code = info.exit_code.map(|code| code as i32).unwrap_or_default();
+
+        ParsedOutput::parse(Output {
+            status: ExitStatus::from_raw(code),
+            stdout: stdout_buf,
+            stderr: stderr_buf,
         })
-    }
-
-    pub(super) fn as_std(&self) -> std::process::Command {
-        let mut cmd = std::process::Command::new(&self.name);
-        cmd.args(&self.args)
-            .current_dir(&self.pwd)
-            .envs(self.envs.iter().map(|(k, v)| (k, v)));
-        cmd
-    }
-}
-
-impl<S: command_cargo_install_builder::State> CommandCargoInstallBuilder<S> {
-    /// Adds a single argument to pass to the program.
-    pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
-        self.args.push(arg.into());
-        self
-    }
-
-    /// Adds multiple arguments to pass to the program.
-    pub fn args(mut self, args: impl IntoIterator<Item = impl Into<OsString>>) -> Self {
-        self.args.extend(args.into_iter().map(Into::into));
-        self
     }
 }
 

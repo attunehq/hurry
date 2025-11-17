@@ -92,9 +92,15 @@ How to construct:
 
 **Only describe changes you understand. If you're uncertain about the purpose or significance of a change, ask before including it.**
 
-# Step 4: Create Draft PR
+# Step 4: Push Branch and Create Draft PR
 
-Use the `gh pr create` command with:
+**First, push the branch to the remote:**
+
+```bash
+git push -u origin $(git branch --show-current)
+```
+
+**Then create the draft PR** using the `gh pr create` command with:
 - `--draft` flag to mark as draft
 - `--title` with the crafted title
 - `--body` with the structured content using a HEREDOC for proper formatting
