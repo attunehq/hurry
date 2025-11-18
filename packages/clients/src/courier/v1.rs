@@ -321,11 +321,10 @@ impl From<&UnitPlanInfo> for UnitPlanInfo {
     }
 }
 
-/// An artifact file in the cargo cache.
-/// The path is stored as a JSON-encoded string.
+/// A saved file in the cargo cache.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
-pub struct ArtifactFile {
+pub struct SavedFile {
     pub executable: bool,
 
     #[builder(into)]
@@ -335,8 +334,8 @@ pub struct ArtifactFile {
     pub path: DiskPath,
 }
 
-impl From<&ArtifactFile> for ArtifactFile {
-    fn from(file: &ArtifactFile) -> Self {
+impl From<&SavedFile> for SavedFile {
+    fn from(file: &SavedFile) -> Self {
         file.clone()
     }
 }
@@ -395,7 +394,7 @@ pub struct LibraryFiles {
     // `rlib` field)? I know there are other possible output files (e.g. `.so`
     // for proc macros on Linux and `.dylib` for something on macOS), but I
     // don't know what the enumerated list is.
-    pub output_files: Vec<ArtifactFile>,
+    pub output_files: Vec<SavedFile>,
 
     /// This information is parsed from the initial fingerprint created after
     /// the build, and is used to dynamically reconstruct fingerprints on
@@ -503,8 +502,8 @@ impl From<&BuildScriptCompilationUnitPlan> for BuildScriptCompilationUnitPlan {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct BuildScriptOutputFiles {
-    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<ArtifactFile>>| i.into_iter().map(Into::into).collect())]
-    pub out_dir_files: Vec<ArtifactFile>,
+    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<SavedFile>>| i.into_iter().map(Into::into).collect())]
+    pub out_dir_files: Vec<SavedFile>,
 
     #[builder(into)]
     pub stdout: Key,
