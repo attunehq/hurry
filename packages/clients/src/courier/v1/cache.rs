@@ -24,6 +24,22 @@ impl From<&CargoSaveRequest2> for CargoSaveRequest2 {
 #[non_exhaustive]
 pub struct CargoRestoreRequest2(HashSet<SavedUnitHash>);
 
+impl CargoRestoreRequest2 {
+    /// Iterate over the hashes in the request.
+    pub fn iter(&self) -> impl Iterator<Item = &SavedUnitHash> {
+        self.0.iter()
+    }
+}
+
+impl IntoIterator for CargoRestoreRequest2 {
+    type Item = SavedUnitHash;
+    type IntoIter = std::collections::hash_set::IntoIter<SavedUnitHash>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 impl From<&CargoRestoreRequest2> for CargoRestoreRequest2 {
     fn from(req: &CargoRestoreRequest2) -> Self {
         req.clone()

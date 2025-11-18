@@ -1,6 +1,6 @@
 //! HTTP client for the Courier v1 API.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_compression::{
     Level,
@@ -98,18 +98,59 @@ impl Client {
     }
 
     /// Save cargo cache metadata.
+    ///
+    /// Important: this is temporarily stubbed using the local file system.
     #[instrument(skip(self))]
     pub async fn cargo_cache_save2(&self, body: CargoSaveRequest2) -> Result<()> {
-        todo!()
+        let plan = body.as_ref();
+        let unit_hash = &plan.info.unit_hash;
+        let path = format!("/tmp/courier-v2-stub/{}.json", unit_hash.as_str());
+
+        tokio::fs::create_dir_all("/tmp/courier-v2-stub")
+            .await
+            .context("create stub directory")?;
+
+        let json = serde_json::to_vec_pretty(plan).context("serialize plan")?;
+
+        tokio::fs::write(&path, json)
+            .await
+            .with_context(|| format!("write plan to {path}"))?;
+
+        Ok(())
     }
 
     /// Restore cargo cache metadata.
+    ///
+    /// Important: this is temporarily stubbed using the local file system.
     #[instrument(skip(self))]
     pub async fn cargo_cache_restore2(
         &self,
         body: CargoRestoreRequest2,
     ) -> Result<Option<CargoRestoreResponse2>> {
-        todo!()
+        let mut results = HashMap::new();
+        for hash in body {
+            let path = format!("/tmp/courier-v2-stub/{}.json", hash.as_str());
+
+            match tokio::fs::read(&path).await {
+                Ok(json) => {
+                    let plan = serde_json::from_slice(&json)
+                        .with_context(|| format!("deserialize plan from {path}"))?;
+                    results.insert(hash.clone(), plan);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    continue;
+                }
+                Err(e) => {
+                    return Err(e).with_context(|| format!("read plan from {path}"));
+                }
+            }
+        }
+
+        if results.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(results.into()))
+        }
     }
 
     /// Save cargo cache metadata.
