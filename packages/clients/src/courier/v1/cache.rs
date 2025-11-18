@@ -55,7 +55,7 @@ impl From<&SavedUnitCacheKey> for SavedUnitCacheKey {
 }
 
 /// A single `SavedUnit` and its associated cache key in a save request.
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct CargoSaveUnitRequest {
     /// The cache key for the `SavedUnit` instance.
@@ -70,7 +70,7 @@ pub struct CargoSaveUnitRequest {
 /// Request to save cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 #[non_exhaustive]
-pub struct CargoSaveRequest2(Vec<CargoSaveUnitRequest>);
+pub struct CargoSaveRequest2(HashSet<CargoSaveUnitRequest>);
 
 impl CargoSaveRequest2 {
     /// Create a new instance from the provided units.
@@ -78,7 +78,7 @@ impl CargoSaveRequest2 {
         units
             .into_iter()
             .map(Into::into)
-            .collect::<Vec<_>>()
+            .collect::<HashSet<_>>()
             .pipe(Self)
     }
 
@@ -90,7 +90,7 @@ impl CargoSaveRequest2 {
 
 impl IntoIterator for CargoSaveRequest2 {
     type Item = CargoSaveUnitRequest;
-    type IntoIter = std::vec::IntoIter<CargoSaveUnitRequest>;
+    type IntoIter = std::collections::hash_set::IntoIter<CargoSaveUnitRequest>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()

@@ -322,7 +322,7 @@ impl From<&UnitPlanInfo> for UnitPlanInfo {
 }
 
 /// A saved file in the cargo cache.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct SavedFile {
     pub executable: bool,
@@ -340,7 +340,7 @@ impl From<&SavedFile> for SavedFile {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub enum SavedUnit {
     LibraryCrate(LibraryFiles, LibraryCrateUnitPlan),
     BuildScriptCompilation(BuildScriptCompiledFiles, BuildScriptCompilationUnitPlan),
@@ -377,7 +377,7 @@ impl From<&SavedUnit> for SavedUnit {
 /// Of these files, the fingerprint hash, fingerprint JSON, and invoked
 /// timestamp are all reconstructed from fingerprint information during
 /// restoration.
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct LibraryFiles {
     /// These files come from the build plan's `outputs` field.
@@ -436,7 +436,7 @@ impl From<&LibraryCrateUnitPlan> for LibraryCrateUnitPlan {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct BuildScriptCompiledFiles {
     /// This field contains the contents of the compiled build script program at
@@ -470,7 +470,7 @@ impl From<&BuildScriptCompiledFiles> for BuildScriptCompiledFiles {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct BuildScriptCompilationUnitPlan {
     /// Common metadata fields present in all unit plan variants.
@@ -500,7 +500,7 @@ impl From<&BuildScriptCompilationUnitPlan> for BuildScriptCompilationUnitPlan {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct BuildScriptOutputFiles {
     #[builder(default, with = |i: impl IntoIterator<Item = impl Into<SavedFile>>| i.into_iter().map(Into::into).collect())]
@@ -522,7 +522,7 @@ impl From<&BuildScriptOutputFiles> for BuildScriptOutputFiles {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct BuildScriptExecutionUnitPlan {
     /// Common metadata fields present in all unit plan variants.
