@@ -30,8 +30,11 @@ impl SavedUnitCacheKey {
     /// `SavedUnitCacheKey` instance are the same, and always different if the
     /// contents are different.
     pub fn opaque(&self) -> String {
+        // When we add new fields, this will show a compile time error; if you got here
+        // due to a compilation error please handle the new field(s) appropriately.
+        let Self { unit } = self;
         let mut hasher = blake3::Hasher::new();
-        hasher.update(self.unit.as_str().as_bytes());
+        hasher.update(unit.as_str().as_bytes());
         hasher.finalize().to_hex().to_string()
     }
 }
