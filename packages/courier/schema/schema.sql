@@ -1,20 +1,19 @@
 -- Schema file for Courier.
--- This file is maintained by hand; we use `sql-schema` to generate migrations.
 --
--- After making changes to this file, run `sql-schema` to generate a migration
--- within the root of the `courier` package:
--- ```
--- sql-schema migration --name {new name here}
--- ```
+-- After making changes to this file, create a migration in ./migrations to
+-- apply the new changes. Each migration should be sequentially ordered after
+-- the previous one using its numeric prefix.
 
--- Authentication and Authorization
-
+-- Organizations in the instance.
 CREATE TABLE organization (
   id BIGSERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Each distinct actor in the application is an "account"; this could be humans
+-- or it could be bots. In the case of bots, the "email" field is for where the
+-- person/team owning the bot can be reached.
 CREATE TABLE account (
   id BIGSERIAL PRIMARY KEY,
   organization_id BIGINT NOT NULL REFERENCES organization(id),
@@ -22,6 +21,7 @@ CREATE TABLE account (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Keys for accounts to use to authenticate.
 CREATE TABLE api_key (
   id BIGSERIAL PRIMARY KEY,
   account_id BIGINT NOT NULL REFERENCES account(id),
@@ -31,14 +31,24 @@ CREATE TABLE api_key (
   revoked_at TIMESTAMPTZ
 );
 
--- Content-Addressed Storage Access Control
-
+-- Lists CAS keys known about by the database.
+--
+-- Since the CAS keys are actually on disk, technically there could be keys
+-- that exist that are not in the database (or vice versa) but the ones in the
+-- database are the only ones that the application knows exist.
 CREATE TABLE cas_key (
   id BIGSERIAL PRIMARY KEY,
   content BYTEA NOT NULL UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Controls what organizations have access to a given CAS key.
+--
+-- We deduplicate CAS keys: if two organizations both save the same content,
+-- we only actually store one copy of it (since they're keyed by content, they
+-- are by defintion safe to deduplicate).
+--
+-- Organizations are given access after they upload the content themselves.
 CREATE TABLE cas_access (
   organization_id BIGINT NOT NULL REFERENCES organization(id),
   cas_key_id BIGINT NOT NULL REFERENCES cas_key(id),
@@ -46,44 +56,62 @@ CREATE TABLE cas_access (
   PRIMARY KEY (organization_id, cas_key_id)
 );
 
--- Cargo Build Artifacts (Global, Deduplicated)
+-- Models `UnitPlanInfo`.
+--
+-- Within a given `Vec<SavedUnit>`, each entry has a `UnitPlanInfo` attached
+-- and this value is _always_ the same across the entire plan.
+--
+-- Given this, we use `UnitPlanInfo` as our "primary data source". To
+-- reconstruct a `Vec<SavedUnit>`:
+-- - Find the plan by its `unit_hash`
+-- - Join to `SavedUnit` instances through `cargo_unit_plan_saved_unit`
+-- - Order them by `entry_order`.
+create table cargo_unit_plan_info (
+  id bigserial primary key,
+  organization_id bigint not null references organization(id),
 
-CREATE TABLE cargo_object (
-  id BIGSERIAL PRIMARY KEY,
-  key TEXT NOT NULL,
-  UNIQUE(key)
+  unit_hash text not null,
+  package_name text not null,
+  crate_name text not null,
+  target_arch text,
+
+  created_at timestamptz not null default now(),
+  unique(
+    unit_hash,
+    package_name,
+    crate_name,
+    target_arch
+  )
 );
 
--- Cargo Cache Metadata (Org-Namespaced)
-
-CREATE TABLE cargo_package (
-  id BIGSERIAL PRIMARY KEY,
-  organization_id BIGINT NOT NULL REFERENCES organization(id),
-  name TEXT NOT NULL,
-  version TEXT NOT NULL,
-  UNIQUE(organization_id, name, version)
+-- Stores `SavedUnit` instances.
+--
+-- We store these using JSONB encoding:
+-- - Many of the inner types use relatively extensive heterogenous types which
+--   are difficult to model well in SQL.
+-- - We don't really ever need to compose a `SavedUnit` instance from smaller
+--   components; they tend to have a lot of local data that can't really be
+--   shared.
+-- - We expect the amount of data duplication to be relatively low.
+--
+-- If any of these points end up false in the future we can explore normalizing
+-- the data into tables or moving parts of this into the CAS or some other
+-- strategy.
+--
+-- Important: We _do_ expect that any instance where the actual content of files
+-- is stored in this type is replaced with the CAS key.
+create table cargo_saved_unit (
+  id bigserial primary key,
+  hash text not null references cargo_unit_plan_info(unit_hash),
+  data jsonb not null,
+  created_at timestamptz not null default now(),
+  unique(hash)
 );
 
-CREATE TABLE cargo_library_unit_build (
-  id BIGSERIAL PRIMARY KEY,
-  organization_id BIGINT NOT NULL REFERENCES organization(id),
-  package_id BIGINT NOT NULL REFERENCES cargo_package(id),
-  target TEXT NOT NULL,
-  library_crate_compilation_unit_hash TEXT NOT NULL,
-  build_script_compilation_unit_hash TEXT,
-  build_script_execution_unit_hash TEXT,
-  content_hash TEXT NOT NULL,
-  UNIQUE NULLS NOT DISTINCT (organization_id, package_id, target, library_crate_compilation_unit_hash, build_script_compilation_unit_hash, build_script_execution_unit_hash)
+-- Maps multiple `SavedUnit` instances to a given `UnitPlanInfo`.
+create table cargo_unit_plan_saved_unit (
+  id bigserial primary key,
+  entry_order int not null,
+  unit_plan__id bigint not null references cargo_unit_plan_info(id),
+  saved_unit_id bigint not null references cargo_saved_unit(id),
 );
-
-CREATE TABLE cargo_library_unit_build_artifact (
-  library_unit_build_id BIGINT NOT NULL REFERENCES cargo_library_unit_build(id),
-  object_id BIGINT NOT NULL REFERENCES cargo_object(id),
-  path TEXT NOT NULL,
-  mtime NUMERIC(39, 0) NOT NULL,
-  executable BOOLEAN NOT NULL,
-  UNIQUE(library_unit_build_id, path)
-);
-
-CREATE INDEX idx_cargo_library_unit_build_artifact_build_id ON cargo_library_unit_build_artifact(library_unit_build_id);
-CREATE INDEX idx_cargo_library_unit_build_artifact_object_id ON cargo_library_unit_build_artifact(object_id);
