@@ -54,7 +54,12 @@ impl QualifiedPath {
     }
 
     #[instrument(name = "QualifiedPath::parse")]
-    pub async fn parse(ws: &Workspace, target: &RustcTarget, path: &GenericPath) -> Result<Self> {
+    pub async fn parse(
+        ws: &Workspace,
+        /*TODO: This should be UnitPlanInfo so we can use ws.unit_profile_dir() */
+        target: &RustcTarget,
+        path: &GenericPath,
+    ) -> Result<Self> {
         // TODO: Do we see repeated paths a lot? Should we cache the
         // `fs::exists` calls?
         let profile_dir = Self::unit_profile_dir(ws, target)?;

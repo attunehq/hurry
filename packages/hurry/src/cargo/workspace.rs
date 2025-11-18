@@ -204,6 +204,22 @@ impl Workspace {
         }
     }
 
+    /// Get the profile directory for intermediate build artifacts for a
+    /// specific unit.
+    pub fn unit_profile_dir(&self, unit_info: &UnitPlanInfo) -> Result<AbsDirPath> {
+        match unit_info.target_arch {
+            RustcTarget::Specified(_) if self.target_arch == unit_info.target_arch => {
+                Ok(self.target_profile_dir())
+            }
+            RustcTarget::ImplicitHost => Ok(self.host_profile_dir()),
+            RustcTarget::Specified(_) => bail!(
+                "unit target architecture {:?} does not match workspace target architecture {:?}",
+                unit_info.target_arch,
+                self.target_arch
+            ),
+        }
+    }
+
     /// Get the build plan by running `cargo build --build-plan` with the
     /// provided arguments.
     #[instrument(name = "Workspace::build_plan")]
@@ -1069,6 +1085,14 @@ pub struct UnitPlanInfo {
     /// the fingerprints in the `deps` field.
     ///
     /// [^1]: https://doc.rust-lang.org/cargo/reference/build-scripts.html#the-links-manifest-key
+    // This field is not serialized because indexes may not be valid between
+    // build plan invocations, and this value should be parsed from the build
+    // plan on every build. This does not impact correctness because the
+    // dependencies of a unit already have their hash baked into the unit's
+    // hash.[^1]
+    //
+    // [^1]: https://github.com/attunehq/cargo/blob/c24e1064277fe51ab72011e2612e556ac56addf7/src/cargo/core/compiler/build_runner/compilation_files.rs#L721-L737
+    #[serde(skip)]
     pub deps: Vec<u32>,
 }
 
