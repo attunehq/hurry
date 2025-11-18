@@ -106,7 +106,7 @@ impl Client {
             .context("create stub directory")?;
 
         for request in body {
-            let path = format!("/tmp/courier-v2-stub/{}.json", request.key.opaque());
+            let path = format!("/tmp/courier-v2-stub/{}.json", request.key.stable_hash());
             let json = serde_json::to_vec_pretty(&request.unit).context("serialize unit")?;
             tokio::fs::write(&path, json)
                 .await
@@ -126,7 +126,7 @@ impl Client {
     ) -> Result<Option<CargoRestoreResponse2>> {
         let mut results = HashMap::new();
         for key in body {
-            let path = format!("/tmp/courier-v2-stub/{}.json", key.opaque());
+            let path = format!("/tmp/courier-v2-stub/{}.json", key.stable_hash());
             match tokio::fs::read(&path).await {
                 Ok(json) => {
                     let unit = serde_json::from_slice(&json)

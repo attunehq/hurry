@@ -29,7 +29,10 @@ impl SavedUnitCacheKey {
     /// that it will always be the same if the contents of the
     /// `SavedUnitCacheKey` instance are the same, and always different if the
     /// contents are different.
-    pub fn opaque(&self) -> String {
+    ///
+    /// Note: this is meant to be similar to a derived `Hash` implementation,
+    /// but stable across compiler versions and platforms.
+    pub fn stable_hash(&self) -> String {
         // When we add new fields, this will show a compile time error; if you got here
         // due to a compilation error please handle the new field(s) appropriately.
         let Self { unit } = self;

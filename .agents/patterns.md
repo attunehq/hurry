@@ -103,7 +103,7 @@ let Self { unit_hash } = self;
 - Hot path code where the compiler might not optimize away the destructuring
 - When the struct has many fields but the method only needs a few
 
-**Real example:** See `SavedUnitCacheKey::opaque()` in `packages/clients/src/courier/v1/cache.rs`
+**Real example:** See `SavedUnitCacheKey::stable_hash()` in `packages/clients/src/courier/v1/cache.rs`
 
 ### Type Aliases for Complex Generics
 Define type aliases to simplify complex generic types:
