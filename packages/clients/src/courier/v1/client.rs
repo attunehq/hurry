@@ -105,12 +105,9 @@ impl Client {
             .await
             .context("create stub directory")?;
 
-        for unit in body {
-            let unit_hash = unit.unit_hash();
-            let path = format!("/tmp/courier-v2-stub/{}.json", unit_hash.as_str());
-
-            let json = serde_json::to_vec_pretty(&unit).context("serialize unit")?;
-
+        for request in body {
+            let path = format!("/tmp/courier-v2-stub/{}.json", request.key.opaque());
+            let json = serde_json::to_vec_pretty(&request.unit).context("serialize unit")?;
             tokio::fs::write(&path, json)
                 .await
                 .with_context(|| format!("write unit to {path}"))?;
@@ -128,14 +125,13 @@ impl Client {
         body: CargoRestoreRequest2,
     ) -> Result<Option<CargoRestoreResponse2>> {
         let mut results = HashMap::new();
-        for hash in body {
-            let path = format!("/tmp/courier-v2-stub/{}.json", hash.as_str());
-
+        for key in body {
+            let path = format!("/tmp/courier-v2-stub/{}.json", key.opaque());
             match tokio::fs::read(&path).await {
                 Ok(json) => {
                     let unit = serde_json::from_slice(&json)
                         .with_context(|| format!("deserialize unit from {path}"))?;
-                    results.insert(hash.clone(), unit);
+                    results.insert(key.clone(), unit);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     continue;

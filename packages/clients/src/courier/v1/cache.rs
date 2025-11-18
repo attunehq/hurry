@@ -9,16 +9,66 @@ use tap::Pipe;
 
 use crate::courier::v1::{Key, SavedUnit, SavedUnitHash};
 
+/// Compound cache key for `SavedUnit`.
 ///
+/// Today, we only cache by `SavedUnitHash`, but soon we will add other fields
+/// to the cache key such as libc version and possibly more.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize, Builder)]
+#[non_exhaustive]
+pub struct SavedUnitCacheKey {
+    /// `SavedUnit` instances are primarily keyed by their hash.
+    #[builder(into)]
+    pub unit: SavedUnitHash,
+}
+
+impl SavedUnitCacheKey {
+    /// Construct a single opaque string representing the cache key.
+    ///
+    /// The contents of this string should be treated as opaque: its format may
+    /// change at any time. The only guaranteed quality of the returned value is
+    /// that it will always be the same if the contents of the
+    /// `SavedUnitCacheKey` instance are the same, and always different if the
+    /// contents are different.
+    pub fn opaque(&self) -> String {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(self.unit.as_str().as_bytes());
+        hasher.finalize().to_hex().to_string()
+    }
+}
+
+impl AsRef<SavedUnitHash> for SavedUnitCacheKey {
+    fn as_ref(&self) -> &SavedUnitHash {
+        &self.unit
+    }
+}
+
+impl From<&SavedUnitCacheKey> for SavedUnitCacheKey {
+    fn from(key: &SavedUnitCacheKey) -> Self {
+        key.clone()
+    }
+}
+
+/// A single `SavedUnit` and its associated cache key in a save request.
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[non_exhaustive]
+pub struct CargoSaveUnitRequest {
+    /// The cache key for the `SavedUnit` instance.
+    #[builder(into)]
+    pub key: SavedUnitCacheKey,
+
+    /// The `SavedUnit` to save.
+    #[builder(into)]
+    pub unit: SavedUnit,
+}
 
 /// Request to save cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 #[non_exhaustive]
-pub struct CargoSaveRequest2(Vec<SavedUnit>);
+pub struct CargoSaveRequest2(Vec<CargoSaveUnitRequest>);
 
 impl CargoSaveRequest2 {
     /// Create a new instance from the provided units.
-    pub fn new(units: impl IntoIterator<Item = impl Into<SavedUnit>>) -> Self {
+    pub fn new(units: impl IntoIterator<Item = impl Into<CargoSaveUnitRequest>>) -> Self {
         units
             .into_iter()
             .map(Into::into)
@@ -27,22 +77,22 @@ impl CargoSaveRequest2 {
     }
 
     /// Iterate over the units in the request.
-    pub fn iter(&self) -> impl Iterator<Item = &SavedUnit> {
+    pub fn iter(&self) -> impl Iterator<Item = &CargoSaveUnitRequest> {
         self.0.iter()
     }
 }
 
 impl IntoIterator for CargoSaveRequest2 {
-    type Item = SavedUnit;
-    type IntoIter = std::vec::IntoIter<SavedUnit>;
+    type Item = CargoSaveUnitRequest;
+    type IntoIter = std::vec::IntoIter<CargoSaveUnitRequest>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
 }
 
-impl FromIterator<SavedUnit> for CargoSaveRequest2 {
-    fn from_iter<T: IntoIterator<Item = SavedUnit>>(iter: T) -> Self {
+impl FromIterator<CargoSaveUnitRequest> for CargoSaveRequest2 {
+    fn from_iter<T: IntoIterator<Item = CargoSaveUnitRequest>>(iter: T) -> Self {
         Self::new(iter)
     }
 }
@@ -56,11 +106,11 @@ impl From<&CargoSaveRequest2> for CargoSaveRequest2 {
 /// Request to restore cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 #[non_exhaustive]
-pub struct CargoRestoreRequest2(HashSet<SavedUnitHash>);
+pub struct CargoRestoreRequest2(HashSet<SavedUnitCacheKey>);
 
 impl CargoRestoreRequest2 {
     /// Create a new instance from the provided hashes.
-    pub fn new(units: impl IntoIterator<Item = impl Into<SavedUnitHash>>) -> Self {
+    pub fn new(units: impl IntoIterator<Item = impl Into<SavedUnitCacheKey>>) -> Self {
         units
             .into_iter()
             .map(Into::into)
@@ -69,22 +119,22 @@ impl CargoRestoreRequest2 {
     }
 
     /// Iterate over the hashes in the request.
-    pub fn iter(&self) -> impl Iterator<Item = &SavedUnitHash> {
+    pub fn iter(&self) -> impl Iterator<Item = &SavedUnitCacheKey> {
         self.0.iter()
     }
 }
 
 impl IntoIterator for CargoRestoreRequest2 {
-    type Item = SavedUnitHash;
-    type IntoIter = std::collections::hash_set::IntoIter<SavedUnitHash>;
+    type Item = SavedUnitCacheKey;
+    type IntoIter = std::collections::hash_set::IntoIter<SavedUnitCacheKey>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
 }
 
-impl FromIterator<SavedUnitHash> for CargoRestoreRequest2 {
-    fn from_iter<T: IntoIterator<Item = SavedUnitHash>>(iter: T) -> Self {
+impl FromIterator<SavedUnitCacheKey> for CargoRestoreRequest2 {
+    fn from_iter<T: IntoIterator<Item = SavedUnitCacheKey>>(iter: T) -> Self {
         Self::new(iter)
     }
 }
@@ -98,14 +148,14 @@ impl From<&CargoRestoreRequest2> for CargoRestoreRequest2 {
 /// Response from restoring cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 #[non_exhaustive]
-pub struct CargoRestoreResponse2(HashMap<SavedUnitHash, SavedUnit>);
+pub struct CargoRestoreResponse2(HashMap<SavedUnitCacheKey, SavedUnit>);
 
 impl CargoRestoreResponse2 {
     /// Create a new instance from the provided hashes.
     pub fn new<I, H, U>(units: I) -> Self
     where
         I: IntoIterator<Item = (H, U)>,
-        H: Into<SavedUnitHash>,
+        H: Into<SavedUnitCacheKey>,
         U: Into<SavedUnit>,
     {
         units
@@ -116,24 +166,24 @@ impl CargoRestoreResponse2 {
     }
 
     /// Iterate over the units in the response.
-    pub fn iter(&self) -> impl Iterator<Item = (&SavedUnitHash, &SavedUnit)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&SavedUnitCacheKey, &SavedUnit)> {
         self.0.iter()
     }
 }
 
 impl IntoIterator for CargoRestoreResponse2 {
-    type Item = (SavedUnitHash, SavedUnit);
-    type IntoIter = std::collections::hash_map::IntoIter<SavedUnitHash, SavedUnit>;
+    type Item = (SavedUnitCacheKey, SavedUnit);
+    type IntoIter = std::collections::hash_map::IntoIter<SavedUnitCacheKey, SavedUnit>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
 }
 
-impl FromIterator<(SavedUnitHash, SavedUnit)> for CargoRestoreResponse2 {
+impl FromIterator<(SavedUnitCacheKey, SavedUnit)> for CargoRestoreResponse2 {
     fn from_iter<I>(iter: I) -> Self
     where
-        I: IntoIterator<Item = (SavedUnitHash, SavedUnit)>,
+        I: IntoIterator<Item = (SavedUnitCacheKey, SavedUnit)>,
     {
         iter.into_iter().collect()
     }
