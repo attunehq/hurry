@@ -56,7 +56,10 @@ impl QualifiedPath {
     #[instrument(name = "QualifiedPath::parse")]
     pub async fn parse(
         ws: &Workspace,
-        /*TODO: This should be UnitPlanInfo so we can use ws.unit_profile_dir() */
+        // TODO: This should be UnitPlanInfo so we can use
+        // ws.unit_profile_dir(), but we can't migrate over until all call-sites
+        // are ready (because we can easily construct a default RustcTarget but
+        // less so a default UnitPlanInfo).
         target: &RustcTarget,
         path: &GenericPath,
     ) -> Result<Self> {
@@ -91,6 +94,7 @@ impl QualifiedPath {
 
     #[instrument(name = "QualifiedPath::reconstruct")]
     pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<GenericPath> {
+        // TODO: Refactor this to use `ws.unit_profile_dir`, which is infallible.
         let profile_dir = Self::unit_profile_dir(ws, target)?;
         Ok(match self {
             QualifiedPath::Rootless(rel) => rel.into(),
