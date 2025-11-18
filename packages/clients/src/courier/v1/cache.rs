@@ -11,10 +11,10 @@ use crate::courier::v1::{SavedFile, SavedUnitHash, UnitSavePlan};
 /// Request to save cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From, AsRef)]
 #[non_exhaustive]
-pub struct CargoSaveRequest(UnitSavePlan);
+pub struct CargoSaveRequest2(UnitSavePlan);
 
-impl From<&CargoSaveRequest> for CargoSaveRequest {
-    fn from(req: &CargoSaveRequest) -> Self {
+impl From<&CargoSaveRequest2> for CargoSaveRequest2 {
+    fn from(req: &CargoSaveRequest2) -> Self {
         req.clone()
     }
 }
@@ -22,10 +22,10 @@ impl From<&CargoSaveRequest> for CargoSaveRequest {
 /// Request to restore cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct CargoRestoreRequest(HashSet<SavedUnitHash>);
+pub struct CargoRestoreRequest2(HashSet<SavedUnitHash>);
 
-impl From<&CargoRestoreRequest> for CargoRestoreRequest {
-    fn from(req: &CargoRestoreRequest) -> Self {
+impl From<&CargoRestoreRequest2> for CargoRestoreRequest2 {
+    fn from(req: &CargoRestoreRequest2) -> Self {
         req.clone()
     }
 }
@@ -33,10 +33,10 @@ impl From<&CargoRestoreRequest> for CargoRestoreRequest {
 /// Response from restoring cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From, AsRef)]
 #[non_exhaustive]
-pub struct CargoRestoreResponse(HashMap<SavedUnitHash, UnitSavePlan>);
+pub struct CargoRestoreResponse2(HashMap<SavedUnitHash, UnitSavePlan>);
 
-impl From<&CargoRestoreResponse> for CargoRestoreResponse {
-    fn from(resp: &CargoRestoreResponse) -> Self {
+impl From<&CargoRestoreResponse2> for CargoRestoreResponse2 {
+    fn from(resp: &CargoRestoreResponse2) -> Self {
         resp.clone()
     }
 }
