@@ -219,7 +219,7 @@ impl<'de> Deserialize<'de> for DepFingerprint {
         let (pkg_id, name, public, hash) = <(u64, String, bool, u64)>::deserialize(d)?;
         Ok(DepFingerprint {
             pkg_id,
-            name: name.into(),
+            name,
             public,
             fingerprint: Arc::new(Fingerprint {
                 memoized_hash: Mutex::new(Some(hash)),

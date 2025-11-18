@@ -365,7 +365,7 @@ impl Workspace {
                             // Filter out DWARF debugging files, which Cargo removes
                             // anyway.
                             .filter(|o| !o.ends_with(".dwp"))
-                            .map(|o| AbsFilePath::try_from(o))
+                            .map(AbsFilePath::try_from)
                             .exactly_one()
                             .unwrap_or_else(|_| {
                                 bail!("build script compilation should produce exactly one output");
@@ -377,9 +377,8 @@ impl Workspace {
                         let linked_program = invocation
                             .links
                             .keys()
-                            .into_iter()
                             .filter(|l| !l.ends_with(".dwp"))
-                            .map(|l| AbsFilePath::try_from(l))
+                            .map(AbsFilePath::try_from)
                             .exactly_one()
                             .unwrap_or_else(|_| {
                                 bail!("build script compilation should produce exactly one output");
@@ -525,7 +524,7 @@ impl Workspace {
                     .outputs
                     .into_iter()
                     .filter(|o| !o.ends_with(".dwp"))
-                    .map(|o| AbsFilePath::try_from(o))
+                    .map(AbsFilePath::try_from)
                     .collect::<Result<Vec<_>>>()?;
                 let args = RustcArguments::from_iter(invocation.args);
                 let crate_name = args.crate_name().ok_or_eyre("no crate name")?.to_owned();

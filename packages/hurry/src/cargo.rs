@@ -39,7 +39,11 @@ pub use rustc::{RustcArgument, RustcArguments, RustcMetadata, RustcTarget};
 pub use unit_graph::{
     UnitGraph, UnitGraphDependency, UnitGraphProfile, UnitGraphProfilePanicStrategy, UnitGraphUnit,
 };
-pub use workspace::{ArtifactKey, ArtifactPlan, BuildScriptDirs, BuiltArtifact, Workspace};
+pub use workspace::{
+    ArtifactKey, ArtifactPlan, BuildScriptCompilationUnitPlan, BuildScriptDirs,
+    BuildScriptExecutionUnitPlan, BuiltArtifact, LibraryCrateUnitPlan, UnitPlan, UnitPlanInfo,
+    Workspace,
+};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
