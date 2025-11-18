@@ -179,7 +179,7 @@ impl Client {
 
     /// Restore cargo cache metadata.
     #[instrument(skip(self))]
-    #[deprecated = "Replaced by `cargo_cache_restore2"]
+    #[deprecated = "Replaced by `cargo_cache_restore2`"]
     pub async fn cargo_cache_restore(
         &self,
         body: CargoRestoreRequest,
@@ -221,7 +221,7 @@ impl Client {
     /// operation. If you exceed this limit, the server will return a 400
     /// Bad Request error.
     #[instrument(skip(self, requests))]
-    #[deprecated = "Replaced by `cargo_cache_restore2"]
+    #[deprecated = "Replaced by `cargo_cache_restore2`"]
     pub async fn cargo_cache_restore_bulk(
         &self,
         requests: impl IntoIterator<Item = impl Into<CargoRestoreRequest>>,

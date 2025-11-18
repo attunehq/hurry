@@ -166,12 +166,12 @@ impl<'de> Deserialize<'de> for Key {
 pub struct DiskPath(String);
 
 impl DiskPath {
-    /// Create a new `DiskPath` from a string.
+    /// Create a new instance from a string.
     pub fn new(path: impl Into<String>) -> Self {
         Self(path.into())
     }
 
-    /// Get the underlying path as a string.
+    /// View the underlying data as a string.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -201,12 +201,12 @@ impl From<&DiskPath> for DiskPath {
 pub struct Fingerprint(String);
 
 impl Fingerprint {
-    /// Create a new `DiskPath` from a string.
+    /// Create a new instance from a string.
     pub fn new(path: impl Into<String>) -> Self {
         Self(path.into())
     }
 
-    /// Get the underlying path as a string.
+    /// View the underlying data as a string.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -236,12 +236,12 @@ impl From<&Fingerprint> for Fingerprint {
 pub struct SavedUnitHash(String);
 
 impl SavedUnitHash {
-    /// Create a new `DiskPath` from a string.
+    /// Create a new instance from a string.
     pub fn new(path: impl Into<String>) -> Self {
         Self(path.into())
     }
 
-    /// Get the underlying path as a string.
+    /// View the underlying data as a string.
     pub fn as_str(&self) -> &str {
         &self.0
     }
