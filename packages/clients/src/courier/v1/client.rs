@@ -151,7 +151,7 @@ impl Client {
 
     /// Save cargo cache metadata.
     #[instrument(skip(self))]
-    #[deprecated = "Replaced by `cargo_cache_save2"]
+    #[deprecated = "Replaced by `cargo_cache_save2`"]
     pub async fn cargo_cache_save(&self, body: CargoSaveRequest) -> Result<()> {
         let url = self.base.join("api/v1/cache/cargo/save")?;
         let response = self
