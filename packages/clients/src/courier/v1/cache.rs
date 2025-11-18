@@ -6,12 +6,28 @@ use bon::Builder;
 use derive_more::{AsRef, From};
 use serde::{Deserialize, Serialize};
 
-use crate::courier::v1::{Key, SavedUnitHash, UnitSavePlan};
+use crate::courier::v1::{Key, SavedUnit, SavedUnitHash, UnitSavePlan};
 
 /// Request to save cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From, AsRef)]
 #[non_exhaustive]
 pub struct CargoSaveRequest2(UnitSavePlan);
+
+impl CargoSaveRequest2 {
+    /// Iterate over the units in the request.
+    pub fn iter(&self) -> impl Iterator<Item = &SavedUnit> {
+        self.0.iter()
+    }
+}
+
+impl IntoIterator for CargoSaveRequest2 {
+    type Item = SavedUnit;
+    type IntoIter = std::vec::IntoIter<SavedUnit>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
 
 impl From<&CargoSaveRequest2> for CargoSaveRequest2 {
     fn from(req: &CargoSaveRequest2) -> Self {
@@ -49,7 +65,7 @@ impl From<&CargoRestoreRequest2> for CargoRestoreRequest2 {
 /// Response from restoring cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From, AsRef)]
 #[non_exhaustive]
-pub struct CargoRestoreResponse2(HashMap<SavedUnitHash, UnitSavePlan>);
+pub struct CargoRestoreResponse2(HashMap<SavedUnitHash, SavedUnit>);
 
 impl From<&CargoRestoreResponse2> for CargoRestoreResponse2 {
     fn from(resp: &CargoRestoreResponse2) -> Self {

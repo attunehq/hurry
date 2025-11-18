@@ -265,7 +265,7 @@ impl From<&SavedUnitHash> for SavedUnitHash {
     }
 }
 
-/// Fields which are shared between all unit plan types.
+/// Common metadata fields present in all unit plan types.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct UnitPlanInfo {
@@ -340,18 +340,30 @@ impl From<&SavedFile> for SavedFile {
     }
 }
 
-/// Collects multiple `SavedUnit` instances with a unified `UnitPlanInfo`.
+/// A collection of `SavedUnit` instances to be saved together.
 ///
-/// Each `SavedUnit` semantically shares the same `UnitPlanInfo`, which is why
-/// it is deduplicated in the root of the struct.
+/// Each `SavedUnit` contains its own `UnitPlanInfo` with a unique `unit_hash`.
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct UnitSavePlan {
-    #[builder(into)]
-    pub info: UnitPlanInfo,
-
     #[builder(default, with = |i: impl IntoIterator<Item = impl Into<SavedUnit>>| i.into_iter().map(Into::into).collect())]
     pub units: Vec<SavedUnit>,
+}
+
+impl UnitSavePlan {
+    /// Iterate over the units in the plan.
+    pub fn iter(&self) -> impl Iterator<Item = &SavedUnit> {
+        self.units.iter()
+    }
+}
+
+impl IntoIterator for UnitSavePlan {
+    type Item = SavedUnit;
+    type IntoIter = std::vec::IntoIter<SavedUnit>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.units.into_iter()
+    }
 }
 
 impl From<&UnitSavePlan> for UnitSavePlan {
@@ -365,6 +377,17 @@ pub enum SavedUnit {
     LibraryCrate(LibraryFiles, LibraryCrateUnitPlan),
     BuildScriptCompilation(BuildScriptCompiledFiles, BuildScriptCompilationUnitPlan),
     BuildScriptExecution(BuildScriptOutputFiles, BuildScriptExecutionUnitPlan),
+}
+
+impl SavedUnit {
+    /// Read the unit hash from this saved unit.
+    pub fn unit_hash(&self) -> &SavedUnitHash {
+        match self {
+            SavedUnit::LibraryCrate(_, plan) => &plan.info.unit_hash,
+            SavedUnit::BuildScriptCompilation(_, plan) => &plan.info.unit_hash,
+            SavedUnit::BuildScriptExecution(_, plan) => &plan.info.unit_hash,
+        }
+    }
 }
 
 impl From<&SavedUnit> for SavedUnit {
@@ -425,6 +448,11 @@ impl From<&LibraryFiles> for LibraryFiles {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct LibraryCrateUnitPlan {
+    /// Common metadata fields present in all unit plan variants.
+    #[serde(flatten)]
+    #[builder(into)]
+    pub info: UnitPlanInfo,
+
     /// The path to the source file on disk.
     #[builder(into)]
     pub src_path: DiskPath,
@@ -477,6 +505,11 @@ impl From<&BuildScriptCompiledFiles> for BuildScriptCompiledFiles {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct BuildScriptCompilationUnitPlan {
+    /// Common metadata fields present in all unit plan variants.
+    #[serde(flatten)]
+    #[builder(into)]
+    pub info: UnitPlanInfo,
+
     /// The path to the build script's main entrypoint source file. This is
     /// usually `build.rs` within the package's source code, but can vary if
     /// the package author sets `package.build` in the package's
@@ -524,6 +557,11 @@ impl From<&BuildScriptOutputFiles> for BuildScriptOutputFiles {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct BuildScriptExecutionUnitPlan {
+    /// Common metadata fields present in all unit plan variants.
+    #[serde(flatten)]
+    #[builder(into)]
+    pub info: UnitPlanInfo,
+
     /// The entrypoint module name of the compiled build script program after
     /// linkage (i.e. using the original build script name, which is what Cargo
     /// uses to name the execution unit files).

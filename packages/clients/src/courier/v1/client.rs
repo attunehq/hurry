@@ -61,7 +61,6 @@ pub struct Client {
 
     token: Token,
 }
-
 impl Client {
     /// Create a new client with the given base URL and authentication token.
     pub fn new(base: Url, token: Token) -> Result<Self> {
@@ -102,19 +101,20 @@ impl Client {
     /// Important: this is temporarily stubbed using the local file system.
     #[instrument(skip(self))]
     pub async fn cargo_cache_save2(&self, body: CargoSaveRequest2) -> Result<()> {
-        let plan = body.as_ref();
-        let unit_hash = &plan.info.unit_hash;
-        let path = format!("/tmp/courier-v2-stub/{}.json", unit_hash.as_str());
-
         tokio::fs::create_dir_all("/tmp/courier-v2-stub")
             .await
             .context("create stub directory")?;
 
-        let json = serde_json::to_vec_pretty(plan).context("serialize plan")?;
+        for unit in body {
+            let unit_hash = unit.unit_hash();
+            let path = format!("/tmp/courier-v2-stub/{}.json", unit_hash.as_str());
 
-        tokio::fs::write(&path, json)
-            .await
-            .with_context(|| format!("write plan to {path}"))?;
+            let json = serde_json::to_vec_pretty(&unit).context("serialize unit")?;
+
+            tokio::fs::write(&path, json)
+                .await
+                .with_context(|| format!("write unit to {path}"))?;
+        }
 
         Ok(())
     }
@@ -133,15 +133,15 @@ impl Client {
 
             match tokio::fs::read(&path).await {
                 Ok(json) => {
-                    let plan = serde_json::from_slice(&json)
-                        .with_context(|| format!("deserialize plan from {path}"))?;
-                    results.insert(hash.clone(), plan);
+                    let unit = serde_json::from_slice(&json)
+                        .with_context(|| format!("deserialize unit from {path}"))?;
+                    results.insert(hash.clone(), unit);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     continue;
                 }
                 Err(e) => {
-                    return Err(e).with_context(|| format!("read plan from {path}"));
+                    return Err(e).with_context(|| format!("read unit from {path}"));
                 }
             }
         }
