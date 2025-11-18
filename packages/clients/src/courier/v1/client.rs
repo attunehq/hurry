@@ -149,7 +149,7 @@ impl Client {
         if results.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(results.into()))
+            CargoRestoreResponse2::from(results).pipe(Some).pipe(Ok)
         }
     }
 

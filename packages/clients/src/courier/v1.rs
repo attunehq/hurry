@@ -340,38 +340,6 @@ impl From<&SavedFile> for SavedFile {
     }
 }
 
-/// A collection of `SavedUnit` instances to be saved together.
-///
-/// Each `SavedUnit` contains its own `UnitPlanInfo` with a unique `unit_hash`.
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
-#[non_exhaustive]
-pub struct UnitSavePlan {
-    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<SavedUnit>>| i.into_iter().map(Into::into).collect())]
-    pub units: Vec<SavedUnit>,
-}
-
-impl UnitSavePlan {
-    /// Iterate over the units in the plan.
-    pub fn iter(&self) -> impl Iterator<Item = &SavedUnit> {
-        self.units.iter()
-    }
-}
-
-impl IntoIterator for UnitSavePlan {
-    type Item = SavedUnit;
-    type IntoIter = std::vec::IntoIter<SavedUnit>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.units.into_iter()
-    }
-}
-
-impl From<&UnitSavePlan> for UnitSavePlan {
-    fn from(plan: &UnitSavePlan) -> Self {
-        plan.clone()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SavedUnit {
     LibraryCrate(LibraryFiles, LibraryCrateUnitPlan),

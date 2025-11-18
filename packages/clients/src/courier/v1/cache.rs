@@ -3,17 +3,29 @@
 use std::collections::{HashMap, HashSet};
 
 use bon::Builder;
-use derive_more::{AsRef, From};
+use derive_more::From;
 use serde::{Deserialize, Serialize};
+use tap::Pipe;
 
-use crate::courier::v1::{Key, SavedUnit, SavedUnitHash, UnitSavePlan};
+use crate::courier::v1::{Key, SavedUnit, SavedUnitHash};
+
+///
 
 /// Request to save cargo cache metadata.
-#[derive(Debug, Clone, Serialize, Deserialize, From, AsRef)]
+#[derive(Debug, Clone, Serialize, Deserialize, From)]
 #[non_exhaustive]
-pub struct CargoSaveRequest2(UnitSavePlan);
+pub struct CargoSaveRequest2(Vec<SavedUnit>);
 
 impl CargoSaveRequest2 {
+    /// Create a new instance from the provided units.
+    pub fn new(units: impl IntoIterator<Item = impl Into<SavedUnit>>) -> Self {
+        units
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>()
+            .pipe(Self)
+    }
+
     /// Iterate over the units in the request.
     pub fn iter(&self) -> impl Iterator<Item = &SavedUnit> {
         self.0.iter()
@@ -29,6 +41,12 @@ impl IntoIterator for CargoSaveRequest2 {
     }
 }
 
+impl FromIterator<SavedUnit> for CargoSaveRequest2 {
+    fn from_iter<T: IntoIterator<Item = SavedUnit>>(iter: T) -> Self {
+        Self::new(iter)
+    }
+}
+
 impl From<&CargoSaveRequest2> for CargoSaveRequest2 {
     fn from(req: &CargoSaveRequest2) -> Self {
         req.clone()
@@ -36,11 +54,20 @@ impl From<&CargoSaveRequest2> for CargoSaveRequest2 {
 }
 
 /// Request to restore cargo cache metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, From)]
 #[non_exhaustive]
 pub struct CargoRestoreRequest2(HashSet<SavedUnitHash>);
 
 impl CargoRestoreRequest2 {
+    /// Create a new instance from the provided hashes.
+    pub fn new(units: impl IntoIterator<Item = impl Into<SavedUnitHash>>) -> Self {
+        units
+            .into_iter()
+            .map(Into::into)
+            .collect::<HashSet<_>>()
+            .pipe(Self)
+    }
+
     /// Iterate over the hashes in the request.
     pub fn iter(&self) -> impl Iterator<Item = &SavedUnitHash> {
         self.0.iter()
@@ -56,6 +83,12 @@ impl IntoIterator for CargoRestoreRequest2 {
     }
 }
 
+impl FromIterator<SavedUnitHash> for CargoRestoreRequest2 {
+    fn from_iter<T: IntoIterator<Item = SavedUnitHash>>(iter: T) -> Self {
+        Self::new(iter)
+    }
+}
+
 impl From<&CargoRestoreRequest2> for CargoRestoreRequest2 {
     fn from(req: &CargoRestoreRequest2) -> Self {
         req.clone()
@@ -63,9 +96,48 @@ impl From<&CargoRestoreRequest2> for CargoRestoreRequest2 {
 }
 
 /// Response from restoring cargo cache metadata.
-#[derive(Debug, Clone, Serialize, Deserialize, From, AsRef)]
+#[derive(Debug, Clone, Serialize, Deserialize, From)]
 #[non_exhaustive]
 pub struct CargoRestoreResponse2(HashMap<SavedUnitHash, SavedUnit>);
+
+impl CargoRestoreResponse2 {
+    /// Create a new instance from the provided hashes.
+    pub fn new<I, H, U>(units: I) -> Self
+    where
+        I: IntoIterator<Item = (H, U)>,
+        H: Into<SavedUnitHash>,
+        U: Into<SavedUnit>,
+    {
+        units
+            .into_iter()
+            .map(|(hash, unit)| (hash.into(), unit.into()))
+            .collect::<HashMap<_, _>>()
+            .pipe(Self)
+    }
+
+    /// Iterate over the units in the response.
+    pub fn iter(&self) -> impl Iterator<Item = (&SavedUnitHash, &SavedUnit)> {
+        self.0.iter()
+    }
+}
+
+impl IntoIterator for CargoRestoreResponse2 {
+    type Item = (SavedUnitHash, SavedUnit);
+    type IntoIter = std::collections::hash_map::IntoIter<SavedUnitHash, SavedUnit>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl FromIterator<(SavedUnitHash, SavedUnit)> for CargoRestoreResponse2 {
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = (SavedUnitHash, SavedUnit)>,
+    {
+        iter.into_iter().collect()
+    }
+}
 
 impl From<&CargoRestoreResponse2> for CargoRestoreResponse2 {
     fn from(resp: &CargoRestoreResponse2) -> Self {
