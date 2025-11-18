@@ -518,6 +518,111 @@ duplicate! {
     }
 }
 
+// All paths can be borrowed as more generic types infallibly.
+// Abs/Rel + Dir/File -> SomeBase + SomeType (fully generic)
+duplicate! {
+    [
+        from_base;
+        [ Abs ];
+        [ Rel ];
+    ]
+    duplicate!{
+        [
+            from_ty;
+            [ Dir ];
+            [ File ];
+        ]
+        impl AsRef<TypedPath<from_base, SomeType>> for TypedPath<from_base, from_ty> {
+            fn as_ref(&self) -> &TypedPath<from_base, SomeType> {
+                // The no-op destructuring helps us catch future unsafety: if we
+                // change B and T to be non-phantom, this will fail to compile.
+                let Self { base, ty, inner } = self;
+                let _b: &PhantomData<from_base> = base;
+                let _t: &PhantomData<from_ty> = ty;
+                let _i: &PathBuf = inner;
+                // SAFETY: this is safe because we are transmuting to the same
+                // struct _and_ the generics B and T are only ever used by
+                // PhantomData markers.
+                unsafe { &*(std::ptr::from_ref(self) as *const TypedPath<from_base, SomeType>) }
+            }
+        }
+        impl AsRef<TypedPath<SomeBase, from_ty>> for TypedPath<from_base, from_ty> {
+            fn as_ref(&self) -> &TypedPath<SomeBase, from_ty> {
+                // The no-op destructuring helps us catch future unsafety: if we
+                // change B and T to be non-phantom, this will fail to compile.
+                let Self { base, ty, inner } = self;
+                let _b: &PhantomData<from_base> = base;
+                let _t: &PhantomData<from_ty> = ty;
+                let _i: &PathBuf = inner;
+                // SAFETY: this is safe because we are transmuting to the same
+                // struct _and_ the generics B and T are only ever used by
+                // PhantomData markers.
+                unsafe { &*(std::ptr::from_ref(self) as *const TypedPath<SomeBase, from_ty>) }
+            }
+        }
+        impl AsRef<TypedPath<SomeBase, SomeType>> for TypedPath<from_base, from_ty> {
+            fn as_ref(&self) -> &TypedPath<SomeBase, SomeType> {
+                // The no-op destructuring helps us catch future unsafety: if we
+                // change B and T to be non-phantom, this will fail to compile.
+                let Self { base, ty, inner } = self;
+                let _b: &PhantomData<from_base> = base;
+                let _t: &PhantomData<from_ty> = ty;
+                let _i: &PathBuf = inner;
+                // SAFETY: this is safe because we are transmuting to the same
+                // struct _and_ the generics B and T are only ever used by
+                // PhantomData markers.
+                unsafe { &*(std::ptr::from_ref(self) as *const TypedPath<SomeBase, SomeType>) }
+            }
+        }
+    }
+}
+
+// Abs/Rel + SomeType -> SomeBase + SomeType
+duplicate! {
+    [
+        from_base;
+        [ Abs ];
+        [ Rel ];
+    ]
+    impl AsRef<TypedPath<SomeBase, SomeType>> for TypedPath<from_base, SomeType> {
+        fn as_ref(&self) -> &TypedPath<SomeBase, SomeType> {
+            // The no-op destructuring helps us catch future unsafety: if we
+            // change B and T to be non-phantom, this will fail to compile.
+            let Self { base, ty, inner } = self;
+            let _b: &PhantomData<from_base> = base;
+            let _t: &PhantomData<SomeType> = ty;
+            let _i: &PathBuf = inner;
+            // SAFETY: this is safe because we are transmuting to the same
+            // struct _and_ the generics B and T are only ever used by
+            // PhantomData markers.
+            unsafe { &*(std::ptr::from_ref(self) as *const TypedPath<SomeBase, SomeType>) }
+        }
+    }
+}
+
+// SomeBase + Dir/File -> SomeBase + SomeType
+duplicate! {
+    [
+        from_ty;
+        [ Dir ];
+        [ File ];
+    ]
+    impl AsRef<TypedPath<SomeBase, SomeType>> for TypedPath<SomeBase, from_ty> {
+        fn as_ref(&self) -> &TypedPath<SomeBase, SomeType> {
+            // The no-op destructuring helps us catch future unsafety: if we
+            // change B and T to be non-phantom, this will fail to compile.
+            let Self { base, ty, inner } = self;
+            let _b: &PhantomData<SomeBase> = base;
+            let _t: &PhantomData<from_ty> = ty;
+            let _i: &PathBuf = inner;
+            // SAFETY: this is safe because we are transmuting to the same
+            // struct _and_ the generics B and T are only ever used by
+            // PhantomData markers.
+            unsafe { &*(std::ptr::from_ref(self) as *const TypedPath<SomeBase, SomeType>) }
+        }
+    }
+}
+
 // All combinations of bases and types can be _fallibly_ converted to
 // `Abs`/`Rel` bases and `Dir`/`File` types.
 // SomeBase -> Abs/Rel
