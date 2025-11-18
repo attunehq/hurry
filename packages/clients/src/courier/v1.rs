@@ -14,7 +14,8 @@
 //! than a `Vec` because the latter implies ordering while the former does not.
 //! The concept of "ordering" is considered "more broad" than the concept of
 //! "equality", even though both require explicit opt-in, because equality
-//! rarely.
+//! can nearly always be derived: it's rarely a matter of business logic. In
+//! contrast, ordering is nearly always inherently dependant on business logic.
 //!
 //! However, sometimes this isn't possible: if the contents aren't able to be
 //! compared for equality or cannot be hashed, then obviously a `HashSet` won't
