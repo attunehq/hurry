@@ -211,9 +211,8 @@ mod tests {
             .map(|name| test_saved_unit(name, "v1"))
             .collect::<HashSet<_>>();
 
-        let restore_request = CargoRestoreRequest2::new(
-            expected.iter().map(|(key, _)| key).collect::<Vec<_>>()
-        );
+        let restore_request =
+            CargoRestoreRequest2::new(expected.iter().map(|(key, _)| key).collect::<Vec<_>>());
         let restored = db
             .cargo_cache_restore(&alice_validated, restore_request)
             .await?;
@@ -256,9 +255,8 @@ mod tests {
             .map(|suffix| test_saved_unit("serde", suffix))
             .collect::<HashSet<_>>();
 
-        let restore_request = CargoRestoreRequest2::new(
-            expected.iter().map(|(key, _)| key).collect::<Vec<_>>()
-        );
+        let restore_request =
+            CargoRestoreRequest2::new(expected.iter().map(|(key, _)| key).collect::<Vec<_>>());
         let restored = db
             .cargo_cache_restore(&alice_validated, restore_request)
             .await?;
@@ -344,9 +342,8 @@ mod tests {
             .map(|i| test_saved_unit(&format!("crate-{i}"), "v1"))
             .collect::<HashSet<_>>();
 
-        let restore_request = CargoRestoreRequest2::new(
-            expected.iter().map(|(key, _)| key).collect::<Vec<_>>()
-        );
+        let restore_request =
+            CargoRestoreRequest2::new(expected.iter().map(|(key, _)| key).collect::<Vec<_>>());
         let restored = db
             .cargo_cache_restore(&alice_validated, restore_request)
             .await?;
