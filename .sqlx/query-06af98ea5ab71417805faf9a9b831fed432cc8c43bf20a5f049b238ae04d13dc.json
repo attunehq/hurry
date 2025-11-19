@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select cache_key, data\n            from cargo_saved_unit\n            where organization_id = $1\n            and cache_key = any($2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cache_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "data",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "06af98ea5ab71417805faf9a9b831fed432cc8c43bf20a5f049b238ae04d13dc"
+}

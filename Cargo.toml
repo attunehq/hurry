@@ -89,3 +89,4 @@ directories = "6.0.0"
 is_executable = "1.0.5"
 sha2 = "0.10.9"
 testcontainers = { git = "https://github.com/testcontainers/testcontainers-rs.git", rev = "9aae21e7330f3ad22a7742c82dd5eea465928510" }
+monostate = "1.0.2"
