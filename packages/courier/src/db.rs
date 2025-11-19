@@ -364,7 +364,7 @@ impl Postgres {
         )
         .execute(tx.as_mut())
         .await
-        .context("delete saved units")?;
+        .context("delete cas access")?;
 
         tx.commit().await?;
         Ok(())
