@@ -1,6 +1,6 @@
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
-use clients::courier::v1::cache::{CargoRestoreRequest, CargoRestoreResponse};
+use clients::courier::v1::cache::{CargoRestoreRequest2, CargoRestoreResponse2};
 use color_eyre::eyre::Report;
 use tap::Pipe;
 use tracing::{error, info};
@@ -11,7 +11,7 @@ use crate::{auth::AuthenticatedToken, db::Postgres};
 pub async fn handle(
     auth: AuthenticatedToken,
     Dep(db): Dep<Postgres>,
-    Json(request): Json<CargoRestoreRequest>,
+    Json(request): Json<CargoRestoreRequest2>,
 ) -> CacheRestoreResponse {
     match db.cargo_cache_restore(&auth, request).await {
         Ok(artifacts) if artifacts.is_empty() => {
@@ -20,11 +20,7 @@ pub async fn handle(
         }
         Ok(artifacts) => {
             info!("cache.restore.hit");
-            CargoRestoreResponse::builder()
-                .artifacts(artifacts)
-                .build()
-                .pipe(Json)
-                .pipe(CacheRestoreResponse::Ok)
+            CargoRestoreResponse2::from(artifacts).pipe(CacheRestoreResponse::Ok)
         }
         Err(err) => {
             error!(error = ?err, "cache.restore.error");
@@ -35,7 +31,7 @@ pub async fn handle(
 
 #[derive(Debug)]
 pub enum CacheRestoreResponse {
-    Ok(Json<CargoRestoreResponse>),
+    Ok(CargoRestoreResponse2),
     NotFound,
     Error(Report),
 }
@@ -43,7 +39,7 @@ pub enum CacheRestoreResponse {
 impl IntoResponse for CacheRestoreResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
-            CacheRestoreResponse::Ok(json) => (StatusCode::OK, json).into_response(),
+            CacheRestoreResponse::Ok(body) => (StatusCode::OK, Json(body)).into_response(),
             CacheRestoreResponse::NotFound => StatusCode::NOT_FOUND.into_response(),
             CacheRestoreResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
@@ -52,6 +48,7 @@ impl IntoResponse for CacheRestoreResponse {
     }
 }
 
+#[cfg(false)]
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;

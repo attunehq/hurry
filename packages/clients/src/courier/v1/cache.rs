@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use bon::Builder;
 use derive_more::From;
+use monostate::MustBeU8;
 use serde::{Deserialize, Serialize};
 use tap::Pipe;
 
@@ -16,6 +17,11 @@ use crate::courier::v1::{Key, SavedUnit, SavedUnitHash};
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct SavedUnitCacheKey {
+    /// Every time we _semantically_ change the contents of `SavedUnit` or
+    /// `SavedUnitCacheKey`, increment this so that old caches are transparently
+    /// invalidated.
+    generation: MustBeU8<1>,
+
     /// `SavedUnit` instances are primarily keyed by their hash.
     #[builder(into)]
     pub unit: SavedUnitHash,
@@ -35,8 +41,9 @@ impl SavedUnitCacheKey {
     pub fn stable_hash(&self) -> String {
         // When we add new fields, this will show a compile time error; if you got here
         // due to a compilation error please handle the new field(s) appropriately.
-        let Self { unit } = self;
+        let Self { unit, generation } = self;
         let mut hasher = blake3::Hasher::new();
+        hasher.update(format!("{generation}").as_bytes());
         hasher.update(unit.as_str().as_bytes());
         hasher.finalize().to_hex().to_string()
     }

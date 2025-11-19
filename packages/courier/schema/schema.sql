@@ -56,62 +56,26 @@ CREATE TABLE cas_access (
   PRIMARY KEY (organization_id, cas_key_id)
 );
 
--- Models `UnitPlanInfo`.
+-- Cargo cache: stores SavedUnit instances as JSONB.
 --
--- Within a given `Vec<SavedUnit>`, each entry has a `UnitPlanInfo` attached
--- and this value is _always_ the same across the entire plan.
+-- This table uses a JSONB-based approach for simplicity and flexibility:
+-- - SavedUnit types are directly serialized to JSONB without decomposition
+-- - cache_key is a stable hash of SavedUnitCacheKey (includes unit hash + future fields)
+-- - No impedance mismatch: Rust types ARE the storage format
+-- - Future-proof: Adding fields to SavedUnitCacheKey doesn't require schema changes
 --
--- Given this, we use `UnitPlanInfo` as our "primary data source". To
--- reconstruct a `Vec<SavedUnit>`:
--- - Find the plan by its `unit_hash`
--- - Join to `SavedUnit` instances through `cargo_unit_plan_saved_unit`
--- - Order them by `entry_order`.
-create table cargo_unit_plan_info (
-  id bigserial primary key,
-  organization_id bigint not null references organization(id),
-
-  unit_hash text not null,
-  package_name text not null,
-  crate_name text not null,
-  target_arch text,
-
-  created_at timestamptz not null default now(),
-  unique(
-    unit_hash,
-    package_name,
-    crate_name,
-    target_arch
-  )
+-- Access pattern is simple key-value:
+-- - Save: INSERT complete SavedUnit by cache_key
+-- - Restore: SELECT by cache_key and deserialize
+--
+-- File contents are stored in CAS (deduplicated), JSONB only stores metadata.
+CREATE TABLE cargo_saved_unit (
+  id BIGSERIAL PRIMARY KEY,
+  organization_id BIGINT NOT NULL REFERENCES organization(id),
+  cache_key TEXT NOT NULL,
+  data JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(organization_id, cache_key)
 );
 
--- Stores `SavedUnit` instances.
---
--- We store these using JSONB encoding:
--- - Many of the inner types use relatively extensive heterogenous types which
---   are difficult to model well in SQL.
--- - We don't really ever need to compose a `SavedUnit` instance from smaller
---   components; they tend to have a lot of local data that can't really be
---   shared.
--- - We expect the amount of data duplication to be relatively low.
---
--- If any of these points end up false in the future we can explore normalizing
--- the data into tables or moving parts of this into the CAS or some other
--- strategy.
---
--- Important: We _do_ expect that any instance where the actual content of files
--- is stored in this type is replaced with the CAS key.
-create table cargo_saved_unit (
-  id bigserial primary key,
-  hash text not null references cargo_unit_plan_info(unit_hash),
-  data jsonb not null,
-  created_at timestamptz not null default now(),
-  unique(hash)
-);
-
--- Maps multiple `SavedUnit` instances to a given `UnitPlanInfo`.
-create table cargo_unit_plan_saved_unit (
-  id bigserial primary key,
-  entry_order int not null,
-  unit_plan__id bigint not null references cargo_unit_plan_info(id),
-  saved_unit_id bigint not null references cargo_saved_unit(id),
-);
+CREATE INDEX idx_cargo_saved_unit_org_key ON cargo_saved_unit(organization_id, cache_key);
