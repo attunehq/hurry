@@ -53,6 +53,8 @@ impl IntoResponse for CacheRestoreResponse {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use axum::http::StatusCode;
     use clients::courier::v1::{
         DiskPath, Fingerprint, LibraryCrateUnitPlan, LibraryFiles, SavedFile, SavedUnit,
@@ -138,12 +140,9 @@ mod tests {
         let restored = serde_json::from_str::<CargoRestoreResponseTransport>(&body)
             .with_section(|| body.header("Response:"))?;
 
-        let restored = restored.into_iter().collect::<Vec<_>>();
-        pretty_assert_eq!(restored.len(), 1);
-
-        let (restored_key, restored_unit) = &restored[0];
-        pretty_assert_eq!(restored_key, &cache_key);
-        pretty_assert_eq!(restored_unit, &unit);
+        let expected = HashSet::from([(cache_key.clone(), unit.clone())]);
+        let restored = restored.into_iter().collect::<HashSet<_>>();
+        pretty_assert_eq!(restored, expected);
 
         Ok(())
     }
@@ -206,8 +205,9 @@ mod tests {
         response.assert_status_ok();
         let restore_response = response.json::<CargoRestoreResponseTransport>();
 
-        let restored = restore_response.into_iter().collect::<Vec<_>>();
-        pretty_assert_eq!(restored.len(), 3);
+        let expected = units.into_iter().collect::<HashSet<_>>();
+        let restored = restore_response.into_iter().collect::<HashSet<_>>();
+        pretty_assert_eq!(restored, expected);
 
         Ok(())
     }
@@ -245,8 +245,9 @@ mod tests {
         response.assert_status_ok();
         let restore_response = response.json::<CargoRestoreResponseTransport>();
 
-        let restored = restore_response.into_iter().collect::<Vec<_>>();
-        pretty_assert_eq!(restored.len(), 1);
+        let expected = HashSet::from([(cache_key1, unit1)]);
+        let restored = restore_response.into_iter().collect::<HashSet<_>>();
+        pretty_assert_eq!(restored, expected);
 
         Ok(())
     }
@@ -315,11 +316,12 @@ mod tests {
                 .json(&restore_request),
         );
 
+        let expected = HashSet::from([(cache_key.clone(), unit.clone())]);
         for response in [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10] {
             response.assert_status_ok();
             let restore_response = response.json::<CargoRestoreResponseTransport>();
-            let restored = restore_response.into_iter().collect::<Vec<_>>();
-            pretty_assert_eq!(restored.len(), 1);
+            let restored = restore_response.into_iter().collect::<HashSet<_>>();
+            pretty_assert_eq!(restored, expected);
         }
 
         Ok(())
@@ -364,6 +366,11 @@ mod tests {
             .await;
 
         response.assert_status_ok();
+        let restore_response = response.json::<CargoRestoreResponseTransport>();
+
+        let expected = HashSet::from([(cache_key, unit)]);
+        let restored = restore_response.into_iter().collect::<HashSet<_>>();
+        pretty_assert_eq!(restored, expected);
 
         Ok(())
     }

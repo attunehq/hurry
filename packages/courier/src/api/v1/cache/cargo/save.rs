@@ -43,6 +43,8 @@ impl IntoResponse for CacheSaveResponse {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use axum::http::StatusCode;
     use clients::courier::v1::{
         DiskPath, Fingerprint, LibraryCrateUnitPlan, LibraryFiles, SavedFile, SavedUnit,
@@ -124,10 +126,9 @@ mod tests {
             .cargo_cache_restore(&alice_validated, restore_request)
             .await?;
 
-        pretty_assert_eq!(restored.len(), 1);
-        let (restored_key, restored_unit) = restored.into_iter().next().unwrap();
-        pretty_assert_eq!(restored_key, cache_key);
-        pretty_assert_eq!(restored_unit, unit);
+        let expected = HashSet::from([(cache_key, unit)]);
+        let restored = restored.into_iter().collect::<HashSet<_>>();
+        pretty_assert_eq!(restored, expected);
 
         Ok(())
     }
@@ -135,6 +136,7 @@ mod tests {
     #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn idempotent_saves(pool: PgPool) -> Result<()> {
+        let db = crate::db::Postgres { pool: pool.clone() };
         let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let (cache_key, unit) = test_saved_unit("serde", "v1");
@@ -158,12 +160,28 @@ mod tests {
             .await;
         response2.assert_status(StatusCode::CREATED);
 
+        let alice_validated = db
+            .validate(auth.token_alice())
+            .await
+            .expect("validate token")
+            .expect("token must exist");
+
+        let restore_request = CargoRestoreRequest2::new([&cache_key]);
+        let restored = db
+            .cargo_cache_restore(&alice_validated, restore_request)
+            .await?;
+
+        let expected = HashSet::from([(cache_key, unit)]);
+        let restored = restored.into_iter().collect::<HashSet<_>>();
+        pretty_assert_eq!(restored, expected);
+
         Ok(())
     }
 
     #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn save_multiple_packages(pool: PgPool) -> Result<()> {
+        let db = crate::db::Postgres { pool: pool.clone() };
         let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let packages = ["serde", "tokio", "axum"];
@@ -182,12 +200,34 @@ mod tests {
             .await;
         response.assert_status(StatusCode::CREATED);
 
+        let alice_validated = db
+            .validate(auth.token_alice())
+            .await
+            .expect("validate token")
+            .expect("token must exist");
+
+        let expected = packages
+            .iter()
+            .map(|name| test_saved_unit(name, "v1"))
+            .collect::<HashSet<_>>();
+
+        let restore_request = CargoRestoreRequest2::new(
+            expected.iter().map(|(key, _)| key).collect::<Vec<_>>()
+        );
+        let restored = db
+            .cargo_cache_restore(&alice_validated, restore_request)
+            .await?;
+
+        let restored = restored.into_iter().collect::<HashSet<_>>();
+        pretty_assert_eq!(restored, expected);
+
         Ok(())
     }
 
     #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn save_same_package_different_hashes(pool: PgPool) -> Result<()> {
+        let db = crate::db::Postgres { pool: pool.clone() };
         let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let units = ["v1", "v2", "v3"]
@@ -205,12 +245,34 @@ mod tests {
             .await;
         response.assert_status(StatusCode::CREATED);
 
+        let alice_validated = db
+            .validate(auth.token_alice())
+            .await
+            .expect("validate token")
+            .expect("token must exist");
+
+        let expected = ["v1", "v2", "v3"]
+            .iter()
+            .map(|suffix| test_saved_unit("serde", suffix))
+            .collect::<HashSet<_>>();
+
+        let restore_request = CargoRestoreRequest2::new(
+            expected.iter().map(|(key, _)| key).collect::<Vec<_>>()
+        );
+        let restored = db
+            .cargo_cache_restore(&alice_validated, restore_request)
+            .await?;
+
+        let restored = restored.into_iter().collect::<HashSet<_>>();
+        pretty_assert_eq!(restored, expected);
+
         Ok(())
     }
 
     #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
     #[test_log::test]
     async fn concurrent_saves_different_packages(pool: PgPool) -> Result<()> {
+        let db = crate::db::Postgres { pool: pool.clone() };
         let (server, auth, _tmp) = test_server(pool).await.context("create test server")?;
 
         let packages = (0..10).map(|i| format!("crate-{i}")).collect::<Vec<_>>();
@@ -271,6 +333,26 @@ mod tests {
         for response in [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10] {
             response.assert_status(StatusCode::CREATED);
         }
+
+        let alice_validated = db
+            .validate(auth.token_alice())
+            .await
+            .expect("validate token")
+            .expect("token must exist");
+
+        let expected = (0..10)
+            .map(|i| test_saved_unit(&format!("crate-{i}"), "v1"))
+            .collect::<HashSet<_>>();
+
+        let restore_request = CargoRestoreRequest2::new(
+            expected.iter().map(|(key, _)| key).collect::<Vec<_>>()
+        );
+        let restored = db
+            .cargo_cache_restore(&alice_validated, restore_request)
+            .await?;
+
+        let restored = restored.into_iter().collect::<HashSet<_>>();
+        pretty_assert_eq!(restored, expected);
 
         Ok(())
     }
