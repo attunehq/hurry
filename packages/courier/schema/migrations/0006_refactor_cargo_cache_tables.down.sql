@@ -1,6 +1,5 @@
 -- Drop new cargo cache tables
 DROP TABLE IF EXISTS cargo_saved_unit;
-DROP TABLE IF EXISTS cargo_unit_plan_info;
 
 -- Restore old cargo cache tables
 CREATE TABLE cargo_object (
