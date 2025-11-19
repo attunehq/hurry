@@ -14,7 +14,7 @@ use color_eyre::{
 use derive_more::{Debug, Display};
 use futures::{AsyncWriteExt, Stream, StreamExt, TryStreamExt};
 use reqwest::{Response, StatusCode};
-use tap::Pipe;
+use tap::{Conv, Pipe};
 use tokio::io::{AsyncRead, BufReader};
 use tokio_util::{
     compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt},
@@ -33,7 +33,10 @@ use super::{
 };
 use crate::{
     ContentType, NETWORK_BUFFER_SIZE, Token,
-    courier::v1::cache::{CargoRestoreRequest2, CargoRestoreResponse2, CargoSaveRequest2},
+    courier::v1::cache::{
+        CargoRestoreRequest2, CargoRestoreResponse2, CargoRestoreResponseTransport,
+        CargoSaveRequest2,
+    },
 };
 
 /// Maximum decompressed size for individual blob decompression (1GB).
@@ -140,13 +143,13 @@ impl Client {
             .context("send")?;
 
         match response.status() {
-            StatusCode::OK => {
-                let data = response
-                    .json::<CargoRestoreResponse2>()
-                    .await
-                    .context("parse JSON response")?;
-                Ok(Some(data))
-            }
+            StatusCode::OK => response
+                .json::<CargoRestoreResponseTransport>()
+                .await
+                .context("parse JSON response")?
+                .conv::<CargoRestoreResponse2>()
+                .pipe(Some)
+                .pipe(Ok),
             StatusCode::NOT_FOUND => Ok(None),
             status => {
                 let url = response.url().to_string();

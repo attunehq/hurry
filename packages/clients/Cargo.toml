@@ -25,7 +25,6 @@ async-compression = { workspace = true, features = ["tokio", "zstd"], optional =
 zstd = { workspace = true, optional = true }
 http = { workspace = true }
 serde_json.workspace = true
-monostate = { workspace = true }
 
 [features]
 default = []
