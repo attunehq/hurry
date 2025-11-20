@@ -574,6 +574,12 @@ pub async fn set_executable(path: &AbsFilePath, executable: bool) -> Result<()> 
 /// Create a hard link to the file.
 #[instrument]
 pub async fn hard_link(original: &AbsFilePath, link: &AbsFilePath) -> Result<()> {
+    if exists(link).await {
+        remove_file(link)
+            .await
+            .context("remove linked destination")?;
+    }
+
     tokio::fs::hard_link(original.as_std_path(), link.as_std_path())
         .await
         .context(format!("hard link {original:?} -> {link:?}"))
