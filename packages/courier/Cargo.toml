@@ -40,9 +40,9 @@ piper = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
 serde_json.workspace = true
+async-tempfile.workspace = true
 
 [dev-dependencies]
-async-tempfile = { workspace = true }
 axum-test = { workspace = true, features = ["all"] }
 clients = { workspace = true, features = ["client"] }
 divan = { workspace = true }
