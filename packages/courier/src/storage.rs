@@ -78,6 +78,7 @@ impl Disk {
     }
 
     /// Create a new instance in a temporary directory.
+    #[allow(dead_code)]
     pub async fn new_temp() -> Result<(Self, async_tempfile::TempDir)> {
         let root = async_tempfile::TempDir::new()
             .await
