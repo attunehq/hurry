@@ -8,7 +8,7 @@ use futures::{StreamExt, future::BoxFuture};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::task::JoinSet;
-use tracing::{debug, instrument, trace, warn};
+use tracing::{Instrument, debug, instrument, trace, warn};
 
 use tap::Pipe as _;
 
@@ -82,14 +82,22 @@ pub async fn restore_units(
     // Spawn concurrent workers for doing parallel downloads.
     let (tx, mut workers) = {
         let worker_count = num_cpus::get();
-        let (tx, rx) = flume::bounded::<FileRestoreKey>(0);
+        // We use an unbounded channel here because if we use a bounded channel,
+        // errors in the client then (incorrectly) get clobbered by the error
+        // caused by sending to a closed channel. We already buffer the entire
+        // set of work items we want to send, so using an unbounded channel for
+        // it doesn't cause additional memory pressure- we just move our
+        // buffered set of work items into the channel all at once instead of as
+        // they're being worked on.
+        let (tx, rx) = flume::unbounded::<FileRestoreKey>();
         let mut workers = JoinSet::new();
-        for _ in 0..worker_count {
+        for worker_id in 0..worker_count {
             let rx = rx.clone();
             let cas = cas.clone();
             let progress = progress.clone();
             let restored = restored.clone();
-            workers.spawn(restore_worker(rx, cas, progress, restored));
+            let span = tracing::info_span!("restore_worker", worker_id);
+            workers.spawn(restore_worker(rx, cas, progress, restored).instrument(span));
         }
         // Dropping the `rx` causes it to close, so we cannot drop it until all
         // workers have finished receiving files.
@@ -405,7 +413,6 @@ pub async fn restore_units(
     Ok(restored)
 }
 
-#[instrument(skip_all)]
 async fn restore_worker(
     rx: flume::Receiver<FileRestoreKey>,
     cas: CourierCas,
@@ -453,12 +460,8 @@ async fn restore_batch(
 ) -> Result<()> {
     debug!(?batch, "restoring batch");
 
-    // Construct a map of object keys to file restore keys.
-    let keys = batch
-        .iter()
-        .map(|file| file.key.clone())
-        .collect::<Vec<_>>();
     // Note that you can have multiple files with the same key.
+    // Build a map of object keys to file restore keys.
     let mut key_to_files = HashMap::new();
     for file in batch {
         key_to_files
@@ -466,6 +469,9 @@ async fn restore_batch(
             .or_insert(vec![])
             .push(file);
     }
+
+    // Deduplicate keys for the CAS request (server doesn't deduplicate).
+    let keys = key_to_files.keys().cloned().collect::<Vec<_>>();
 
     // For each streamed CAS key, restore the file to the local filesystem.
     debug!(?keys, "start fetching files from CAS");

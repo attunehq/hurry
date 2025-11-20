@@ -9,7 +9,7 @@ use color_eyre::Result;
 use dashmap::DashMap;
 use derive_more::Debug;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info, instrument};
+use tracing::{Instrument, error, info, instrument};
 use url::Url;
 use uuid::Uuid;
 
@@ -70,31 +70,35 @@ async fn upload(
             uploaded_bytes: 0,
         }),
     );
-    tokio::spawn(async move {
-        let courier = Courier::new(req.courier_url, req.courier_token)?;
-        let cas = CourierCas::new(courier.clone());
-        let upload = save_units(&courier, &cas, req.ws, req.units, req.skip, |progress| {
-            state
-                .uploads
-                .insert(request_id, CargoUploadStatus::InProgress(progress.clone()));
-        })
-        .await;
-        match upload {
-            Ok(()) => {
-                info!(?request_id, "upload completed successfully");
+    let span = tracing::info_span!("upload_worker", ?request_id);
+    tokio::spawn(
+        async move {
+            let courier = Courier::new(req.courier_url, req.courier_token)?;
+            let cas = CourierCas::new(courier.clone());
+            let upload = save_units(&courier, &cas, req.ws, req.units, req.skip, |progress| {
                 state
                     .uploads
-                    .insert(request_id, CargoUploadStatus::Complete);
+                    .insert(request_id, CargoUploadStatus::InProgress(progress.clone()));
+            })
+            .await;
+            match upload {
+                Ok(()) => {
+                    info!(?request_id, "upload completed successfully");
+                    state
+                        .uploads
+                        .insert(request_id, CargoUploadStatus::Complete);
+                }
+                Err(err) => {
+                    error!(?err, ?request_id, "upload failed");
+                    state
+                        .uploads
+                        .insert(request_id, CargoUploadStatus::Complete);
+                }
             }
-            Err(err) => {
-                error!(?err, ?request_id, "upload failed");
-                state
-                    .uploads
-                    .insert(request_id, CargoUploadStatus::Complete);
-            }
+            Result::<_>::Ok(())
         }
-        Result::<_>::Ok(())
-    });
+        .instrument(span),
+    );
     Json(CargoUploadResponse { ok: true })
 }
 

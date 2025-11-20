@@ -386,7 +386,7 @@ impl Workspace {
                             .into_iter()
                             // Filter out DWARF debugging files, which Cargo removes
                             // anyway.
-                            .filter(|o| !o.ends_with(".dwp"))
+                            .filter(|o| !o.ends_with(".dwp") && !o.ends_with(".dSYM"))
                             .map(AbsFilePath::try_from)
                             .exactly_one()
                             .unwrap_or_else(|_| {
@@ -399,7 +399,7 @@ impl Workspace {
                         let linked_program = invocation
                             .links
                             .keys()
-                            .filter(|l| !l.ends_with(".dwp"))
+                            .filter(|l| !l.ends_with(".dwp") && !l.ends_with(".dSYM"))
                             .map(AbsFilePath::try_from)
                             .exactly_one()
                             .unwrap_or_else(|_| {
@@ -535,7 +535,7 @@ impl Workspace {
                 let outputs = invocation
                     .outputs
                     .into_iter()
-                    .filter(|o| !o.ends_with(".dwp"))
+                    .filter(|o| !o.ends_with(".dwp") && !o.ends_with(".dSYM"))
                     .map(AbsFilePath::try_from)
                     .collect::<Result<Vec<_>>>()?;
                 let args = RustcArguments::from_iter(invocation.args);

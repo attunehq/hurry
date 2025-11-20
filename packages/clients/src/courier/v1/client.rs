@@ -20,7 +20,7 @@ use tokio_util::{
     compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt},
     io::{ReaderStream, StreamReader},
 };
-use tracing::instrument;
+use tracing::{Instrument, instrument, warn};
 use url::Url;
 
 use super::{
@@ -442,23 +442,27 @@ impl Client {
     ) -> Result<CasBulkWriteResponse> {
         let url = self.base.join("api/v1/cas/bulk/write")?;
         let (reader, writer) = piper::pipe(NETWORK_BUFFER_SIZE);
-        let writer = tokio::task::spawn(async move {
-            let mut tar = async_tar::Builder::new(writer);
-            while let Some((key, content)) = entries.next().await {
-                let compressed = zstd::bulk::compress(&content, 0)
-                    .with_context(|| format!("compress entry: {key}"))?;
-                let mut header = async_tar::Header::new_gnu();
-                header.set_size(compressed.len() as u64);
-                header.set_mode(0o644);
-                header.set_cksum();
-                tar.append_data(&mut header, key.to_hex(), compressed.as_slice())
-                    .await
-                    .with_context(|| format!("add entry: {key}"))?;
-            }
+        let span = tracing::info_span!("cas_bulk_write_worker");
+        let writer = tokio::task::spawn(
+            async move {
+                let mut tar = async_tar::Builder::new(writer);
+                while let Some((key, content)) = entries.next().await {
+                    let compressed = zstd::bulk::compress(&content, 0)
+                        .with_context(|| format!("compress entry: {key}"))?;
+                    let mut header = async_tar::Header::new_gnu();
+                    header.set_size(compressed.len() as u64);
+                    header.set_mode(0o644);
+                    header.set_cksum();
+                    tar.append_data(&mut header, key.to_hex(), compressed.as_slice())
+                        .await
+                        .with_context(|| format!("add entry: {key}"))?;
+                }
 
-            let mut writer = tar.into_inner().await.context("finalize tarball")?;
-            writer.close().await.context("close writer")
-        });
+                let mut writer = tar.into_inner().await.context("finalize tarball")?;
+                writer.close().await.context("close writer")
+            }
+            .instrument(span),
+        );
 
         let stream = ReaderStream::with_capacity(reader.compat(), NETWORK_BUFFER_SIZE);
         let body = reqwest::Body::wrap_stream(stream);
@@ -518,43 +522,50 @@ impl Client {
             .pipe(|r| Archive::new(r.compat()));
 
         let (tx, rx) = flume::bounded::<Result<(Key, Vec<u8>)>>(0);
-        tokio::task::spawn(async move {
-            let mut entries = match archive.entries().context("read entries") {
-                Ok(entries) => entries,
-                Err(err) => {
-                    return tx
-                        .send_async(Err(err))
-                        .await
-                        .expect("invariant: sender cannot be closed");
+        let span = tracing::info_span!("cas_bulk_read_worker");
+        tokio::task::spawn(
+            async move {
+                let mut entries = match archive.entries().context("read entries") {
+                    Ok(entries) => entries,
+                    Err(err) => {
+                        return tx
+                            .send_async(Err(err))
+                            .await
+                            .expect("invariant: sender cannot be closed");
+                    }
+                };
+                let mut download = async || -> Result<()> {
+                    while let Some(entry) = entries.next().await {
+                        let entry = entry.context("read entry")?;
+                        let path = entry.path().context("read path")?;
+                        let key = Key::from_hex(path.to_string_lossy())
+                            .with_context(|| format!("parse entry name {path:?}"))?;
+
+                        let mut compressed = Vec::new();
+                        tokio::io::copy(&mut entry.compat(), &mut compressed)
+                            .await
+                            .context("read compressed content")?;
+
+                        let decompressed =
+                            zstd::bulk::decompress(&compressed, MAX_DECOMPRESSED_SIZE)
+                                .with_context(|| format!("decompress entry: {key}"))?;
+
+                        tx.send_async(Ok((key, decompressed)))
+                            .await
+                            .context("send entry")?;
+                    }
+                    Result::<()>::Ok(())
+                };
+                while let Err(err) = download().await {
+                    if let Err(err) = tx.send_async(Err(err)).await {
+                        let error = err.into_inner();
+                        warn!(?error, "failed to send, channel closed");
+                        break;
+                    }
                 }
-            };
-            let mut download = async || -> Result<()> {
-                while let Some(entry) = entries.next().await {
-                    let entry = entry.context("read entry")?;
-                    let path = entry.path().context("read path")?;
-                    let key = Key::from_hex(path.to_string_lossy())
-                        .with_context(|| format!("parse entry name {path:?}"))?;
-
-                    let mut compressed = Vec::new();
-                    tokio::io::copy(&mut entry.compat(), &mut compressed)
-                        .await
-                        .context("read compressed content")?;
-
-                    let decompressed = zstd::bulk::decompress(&compressed, MAX_DECOMPRESSED_SIZE)
-                        .with_context(|| format!("decompress entry: {key}"))?;
-
-                    tx.send_async(Ok((key, decompressed)))
-                        .await
-                        .expect("invariant: sender cannot be closed");
-                }
-                Result::<()>::Ok(())
-            };
-            while let Err(err) = download().await {
-                tx.send_async(Err(err))
-                    .await
-                    .expect("invariant: sender cannot be closed");
             }
-        });
+            .instrument(span),
+        );
 
         rx.into_stream().pipe(Ok)
     }

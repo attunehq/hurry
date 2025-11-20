@@ -13,7 +13,7 @@ use tokio_util::{
     compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt},
     io::ReaderStream,
 };
-use tracing::{error, info};
+use tracing::{Instrument, error, info};
 
 use crate::{auth::AuthenticatedToken, db::Postgres, storage::Disk};
 
@@ -91,63 +91,67 @@ async fn handle_compressed(
     };
 
     let (reader, writer) = piper::pipe(NETWORK_BUFFER_SIZE);
-    tokio::spawn(async move {
-        let mut builder = Builder::new(writer);
-        for key in req.keys {
-            // Check if org has access to this key
-            if !accessible_keys.contains(&key) {
-                error!(%key, "cas.bulk.read.no_access");
-                continue;
+    let span = tracing::info_span!("cas_bulk_read_compressed_worker");
+    tokio::spawn(
+        async move {
+            let mut builder = Builder::new(writer);
+            for key in req.keys {
+                // Check if org has access to this key
+                if !accessible_keys.contains(&key) {
+                    error!(%key, "cas.bulk.read.no_access");
+                    continue;
+                }
+
+                let reader = match cas.read_compressed(&key).await {
+                    Ok(reader) => reader,
+                    Err(error) => {
+                        error!(%key, ?error, "cas.bulk.read.compressed.error");
+                        continue;
+                    }
+                };
+
+                let bytes = match cas.size_compressed(&key).await {
+                    Ok(Some(bytes)) => bytes,
+                    Ok(None) => {
+                        error!(%key, error = "No compressed size for blob", "cas.bulk.read.size_compressed.error");
+                        continue;
+                    }
+                    Err(error) => {
+                        error!(%key, ?error, "cas.bulk.read.size_compressed.error");
+                        continue;
+                    }
+                };
+
+                let header = {
+                    let name = key.to_hex();
+                    let mut header = Header::new_gnu();
+                    if let Err(error) = header.set_path(&name) {
+                        error!(%key, ?error, ?name, "cas.bulk.read.header.set_path.error");
+                        continue;
+                    }
+                    header.set_size(bytes);
+                    header.set_mode(0o644);
+                    header.set_cksum();
+                    header
+                };
+
+                match builder.append(&header, reader.compat()).await {
+                    Ok(_) => info!(%key, bytes, "cas.bulk.read.append.success"),
+                    Err(error) => error!(%key, ?error, "cas.bulk.read.append.error"),
+                }
             }
 
-            let reader = match cas.read_compressed(&key).await {
-                Ok(reader) => reader,
-                Err(error) => {
-                    error!(%key, ?error, "cas.bulk.read.compressed.error");
-                    continue;
-                }
-            };
-
-            let bytes = match cas.size_compressed(&key).await {
-                Ok(Some(bytes)) => bytes,
-                Ok(None) => {
-                    error!(%key, error = "No compressed size for blob", "cas.bulk.read.size_compressed.error");
-                    continue;
-                }
-                Err(error) => {
-                    error!(%key, ?error, "cas.bulk.read.size_compressed.error");
-                    continue;
-                }
-            };
-
-            let header = {
-                let name = key.to_hex();
-                let mut header = Header::new_gnu();
-                if let Err(error) = header.set_path(&name) {
-                    error!(%key, ?error, ?name, "cas.bulk.read.header.set_path.error");
-                    continue;
-                }
-                header.set_size(bytes);
-                header.set_mode(0o644);
-                header.set_cksum();
-                header
-            };
-
-            match builder.append(&header, reader.compat()).await {
-                Ok(_) => info!(%key, bytes, "cas.bulk.read.append.success"),
-                Err(error) => error!(%key, ?error, "cas.bulk.read.append.error"),
+            // Finalize the tar archive and close the pipe.
+            match builder.into_inner().await {
+                Ok(mut writer) => match writer.close().await {
+                    Ok(_) => info!("cas.bulk.read.finalize.success"),
+                    Err(error) => error!(?error, "cas.bulk.read.finalize.error"),
+                },
+                Err(error) => error!(?error, "cas.bulk.read.finalize_error"),
             }
         }
-
-        // Finalize the tar archive and close the pipe.
-        match builder.into_inner().await {
-            Ok(mut writer) => match writer.close().await {
-                Ok(_) => info!("cas.bulk.read.finalize.success"),
-                Err(error) => error!(?error, "cas.bulk.read.finalize.error"),
-            },
-            Err(error) => error!(?error, "cas.bulk.read.finalize_error"),
-        }
-    });
+        .instrument(span),
+    );
 
     let stream = ReaderStream::with_capacity(reader.compat(), NETWORK_BUFFER_SIZE);
     let body = Body::from_stream(stream);
@@ -173,63 +177,67 @@ async fn handle_plain(
     };
 
     let (reader, writer) = piper::pipe(NETWORK_BUFFER_SIZE);
-    tokio::spawn(async move {
-        let mut builder = Builder::new(writer);
-        for key in req.keys {
-            // Check if org has access to this key
-            if !accessible_keys.contains(&key) {
-                error!(%key, "cas.bulk.read.no_access");
-                continue;
+    let span = tracing::info_span!("cas_bulk_read_plain_worker");
+    tokio::spawn(
+        async move {
+            let mut builder = Builder::new(writer);
+            for key in req.keys {
+                // Check if org has access to this key
+                if !accessible_keys.contains(&key) {
+                    error!(%key, "cas.bulk.read.no_access");
+                    continue;
+                }
+
+                let reader = match cas.read(&key).await {
+                    Ok(reader) => reader,
+                    Err(error) => {
+                        error!(%key, ?error, "cas.bulk.read.error");
+                        continue;
+                    }
+                };
+
+                let bytes = match cas.size(&key).await {
+                    Ok(Some(bytes)) => bytes,
+                    Ok(None) => {
+                        error!(%key, error = "No size for blob", "cas.bulk.read.size.error");
+                        continue;
+                    }
+                    Err(error) => {
+                        error!(%key, ?error, "cas.bulk.read.size.error");
+                        continue;
+                    }
+                };
+
+                let header = {
+                    let name = key.to_hex();
+                    let mut header = Header::new_gnu();
+                    if let Err(error) = header.set_path(&name) {
+                        error!(%key, ?error, ?name, "cas.bulk.read.header.set_path.error");
+                        continue;
+                    }
+                    header.set_size(bytes);
+                    header.set_mode(0o644);
+                    header.set_cksum();
+                    header
+                };
+
+                match builder.append(&header, reader.compat()).await {
+                    Ok(_) => info!(%key, bytes, "cas.bulk.read.append.success"),
+                    Err(error) => error!(%key, ?error, "cas.bulk.read.append.error"),
+                }
             }
 
-            let reader = match cas.read(&key).await {
-                Ok(reader) => reader,
-                Err(error) => {
-                    error!(%key, ?error, "cas.bulk.read.error");
-                    continue;
-                }
-            };
-
-            let bytes = match cas.size(&key).await {
-                Ok(Some(bytes)) => bytes,
-                Ok(None) => {
-                    error!(%key, error = "No size for blob", "cas.bulk.read.size.error");
-                    continue;
-                }
-                Err(error) => {
-                    error!(%key, ?error, "cas.bulk.read.size.error");
-                    continue;
-                }
-            };
-
-            let header = {
-                let name = key.to_hex();
-                let mut header = Header::new_gnu();
-                if let Err(error) = header.set_path(&name) {
-                    error!(%key, ?error, ?name, "cas.bulk.read.header.set_path.error");
-                    continue;
-                }
-                header.set_size(bytes);
-                header.set_mode(0o644);
-                header.set_cksum();
-                header
-            };
-
-            match builder.append(&header, reader.compat()).await {
-                Ok(_) => info!(%key, bytes, "cas.bulk.read.append.success"),
-                Err(error) => error!(%key, ?error, "cas.bulk.read.append.error"),
+            // Finalize the tar archive and close the pipe.
+            match builder.into_inner().await {
+                Ok(mut writer) => match writer.close().await {
+                    Ok(_) => info!("cas.bulk.read.finalize.success"),
+                    Err(error) => error!(?error, "cas.bulk.read.finalize.error"),
+                },
+                Err(error) => error!(?error, "cas.bulk.read.finalize_error"),
             }
         }
-
-        // Finalize the tar archive and close the pipe.
-        match builder.into_inner().await {
-            Ok(mut writer) => match writer.close().await {
-                Ok(_) => info!("cas.bulk.read.finalize.success"),
-                Err(error) => error!(?error, "cas.bulk.read.finalize.error"),
-            },
-            Err(error) => error!(?error, "cas.bulk.read.finalize_error"),
-        }
-    });
+        .instrument(span),
+    );
 
     let stream = ReaderStream::with_capacity(reader.compat(), NETWORK_BUFFER_SIZE);
     let body = Body::from_stream(stream);
