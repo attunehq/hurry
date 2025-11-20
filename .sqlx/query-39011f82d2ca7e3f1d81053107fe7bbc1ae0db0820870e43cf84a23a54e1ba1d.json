@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from cargo_saved_unit where organization_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "39011f82d2ca7e3f1d81053107fe7bbc1ae0db0820870e43cf84a23a54e1ba1d"
+}

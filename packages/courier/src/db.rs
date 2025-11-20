@@ -10,18 +10,17 @@
 use std::collections::HashMap;
 
 use clients::courier::v1::{
-    Key,
-    cache::{ArtifactFile, CargoRestoreRequest, CargoSaveRequest},
+    Key, SavedUnit,
+    cache::{CargoRestoreRequest2, CargoSaveRequest2, SavedUnitCacheKey},
 };
 use color_eyre::{
-    Result, Section, SectionExt,
-    eyre::{Context, Report, bail},
+    Result,
+    eyre::{Context, bail, eyre},
 };
 use derive_more::Debug;
 use futures::StreamExt;
-use num_traits::ToPrimitive;
 use sqlx::{PgPool, migrate::Migrator};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::{
     auth::{AccountId, AuthenticatedToken, OrgId, RawToken},
@@ -66,163 +65,30 @@ impl AsRef<PgPool> for Postgres {
     }
 }
 
-#[derive(Debug, Clone)]
-struct CargoLibraryUnitBuildRow {
-    id: i64,
-    content_hash: String,
-}
-
 impl Postgres {
     #[tracing::instrument(name = "Postgres::save_cargo_cache")]
     pub async fn cargo_cache_save(
         &self,
         auth: &AuthenticatedToken,
-        request: CargoSaveRequest,
+        request: CargoSaveRequest2,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
-        let package_id = sqlx::query!(
-            r#"
-            WITH inserted AS (
-                INSERT INTO cargo_package (organization_id, name, version)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (organization_id, name, version) DO NOTHING
-                RETURNING id
-            )
-            SELECT id FROM inserted
-            UNION ALL
-            SELECT id FROM cargo_package WHERE organization_id = $1 AND name = $2 AND version = $3
-            LIMIT 1
-            "#,
-            auth.org_id.as_i64(),
-            request.package_name,
-            request.package_version
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .context("upsert package")?
-        .id;
-
-        // Library unit builds are intended to be immutable: we only insert a
-        // new one if it doesn't already exist. If it does exist and the content
-        // hash is different, this indicates an error in how the cache is being
-        // used; we don't want to edit the build to upsert the new data.
-        let existing_build = sqlx::query_as!(
-            CargoLibraryUnitBuildRow,
-            r#"
-            SELECT id, content_hash
-            FROM cargo_library_unit_build
-            WHERE package_id = $1
-            AND target = $2
-            AND library_crate_compilation_unit_hash = $3
-            AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($4, '')
-            AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($5, '')
-            "#,
-            package_id,
-            request.target,
-            request.library_crate_compilation_unit_hash,
-            request.build_script_compilation_unit_hash,
-            request.build_script_execution_unit_hash
-        )
-        .fetch_optional(&mut *tx)
-        .await
-        .context("check for existing library unit build")?;
-
-        // If it does exist, and the content hash is the same, there is nothing
-        // more to do. If it exists but the content hash is different, something
-        // has gone wrong with our cache key and we should abort.
-        match existing_build {
-            Some(existing) if existing.content_hash == request.content_hash => {
-                debug!(
-                    library_unit_build_id = existing.id,
-                    library_unit_build_content_hash = existing.content_hash,
-                    "cache.save.already_exists"
-                );
-                return tx.commit().await.context("commit transaction");
-            }
-            Some(existing) => {
-                bail!(
-                    "content hash mismatch for package {}, version {}, unit hash {}: expected {:?}, actual {:?}",
-                    request.package_name,
-                    request.package_version,
-                    request.library_crate_compilation_unit_hash,
-                    existing.content_hash,
-                    request.content_hash
-                );
-            }
-            None => {}
-        }
-
-        let library_unit_build_id = sqlx::query!(
-            r#"
-            INSERT INTO cargo_library_unit_build (
-                organization_id,
-                package_id,
-                target,
-                library_crate_compilation_unit_hash,
-                build_script_compilation_unit_hash,
-                build_script_execution_unit_hash,
-                content_hash
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING id
-            "#,
-            auth.org_id.as_i64(),
-            package_id,
-            request.target,
-            request.library_crate_compilation_unit_hash,
-            request.build_script_compilation_unit_hash,
-            request.build_script_execution_unit_hash,
-            request.content_hash
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .context("insert library unit build")?
-        .id;
-
-        debug!(library_unit_build_id, "cache.save.inserted");
-
-        // TODO: Bulk insert.
-        for artifact in request.artifacts {
-            let object_key = artifact.object_key.to_hex();
-            let object_id = sqlx::query!(
-                r#"
-                WITH inserted AS (
-                    INSERT INTO cargo_object (key)
-                    VALUES ($1)
-                    ON CONFLICT (key) DO NOTHING
-                    RETURNING id
-                )
-                SELECT id FROM inserted
-                UNION ALL
-                SELECT id FROM cargo_object WHERE key = $1
-                LIMIT 1
-                "#,
-                object_key
-            )
-            .fetch_one(&mut *tx)
-            .await?
-            .id;
-
-            let mtime = bigdecimal::BigDecimal::from(artifact.mtime_nanos);
+        // TODO: bulk insert
+        for item in request {
+            let data = serde_json::to_value(&item.unit)
+                .with_context(|| format!("serialize data to json: {:?}", item.unit))?;
             sqlx::query!(
-                r#"
-                INSERT INTO cargo_library_unit_build_artifact (
-                    library_unit_build_id,
-                    object_id,
-                    path,
-                    mtime,
-                    executable
-                ) VALUES ($1, $2, $3, $4, $5)
-                "#,
-                library_unit_build_id,
-                object_id,
-                artifact.path,
-                mtime,
-                artifact.executable
+                "insert into cargo_saved_unit (organization_id, cache_key, data)
+                values ($1, $2, $3)
+                on conflict do nothing",
+                auth.org_id.as_i64(),
+                item.key.stable_hash(),
+                data,
             )
-            .execute(&mut *tx)
-            .await?;
+            .execute(tx.as_mut())
+            .await
+            .context("insert serialized cache data")?;
         }
 
         tx.commit().await.context("commit transaction")
@@ -232,276 +98,44 @@ impl Postgres {
     pub async fn cargo_cache_restore(
         &self,
         auth: &AuthenticatedToken,
-        request: CargoRestoreRequest,
-    ) -> Result<Vec<ArtifactFile>, Report> {
-        let mut tx = self.pool.begin().await?;
+        request: CargoRestoreRequest2,
+    ) -> Result<HashMap<SavedUnitCacheKey, SavedUnit>> {
+        // When we store `SavedUnitCacheKey` in the database we store it by its stable
+        // hash, so there's no way to get the original value back out using just the
+        // query. Instead we build a map of "hashes to original values" and use that to
+        // fetch the originals back out.
+        let mut request_hashes = request
+            .into_iter()
+            .map(|item| (item.stable_hash(), item))
+            .collect::<HashMap<_, _>>();
 
-        let unit_to_restore = {
-            // We would normally use a `split_first` approach here, but this
-            // streaming approach allows us to get the same result without
-            // buffering the entire collection.
-            let mut unit_build = Option::<CargoLibraryUnitBuildRow>::None;
-            let mut rows = sqlx::query_as!(
-                CargoLibraryUnitBuildRow,
-                r#"
-                SELECT
-                    cargo_library_unit_build.id,
-                    cargo_library_unit_build.content_hash
-                FROM cargo_package
-                JOIN cargo_library_unit_build ON cargo_package.id = cargo_library_unit_build.package_id
-                WHERE
-                    cargo_package.organization_id = $1
-                    AND cargo_package.name = $2
-                    AND cargo_package.version = $3
-                    AND target = $4
-                    AND library_crate_compilation_unit_hash = $5
-                    AND COALESCE(build_script_compilation_unit_hash, '') = COALESCE($6, '')
-                    AND COALESCE(build_script_execution_unit_hash, '') = COALESCE($7, '')
-                "#,
-                auth.org_id.as_i64(),
-                request.package_name,
-                request.package_version,
-                request.target,
-                request.library_crate_compilation_unit_hash,
-                request.build_script_compilation_unit_hash,
-                request.build_script_execution_unit_hash
-            )
-            .fetch(&mut *tx);
-            while let Some(row) = rows.next().await {
-                let row = row
-                    .context("query library unit build")
-                    .with_section(|| format!("{request:#?}").header("Request:"))?;
-                match unit_build.as_ref() {
-                    None => unit_build = Some(row),
-
-                    // Multiple builds with same unit hashes but different
-                    // content_hash: the cache key is insufficient to uniquely
-                    // identify builds. We log the warning for our
-                    // logs/debugging and otherwise present this to the client
-                    // as a cache miss.
-                    Some(existing) if existing.content_hash != row.content_hash => {
-                        warn!(
-                            existing_content_hash = ?existing.content_hash,
-                            new_content_hash = ?row.content_hash,
-                            package_name = %request.package_name,
-                            package_version = %request.package_version,
-                            "cache.restore.content_hash_mismatch"
-                        );
-                        return Ok(vec![]);
-                    }
-
-                    // Multiple builds with same unit hashes AND same
-                    // content_hash are perfectly fine; in that case we could
-                    // restore any of them without issue so we just restore the
-                    // first one.
-                    Some(_) => {}
-                }
-            }
-            match unit_build {
-                Some(unit_build) => unit_build,
-                None => {
-                    debug!("cache.restore.miss");
-                    return Ok(vec![]);
-                }
-            }
-        };
-
-        let mut artifacts = Vec::<ArtifactFile>::new();
+        // Postgres however does need us to pass in a vec of owned strings.
         let mut rows = sqlx::query!(
-            r#"
-            SELECT
-                cargo_object.key,
-                cargo_library_unit_build_artifact.path,
-                cargo_library_unit_build_artifact.mtime,
-                cargo_library_unit_build_artifact.executable
-            FROM cargo_library_unit_build_artifact
-            JOIN cargo_object ON cargo_library_unit_build_artifact.object_id = cargo_object.id
-            WHERE
-                cargo_library_unit_build_artifact.library_unit_build_id = $1
-            "#,
-            unit_to_restore.id
+            "select cache_key, data
+            from cargo_saved_unit
+            where organization_id = $1
+            and cache_key = any($2)",
+            auth.org_id.as_i64(),
+            &request_hashes.keys().cloned().collect::<Vec<_>>(),
         )
-        .fetch(&mut *tx);
-        while let Some(row) = rows.next().await {
-            let row = row
-                .context("query artifacts")
-                .with_section(|| format!("{unit_to_restore:#?}").header("Library unit build:"))?;
-            let object_key = Key::from_hex(&row.key).context("parse object key from database")?;
-            artifacts.push(
-                ArtifactFile::builder()
-                    .object_key(object_key)
-                    .path(row.path)
-                    .mtime_nanos(row.mtime.to_u128().unwrap_or_default())
-                    .executable(row.executable)
-                    .build(),
-            );
-        }
+        .fetch(&self.pool);
 
-        debug!(
-            library_unit_build_id = unit_to_restore.id,
-            "cache.restore.hit"
-        );
+        let mut artifacts = HashMap::with_capacity(request_hashes.len());
+        while let Some(row) = rows.next().await {
+            let row = row.context("read rows")?;
+
+            // We remove as we go because we expect at most one match per key, and this
+            // allows us to avoid a clone.
+            let key = request_hashes
+                .remove(&row.cache_key)
+                .ok_or_else(|| eyre!("matched key not in the request: {}", row.cache_key))?;
+            let unit = serde_json::from_value::<SavedUnit>(row.data)
+                .with_context(|| format!("deserialize value for cache key: {}", row.cache_key))?;
+
+            artifacts.insert(key, unit);
+        }
 
         Ok(artifacts)
-    }
-
-    /// Restore multiple cargo cache entries in bulk using a single query.
-    ///
-    /// This is significantly faster than calling `cargo_cache_restore` in a
-    /// loop because it issues a single database query instead of N queries.
-    ///
-    /// The result maps resulting artifact files by the index of the request
-    /// that caused them, exactly as if the caller had invoked
-    /// [`Postgres::cargo_cache_restore`] for each item in the index.
-    #[tracing::instrument(name = "Postgres::cargo_cache_restore_bulk", skip(requests))]
-    pub async fn cargo_cache_restore_bulk(
-        &self,
-        auth: &AuthenticatedToken,
-        requests: &[CargoRestoreRequest],
-    ) -> Result<HashMap<usize, Vec<ArtifactFile>>, Report> {
-        if requests.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let mut tx = self.pool.begin().await?;
-
-        let mut request_indices = Vec::new();
-        let mut package_names = Vec::new();
-        let mut package_versions = Vec::new();
-        let mut targets = Vec::new();
-        let mut lib_hashes = Vec::new();
-        let mut build_comp_hashes = Vec::new();
-        let mut build_exec_hashes = Vec::new();
-        for (i, request) in requests.iter().enumerate() {
-            request_indices.push(i as i32);
-            package_names.push(request.package_name.as_str());
-            package_versions.push(request.package_version.as_str());
-            targets.push(request.target.as_str());
-            lib_hashes.push(request.library_crate_compilation_unit_hash.as_str());
-            build_comp_hashes.push(request.build_script_compilation_unit_hash.as_deref());
-            build_exec_hashes.push(request.build_script_execution_unit_hash.as_deref());
-        }
-
-        // Find all matching builds
-        let mut build_rows = sqlx::query!(
-            r#"
-            WITH request_data AS (
-                SELECT
-                    unnest($2::integer[]) as request_idx,
-                    unnest($3::text[]) as package_name,
-                    unnest($4::text[]) as package_version,
-                    unnest($5::text[]) as target,
-                    unnest($6::text[]) as lib_hash,
-                    unnest($7::text[]) as build_comp_hash,
-                    unnest($8::text[]) as build_exec_hash
-            )
-            SELECT
-                rd.request_idx,
-                clb.id as build_id,
-                clb.content_hash
-            FROM request_data rd
-            JOIN cargo_package cp ON cp.organization_id = $1 AND cp.name = rd.package_name AND cp.version = rd.package_version
-            JOIN cargo_library_unit_build clb ON
-                clb.package_id = cp.id
-                AND clb.target = rd.target
-                AND clb.library_crate_compilation_unit_hash = rd.lib_hash
-                AND COALESCE(clb.build_script_compilation_unit_hash, '') = COALESCE(rd.build_comp_hash, '')
-                AND COALESCE(clb.build_script_execution_unit_hash, '') = COALESCE(rd.build_exec_hash, '')
-            "#,
-            auth.org_id.as_i64(),
-            &request_indices,
-            &package_names as &[&str],
-            &package_versions as &[&str],
-            &targets as &[&str],
-            &lib_hashes as &[&str],
-            &build_comp_hashes as &[Option<&str>],
-            &build_exec_hashes as &[Option<&str>]
-        )
-        .fetch(&mut *tx);
-
-        let mut build_id_to_request_idx = HashMap::new();
-        let mut request_idx_to_content_hash = HashMap::new();
-        while let Some(row) = build_rows.next().await {
-            let row = row.context("read row")?;
-            let Some(request_idx) = row.request_idx.map(|idx| idx as usize) else {
-                bail!("Missing request index for build row: {row:?}");
-            };
-
-            match request_idx_to_content_hash.get(&request_idx) {
-                None => {
-                    request_idx_to_content_hash.insert(request_idx, row.content_hash.clone());
-                    build_id_to_request_idx.insert(row.build_id, request_idx);
-                }
-                Some(existing_hash) if existing_hash != &row.content_hash => {
-                    let request = &requests[request_idx];
-                    warn!(
-                        existing_content_hash = ?existing_hash,
-                        new_content_hash = ?row.content_hash,
-                        package_name = %request.package_name,
-                        package_version = %request.package_version,
-                        "cache.restore.content_hash_mismatch"
-                    );
-                    // Remove this request_idx from consideration
-                    build_id_to_request_idx.retain(|_, idx| *idx != request_idx);
-                    request_idx_to_content_hash.remove(&request_idx);
-                }
-                Some(_) => {
-                    // Same content hash, just use first build_id
-                }
-            }
-        }
-
-        if build_id_to_request_idx.is_empty() {
-            debug!("cache.restore_bulk.all_misses");
-            return Ok(HashMap::new());
-        }
-
-        drop(build_rows);
-        let build_ids = build_id_to_request_idx.keys().copied().collect::<Vec<_>>();
-        let mut artifact_rows = sqlx::query!(
-            r#"
-            SELECT
-                clba.library_unit_build_id as build_id,
-                co.key as object_key,
-                clba.path,
-                clba.mtime,
-                clba.executable
-            FROM cargo_library_unit_build_artifact clba
-            JOIN cargo_object co ON clba.object_id = co.id
-            WHERE clba.library_unit_build_id = ANY($1)
-            "#,
-            &build_ids
-        )
-        .fetch(&mut *tx);
-
-        let mut results_by_request_idx = HashMap::<usize, Vec<ArtifactFile>>::new();
-        while let Some(row) = artifact_rows.next().await {
-            let row = row.context("read row")?;
-            let Some(&request_idx) = build_id_to_request_idx.get(&row.build_id) else {
-                bail!("Missing request index for build row: {row:?}");
-            };
-
-            let object_key = Key::from_hex(&row.object_key).context("parse object key")?;
-            let artifact = ArtifactFile::builder()
-                .object_key(object_key)
-                .path(row.path)
-                .mtime_nanos(row.mtime.to_u128().unwrap_or_default())
-                .executable(row.executable)
-                .build();
-
-            results_by_request_idx
-                .entry(request_idx)
-                .or_default()
-                .push(artifact);
-        }
-
-        debug!(
-            hits = results_by_request_idx.len(),
-            misses = requests.len() - results_by_request_idx.len(),
-            "cache.restore_bulk.complete"
-        );
-
-        Ok(results_by_request_idx)
     }
 
     /// Lookup account and org for a raw token by direct hash comparison.
@@ -714,44 +348,23 @@ impl Postgres {
 
     #[tracing::instrument(name = "Postgres::cargo_cache_reset")]
     pub async fn cargo_cache_reset(&self, auth: &AuthenticatedToken) -> Result<()> {
-        // Delete all cache data for the authenticated organization in a single
-        // transaction
         let mut tx = self.pool.begin().await?;
 
-        // Must delete in order: artifacts -> builds -> packages (respecting foreign
-        // keys)
         sqlx::query!(
-            r#"
-            DELETE FROM cargo_library_unit_build_artifact
-            WHERE library_unit_build_id IN (
-                SELECT id FROM cargo_library_unit_build
-                WHERE organization_id = $1
-            )
-            "#,
+            "delete from cargo_saved_unit where organization_id = $1",
             auth.org_id.as_i64()
         )
-        .execute(&mut *tx)
-        .await?;
+        .execute(tx.as_mut())
+        .await
+        .context("delete saved units")?;
 
         sqlx::query!(
-            r#"
-            DELETE FROM cargo_library_unit_build
-            WHERE organization_id = $1
-            "#,
+            "delete from cas_access where organization_id = $1",
             auth.org_id.as_i64()
         )
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query!(
-            r#"
-            DELETE FROM cargo_package
-            WHERE organization_id = $1
-            "#,
-            auth.org_id.as_i64()
-        )
-        .execute(&mut *tx)
-        .await?;
+        .execute(tx.as_mut())
+        .await
+        .context("delete cas access")?;
 
         tx.commit().await?;
         Ok(())

@@ -16,12 +16,26 @@ use crate::courier::v1::{Key, SavedUnit, SavedUnitHash};
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize, Builder)]
 #[non_exhaustive]
 pub struct SavedUnitCacheKey {
+    /// The key generation, used to invalidate keys that no longer point to the
+    /// same content.
+    #[builder(skip = SavedUnitCacheKey::GENERATION)]
+    generation: u8,
+
     /// `SavedUnit` instances are primarily keyed by their hash.
     #[builder(into)]
     pub unit_hash: SavedUnitHash,
 }
 
 impl SavedUnitCacheKey {
+    /// The current generation for the cache key.
+    ///
+    /// This exists so that if we _semantically_ change how the cache works
+    /// without actually changing how the cache key is generated (so e.g. the
+    /// same key means something different than it used to mean, or holds
+    /// different content) we can increment the generation to force a change
+    /// to the key.
+    const GENERATION: u8 = 1;
+
     /// Construct a single opaque string representing the cache key.
     ///
     /// The contents of this string should be treated as opaque: its format may
@@ -35,9 +49,10 @@ impl SavedUnitCacheKey {
     pub fn stable_hash(&self) -> String {
         // When we add new fields, this will show a compile time error; if you got here
         // due to a compilation error please handle the new field(s) appropriately.
-        let Self { unit_hash: unit } = self;
+        let Self { unit_hash, generation } = self;
         let mut hasher = blake3::Hasher::new();
-        hasher.update(unit.as_str().as_bytes());
+        hasher.update(format!("{generation}").as_bytes());
+        hasher.update(unit_hash.as_str().as_bytes());
         hasher.finalize().to_hex().to_string()
     }
 }
@@ -151,9 +166,47 @@ impl From<&CargoRestoreRequest2> for CargoRestoreRequest2 {
     }
 }
 
+/// Intermediate transport type used when requesting a restore.
+///
+/// We can't use structs as keys in JSON encoding, so we work around that with
+/// this type when communicating between the client and server.
+#[derive(Debug, Clone, Serialize, Deserialize, From)]
+pub struct CargoRestoreResponseTransport(HashSet<(SavedUnitCacheKey, SavedUnit)>);
+
+impl CargoRestoreResponseTransport {
+    /// Iterate over the units in the response.
+    pub fn iter(&self) -> impl Iterator<Item = (&SavedUnitCacheKey, &SavedUnit)> {
+        // This looks odd, but it's sugar going from `&(A, B)` to `(&A, &B)`.
+        self.0.iter().map(|(a, b)| (a, b))
+    }
+}
+
+impl From<CargoRestoreResponseTransport> for CargoRestoreResponse2 {
+    fn from(resp: CargoRestoreResponseTransport) -> Self {
+        resp.into_iter().collect()
+    }
+}
+
+impl IntoIterator for CargoRestoreResponseTransport {
+    type Item = (SavedUnitCacheKey, SavedUnit);
+    type IntoIter = std::collections::hash_set::IntoIter<(SavedUnitCacheKey, SavedUnit)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl FromIterator<(SavedUnitCacheKey, SavedUnit)> for CargoRestoreResponseTransport {
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = (SavedUnitCacheKey, SavedUnit)>,
+    {
+        Self(iter.into_iter().collect())
+    }
+}
+
 /// Response from restoring cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
-#[non_exhaustive]
 pub struct CargoRestoreResponse2(HashMap<SavedUnitCacheKey, SavedUnit>);
 
 impl CargoRestoreResponse2 {
@@ -201,7 +254,7 @@ impl FromIterator<(SavedUnitCacheKey, SavedUnit)> for CargoRestoreResponse2 {
     where
         I: IntoIterator<Item = (SavedUnitCacheKey, SavedUnit)>,
     {
-        iter.into_iter().collect()
+        Self(iter.into_iter().collect())
     }
 }
 

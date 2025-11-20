@@ -1,6 +1,6 @@
 //! HTTP client for the Courier v1 API.
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use async_compression::{
     Level,
@@ -14,7 +14,7 @@ use color_eyre::{
 use derive_more::{Debug, Display};
 use futures::{AsyncWriteExt, Stream, StreamExt, TryStreamExt};
 use reqwest::{Response, StatusCode};
-use tap::Pipe;
+use tap::{Conv, Pipe};
 use tokio::io::{AsyncRead, BufReader};
 use tokio_util::{
     compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt},
@@ -33,7 +33,13 @@ use super::{
 };
 use crate::{
     ContentType, NETWORK_BUFFER_SIZE, Token,
-    courier::v1::cache::{CargoRestoreRequest2, CargoRestoreResponse2, CargoSaveRequest2},
+    courier::v1::{
+        SavedUnit,
+        cache::{
+            CargoRestoreRequest2, CargoRestoreResponse2, CargoRestoreResponseTransport,
+            CargoSaveRequest2, SavedUnitCacheKey,
+        },
+    },
 };
 
 /// Maximum decompressed size for individual blob decompression (1GB).
@@ -97,52 +103,68 @@ impl Client {
     }
 
     /// Save cargo cache metadata.
-    ///
-    /// Important: this is temporarily stubbed using the local file system.
     #[instrument(skip(self))]
     pub async fn cargo_cache_save2(&self, body: CargoSaveRequest2) -> Result<()> {
-        tokio::fs::create_dir_all("/tmp/courier-v2-stub")
+        let url = self.base.join("api/v1/cache/cargo/save")?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(self.token.expose())
+            .json(&body)
+            .send()
             .await
-            .context("create stub directory")?;
+            .context("send")?;
 
-        for request in body {
-            let path = format!("/tmp/courier-v2-stub/{}.json", request.key.stable_hash());
-            let json = serde_json::to_vec_pretty(&request.unit).context("serialize unit")?;
-            tokio::fs::write(&path, json)
-                .await
-                .with_context(|| format!("write unit to {path}"))?;
+        match response.status() {
+            StatusCode::CREATED => Ok(()),
+            status => {
+                let url = response.url().to_string();
+                let request_id = request_id(&response);
+                let body = response.text().await.unwrap_or_default();
+                Err(eyre!("unexpected status code: {status}"))
+                    .with_section(|| url.header("Url:"))
+                    .with_section(|| body.header("Body:"))
+                    .with_section(|| request_id.header("Request ID:"))
+            }
         }
-
-        Ok(())
     }
 
     /// Restore cargo cache metadata.
-    ///
-    /// Important: this is temporarily stubbed using the local file system.
     #[instrument(skip(self))]
     pub async fn cargo_cache_restore2(
         &self,
         body: CargoRestoreRequest2,
     ) -> Result<CargoRestoreResponse2> {
-        let mut results = HashMap::new();
-        for key in body {
-            let path = format!("/tmp/courier-v2-stub/{}.json", key.stable_hash());
-            match tokio::fs::read(&path).await {
-                Ok(json) => {
-                    let unit = serde_json::from_slice(&json)
-                        .with_context(|| format!("deserialize unit from {path}"))?;
-                    results.insert(key.clone(), unit);
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    continue;
-                }
-                Err(e) => {
-                    return Err(e).with_context(|| format!("read unit from {path}"));
-                }
+        let url = self.base.join("api/v1/cache/cargo/restore")?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(self.token.expose())
+            .json(&body)
+            .send()
+            .await
+            .context("send")?;
+
+        match response.status() {
+            StatusCode::OK => response
+                .json::<CargoRestoreResponseTransport>()
+                .await
+                .context("parse JSON response")?
+                .conv::<CargoRestoreResponse2>()
+                .pipe(Ok),
+            StatusCode::NOT_FOUND => {
+                Ok(CargoRestoreResponse2::new::<_, SavedUnitCacheKey, SavedUnit>(vec![]))
+            }
+            status => {
+                let url = response.url().to_string();
+                let request_id = request_id(&response);
+                let body = response.text().await.unwrap_or_default();
+                Err(eyre!("unexpected status code: {status}"))
+                    .with_section(|| url.header("Url:"))
+                    .with_section(|| body.header("Body:"))
+                    .with_section(|| request_id.header("Request ID:"))
             }
         }
-
-        CargoRestoreResponse2::from(results).pipe(Ok)
     }
 
     /// Save cargo cache metadata.

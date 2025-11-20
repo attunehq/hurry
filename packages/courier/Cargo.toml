@@ -36,14 +36,13 @@ serde = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 aerosol = { workspace = true, features = ["async", "axum", "axum-extra", "tracing"] }
 futures = { workspace = true }
-num-traits = { workspace = true }
-bigdecimal = { workspace = true }
 async-tar = { workspace = true }
 piper = { workspace = true }
 maplit = { workspace = true }
 rand = { workspace = true }
 duplicate.workspace = true
 sha2 = { workspace = true }
+serde_json.workspace = true
 
 [dev-dependencies]
 async-tempfile = { workspace = true }
