@@ -470,7 +470,8 @@ async fn restore_batch(
             .push(file);
     }
 
-    // Deduplicate keys for the CAS request (server doesn't deduplicate).
+    // Now that keys are deduplicated, we can send them to the CAS; this way we
+    // avoid making the server send multiple copies of the same file content.
     let keys = key_to_files.keys().cloned().collect::<Vec<_>>();
 
     // For each streamed CAS key, restore the file to the local filesystem.
