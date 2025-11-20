@@ -33,7 +33,6 @@ impl AccountId {
 
     /// Currently only used in tests. If used elsewhere, feel free to make this
     /// generally available.
-    #[cfg(test)]
     pub fn as_i64(&self) -> i64 {
         self.0
     }
