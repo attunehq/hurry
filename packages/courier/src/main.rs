@@ -15,8 +15,6 @@ use tracing_error::ErrorLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_tree::time::FormatTime;
 
-use courier::db::Postgres;
-
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -151,11 +149,11 @@ async fn shutdown_signal() {
 async fn migrate(config: MigrateConfig) -> Result<()> {
     tracing::info!("applying migrations...");
 
-    let pool = Postgres::connect(&config.database_url)
+    let pool = courier::db::Postgres::connect(&config.database_url)
         .await
         .context("connect to database")?;
 
-    Postgres::MIGRATOR
+    courier::db::Postgres::MIGRATOR
         .run(pool.as_ref())
         .await
         .context("apply migrations")?;
