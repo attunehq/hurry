@@ -22,7 +22,7 @@ pub struct TokenHash(Vec<u8>);
 impl TokenHash {
     /// Currently only used in tests. If used elsewhere, feel free to make this
     /// generally available.
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn parse(hash: impl Into<Vec<u8>>) -> Self {
         Self(hash.into())
     }
@@ -37,7 +37,7 @@ impl TokenHash {
 
     /// Currently only used in tests. If used elsewhere, feel free to make this
     /// generally available.
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn verify(&self, token: impl AsRef<[u8]>) -> bool {
         Self::new(token) == *self
     }
