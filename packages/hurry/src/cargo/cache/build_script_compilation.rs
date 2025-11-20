@@ -35,7 +35,7 @@ pub struct BuildScriptCompiledFiles {
 }
 
 impl BuildScriptCompiledFiles {
-    async fn save(ws: &Workspace, unit: &BuildScriptCompilationUnitPlan) -> Result<Self> {
+    pub async fn read(ws: &Workspace, unit: &BuildScriptCompilationUnitPlan) -> Result<Self> {
         let profile_dir = ws.unit_profile_dir(&unit.info);
 
         let compiled_program =
@@ -77,7 +77,7 @@ impl BuildScriptCompiledFiles {
         })
     }
 
-    async fn restore(
+    pub async fn restore(
         self,
         ws: &Workspace,
         dep_fingerprints: &mut HashMap<u64, Arc<Fingerprint>>,

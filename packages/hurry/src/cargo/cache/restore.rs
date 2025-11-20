@@ -1,11 +1,9 @@
-use color_eyre::{
-    Result,
-    eyre::{Context as _, bail},
-};
+use color_eyre::{Result, eyre::bail};
 use dashmap::DashSet;
 use derive_more::Debug;
 use futures::StreamExt;
 use itertools::Itertools;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     collections::HashMap,
     time::{Duration, UNIX_EPOCH},
@@ -16,8 +14,8 @@ use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     cargo::{
-        ArtifactKey, ArtifactPlan, BuildScriptOutput, DepInfo, QualifiedPath, RootOutput,
-        RustcTarget, Workspace,
+        self, ArtifactKey, BuildScriptOutput, DepInfo, QualifiedPath, RootOutput, RustcTarget,
+        UnitPlan, Workspace, cache, workspace::UnitHash,
     },
     cas::CourierCas,
     fs,
@@ -27,75 +25,165 @@ use crate::{
 use clients::{
     Courier,
     courier::v1::{
-        Key,
-        cache::{ArtifactFile, CargoBulkRestoreHit, CargoRestoreRequest},
+        self as courier, Key, SavedUnitHash,
+        cache::{ArtifactFile, CargoBulkRestoreHit, CargoRestoreRequest2, SavedUnitCacheKey},
     },
 };
 
 /// Tracks items that were restored from the cache.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Restored {
-    pub artifacts: DashSet<ArtifactKey>,
-    pub objects: DashSet<Key>,
+    /// Stores the unit hashes of restored units.
+    pub units: DashSet<UnitHash>,
+    pub files: DashSet<Key>,
 }
 
 impl Restored {
     /// Records that an artifact was restored from cache.
-    fn record_artifact(&self, artifact: &ArtifactKey) {
-        self.artifacts.insert(artifact.clone());
+    fn record_unit(&self, unit_hash: UnitHash) {
+        self.units.insert(unit_hash);
     }
 
     /// Records that an object was restored from cache.
-    fn record_object(&self, key: &Key) {
-        self.objects.insert(key.clone());
+    fn record_file(&self, key: Key) {
+        self.files.insert(key);
     }
 }
 
-#[instrument(skip(artifact_plan, progress))]
+struct FileRestoreKey {
+    path: AbsFilePath,
+    key: Key,
+    transform: fn(Vec<u8>) -> Vec<u8>,
+}
+
+#[instrument(skip(units, progress))]
 pub async fn restore_artifacts(
     courier: &Courier,
     cas: &CourierCas,
     ws: &Workspace,
-    artifact_plan: &ArtifactPlan,
+    units: &Vec<UnitPlan>,
+    // artifact_plan: &ArtifactPlan,
     progress: &TransferBar,
 ) -> Result<Restored> {
-    trace!(?artifact_plan, "artifact plan");
-    let (artifacts, requests) = build_restore_requests(artifact_plan);
-    let restore_result = courier
-        .cargo_cache_restore_bulk(requests)
-        .await
-        .context("cache restore")?;
-    trace!(?restore_result, "cache restore response");
+    trace!(?units, "units");
 
-    for miss in restore_result.misses {
-        debug!(artifact = ?miss, "no matching library unit build found");
-        progress.dec_length(1);
+    // TODO: Check which units are already fresh on disk, and don't attempt to
+    // restore them.
+
+    // Load unit information from remote cache. Note that this does NOT download
+    // the actual files, which are loaded as CAS keys.
+    let bulk_req = CargoRestoreRequest2::new(units.iter().map(|unit| {
+        SavedUnitCacheKey::builder()
+            .unit_hash(unit.info().unit_hash.clone())
+            .build()
+    }));
+    let restore_res = courier.cargo_cache_restore2(bulk_req).await?;
+
+    // TODO: Spawn concurrent workers for doing parallel downloads.
+
+    let mut dep_fingerprints = HashMap::new();
+    for unit in units {
+        // Load the saved file info from the response.
+        let saved = restore_res.get(
+            &SavedUnitCacheKey::builder()
+                .unit_hash(unit.info().unit_hash.clone())
+                .build(),
+        );
+        let Some(saved) = saved else {
+            debug!(unit_hash = ?unit.info().unit_hash, "unit missing from cache");
+            progress.dec_length(1);
+            continue;
+        };
+
+        // Write the fingerprint. This happens during this loop because
+        // fingerprint rewriting must occur in dependency order.
+        //
+        // TODO: Ideally, we would only write fingerprints _after_ all the files
+        // for the unit are restored, to be maximally correct. This requires
+        // plumbing some sort of work-dependency relationship between units and
+        // restores.
+        match (saved, unit) {
+            (
+                courier::SavedUnit::LibraryCrate(saved_library_files, _),
+                UnitPlan::LibraryCrate(unit_plan),
+            ) => {
+                let fingerprint: cargo::Fingerprint =
+                    serde_json::from_str(saved_library_files.fingerprint.as_str())?;
+                cache::LibraryFiles::restore_fingerprint(
+                    ws,
+                    &mut dep_fingerprints,
+                    fingerprint,
+                    unit_plan,
+                )
+                .await?;
+            }
+            (
+                courier::SavedUnit::BuildScriptCompilation(
+                    build_script_compiled_files,
+                    build_script_compilation_unit_plan,
+                ),
+                UnitPlan::BuildScriptCompilation(unit_plan),
+            ) => todo!(),
+            (
+                courier::SavedUnit::BuildScriptExecution(
+                    build_script_output_files,
+                    build_script_execution_unit_plan,
+                ),
+                UnitPlan::BuildScriptExecution(unit_plan),
+            ) => todo!(),
+            _ => bail!("unit type mismatch"),
+        }
+
+        // Queue the other files in the unit to be batch downloaded and
+        // restored.
     }
-    let files_to_restore = filter_files_need_restored(ws, restore_result.hits, artifacts).await?;
-    trace!(?files_to_restore, "files to restore");
 
-    let restored = Restored::default();
+    // TODO: For each unit, check which loadable files are already fresh on
+    // disk, and skip downloading them from CAS? Is this overkill if we already
+    // check unit freshness?
+
+    // let (artifacts, requests) = build_restore_requests(artifact_plan);
+    // let restore_result = courier
+    //     .cargo_cache_restore_bulk(requests)
+    //     .await
+    //     .context("cache restore")?;
+    // trace!(?restore_result, "cache restore response");
+
+    // for miss in restore_result.misses {
+    //     debug!(artifact = ?miss, "no matching library unit build found");
+    //     progress.dec_length(1);
+    // }
+    // let files_to_restore = filter_files_need_restored(ws, restore_result.hits, artifacts).await?;
+    // trace!(?files_to_restore, "files to restore");
+
+    // let restored = Restored::default();
+    // let worker_count = num_cpus::get();
+    // let (tx, rx) = flume::bounded::<(ArtifactFile, AbsFilePath)>(0);
+    // let mut workers = spawn_restore_workers(cas, ws, worker_count, rx.clone(), progress, &restored);
+    // for (artifact, files) in files_to_restore {
+    //     for (file, path) in files {
+    //         trace!(?artifact, ?file, ?path, "sending file to restore workers");
+    //         if let Err(error) = tx.send_async((file, path)).await {
+    //             panic!("invariant violated: no restore workers are alive: {error:?}");
+    //         }
+    //     }
+    //     restored.record_artifact(&artifact);
+    //     progress.inc(1);
+    // }
+
+    // drop(rx);
+    // drop(tx);
+    // while let Some(worker) = workers.join_next().await {
+    //     worker.context("cas restore worker")?;
+    // }
+
+    // Ok(restored)
+    Ok(todo!())
+}
+
+fn spawn_workers() {
     let worker_count = num_cpus::get();
     let (tx, rx) = flume::bounded::<(ArtifactFile, AbsFilePath)>(0);
-    let mut workers = spawn_restore_workers(cas, ws, worker_count, rx.clone(), progress, &restored);
-    for (artifact, files) in files_to_restore {
-        for (file, path) in files {
-            trace!(?artifact, ?file, ?path, "sending file to restore workers");
-            if let Err(error) = tx.send_async((file, path)).await {
-                panic!("invariant violated: no restore workers are alive: {error:?}");
-            }
-        }
-        restored.record_artifact(&artifact);
-        progress.inc(1);
-    }
-
-    drop(rx);
-    drop(tx);
-    while let Some(worker) = workers.join_next().await {
-        worker.context("cas restore worker")?;
-    }
-
-    Ok(restored)
 }
 
 /// Filter the set to only the files which need to be restored, either
@@ -146,8 +234,9 @@ async fn filter_files_need_restored(
 }
 
 /// Spawn worker tasks to restore files from CAS in batches.
+#[deprecated]
 #[instrument(skip(restored))]
-fn spawn_restore_workers(
+fn spawn_restore_workers_old(
     cas: &CourierCas,
     ws: &Workspace,
     worker_count: usize,
@@ -173,7 +262,8 @@ fn spawn_restore_workers(
                     continue;
                 }
 
-                let restore = process_restore_batch(&cas, &ws, &batch, &progress, &restored).await;
+                let restore =
+                    process_restore_batch_old(&cas, &ws, &batch, &progress, &restored).await;
                 if let Err(error) = restore {
                     warn!(?error, "failed to process batch");
                 }
@@ -181,7 +271,7 @@ fn spawn_restore_workers(
                 batch.clear();
             }
 
-            let restore = process_restore_batch(&cas, &ws, &batch, &progress, &restored).await;
+            let restore = process_restore_batch_old(&cas, &ws, &batch, &progress, &restored).await;
             if let Err(error) = restore {
                 warn!(?error, "failed to process final batch");
             }
@@ -191,8 +281,9 @@ fn spawn_restore_workers(
 }
 
 /// Process a batch of files to restore from CAS.
+#[deprecated]
 #[instrument(skip(restored))]
-async fn process_restore_batch(
+async fn process_restore_batch_old(
     cas: &CourierCas,
     ws: &Workspace,
     batch: &[(ArtifactFile, AbsFilePath)],
@@ -227,7 +318,7 @@ async fn process_restore_batch(
             continue;
         };
 
-        match restore_single_file(ws, file, path, data, restored).await {
+        match restore_single_file_old(ws, file, path, data, restored).await {
             Ok(transferred) => {
                 progress.add_files(1);
                 progress.add_bytes(transferred);
@@ -242,15 +333,16 @@ async fn process_restore_batch(
 }
 
 /// Restore a single file from CAS data.
+#[deprecated]
 #[instrument(skip(data, restored))]
-async fn restore_single_file(
+async fn restore_single_file_old(
     ws: &Workspace,
     file: &ArtifactFile,
     path: &AbsFilePath,
     data: &[u8],
     restored: &Restored,
 ) -> Result<u64> {
-    let data = reconstruct(ws, path, data).await?;
+    let data = reconstruct_old(ws, path, data).await?;
 
     let mtime = UNIX_EPOCH + Duration::from_nanos(file.mtime_nanos as u64);
     let metadata = fs::Metadata::builder()
@@ -260,13 +352,14 @@ async fn restore_single_file(
         .build();
     fs::write(path, &data).await?;
     metadata.set_file(path).await?;
-    restored.record_object(&file.object_key);
+    restored.record_file(file.object_key.clone());
     Ok(data.len() as u64)
 }
 
 /// Reconstruct file contents after retrieving from CAS.
+#[deprecated]
 #[instrument(skip(content))]
-async fn reconstruct(ws: &Workspace, path: &AbsFilePath, content: &[u8]) -> Result<Vec<u8>> {
+async fn reconstruct_old(ws: &Workspace, path: &AbsFilePath, content: &[u8]) -> Result<Vec<u8>> {
     // Determine what kind of file this is based on path structure.
     let components = path.component_strs_lossy().collect::<Vec<_>>();
 
@@ -315,30 +408,4 @@ async fn reconstruct(ws: &Workspace, path: &AbsFilePath, content: &[u8]) -> Resu
             bail!("unknown file type for reconstruction: {unknown}")
         }
     }
-}
-
-/// Build CargoRestoreRequest objects from an artifact plan.
-fn build_restore_requests(
-    artifact_plan: &ArtifactPlan,
-) -> (HashMap<Vec<u8>, ArtifactKey>, Vec<CargoRestoreRequest>) {
-    artifact_plan.artifacts.iter().fold(
-        (HashMap::new(), Vec::new()),
-        |(mut artifacts, mut requests), artifact| {
-            let req = CargoRestoreRequest::builder()
-                .package_name(&artifact.package_name)
-                .package_version(&artifact.package_version)
-                .target(&artifact_plan.target)
-                .library_crate_compilation_unit_hash(&artifact.library_crate_compilation_unit_hash)
-                .maybe_build_script_compilation_unit_hash(
-                    artifact.build_script_compilation_unit_hash.as_ref(),
-                )
-                .maybe_build_script_execution_unit_hash(
-                    artifact.build_script_execution_unit_hash.as_ref(),
-                )
-                .build();
-            artifacts.insert(req.hash(), artifact.clone());
-            requests.push(req);
-            (artifacts, requests)
-        },
-    )
 }

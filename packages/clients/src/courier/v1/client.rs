@@ -123,7 +123,7 @@ impl Client {
     pub async fn cargo_cache_restore2(
         &self,
         body: CargoRestoreRequest2,
-    ) -> Result<Option<CargoRestoreResponse2>> {
+    ) -> Result<CargoRestoreResponse2> {
         let mut results = HashMap::new();
         for key in body {
             let path = format!("/tmp/courier-v2-stub/{}.json", key.stable_hash());
@@ -142,11 +142,7 @@ impl Client {
             }
         }
 
-        if results.is_empty() {
-            Ok(None)
-        } else {
-            CargoRestoreResponse2::from(results).pipe(Some).pipe(Ok)
-        }
+        CargoRestoreResponse2::from(results).pipe(Ok)
     }
 
     /// Save cargo cache metadata.

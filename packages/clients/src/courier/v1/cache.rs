@@ -18,7 +18,7 @@ use crate::courier::v1::{Key, SavedUnit, SavedUnitHash};
 pub struct SavedUnitCacheKey {
     /// `SavedUnit` instances are primarily keyed by their hash.
     #[builder(into)]
-    pub unit: SavedUnitHash,
+    pub unit_hash: SavedUnitHash,
 }
 
 impl SavedUnitCacheKey {
@@ -35,7 +35,7 @@ impl SavedUnitCacheKey {
     pub fn stable_hash(&self) -> String {
         // When we add new fields, this will show a compile time error; if you got here
         // due to a compilation error please handle the new field(s) appropriately.
-        let Self { unit } = self;
+        let Self { unit_hash: unit } = self;
         let mut hasher = blake3::Hasher::new();
         hasher.update(unit.as_str().as_bytes());
         hasher.finalize().to_hex().to_string()
@@ -44,7 +44,7 @@ impl SavedUnitCacheKey {
 
 impl AsRef<SavedUnitHash> for SavedUnitCacheKey {
     fn as_ref(&self) -> &SavedUnitHash {
-        &self.unit
+        &self.unit_hash
     }
 }
 
@@ -174,6 +174,12 @@ impl CargoRestoreResponse2 {
     /// Iterate over the units in the response.
     pub fn iter(&self) -> impl Iterator<Item = (&SavedUnitCacheKey, &SavedUnit)> {
         self.0.iter()
+    }
+}
+
+impl CargoRestoreResponse2 {
+    pub fn get(&self, key: &SavedUnitCacheKey) -> Option<&SavedUnit> {
+        self.0.get(key)
     }
 }
 

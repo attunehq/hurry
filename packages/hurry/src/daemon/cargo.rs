@@ -1,13 +1,11 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     Router,
     extract::{Json, State},
     routing::{get, post},
 };
+use color_eyre::Result;
 use dashmap::DashMap;
 use derive_more::Debug;
 use serde::{Deserialize, Serialize};
@@ -16,10 +14,10 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    cargo::{ArtifactKey, ArtifactPlan, SaveProgress, Workspace, save_artifacts},
+    cargo::{Restored, SaveProgress, UnitPlan, Workspace, save_artifacts},
     cas::CourierCas,
 };
-use clients::{Courier, Token, courier::v1::Key};
+use clients::{Courier, Token};
 
 #[derive(Debug, Clone)]
 pub struct CargoDaemonState {
@@ -41,16 +39,15 @@ pub fn cargo_router() -> Router<CargoDaemonState> {
         .route("/status/all", get(status_all))
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CargoUploadRequest {
     pub request_id: Uuid,
     pub courier_url: Url,
     pub courier_token: Token,
     pub ws: Workspace,
     #[debug(skip)]
-    pub artifact_plan: ArtifactPlan,
-    pub skip_artifacts: Vec<ArtifactKey>,
-    pub skip_objects: Vec<Key>,
+    pub units: Vec<UnitPlan>,
+    pub skip: Restored,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -67,33 +64,20 @@ async fn upload(
     state.uploads.insert(
         request_id,
         CargoUploadStatus::InProgress(SaveProgress {
-            uploaded_artifacts: 0,
-            total_artifacts: req.artifact_plan.artifacts.len() as u64,
+            uploaded_units: 0,
+            total_units: req.units.len() as u64,
             uploaded_files: 0,
             uploaded_bytes: 0,
         }),
     );
     tokio::spawn(async move {
-        let upload = async {
-            let courier = Courier::new(req.courier_url, req.courier_token)?;
-            let cas = CourierCas::new(courier.clone());
-            let skip_artifacts = HashSet::<_>::from_iter(req.skip_artifacts);
-            let skip_objects = HashSet::from_iter(req.skip_objects);
-            save_artifacts(
-                &courier,
-                &cas,
-                &req.ws,
-                &req.artifact_plan,
-                &skip_artifacts,
-                &skip_objects,
-                |progress| {
-                    state
-                        .uploads
-                        .insert(request_id, CargoUploadStatus::InProgress(progress.clone()));
-                },
-            )
-            .await
-        }
+        let courier = Courier::new(req.courier_url, req.courier_token)?;
+        let cas = CourierCas::new(courier.clone());
+        let upload = save_artifacts(&courier, &cas, req.ws, req.units, req.skip, |progress| {
+            state
+                .uploads
+                .insert(request_id, CargoUploadStatus::InProgress(progress.clone()));
+        })
         .await;
         match upload {
             Ok(()) => {
@@ -109,6 +93,7 @@ async fn upload(
                     .insert(request_id, CargoUploadStatus::Complete);
             }
         }
+        Result::<_>::Ok(())
     });
     Json(CargoUploadResponse { ok: true })
 }

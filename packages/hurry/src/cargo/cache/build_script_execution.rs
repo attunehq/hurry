@@ -27,7 +27,7 @@ pub struct BuildScriptOutputFiles {
 }
 
 impl BuildScriptOutputFiles {
-    async fn save(ws: &Workspace, unit_plan: &BuildScriptExecutionUnitPlan) -> Result<Self> {
+    pub async fn read(ws: &Workspace, unit_plan: &BuildScriptExecutionUnitPlan) -> Result<Self> {
         let profile_dir = ws.unit_profile_dir(&unit_plan.info);
 
         let stdout = BuildScriptOutput::from_file(
@@ -44,8 +44,7 @@ impl BuildScriptOutputFiles {
             let mut out_dir_files = Vec::new();
             for file in files {
                 let path =
-                    QualifiedPath::parse(ws, &unit_plan.info.target_arch, &file.clone().into())
-                        .await?;
+                    QualifiedPath::parse(ws, &unit_plan.info.target_arch, file.as_ref()).await?;
                 let executable = fs::is_executable(&file).await;
                 let contents = fs::must_read_buffered(&file).await?;
                 out_dir_files.push(SavedFile {
@@ -87,7 +86,7 @@ impl BuildScriptOutputFiles {
         })
     }
 
-    async fn restore(
+    pub async fn restore(
         self,
         ws: &Workspace,
         dep_fingerprints: &mut HashMap<u64, Arc<Fingerprint>>,

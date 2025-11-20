@@ -40,7 +40,7 @@ use tracing::debug;
 /// [^2]: https://github.com/rust-lang/cargo/blob/df07b394850b07348c918703054712e3427715cf/src/cargo/core/compiler/fingerprint/mod.rs#L600
 /// [^3]: https://github.com/rust-lang/cargo/blob/df07b394850b07348c918703054712e3427715cf/src/cargo/core/compiler/fingerprint/mod.rs#L431
 /// [^4]: https://github.com/rust-lang/cargo/blob/df07b394850b07348c918703054712e3427715cf/src/cargo/core/compiler/build_runner/compilation_files.rs#L294
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Fingerprint {
     /// Hash of the version of `rustc` used. This comes from `rustc -vV`.
     rustc: u64,
@@ -64,11 +64,11 @@ pub struct Fingerprint {
     pub deps: Vec<DepFingerprint>,
     /// Information about the inputs that affect this Unit (such as source
     /// file mtimes or build script environment variables).
-    local: Mutex<Vec<LocalFingerprint>>,
+    local: Arc<Mutex<Vec<LocalFingerprint>>>,
     /// Cached hash of the [`Fingerprint`] struct. Used to improve performance
     /// for hashing.
     #[serde(skip)]
-    memoized_hash: Mutex<Option<u64>>,
+    memoized_hash: Arc<Mutex<Option<u64>>>,
     /// RUSTFLAGS/RUSTDOCFLAGS environment variable value (or config value).
     rustflags: Vec<String>,
     /// Hash of various config settings that change how things are compiled.
@@ -88,8 +88,8 @@ impl Fingerprint {
             features: String::new(),
             declared_features: String::new(),
             deps: Vec::new(),
-            local: Mutex::new(Vec::new()),
-            memoized_hash: Mutex::new(None),
+            local: Arc::new(Mutex::new(Vec::new())),
+            memoized_hash: Arc::new(Mutex::new(None)),
             rustflags: Vec::new(),
             config: 0,
             compile_kind: 0,
@@ -222,7 +222,7 @@ impl<'de> Deserialize<'de> for DepFingerprint {
             name,
             public,
             fingerprint: Arc::new(Fingerprint {
-                memoized_hash: Mutex::new(Some(hash)),
+                memoized_hash: Mutex::new(Some(hash)).into(),
                 ..Fingerprint::new()
             }),
         })

@@ -31,7 +31,7 @@ pub use build_plan::BuildPlan;
 pub use build_script::{BuildScriptOutput, RootOutput};
 pub use cache::{CargoCache, Restored, SaveProgress, save_artifacts};
 pub use dep_info::{DepInfo, DepInfoLine};
-pub use dependency::{Dependency, DependencyBuild, Optimizations};
+// pub use dependency::{Dependency, DependencyBuild, Optimizations};
 pub use fingerprint::Fingerprint;
 pub use path::QualifiedPath;
 pub use profile::Profile;

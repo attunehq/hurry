@@ -60,7 +60,7 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 indicatif = { workspace = true }
 humansize = { workspace = true }
 scopeguard = { workspace = true }
-dashmap = { workspace = true }
+dashmap = { workspace = true, features = ["serde"] }
 console = { workspace = true }
 sysinfo = { workspace = true }
 axum = { workspace = true, features = ["macros"] }

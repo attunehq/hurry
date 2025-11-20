@@ -3,7 +3,7 @@ use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 use cargo_metadata::TargetKind;
 use color_eyre::{
     Result, Section, SectionExt,
-    eyre::{Context, OptionExt as _, bail, eyre},
+    eyre::{self, Context, OptionExt as _, bail, eyre},
 };
 use derive_more::{Debug as DebugExt, Display};
 use itertools::Itertools as _;
@@ -25,6 +25,7 @@ use crate::{
         TryJoinWith as _,
     },
 };
+use clients::courier::v1 as courier;
 
 /// The Cargo workspace of a build.
 ///
@@ -133,6 +134,7 @@ impl Workspace {
     /// Get the profile directory for intermediate build artifacts built for the
     /// host architecture.
     // TODO: Remove this once the migration is complete.
+    #[deprecated = "Use unit_profile_dir() instead"]
     pub fn host_profile_dir(&self) -> AbsDirPath {
         self.build_dir
             .try_join_dir(self.profile.as_str())
@@ -147,6 +149,7 @@ impl Workspace {
     /// architecture!), and library and build script execution artifacts are
     /// stored in the target profile directory.
     // TODO: Remove this once the migration is complete.
+    #[deprecated = "Use unit_profile_dir() instead"]
     pub fn target_profile_dir(&self) -> AbsDirPath {
         match &self.target_arch {
             RustcTarget::Specified(target_arch) => self
@@ -430,7 +433,7 @@ impl Workspace {
                         let profile_dir = self.host_profile_dir();
                         let bsc_unit = BuildScriptCompilationUnitPlan {
                             info: UnitPlanInfo {
-                                unit_hash,
+                                unit_hash: unit_hash.into(),
                                 package_name,
                                 crate_name,
                                 target_arch,
@@ -485,7 +488,7 @@ impl Workspace {
                         // values.
                         let bse_unit = BuildScriptExecutionUnitPlan {
                             info: UnitPlanInfo {
-                                unit_hash,
+                                unit_hash: unit_hash.into(),
                                 package_name,
                                 crate_name,
                                 target_arch,
@@ -558,7 +561,7 @@ impl Workspace {
 
                 UnitPlan::LibraryCrate(LibraryCrateUnitPlan {
                     info: UnitPlanInfo {
-                        unit_hash,
+                        unit_hash: unit_hash.into(),
                         package_name,
                         crate_name,
                         target_arch,
@@ -576,6 +579,7 @@ impl Workspace {
         Ok(units)
     }
 
+    #[deprecated = "Use units() instead"]
     #[instrument(name = "Workspace::artifact_plan")]
     pub async fn artifact_plan(
         &self,
@@ -876,6 +880,7 @@ impl Workspace {
 
 /// An ArtifactPlan represents the collection of information known about the
 /// artifacts for a build statically at compile-time.
+#[deprecated = "Use units instead"]
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub struct ArtifactPlan {
     pub profile: Profile,
@@ -890,6 +895,7 @@ pub struct ArtifactPlan {
 /// In particular, this information does _not_ include information derived from
 /// compiling and running the build script, such as `rustc` flags from build
 /// script output directives.
+#[deprecated = "Use units instead"]
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub struct ArtifactKey {
     // Partial artifact key information. Note that this is only derived from the
@@ -923,6 +929,7 @@ pub struct ArtifactKey {
     pub profile: Profile,
 }
 
+#[deprecated = "Use units instead"]
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub struct BuildScriptDirs {
     pub compiled_dir: AbsDirPath,
@@ -932,6 +939,7 @@ pub struct BuildScriptDirs {
 /// A BuiltArtifact represents the information known about a library unit (i.e.
 /// a library crate, its build script, and its build script outputs) after it
 /// has been built.
+#[deprecated = "Use units instead"]
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct BuiltArtifact {
     pub package_name: String,
@@ -1022,6 +1030,22 @@ impl BuiltArtifact {
     }
 }
 
+/// This is a newtype for unit hash strings.
+#[derive(Debug, Display, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct UnitHash(String);
+
+impl From<String> for UnitHash {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<UnitHash> for String {
+    fn from(value: UnitHash) -> Self {
+        value.0
+    }
+}
+
 /// Fields which are shared between all unit plan types.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct UnitPlanInfo {
@@ -1031,7 +1055,7 @@ pub struct UnitPlanInfo {
     /// See the `*_dir` methods on `CompilationFiles`[^1] for details.
     ///
     /// [^1]: https://github.com/attunehq/cargo/blob/7a93b36f1ae2f524d93efd16cd42864675f3e15b/src/cargo/core/compiler/build_runner/compilation_files.rs#L117
-    pub unit_hash: String,
+    pub unit_hash: UnitHash,
 
     /// The package name of this unit.
     ///
@@ -1110,6 +1134,17 @@ impl UnitPlanInfo {
     }
 }
 
+impl From<UnitPlanInfo> for courier::UnitPlanInfo {
+    fn from(value: UnitPlanInfo) -> Self {
+        Self::builder()
+            .unit_hash(value.unit_hash)
+            .package_name(value.package_name)
+            .crate_name(value.crate_name)
+            .maybe_target_arch(value.target_arch.conv::<Option<String>>())
+            .build()
+    }
+}
+
 /// Mode-specific information about this unit.
 ///
 /// This is similar to an amalgamation of TargetKind[^1] and
@@ -1169,6 +1204,25 @@ impl LibraryCrateUnitPlan {
         self.info
             .fingerprint_dir()?
             .try_join_file(format!("lib-{}", self.info.crate_name))
+    }
+}
+
+impl TryFrom<LibraryCrateUnitPlan> for courier::LibraryCrateUnitPlan {
+    type Error = eyre::Report;
+
+    fn try_from(value: LibraryCrateUnitPlan) -> Result<Self> {
+        Self::builder()
+            .info(value.info)
+            .src_path(serde_json::to_string(&value.src_path)?)
+            .outputs(
+                value
+                    .outputs
+                    .into_iter()
+                    .map(|p| Result::<_>::Ok(serde_json::to_string(&p)?.into()))
+                    .try_collect::<_, Vec<_>, _>()?,
+            )
+            .build()
+            .pipe(Ok)
     }
 }
 

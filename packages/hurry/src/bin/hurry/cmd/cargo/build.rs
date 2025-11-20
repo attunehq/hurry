@@ -153,16 +153,24 @@ pub async fn exec(options: Options) -> Result<()> {
         .await
         .context("calculating expected artifacts")?;
 
+    // Compute expected unit plans. Note that because we are not actually
+    // running build scripts, these "unit plans" do not contain fully
+    // unambiguous cache key information (e.g. they do not provide build script outputs).
+    let units = workspace
+        .units(&args)
+        .await
+        .context("calculating expected units")?;
+
     // Initialize cache.
     let cache = CargoCache::open(options.courier_url, token.clone(), workspace)
         .await
         .context("opening cache")?;
 
     // Restore artifacts.
-    let artifact_count = artifact_plan.artifacts.len() as u64;
+    let unit_count = units.len() as u64;
     let restored = if !options.skip_restore {
-        let progress = TransferBar::new(artifact_count, "Restoring cache");
-        cache.restore(&artifact_plan, &progress).await?
+        let progress = TransferBar::new(unit_count, "Restoring cache");
+        cache.restore(&units, &progress).await?
     } else {
         Default::default()
     };
@@ -246,9 +254,9 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Cache the built artifacts.
     if !options.skip_backup {
-        let upload_id = cache.save(artifact_plan, restored).await?;
+        let upload_id = cache.save(units, restored).await?;
         if WaitForUpload::from(options.wait_for_upload).should_wait() {
-            let progress = TransferBar::new(artifact_count, "Uploading cache");
+            let progress = TransferBar::new(unit_count, "Uploading cache");
             wait_for_upload(upload_id, &progress).await?;
         }
     }
@@ -303,13 +311,13 @@ async fn wait_for_upload(request_id: Uuid, progress: &TransferBar) -> Result<()>
                 last_uploaded_files = save_progress.uploaded_files;
                 progress.inc(
                     save_progress
-                        .uploaded_artifacts
+                        .uploaded_units
                         .saturating_sub(last_uploaded_artifacts),
                 );
-                last_uploaded_artifacts = save_progress.uploaded_artifacts;
+                last_uploaded_artifacts = save_progress.uploaded_units;
                 progress
-                    .dec_length(last_total_artifacts.saturating_sub(save_progress.total_artifacts));
-                last_total_artifacts = save_progress.total_artifacts;
+                    .dec_length(last_total_artifacts.saturating_sub(save_progress.total_units));
+                last_total_artifacts = save_progress.total_units;
             }
         }
     }
