@@ -94,4 +94,3 @@ impl IntoResponse for CasCheckResponse {
         }
     }
 }
-

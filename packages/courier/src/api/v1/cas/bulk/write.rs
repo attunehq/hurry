@@ -269,4 +269,3 @@ impl IntoResponse for BulkWriteResponse {
         }
     }
 }
-

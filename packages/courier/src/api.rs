@@ -105,4 +105,3 @@ async fn trace_request(request: Request, next: Next) -> Response {
     .instrument(span)
     .await
 }
-

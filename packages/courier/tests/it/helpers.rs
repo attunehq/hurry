@@ -93,7 +93,8 @@ impl TestFixture {
         })
     }
 
-    /// Create a client with a specific token (useful for testing invalid tokens).
+    /// Create a client with a specific token (useful for testing invalid
+    /// tokens).
     pub fn client_with_token(&self, token: impl Into<Token>) -> Result<Client> {
         Client::new(self.base_url.clone(), token.into())
     }

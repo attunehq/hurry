@@ -18,4 +18,3 @@ pub async fn handle(auth: AuthenticatedToken, Dep(db): Dep<Postgres>) -> StatusC
         }
     }
 }
-

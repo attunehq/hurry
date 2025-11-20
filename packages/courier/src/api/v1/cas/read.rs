@@ -126,4 +126,3 @@ impl IntoResponse for CasReadResponse {
         }
     }
 }
-
