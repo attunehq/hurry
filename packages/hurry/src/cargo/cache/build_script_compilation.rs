@@ -77,6 +77,7 @@ impl BuildScriptCompiledFiles {
         })
     }
 
+    #[allow(unused, reason = "documents how to restore in-memory unit")]
     pub async fn restore(
         self,
         ws: &Workspace,

@@ -53,6 +53,10 @@ impl Restored {
 #[derive(Debug)]
 struct FileRestoreKey {
     key: Key,
+    #[allow(
+        clippy::type_complexity,
+        reason = "it's a closure that returns a future of Result<()>"
+    )]
     #[debug(skip)]
     write: Box<dyn FnOnce(&Vec<u8>) -> BoxFuture<'static, Result<()>> + Send + Sync>,
 }
