@@ -1,4 +1,3 @@
-use std::time::Instant;
 use std::{io::BufWriter, path::Path};
 
 use clap::ValueEnum;

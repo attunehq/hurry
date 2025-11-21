@@ -6,7 +6,10 @@ use dashmap::DashSet;
 use derive_more::Debug;
 use futures::{StreamExt, future::BoxFuture};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    time::{Duration, SystemTime},
+};
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, instrument, trace, warn};
 
@@ -66,6 +69,7 @@ pub async fn restore_units(
     trace!(?units, "units");
 
     let restored = Restored::default();
+    let start_time = SystemTime::now();
 
     // TODO: Check which units are already fresh on disk, and don't attempt to
     // restore them.
@@ -106,7 +110,7 @@ pub async fn restore_units(
 
     let mut dep_fingerprints = HashMap::new();
     let mut files_to_restore = Vec::<FileRestoreKey>::new();
-    for unit in units {
+    for (i, unit) in units.iter().enumerate() {
         let unit_hash = unit.info().unit_hash.clone();
 
         // Load the saved file info from the response.
@@ -121,8 +125,23 @@ pub async fn restore_units(
             continue;
         };
 
-        // Write the fingerprint. This happens during this loop because
-        // fingerprint rewriting must occur in dependency order.
+        // Calculate the mtime for files to be restored. All output file mtimes
+        // for a unit U must be after those of U's dependencies (i.e. all of U's
+        // mtimes must be before its dependents). To satisfy this property
+        // easily, we set the mtime of all files in U to be the same, and
+        // increment this mtime for every unit we see (since units are in
+        // dependency order).
+        //
+        // We use a 1s increment here so that mtimes are still correctly set on
+        // filesystems with low timestamp precision. For reference, see Cargo's
+        // timestamp comparison logic.[^1]
+        //
+        // [^1]: https://github.com/rust-lang/cargo/blob/c24e1064277fe51ab72011e2612e556ac56addf7/src/cargo/core/compiler/fingerprint/mod.rs#L1229-L1235
+        let mtime = start_time + Duration::from_secs(i as u64);
+
+        // Write the fingerprint and queue other files to be restored. Writing
+        // fingerprints happens during this loop because fingerprint rewriting
+        // must occur in dependency order.
         //
         // TODO: Ideally, we would only write fingerprints _after_ all the files
         // for the unit are restored, to be maximally correct. This requires
@@ -157,11 +176,12 @@ pub async fn restore_units(
                         write: Box::new(move |data| {
                             let data = data.clone();
                             Box::pin(async move {
-                                let abs_path = path
+                                let path = path
                                     .reconstruct(&ws_clone, &target_arch)?
                                     .pipe(AbsFilePath::try_from)?;
-                                fs::write(&abs_path, data).await?;
-                                fs::set_executable(&abs_path, executable).await?;
+                                fs::write(&path, data).await?;
+                                fs::set_executable(&path, executable).await?;
+                                fs::set_mtime(&path, mtime).await?;
                                 Ok(())
                             })
                         }),
@@ -180,13 +200,11 @@ pub async fn restore_units(
                         let data = data.clone();
                         Box::pin(async move {
                             let dep_info: cargo::DepInfo = serde_json::from_slice(&data)?;
-                            let reconstructed = dep_info
+                            let dep_info = dep_info
                                 .reconstruct(&ws_clone, &unit_plan_clone.info.target_arch)?;
-                            fs::write(
-                                &profile_dir_clone.join(&unit_plan_clone.dep_info_file()?),
-                                reconstructed,
-                            )
-                            .await?;
+                            let path = profile_dir_clone.join(&unit_plan_clone.dep_info_file()?);
+                            fs::write(&path, dep_info).await?;
+                            fs::set_mtime(&path, mtime).await?;
                             Ok(())
                         })
                     }),
@@ -200,11 +218,10 @@ pub async fn restore_units(
                     write: Box::new(move |data| {
                         let data = data.clone();
                         Box::pin(async move {
-                            fs::write(
-                                &profile_dir_clone.join(&unit_plan_clone.encoded_dep_info_file()?),
-                                data,
-                            )
-                            .await?;
+                            let path =
+                                profile_dir_clone.join(&unit_plan_clone.encoded_dep_info_file()?);
+                            fs::write(&path, data).await?;
+                            fs::set_mtime(&path, mtime).await?;
                             Ok(())
                         })
                     }),
@@ -236,15 +253,16 @@ pub async fn restore_units(
                     write: Box::new(move |data| {
                         let data = data.clone();
                         Box::pin(async move {
-                            let program_file =
-                                profile_dir_clone.join(unit_plan_clone.program_file()?);
-                            fs::write(&program_file, data).await?;
-                            fs::set_executable(&program_file, true).await?;
-                            fs::hard_link(
-                                &program_file,
-                                &profile_dir_clone.join(unit_plan_clone.linked_program_file()?),
-                            )
-                            .await?;
+                            let path = profile_dir_clone.join(unit_plan_clone.program_file()?);
+
+                            fs::write(&path, data).await?;
+                            fs::set_executable(&path, true).await?;
+                            fs::set_mtime(&path, mtime).await?;
+
+                            let linked_path =
+                                profile_dir_clone.join(unit_plan_clone.linked_program_file()?);
+                            fs::hard_link(&path, &linked_path).await?;
+                            fs::set_mtime(&linked_path, mtime).await?;
                             Ok(())
                         })
                     }),
@@ -260,13 +278,11 @@ pub async fn restore_units(
                         let data = data.clone();
                         Box::pin(async move {
                             let dep_info: cargo::DepInfo = serde_json::from_slice(&data)?;
-                            let reconstructed = dep_info
+                            let dep_info = dep_info
                                 .reconstruct(&ws_clone, &unit_plan_clone.info.target_arch)?;
-                            fs::write(
-                                &profile_dir_clone.join(&unit_plan_clone.dep_info_file()?),
-                                reconstructed,
-                            )
-                            .await?;
+                            let path = profile_dir_clone.join(&unit_plan_clone.dep_info_file()?);
+                            fs::write(&path, dep_info).await?;
+                            fs::set_mtime(&path, mtime).await?;
                             Ok(())
                         })
                     }),
@@ -280,11 +296,10 @@ pub async fn restore_units(
                     write: Box::new(move |data| {
                         let data = data.clone();
                         Box::pin(async move {
-                            fs::write(
-                                &profile_dir_clone.join(&unit_plan_clone.encoded_dep_info_file()?),
-                                data,
-                            )
-                            .await?;
+                            let path =
+                                profile_dir_clone.join(&unit_plan_clone.encoded_dep_info_file()?);
+                            fs::write(&path, data).await?;
+                            fs::set_mtime(&path, mtime).await?;
                             Ok(())
                         })
                     }),
@@ -320,11 +335,12 @@ pub async fn restore_units(
                         write: Box::new(move |data| {
                             let data = data.clone();
                             Box::pin(async move {
-                                let abs_path = path
+                                let path = path
                                     .reconstruct(&ws_clone, &target_arch)?
                                     .pipe(AbsFilePath::try_from)?;
-                                fs::write(&abs_path, data).await?;
-                                fs::set_executable(&abs_path, executable).await?;
+                                fs::write(&path, data).await?;
+                                fs::set_executable(&path, executable).await?;
+                                fs::set_mtime(&path, mtime).await?;
                                 Ok(())
                             })
                         }),
@@ -341,13 +357,11 @@ pub async fn restore_units(
                         let data = data.clone();
                         Box::pin(async move {
                             let stdout: cargo::BuildScriptOutput = serde_json::from_slice(&data)?;
-                            let reconstructed =
+                            let stdout =
                                 stdout.reconstruct(&ws_clone, &unit_plan_clone.info.target_arch)?;
-                            fs::write(
-                                &profile_dir_clone.join(&unit_plan_clone.stdout_file()?),
-                                reconstructed,
-                            )
-                            .await?;
+                            let path = profile_dir_clone.join(&unit_plan_clone.stdout_file()?);
+                            fs::write(&path, stdout).await?;
+                            fs::set_mtime(&path, mtime).await?;
                             Ok(())
                         })
                     }),
@@ -361,11 +375,9 @@ pub async fn restore_units(
                     write: Box::new(move |data| {
                         let data = data.clone();
                         Box::pin(async move {
-                            fs::write(
-                                &profile_dir_clone.join(&unit_plan_clone.stderr_file()?),
-                                data,
-                            )
-                            .await?;
+                            let path = profile_dir_clone.join(&unit_plan_clone.stderr_file()?);
+                            fs::write(&path, data).await?;
+                            fs::set_mtime(&path, mtime).await?;
                             Ok(())
                         })
                     }),
@@ -378,12 +390,10 @@ pub async fn restore_units(
                     unit_plan.out_dir()?.as_os_str().as_encoded_bytes(),
                 )
                 .await?;
+                fs::set_mtime(&root_output_path, mtime).await?;
             }
             _ => bail!("unit type mismatch"),
         }
-
-        // Queue the other files in the unit to be batch downloaded and
-        // restored.
 
         // Mark the unit as restored. It's not _technically_ restored yet, but
         // this function will return an error if the restore doesn't happen

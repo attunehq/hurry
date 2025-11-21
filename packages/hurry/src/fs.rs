@@ -468,14 +468,9 @@ impl Metadata {
 
         // Make sure to set the file times last so that other modifications to
         // the metadata don't mess with these.
-        let mtime = FileTime::from_system_time(self.mtime);
-        let path = path.as_std_path().to_path_buf();
-        spawn_blocking(move || {
-            filetime::set_file_mtime(&path, mtime).tap_ok(|_| trace!(?path, ?mtime, "update mtime"))
-        })
-        .await
-        .context("join thread")?
-        .context("update handle")
+        set_mtime(path, self.mtime).await?;
+
+        Ok(())
     }
 }
 
@@ -537,6 +532,19 @@ pub async fn is_executable(path: impl AsRef<std::path::Path> + StdDebug) -> bool
     spawn_blocking(move || is_executable::is_executable(path))
         .await
         .expect("join task")
+}
+
+/// Set the mtime of the file.
+#[instrument]
+pub async fn set_mtime(path: &AbsFilePath, mtime: SystemTime) -> Result<()> {
+    let mtime = FileTime::from_system_time(mtime);
+    let path = path.as_std_path().to_path_buf();
+    spawn_blocking(move || {
+        filetime::set_file_mtime(&path, mtime).tap_ok(|_| trace!(?path, ?mtime, "update mtime"))
+    })
+    .await
+    .context("join thread")?
+    .context("update handle")
 }
 
 /// Set the file to be executable.
