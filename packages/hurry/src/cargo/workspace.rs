@@ -508,8 +508,10 @@ impl Workspace {
                         invocation.compile_mode
                     ),
                 }
-            } else if invocation.target_kind == [TargetKind::Bin] {
-                // Binaries are _always_ first-party code. Do nothing for now.
+            } else if invocation.target_kind == [TargetKind::Bin]
+                || invocation.target_kind == [TargetKind::Test]
+            {
+                // Binaries and tests are _always_ first-party code. Do nothing for now.
                 continue;
             } else if invocation.target_kind.contains(&TargetKind::Lib)
                 || invocation.target_kind.contains(&TargetKind::RLib)
