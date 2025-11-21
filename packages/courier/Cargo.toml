@@ -22,7 +22,6 @@ sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate", "
 async-compression = { workspace = true, features = ["tokio", "zstd"] }
 blake3 = { workspace = true }
 hex = { workspace = true }
-zstd = { workspace = true }
 color-eyre = { workspace = true }
 tracing = { workspace = true }
 tracing-error = { workspace = true }
@@ -38,14 +37,12 @@ aerosol = { workspace = true, features = ["async", "axum", "axum-extra", "tracin
 futures = { workspace = true }
 async-tar = { workspace = true }
 piper = { workspace = true }
-maplit = { workspace = true }
 rand = { workspace = true }
-duplicate.workspace = true
 sha2 = { workspace = true }
 serde_json.workspace = true
+async-tempfile.workspace = true
 
 [dev-dependencies]
-async-tempfile = { workspace = true }
 axum-test = { workspace = true, features = ["all"] }
 clients = { workspace = true, features = ["client"] }
 divan = { workspace = true }
@@ -53,6 +50,7 @@ futures = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }
+reqwest.workspace = true
 serde_json.workspace = true
 simple_test_case.workspace = true
 test-log = { workspace = true, features = ["trace"] }

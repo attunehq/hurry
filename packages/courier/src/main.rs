@@ -8,14 +8,6 @@ use tracing::level_filters::LevelFilter;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::db::Postgres;
-
-mod api;
-mod auth;
-mod crypto;
-mod db;
-mod storage;
-
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -92,11 +84,11 @@ async fn main() -> Result<()> {
 
 async fn serve(config: ServeConfig) -> Result<()> {
     tracing::info!("constructing application router...");
-    let storage = storage::Disk::new(&config.cas_root);
-    let db = Postgres::connect(&config.database_url)
+    let storage = courier::storage::Disk::new(&config.cas_root);
+    let db = courier::db::Postgres::connect(&config.database_url)
         .await
         .context("connect to database")?;
-    let router = api::router(Aero::new().with(storage).with(db));
+    let router = courier::api::router(Aero::new().with(storage).with(db));
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -146,11 +138,11 @@ async fn shutdown_signal() {
 async fn migrate(config: MigrateConfig) -> Result<()> {
     tracing::info!("applying migrations...");
 
-    let pool = Postgres::connect(&config.database_url)
+    let pool = courier::db::Postgres::connect(&config.database_url)
         .await
         .context("connect to database")?;
 
-    Postgres::MIGRATOR
+    courier::db::Postgres::MIGRATOR
         .run(pool.as_ref())
         .await
         .context("apply migrations")?;

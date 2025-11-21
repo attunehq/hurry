@@ -1224,14 +1224,13 @@ dependencies = [
  "derive_more",
  "divan",
  "dotenvy",
- "duplicate",
  "futures",
  "hex",
- "maplit",
  "piper",
  "pretty_assertions",
  "proptest",
  "rand 0.8.5",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
@@ -1250,7 +1249,6 @@ dependencies = [
  "tracing-tree",
  "url",
  "uuid",
- "zstd",
 ]
 
 [[package]]
@@ -3099,12 +3097,6 @@ name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
-
-[[package]]
-name = "maplit"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 
 [[package]]
 name = "matchers"

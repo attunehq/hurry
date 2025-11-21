@@ -189,7 +189,7 @@ impl Postgres {
     /// Generate a new token for the account in the database.
     /// Currently only used in tests. If used elsewhere, feel free to make this
     /// generally available.
-    #[cfg(test)]
+    #[allow(dead_code)]
     #[tracing::instrument(name = "Postgres::create_token")]
     pub async fn create_token(&self, account: AccountId) -> Result<RawToken> {
         use rand::RngCore;
@@ -221,7 +221,7 @@ impl Postgres {
     /// Revoke the specified token.
     /// Currently only used in tests. If used elsewhere, feel free to make this
     /// generally available.
-    #[cfg(test)]
+    #[allow(dead_code)]
     #[tracing::instrument(name = "Postgres::revoke_token", skip(token))]
     pub async fn revoke_token(&self, token: impl AsRef<RawToken>) -> Result<()> {
         let hash = TokenHash::new(token.as_ref().expose());
@@ -368,17 +368,5 @@ impl Postgres {
 
         tx.commit().await?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    #[test_log::test]
-    async fn open_test_database(pool: PgPool) {
-        let db = crate::db::Postgres { pool };
-        db.ping().await.expect("ping database");
     }
 }

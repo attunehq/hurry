@@ -22,7 +22,7 @@ pub struct TokenHash(Vec<u8>);
 impl TokenHash {
     /// Currently only used in tests. If used elsewhere, feel free to make this
     /// generally available.
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn parse(hash: impl Into<Vec<u8>>) -> Self {
         Self(hash.into())
     }
@@ -37,7 +37,7 @@ impl TokenHash {
 
     /// Currently only used in tests. If used elsewhere, feel free to make this
     /// generally available.
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn verify(&self, token: impl AsRef<[u8]>) -> bool {
         Self::new(token) == *self
     }
@@ -51,43 +51,5 @@ impl TokenHash {
 impl AsRef<TokenHash> for TokenHash {
     fn as_ref(&self) -> &TokenHash {
         self
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn verify() {
-        let plain = "test-token-12345";
-        let token = TokenHash::new(plain);
-
-        assert!(token.verify(plain), "valid token verifies");
-        assert!(!token.verify("abcd"), "invalid token fails");
-    }
-
-    #[test]
-    fn deterministic_hash() {
-        let plain = "test-token-12345";
-
-        let token1 = TokenHash::new(plain);
-        let token2 = TokenHash::new(plain);
-
-        assert_eq!(token1, token2, "same plaintext produces same SHA256 hash");
-    }
-
-    #[test]
-    fn roundtrip() {
-        let plain = "test-token-12345";
-        let token = TokenHash::new(plain);
-
-        // Simulate database roundtrip
-        let bytes = token.as_bytes();
-        let parsed = TokenHash::parse(bytes);
-
-        assert_eq!(token, parsed, "decoded token should match original");
-        assert!(token.verify(plain), "original token should validate");
-        assert!(parsed.verify(plain), "decoded token should validate");
     }
 }
