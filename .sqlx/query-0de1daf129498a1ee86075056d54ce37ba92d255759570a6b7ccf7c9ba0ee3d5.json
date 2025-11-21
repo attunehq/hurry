@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                INSERT INTO organization (name, created_at) VALUES\n                    ($1, now()),\n                    ($2, now())\n                RETURNING id, name\n                ",
+  "query": "\n            INSERT INTO organization (name, created_at) VALUES\n                ($1, now()),\n                ($2, now())\n            RETURNING id, name\n            ",
   "describe": {
     "columns": [
       {
@@ -25,5 +25,5 @@
       false
     ]
   },
-  "hash": "a14a8806719dfc2942aff82cf7c6ecfeba820aefbb018c230c247c1761e82b57"
+  "hash": "0de1daf129498a1ee86075056d54ce37ba92d255759570a6b7ccf7c9ba0ee3d5"
 }

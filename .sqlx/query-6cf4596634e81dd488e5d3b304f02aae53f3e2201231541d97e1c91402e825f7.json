@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                INSERT INTO account (organization_id, email, created_at) VALUES\n                    (2, $1, now()),\n                    (2, $2, now()),\n                    (3, $3, now())\n                RETURNING id, email\n                ",
+  "query": "\n            INSERT INTO account (organization_id, email, created_at) VALUES\n                (2, $1, now()),\n                (2, $2, now()),\n                (3, $3, now())\n            RETURNING id, email\n            ",
   "describe": {
     "columns": [
       {
@@ -26,5 +26,5 @@
       false
     ]
   },
-  "hash": "10c3c21b69d72a458e01fde1a7e236402b7c007a2f3780bfe2a364daa9c4de6f"
+  "hash": "6cf4596634e81dd488e5d3b304f02aae53f3e2201231541d97e1c91402e825f7"
 }

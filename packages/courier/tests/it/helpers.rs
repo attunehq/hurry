@@ -284,7 +284,7 @@ pub fn test_cargo_save_request(
 ) -> (CargoSaveRequest2, SavedUnitCacheKey) {
     let unit_hash = unit_hash.into();
     let unit = test_saved_unit(&unit_hash);
-    let key = SavedUnitCacheKey::builder().unit(&unit_hash).build();
+    let key = SavedUnitCacheKey::builder().unit_hash(&unit_hash).build();
     let request = CargoSaveUnitRequest::builder().key(&key).unit(unit).build();
     let save_request = CargoSaveRequest2::new([request]);
     (save_request, key)

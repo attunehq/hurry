@@ -13,7 +13,7 @@ async fn resets_cache(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
 
     let unit = test_saved_unit("hash-reset");
-    let key = SavedUnitCacheKey::builder().unit("hash-reset").build();
+    let key = SavedUnitCacheKey::builder().unit_hash("hash-reset").build();
     let request = CargoSaveUnitRequest::builder().key(&key).unit(unit).build();
     let save_request = CargoSaveRequest2::new([request]);
 
@@ -42,7 +42,7 @@ async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
 
     let unit_alice = test_saved_unit("hash-alice");
-    let key_alice = SavedUnitCacheKey::builder().unit("hash-alice").build();
+    let key_alice = SavedUnitCacheKey::builder().unit_hash("hash-alice").build();
     let request_alice = CargoSaveUnitRequest::builder()
         .key(&key_alice)
         .unit(unit_alice)
@@ -50,7 +50,9 @@ async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
     let save_request_alice = CargoSaveRequest2::new([request_alice]);
 
     let unit_charlie = test_saved_unit("hash-charlie");
-    let key_charlie = SavedUnitCacheKey::builder().unit("hash-charlie").build();
+    let key_charlie = SavedUnitCacheKey::builder()
+        .unit_hash("hash-charlie")
+        .build();
     let request_charlie = CargoSaveUnitRequest::builder()
         .key(&key_charlie)
         .unit(unit_charlie)
@@ -73,7 +75,10 @@ async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
         .client_alice
         .cargo_cache_restore2(restore_alice)
         .await?;
-    assert!(response_alice.is_none(), "org A's cache should be deleted");
+    assert!(
+        response_alice.iter().count() == 0,
+        "org A's cache should be deleted"
+    );
 
     let restore_charlie = CargoRestoreRequest2::new([key_charlie]);
     let response_charlie = fixture
@@ -81,7 +86,7 @@ async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
         .cargo_cache_restore2(restore_charlie)
         .await?;
     assert!(
-        response_charlie.is_some(),
+        response_charlie.iter().count() > 0,
         "org B's cache should still exist"
     );
 
