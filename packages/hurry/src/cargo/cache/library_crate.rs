@@ -154,8 +154,6 @@ impl LibraryFiles {
         // Reconstruct and restore fingerprint.
         Self::restore_fingerprint(ws, dep_fingerprints, self.fingerprint, unit_plan).await?;
 
-        // TODO: Set timestamps.
-
         Ok(())
     }
 

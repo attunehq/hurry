@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use color_eyre::{
     Result,
-    eyre::{bail, eyre},
+    eyre::{OptionExt as _, bail},
 };
 use derive_more::Debug;
 use futures::TryStreamExt as _;
@@ -161,12 +161,7 @@ impl BuildScriptOutputFiles {
             let old_dep_fingerprint = dep.fingerprint.hash_u64();
             dep.fingerprint = dep_fingerprints
                 .get(&old_dep_fingerprint)
-                .ok_or_else(|| {
-                    eyre!("dependency fingerprint hash not found").wrap_err(format!(
-                        "rewriting fingerprint {} for unit {}",
-                        old_dep_fingerprint, unit_plan.info.unit_hash
-                    ))
-                })?
+                .ok_or_eyre("dependency fingerprint hash not found")?
                 .clone();
         }
         debug!("rewrite fingerprint deps: done");

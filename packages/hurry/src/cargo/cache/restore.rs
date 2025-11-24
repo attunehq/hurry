@@ -7,8 +7,7 @@ use derive_more::Debug;
 use futures::{StreamExt, future::BoxFuture};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
-    time::{Duration, SystemTime},
+    collections::HashMap, sync::Arc, time::{Duration, SystemTime}
 };
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, instrument, trace, warn};
@@ -114,6 +113,8 @@ pub async fn restore_units(
 
     let mut dep_fingerprints = HashMap::new();
     let mut files_to_restore = Vec::<FileRestoreKey>::new();
+    // Shared references to clone once here instead of cloning once per unit.
+    let ws = Arc::new(ws.clone());
     for (i, unit) in units.iter().enumerate() {
         let unit_hash = unit.info().unit_hash.clone();
 
@@ -161,7 +162,7 @@ pub async fn restore_units(
                 let fingerprint: cargo::Fingerprint =
                     serde_json::from_str(saved_library_files.fingerprint.as_str())?;
                 cache::LibraryFiles::restore_fingerprint(
-                    ws,
+                    &*ws,
                     &mut dep_fingerprints,
                     fingerprint,
                     unit_plan,
@@ -171,8 +172,9 @@ pub async fn restore_units(
                 // Queue the output files.
                 for file in saved_library_files.output_files {
                     let path: QualifiedPath = serde_json::from_str(file.path.as_str())?;
-                    let ws_clone = ws.clone();
-                    let target_arch = unit_plan.info.target_arch.clone();
+                    let path = path
+                        .reconstruct(&ws, &unit_plan.info.target_arch)?
+                        .pipe(AbsFilePath::try_from)?;
                     let executable = file.executable;
 
                     files_to_restore.push(FileRestoreKey {
@@ -180,9 +182,6 @@ pub async fn restore_units(
                         write: Box::new(move |data| {
                             let data = data.clone();
                             Box::pin(async move {
-                                let path = path
-                                    .reconstruct(&ws_clone, &target_arch)?
-                                    .pipe(AbsFilePath::try_from)?;
                                 fs::write(&path, data).await?;
                                 fs::set_executable(&path, executable).await?;
                                 fs::set_mtime(&path, mtime).await?;
@@ -197,7 +196,7 @@ pub async fn restore_units(
                 // Queue the dep-info file with reconstruction.
                 let ws_clone = ws.clone();
                 let unit_plan_clone = unit_plan.clone();
-                let profile_dir_clone = profile_dir.clone();
+                let path = profile_dir.join(&unit_plan_clone.dep_info_file()?);
                 files_to_restore.push(FileRestoreKey {
                     key: saved_library_files.dep_info_file.clone(),
                     write: Box::new(move |data| {
@@ -206,7 +205,6 @@ pub async fn restore_units(
                             let dep_info: cargo::DepInfo = serde_json::from_slice(&data)?;
                             let dep_info = dep_info
                                 .reconstruct(&ws_clone, &unit_plan_clone.info.target_arch)?;
-                            let path = profile_dir_clone.join(&unit_plan_clone.dep_info_file()?);
                             fs::write(&path, dep_info).await?;
                             fs::set_mtime(&path, mtime).await?;
                             Ok(())
@@ -215,15 +213,12 @@ pub async fn restore_units(
                 });
 
                 // Queue the encoded dep-info file (no transformation).
-                let unit_plan_clone = unit_plan.clone();
-                let profile_dir_clone = profile_dir.clone();
+                let path = profile_dir.join(&unit_plan.encoded_dep_info_file()?);
                 files_to_restore.push(FileRestoreKey {
                     key: saved_library_files.encoded_dep_info_file.clone(),
                     write: Box::new(move |data| {
                         let data = data.clone();
                         Box::pin(async move {
-                            let path =
-                                profile_dir_clone.join(&unit_plan_clone.encoded_dep_info_file()?);
                             fs::write(&path, data).await?;
                             fs::set_mtime(&path, mtime).await?;
                             Ok(())
@@ -240,7 +235,7 @@ pub async fn restore_units(
                 let fingerprint: cargo::Fingerprint =
                     serde_json::from_str(build_script_compiled_files.fingerprint.as_str())?;
                 cache::BuildScriptCompiledFiles::restore_fingerprint(
-                    ws,
+                    &*ws,
                     &mut dep_fingerprints,
                     fingerprint,
                     unit_plan,
@@ -250,21 +245,17 @@ pub async fn restore_units(
                 let profile_dir = ws.unit_profile_dir(&unit_plan.info);
 
                 // Queue compiled program with hard link creation.
-                let unit_plan_clone = unit_plan.clone();
-                let profile_dir_clone = profile_dir.clone();
+                let path = profile_dir.join(unit_plan.program_file()?);
+                let linked_path = profile_dir.join(unit_plan.linked_program_file()?);
                 files_to_restore.push(FileRestoreKey {
                     key: build_script_compiled_files.compiled_program.clone(),
                     write: Box::new(move |data| {
                         let data = data.clone();
                         Box::pin(async move {
-                            let path = profile_dir_clone.join(unit_plan_clone.program_file()?);
-
                             fs::write(&path, data).await?;
                             fs::set_executable(&path, true).await?;
                             fs::set_mtime(&path, mtime).await?;
 
-                            let linked_path =
-                                profile_dir_clone.join(unit_plan_clone.linked_program_file()?);
                             fs::hard_link(&path, &linked_path).await?;
                             fs::set_mtime(&linked_path, mtime).await?;
                             Ok(())
@@ -275,7 +266,7 @@ pub async fn restore_units(
                 // Queue dep-info file with reconstruction.
                 let ws_clone = ws.clone();
                 let unit_plan_clone = unit_plan.clone();
-                let profile_dir_clone = profile_dir.clone();
+                let path = profile_dir.join(&unit_plan.dep_info_file()?);
                 files_to_restore.push(FileRestoreKey {
                     key: build_script_compiled_files.dep_info_file.clone(),
                     write: Box::new(move |data| {
@@ -284,7 +275,6 @@ pub async fn restore_units(
                             let dep_info: cargo::DepInfo = serde_json::from_slice(&data)?;
                             let dep_info = dep_info
                                 .reconstruct(&ws_clone, &unit_plan_clone.info.target_arch)?;
-                            let path = profile_dir_clone.join(&unit_plan_clone.dep_info_file()?);
                             fs::write(&path, dep_info).await?;
                             fs::set_mtime(&path, mtime).await?;
                             Ok(())
@@ -293,15 +283,12 @@ pub async fn restore_units(
                 });
 
                 // Queue encoded dep-info file (no transformation).
-                let unit_plan_clone = unit_plan.clone();
-                let profile_dir_clone = profile_dir.clone();
+                let path = profile_dir.join(&unit_plan.encoded_dep_info_file()?);
                 files_to_restore.push(FileRestoreKey {
                     key: build_script_compiled_files.encoded_dep_info_file.clone(),
                     write: Box::new(move |data| {
                         let data = data.clone();
                         Box::pin(async move {
-                            let path =
-                                profile_dir_clone.join(&unit_plan_clone.encoded_dep_info_file()?);
                             fs::write(&path, data).await?;
                             fs::set_mtime(&path, mtime).await?;
                             Ok(())
@@ -318,7 +305,7 @@ pub async fn restore_units(
                 let fingerprint: cargo::Fingerprint =
                     serde_json::from_str(build_script_output_files.fingerprint.as_str())?;
                 cache::BuildScriptOutputFiles::restore_fingerprint(
-                    ws,
+                    &*ws,
                     &mut dep_fingerprints,
                     fingerprint,
                     unit_plan,
@@ -330,8 +317,9 @@ pub async fn restore_units(
                 // Queue all OUT_DIR files with executable flag handling.
                 for file in build_script_output_files.out_dir_files {
                     let path: QualifiedPath = serde_json::from_str(file.path.as_str())?;
-                    let ws_clone = ws.clone();
-                    let target_arch = unit_plan.info.target_arch.clone();
+                    let path = path
+                        .reconstruct(&ws, &unit_plan.info.target_arch)?
+                        .pipe(AbsFilePath::try_from)?;
                     let executable = file.executable;
 
                     files_to_restore.push(FileRestoreKey {
@@ -339,9 +327,6 @@ pub async fn restore_units(
                         write: Box::new(move |data| {
                             let data = data.clone();
                             Box::pin(async move {
-                                let path = path
-                                    .reconstruct(&ws_clone, &target_arch)?
-                                    .pipe(AbsFilePath::try_from)?;
                                 fs::write(&path, data).await?;
                                 fs::set_executable(&path, executable).await?;
                                 fs::set_mtime(&path, mtime).await?;
@@ -354,7 +339,7 @@ pub async fn restore_units(
                 // Queue stdout with BuildScriptOutput reconstruction.
                 let ws_clone = ws.clone();
                 let unit_plan_clone = unit_plan.clone();
-                let profile_dir_clone = profile_dir.clone();
+                let path = profile_dir.join(&unit_plan.stdout_file()?);
                 files_to_restore.push(FileRestoreKey {
                     key: build_script_output_files.stdout.clone(),
                     write: Box::new(move |data| {
@@ -363,7 +348,6 @@ pub async fn restore_units(
                             let stdout: cargo::BuildScriptOutput = serde_json::from_slice(&data)?;
                             let stdout =
                                 stdout.reconstruct(&ws_clone, &unit_plan_clone.info.target_arch)?;
-                            let path = profile_dir_clone.join(&unit_plan_clone.stdout_file()?);
                             fs::write(&path, stdout).await?;
                             fs::set_mtime(&path, mtime).await?;
                             Ok(())
@@ -372,14 +356,12 @@ pub async fn restore_units(
                 });
 
                 // Queue stderr (no transformation).
-                let unit_plan_clone = unit_plan.clone();
-                let profile_dir_clone = profile_dir.clone();
+                let path = profile_dir.join(&unit_plan.stderr_file()?);
                 files_to_restore.push(FileRestoreKey {
                     key: build_script_output_files.stderr.clone(),
                     write: Box::new(move |data| {
                         let data = data.clone();
                         Box::pin(async move {
-                            let path = profile_dir_clone.join(&unit_plan_clone.stderr_file()?);
                             fs::write(&path, data).await?;
                             fs::set_mtime(&path, mtime).await?;
                             Ok(())
