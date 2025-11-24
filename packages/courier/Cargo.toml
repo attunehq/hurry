@@ -7,10 +7,6 @@ edition = "2024"
 name = "cas_transport"
 harness = false
 
-[[bench]]
-name = "cache_restore"
-harness = false
-
 [dependencies]
 clients = { workspace = true }
 axum = { workspace = true }

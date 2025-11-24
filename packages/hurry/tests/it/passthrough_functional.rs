@@ -54,6 +54,7 @@
 //! other tests that these should be safe (we do the same thing for all
 //! passthrough commands). If necessary we can add tests for these specifically
 //! in the future.
+#![allow(clippy::disallowed_methods, reason = "permitted in tests")]
 
 use pretty_assertions::assert_eq as pretty_assert_eq;
 use serde_json::Value;

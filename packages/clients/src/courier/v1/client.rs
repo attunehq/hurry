@@ -23,22 +23,15 @@ use tokio_util::{
 use tracing::{Instrument, instrument, warn};
 use url::Url;
 
-use super::{
-    Key,
-    cache::{
-        CargoBulkRestoreRequest, CargoBulkRestoreResponse, CargoRestoreRequest,
-        CargoRestoreResponse, CargoSaveRequest,
-    },
-    cas::{CasBulkReadRequest, CasBulkWriteResponse},
-};
 use crate::{
     ContentType, NETWORK_BUFFER_SIZE, Token,
     courier::v1::{
-        SavedUnit,
+        Key, SavedUnit,
         cache::{
             CargoRestoreRequest2, CargoRestoreResponse2, CargoRestoreResponseTransport,
             CargoSaveRequest2, SavedUnitCacheKey,
         },
+        cas::{CasBulkReadRequest, CasBulkWriteResponse},
     },
 };
 
@@ -154,118 +147,6 @@ impl Client {
                 .pipe(Ok),
             StatusCode::NOT_FOUND => {
                 Ok(CargoRestoreResponse2::new::<_, SavedUnitCacheKey, SavedUnit>(vec![]))
-            }
-            status => {
-                let url = response.url().to_string();
-                let request_id = request_id(&response);
-                let body = response.text().await.unwrap_or_default();
-                Err(eyre!("unexpected status code: {status}"))
-                    .with_section(|| url.header("Url:"))
-                    .with_section(|| body.header("Body:"))
-                    .with_section(|| request_id.header("Request ID:"))
-            }
-        }
-    }
-
-    /// Save cargo cache metadata.
-    #[instrument(skip(self))]
-    #[deprecated = "Replaced by `cargo_cache_save2`"]
-    pub async fn cargo_cache_save(&self, body: CargoSaveRequest) -> Result<()> {
-        let url = self.base.join("api/v1/cache/cargo/save")?;
-        let response = self
-            .http
-            .post(url)
-            .bearer_auth(self.token.expose())
-            .json(&body)
-            .send()
-            .await
-            .context("send")?;
-
-        match response.status() {
-            StatusCode::CREATED => Ok(()),
-            status => {
-                let url = response.url().to_string();
-                let request_id = request_id(&response);
-                let body = response.text().await.unwrap_or_default();
-                return Err(eyre!("unexpected status code: {status}"))
-                    .with_section(|| url.header("Url:"))
-                    .with_section(|| body.header("Body:"))
-                    .with_section(|| request_id.header("Request ID:"));
-            }
-        }
-    }
-
-    /// Restore cargo cache metadata.
-    #[instrument(skip(self))]
-    #[deprecated = "Replaced by `cargo_cache_restore2`"]
-    pub async fn cargo_cache_restore(
-        &self,
-        body: CargoRestoreRequest,
-    ) -> Result<Option<CargoRestoreResponse>> {
-        let url = self.base.join("api/v1/cache/cargo/restore")?;
-        let response = self
-            .http
-            .post(url)
-            .bearer_auth(self.token.expose())
-            .json(&body)
-            .send()
-            .await
-            .context("send")?;
-
-        match response.status() {
-            StatusCode::OK => {
-                let data = response
-                    .json::<CargoRestoreResponse>()
-                    .await
-                    .context("parse JSON response")?;
-                Ok(Some(data))
-            }
-            StatusCode::NOT_FOUND => Ok(None),
-            status => {
-                let url = response.url().to_string();
-                let request_id = request_id(&response);
-                let body = response.text().await.unwrap_or_default();
-                return Err(eyre!("unexpected status code: {status}"))
-                    .with_section(|| url.header("Url:"))
-                    .with_section(|| body.header("Body:"))
-                    .with_section(|| request_id.header("Request ID:"));
-            }
-        }
-    }
-
-    /// Restore multiple cargo cache entries in bulk.
-    ///
-    /// Note: The server supports up to 100,000 requests in a single bulk
-    /// operation. If you exceed this limit, the server will return a 400
-    /// Bad Request error.
-    #[instrument(skip(self, requests))]
-    #[deprecated = "Replaced by `cargo_cache_restore2`"]
-    pub async fn cargo_cache_restore_bulk(
-        &self,
-        requests: impl IntoIterator<Item = impl Into<CargoRestoreRequest>>,
-    ) -> Result<CargoBulkRestoreResponse> {
-        let url = self.base.join("api/v1/cache/cargo/bulk/restore")?;
-        let requests = requests.into_iter().map(Into::into).collect::<Vec<_>>();
-        let body = CargoBulkRestoreRequest::builder()
-            .requests(requests)
-            .build();
-
-        let response = self
-            .http
-            .post(url)
-            .bearer_auth(self.token.expose())
-            .json(&body)
-            .send()
-            .await
-            .context("send")?;
-
-        match response.status() {
-            StatusCode::OK => {
-                let data = response
-                    .json::<CargoBulkRestoreResponse>()
-                    .await
-                    .context("parse JSON response")?;
-                Ok(data)
             }
             status => {
                 let url = response.url().to_string();
