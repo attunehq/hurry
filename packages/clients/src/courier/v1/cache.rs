@@ -88,9 +88,9 @@ pub struct CargoSaveUnitRequest {
 /// Request to save cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 #[non_exhaustive]
-pub struct CargoSaveRequest2(HashSet<CargoSaveUnitRequest>);
+pub struct CargoSaveRequest(HashSet<CargoSaveUnitRequest>);
 
-impl CargoSaveRequest2 {
+impl CargoSaveRequest {
     /// Create a new instance from the provided units.
     pub fn new(units: impl IntoIterator<Item = impl Into<CargoSaveUnitRequest>>) -> Self {
         units
@@ -106,7 +106,7 @@ impl CargoSaveRequest2 {
     }
 }
 
-impl IntoIterator for CargoSaveRequest2 {
+impl IntoIterator for CargoSaveRequest {
     type Item = CargoSaveUnitRequest;
     type IntoIter = std::collections::hash_set::IntoIter<CargoSaveUnitRequest>;
 
@@ -115,14 +115,14 @@ impl IntoIterator for CargoSaveRequest2 {
     }
 }
 
-impl FromIterator<CargoSaveUnitRequest> for CargoSaveRequest2 {
+impl FromIterator<CargoSaveUnitRequest> for CargoSaveRequest {
     fn from_iter<T: IntoIterator<Item = CargoSaveUnitRequest>>(iter: T) -> Self {
         Self::new(iter)
     }
 }
 
-impl From<&CargoSaveRequest2> for CargoSaveRequest2 {
-    fn from(req: &CargoSaveRequest2) -> Self {
+impl From<&CargoSaveRequest> for CargoSaveRequest {
+    fn from(req: &CargoSaveRequest) -> Self {
         req.clone()
     }
 }
@@ -130,9 +130,9 @@ impl From<&CargoSaveRequest2> for CargoSaveRequest2 {
 /// Request to restore cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 #[non_exhaustive]
-pub struct CargoRestoreRequest2(HashSet<SavedUnitCacheKey>);
+pub struct CargoRestoreRequest(HashSet<SavedUnitCacheKey>);
 
-impl CargoRestoreRequest2 {
+impl CargoRestoreRequest {
     /// Create a new instance from the provided hashes.
     pub fn new(units: impl IntoIterator<Item = impl Into<SavedUnitCacheKey>>) -> Self {
         units
@@ -148,7 +148,7 @@ impl CargoRestoreRequest2 {
     }
 }
 
-impl IntoIterator for CargoRestoreRequest2 {
+impl IntoIterator for CargoRestoreRequest {
     type Item = SavedUnitCacheKey;
     type IntoIter = std::collections::hash_set::IntoIter<SavedUnitCacheKey>;
 
@@ -157,14 +157,14 @@ impl IntoIterator for CargoRestoreRequest2 {
     }
 }
 
-impl FromIterator<SavedUnitCacheKey> for CargoRestoreRequest2 {
+impl FromIterator<SavedUnitCacheKey> for CargoRestoreRequest {
     fn from_iter<T: IntoIterator<Item = SavedUnitCacheKey>>(iter: T) -> Self {
         Self::new(iter)
     }
 }
 
-impl From<&CargoRestoreRequest2> for CargoRestoreRequest2 {
-    fn from(req: &CargoRestoreRequest2) -> Self {
+impl From<&CargoRestoreRequest> for CargoRestoreRequest {
+    fn from(req: &CargoRestoreRequest) -> Self {
         req.clone()
     }
 }
@@ -184,7 +184,7 @@ impl CargoRestoreResponseTransport {
     }
 }
 
-impl From<CargoRestoreResponseTransport> for CargoRestoreResponse2 {
+impl From<CargoRestoreResponseTransport> for CargoRestoreResponse {
     fn from(resp: CargoRestoreResponseTransport) -> Self {
         resp.into_iter().collect()
     }
@@ -210,9 +210,9 @@ impl FromIterator<(SavedUnitCacheKey, SavedUnit)> for CargoRestoreResponseTransp
 
 /// Response from restoring cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
-pub struct CargoRestoreResponse2(HashMap<SavedUnitCacheKey, SavedUnit>);
+pub struct CargoRestoreResponse(HashMap<SavedUnitCacheKey, SavedUnit>);
 
-impl CargoRestoreResponse2 {
+impl CargoRestoreResponse {
     /// Create a new instance from the provided hashes.
     pub fn new<I, H, U>(units: I) -> Self
     where
@@ -248,7 +248,7 @@ impl CargoRestoreResponse2 {
     }
 }
 
-impl IntoIterator for CargoRestoreResponse2 {
+impl IntoIterator for CargoRestoreResponse {
     type Item = (SavedUnitCacheKey, SavedUnit);
     type IntoIter = std::collections::hash_map::IntoIter<SavedUnitCacheKey, SavedUnit>;
 
@@ -257,7 +257,7 @@ impl IntoIterator for CargoRestoreResponse2 {
     }
 }
 
-impl FromIterator<(SavedUnitCacheKey, SavedUnit)> for CargoRestoreResponse2 {
+impl FromIterator<(SavedUnitCacheKey, SavedUnit)> for CargoRestoreResponse {
     fn from_iter<I>(iter: I) -> Self
     where
         I: IntoIterator<Item = (SavedUnitCacheKey, SavedUnit)>,
@@ -266,8 +266,8 @@ impl FromIterator<(SavedUnitCacheKey, SavedUnit)> for CargoRestoreResponse2 {
     }
 }
 
-impl From<&CargoRestoreResponse2> for CargoRestoreResponse2 {
-    fn from(resp: &CargoRestoreResponse2) -> Self {
+impl From<&CargoRestoreResponse> for CargoRestoreResponse {
+    fn from(resp: &CargoRestoreResponse) -> Self {
         resp.clone()
     }
 }

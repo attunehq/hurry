@@ -1,7 +1,7 @@
 //! Cargo cache restore endpoint tests.
 
 use clients::courier::v1::cache::{
-    CargoRestoreRequest2, CargoSaveRequest2, CargoSaveUnitRequest, SavedUnitCacheKey,
+    CargoRestoreRequest, CargoSaveRequest, CargoSaveUnitRequest, SavedUnitCacheKey,
 };
 use color_eyre::Result;
 use pretty_assertions::assert_eq as pretty_assert_eq;
@@ -19,13 +19,13 @@ async fn restore_after_save(pool: PgPool) -> Result<()> {
         .unit(unit.clone())
         .build();
 
-    let save_request = CargoSaveRequest2::new([request]);
-    fixture.client_alice.cargo_cache_save2(save_request).await?;
+    let save_request = CargoSaveRequest::new([request]);
+    fixture.client_alice.cargo_cache_save(save_request).await?;
 
-    let restore_request = CargoRestoreRequest2::new([key.clone()]);
+    let restore_request = CargoRestoreRequest::new([key.clone()]);
     let response = fixture
         .client_alice
-        .cargo_cache_restore2(restore_request)
+        .cargo_cache_restore(restore_request)
         .await?;
 
     let restored_unit = response
@@ -44,11 +44,11 @@ async fn restore_nonexistent_cache(pool: PgPool) -> Result<()> {
     let key = SavedUnitCacheKey::builder()
         .unit_hash("nonexistent")
         .build();
-    let restore_request = CargoRestoreRequest2::new([key]);
+    let restore_request = CargoRestoreRequest::new([key]);
 
     let response = fixture
         .client_alice
-        .cargo_cache_restore2(restore_request)
+        .cargo_cache_restore(restore_request)
         .await?;
     assert!(
         response.is_empty(),
@@ -79,18 +79,18 @@ async fn restore_multiple_units(pool: PgPool) -> Result<()> {
         })
         .collect::<Vec<_>>();
 
-    let save_request = CargoSaveRequest2::new(requests);
-    fixture.client_alice.cargo_cache_save2(save_request).await?;
+    let save_request = CargoSaveRequest::new(requests);
+    fixture.client_alice.cargo_cache_save(save_request).await?;
 
     let keys = units
         .iter()
         .map(|(hash, _)| SavedUnitCacheKey::builder().unit_hash(*hash).build())
         .collect::<Vec<_>>();
 
-    let restore_request = CargoRestoreRequest2::new(keys.clone());
+    let restore_request = CargoRestoreRequest::new(keys.clone());
     let response = fixture
         .client_alice
-        .cargo_cache_restore2(restore_request)
+        .cargo_cache_restore(restore_request)
         .await?;
 
     for ((hash, unit), key) in units.iter().zip(keys.iter()) {
@@ -118,16 +118,16 @@ async fn restore_partial_miss(pool: PgPool) -> Result<()> {
         .unit(unit.clone())
         .build();
 
-    let save_request = CargoSaveRequest2::new([request]);
-    fixture.client_alice.cargo_cache_save2(save_request).await?;
+    let save_request = CargoSaveRequest::new([request]);
+    fixture.client_alice.cargo_cache_save(save_request).await?;
 
     let key_missing = SavedUnitCacheKey::builder()
         .unit_hash("hash-missing")
         .build();
-    let restore_request = CargoRestoreRequest2::new([key_exists.clone(), key_missing.clone()]);
+    let restore_request = CargoRestoreRequest::new([key_exists.clone(), key_missing.clone()]);
     let response = fixture
         .client_alice
-        .cargo_cache_restore2(restore_request)
+        .cargo_cache_restore(restore_request)
         .await?;
 
     let has_exists = response.iter().any(|(k, _)| k == &key_exists);
@@ -158,13 +158,13 @@ async fn concurrent_restores_same_cache(pool: PgPool) -> Result<()> {
         .unit(unit.clone())
         .build();
 
-    let save_request = CargoSaveRequest2::new([request]);
-    fixture.client_alice.cargo_cache_save2(save_request).await?;
+    let save_request = CargoSaveRequest::new([request]);
+    fixture.client_alice.cargo_cache_save(save_request).await?;
 
     let restores = (0..10)
         .map(|_| {
-            let restore_request = CargoRestoreRequest2::new([key.clone()]);
-            fixture.client_alice.cargo_cache_restore2(restore_request)
+            let restore_request = CargoRestoreRequest::new([key.clone()]);
+            fixture.client_alice.cargo_cache_restore(restore_request)
         })
         .collect::<Vec<_>>();
 
@@ -189,13 +189,13 @@ async fn org_cannot_restore_other_orgs_cache(pool: PgPool) -> Result<()> {
     let key = SavedUnitCacheKey::builder().unit_hash("hash-org-a").build();
     let request = CargoSaveUnitRequest::builder().key(&key).unit(unit).build();
 
-    let save_request = CargoSaveRequest2::new([request]);
-    fixture.client_alice.cargo_cache_save2(save_request).await?;
+    let save_request = CargoSaveRequest::new([request]);
+    fixture.client_alice.cargo_cache_save(save_request).await?;
 
-    let restore_request = CargoRestoreRequest2::new([key]);
+    let restore_request = CargoRestoreRequest::new([key]);
     let response = fixture
         .client_charlie
-        .cargo_cache_restore2(restore_request)
+        .cargo_cache_restore(restore_request)
         .await?;
     assert!(
         response.is_empty(),
@@ -211,10 +211,10 @@ async fn restore_missing_auth_returns_401(pool: PgPool) -> Result<()> {
     let key = SavedUnitCacheKey::builder()
         .unit_hash("hash-noauth")
         .build();
-    let restore_request = CargoRestoreRequest2::new([key]);
+    let restore_request = CargoRestoreRequest::new([key]);
 
     let client_no_auth = fixture.client_with_token("")?;
-    let result = client_no_auth.cargo_cache_restore2(restore_request).await;
+    let result = client_no_auth.cargo_cache_restore(restore_request).await;
     assert!(result.is_err(), "restore without auth should fail");
 
     Ok(())
@@ -227,9 +227,9 @@ async fn restore_invalid_token_returns_401(pool: PgPool) -> Result<()> {
         .unit_hash("hash-invalidtoken")
         .build();
 
-    let restore_request = CargoRestoreRequest2::new([key]);
+    let restore_request = CargoRestoreRequest::new([key]);
     let client = fixture.client_with_token("invalid-token-that-does-not-exist")?;
-    let result = client.cargo_cache_restore2(restore_request).await;
+    let result = client.cargo_cache_restore(restore_request).await;
     assert!(result.is_err(), "restore with invalid token should fail");
 
     Ok(())
@@ -242,9 +242,9 @@ async fn restore_revoked_token_returns_401(pool: PgPool) -> Result<()> {
         .unit_hash("hash-revokedtoken")
         .build();
 
-    let restore_request = CargoRestoreRequest2::new([key]);
+    let restore_request = CargoRestoreRequest::new([key]);
     let client = fixture.client_with_token(fixture.auth.token_alice_revoked().expose())?;
-    let result = client.cargo_cache_restore2(restore_request).await;
+    let result = client.cargo_cache_restore(restore_request).await;
     assert!(result.is_err(), "restore with revoked token should fail");
 
     Ok(())

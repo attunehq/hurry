@@ -11,7 +11,7 @@ use clients::{
     Courier,
     courier::v1::{
         self as courier, Key,
-        cache::{CargoSaveRequest2, CargoSaveUnitRequest, SavedUnitCacheKey},
+        cache::{CargoSaveRequest, CargoSaveUnitRequest, SavedUnitCacheKey},
     },
 };
 
@@ -229,7 +229,7 @@ pub async fn save_units(
 
     // Save units to remote cache.
     courier
-        .cargo_cache_save2(CargoSaveRequest2::new(save_requests))
+        .cargo_cache_save(CargoSaveRequest::new(save_requests))
         .await?;
 
     Result::<_>::Ok(())

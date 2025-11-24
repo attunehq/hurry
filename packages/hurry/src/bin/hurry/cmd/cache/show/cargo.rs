@@ -1,7 +1,7 @@
 use clap::Args;
 use clients::{
     Courier, Token,
-    courier::v1::cache::{CargoRestoreRequest2, SavedUnitCacheKey},
+    courier::v1::cache::{CargoRestoreRequest, SavedUnitCacheKey},
 };
 use color_eyre::Result;
 use derive_more::Debug;
@@ -97,7 +97,7 @@ pub async fn exec(opts: Options) -> Result<()> {
             .unit_hash(info.unit_hash.clone())
             .build();
         let mut cached = courier
-            .cargo_cache_restore2(CargoRestoreRequest2::new([key.clone()]))
+            .cargo_cache_restore(CargoRestoreRequest::new([key.clone()]))
             .await?;
 
         match cached.take(&key) {

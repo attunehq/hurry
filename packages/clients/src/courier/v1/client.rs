@@ -28,8 +28,8 @@ use crate::{
     courier::v1::{
         Key, SavedUnit,
         cache::{
-            CargoRestoreRequest2, CargoRestoreResponse2, CargoRestoreResponseTransport,
-            CargoSaveRequest2, SavedUnitCacheKey,
+            CargoRestoreRequest, CargoRestoreResponse, CargoRestoreResponseTransport,
+            CargoSaveRequest, SavedUnitCacheKey,
         },
         cas::{CasBulkReadRequest, CasBulkWriteResponse},
     },
@@ -97,7 +97,7 @@ impl Client {
 
     /// Save cargo cache metadata.
     #[instrument(skip(self))]
-    pub async fn cargo_cache_save2(&self, body: CargoSaveRequest2) -> Result<()> {
+    pub async fn cargo_cache_save(&self, body: CargoSaveRequest) -> Result<()> {
         let url = self.base.join("api/v1/cache/cargo/save")?;
         let response = self
             .http
@@ -124,10 +124,10 @@ impl Client {
 
     /// Restore cargo cache metadata.
     #[instrument(skip_all)]
-    pub async fn cargo_cache_restore2(
+    pub async fn cargo_cache_restore(
         &self,
-        body: CargoRestoreRequest2,
-    ) -> Result<CargoRestoreResponse2> {
+        body: CargoRestoreRequest,
+    ) -> Result<CargoRestoreResponse> {
         let url = self.base.join("api/v1/cache/cargo/restore")?;
         let response = self
             .http
@@ -143,10 +143,10 @@ impl Client {
                 .json::<CargoRestoreResponseTransport>()
                 .await
                 .context("parse JSON response")?
-                .conv::<CargoRestoreResponse2>()
+                .conv::<CargoRestoreResponse>()
                 .pipe(Ok),
             StatusCode::NOT_FOUND => {
-                Ok(CargoRestoreResponse2::new::<_, SavedUnitCacheKey, SavedUnit>(vec![]))
+                Ok(CargoRestoreResponse::new::<_, SavedUnitCacheKey, SavedUnit>(vec![]))
             }
             status => {
                 let url = response.url().to_string();

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use clients::courier::v1::{
     Key, SavedUnit,
-    cache::{CargoRestoreRequest2, CargoSaveRequest2, SavedUnitCacheKey},
+    cache::{CargoRestoreRequest, CargoSaveRequest, SavedUnitCacheKey},
 };
 use color_eyre::{
     Result,
@@ -70,7 +70,7 @@ impl Postgres {
     pub async fn cargo_cache_save(
         &self,
         auth: &AuthenticatedToken,
-        request: CargoSaveRequest2,
+        request: CargoSaveRequest,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -98,7 +98,7 @@ impl Postgres {
     pub async fn cargo_cache_restore(
         &self,
         auth: &AuthenticatedToken,
-        request: CargoRestoreRequest2,
+        request: CargoRestoreRequest,
     ) -> Result<HashMap<SavedUnitCacheKey, SavedUnit>> {
         // When we store `SavedUnitCacheKey` in the database we store it by its stable
         // hash, so there's no way to get the original value back out using just the

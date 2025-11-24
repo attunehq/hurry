@@ -25,7 +25,7 @@ use clients::{
     Courier,
     courier::v1::{
         Key, SavedUnit,
-        cache::{CargoRestoreRequest2, SavedUnitCacheKey},
+        cache::{CargoRestoreRequest, SavedUnitCacheKey},
     },
 };
 
@@ -79,12 +79,12 @@ pub async fn restore_units(
 
     // Load unit information from remote cache. Note that this does NOT download
     // the actual files, which are loaded as CAS keys.
-    let bulk_req = CargoRestoreRequest2::new(units.iter().map(|unit| {
+    let bulk_req = CargoRestoreRequest::new(units.iter().map(|unit| {
         SavedUnitCacheKey::builder()
             .unit_hash(unit.info().unit_hash.clone())
             .build()
     }));
-    let mut saved_units = courier.cargo_cache_restore2(bulk_req).await?;
+    let mut saved_units = courier.cargo_cache_restore(bulk_req).await?;
 
     // Spawn concurrent workers for doing parallel downloads.
     let (tx, mut workers) = {

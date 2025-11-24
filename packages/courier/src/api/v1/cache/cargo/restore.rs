@@ -1,6 +1,6 @@
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
-use clients::courier::v1::cache::{CargoRestoreRequest2, CargoRestoreResponseTransport};
+use clients::courier::v1::cache::{CargoRestoreRequest, CargoRestoreResponseTransport};
 use color_eyre::eyre::Report;
 use tap::Pipe;
 use tracing::{error, info};
@@ -11,7 +11,7 @@ use crate::{auth::AuthenticatedToken, db::Postgres};
 pub async fn handle(
     auth: AuthenticatedToken,
     Dep(db): Dep<Postgres>,
-    Json(request): Json<CargoRestoreRequest2>,
+    Json(request): Json<CargoRestoreRequest>,
 ) -> CacheRestoreResponse {
     match db.cargo_cache_restore(&auth, request).await {
         Ok(artifacts) if artifacts.is_empty() => {
