@@ -355,6 +355,7 @@ impl Workspace {
 
             // Figure out what kind of unit this invocation is.
             let package_name = invocation.package_name;
+            let package_version = invocation.package_version;
             let target_arch = invocation.target_arch;
             // FIXME: To support `patch` and `replace` directives when rewriting
             // fingerprints, we need to know the extern_crate_name for each
@@ -435,6 +436,7 @@ impl Workspace {
                             info: UnitPlanInfo {
                                 unit_hash: unit_hash.into(),
                                 package_name,
+                                package_version,
                                 crate_name,
                                 target_arch,
                                 deps,
@@ -490,6 +492,7 @@ impl Workspace {
                             info: UnitPlanInfo {
                                 unit_hash: unit_hash.into(),
                                 package_name,
+                                package_version,
                                 crate_name,
                                 target_arch,
                                 deps,
@@ -563,6 +566,7 @@ impl Workspace {
                     info: UnitPlanInfo {
                         unit_hash: unit_hash.into(),
                         package_name,
+                        package_version,
                         crate_name,
                         target_arch,
                         deps,
@@ -1064,6 +1068,11 @@ pub struct UnitPlanInfo {
     ///
     /// [^1]: https://github.com/attunehq/cargo/blob/7a93b36f1ae2f524d93efd16cd42864675f3e15b/src/cargo/core/compiler/build_runner/compilation_files.rs#L117
     pub package_name: String,
+
+    /// The package version of this unit.
+    ///
+    /// This is primarily used for debugging.
+    pub package_version: String,
 
     /// The crate name of this unit.
     ///
