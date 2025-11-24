@@ -171,8 +171,11 @@ impl From<&CargoRestoreRequest> for CargoRestoreRequest {
 
 /// Intermediate transport type used when requesting a restore.
 ///
-/// We can't use structs as keys in JSON encoding, so we work around that with
-/// this type when communicating between the client and server.
+/// JSON does not permit non-string keys in objects, and we would like to use
+/// the struct `SavedUnitCacheKey` as a key in our response map. We work around
+/// this by instead sending a list of (key, value) object pairs using this type
+/// instead of CargoRestoreResponse, and parsing the list of keys and values
+/// back into a map when received.
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 pub struct CargoRestoreResponseTransport(HashSet<(SavedUnitCacheKey, SavedUnit)>);
 
