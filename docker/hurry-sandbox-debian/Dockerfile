@@ -2,7 +2,13 @@
 # cross-machine build save/restores with Hurry. It is capable of building Hurry
 # and some other test Rust projects.
 #
-# As an example, to invoke, use:
+# To build:
+#
+# ```
+# docker build -t hurry-sandbox-debian -f ./docker/hurry-sandbox-debian/Dockerfile .
+# ```
+#
+# To run:
 #
 # ```
 # docker run --name=hurry-sandbox-$(date +%s)
@@ -11,8 +17,7 @@
 #  --network=host \
 #  --volume ~/src/attune/attune:/root/src/attune \
 #  --volume ~/src/attune/hurry:/root/src/hurry \
-#  hurry-sandbox-debian:latest \
-#  /bin/bash
+#  hurry-sandbox-debian:latest
 # ```
 #
 # To resume a stopped but existing container, use:
@@ -23,6 +28,9 @@
 FROM debian:bookworm-20251020
 
 RUN apt update && apt install -y curl git build-essential pkg-config libssl-dev libgpg-error-dev libgpgme-dev
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 WORKDIR /root
+
+COPY . /root/src/hurry
+RUN cd ./src/hurry && . ~/.cargo/env && cargo install --locked --path ./packages/hurry
