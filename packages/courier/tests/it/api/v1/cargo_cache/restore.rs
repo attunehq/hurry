@@ -51,8 +51,8 @@ async fn restore_nonexistent_cache(pool: PgPool) -> Result<()> {
         .cargo_cache_restore2(restore_request)
         .await?;
     assert!(
-        response.iter().count() == 0,
-        "restore of nonexistent cache should return None"
+        response.is_empty(),
+        "restore of nonexistent cache should be empty"
     );
 
     Ok(())
@@ -198,7 +198,7 @@ async fn org_cannot_restore_other_orgs_cache(pool: PgPool) -> Result<()> {
         .cargo_cache_restore2(restore_request)
         .await?;
     assert!(
-        response.iter().count() == 0,
+        response.is_empty(),
         "org B should not be able to restore org A's cache"
     );
 

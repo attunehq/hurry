@@ -182,6 +182,11 @@ impl CargoRestoreResponseTransport {
         // This looks odd, but it's sugar going from `&(A, B)` to `(&A, &B)`.
         self.0.iter().map(|(a, b)| (a, b))
     }
+
+    /// Check if the response is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl From<CargoRestoreResponseTransport> for CargoRestoreResponse2 {

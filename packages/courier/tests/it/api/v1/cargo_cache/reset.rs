@@ -75,10 +75,7 @@ async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
         .client_alice
         .cargo_cache_restore2(restore_alice)
         .await?;
-    assert!(
-        response_alice.iter().count() == 0,
-        "org A's cache should be deleted"
-    );
+    assert!(response_alice.is_empty(), "org A's cache should be deleted");
 
     let restore_charlie = CargoRestoreRequest2::new([key_charlie]);
     let response_charlie = fixture
@@ -86,7 +83,7 @@ async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
         .cargo_cache_restore2(restore_charlie)
         .await?;
     assert!(
-        response_charlie.iter().count() > 0,
+        !response_charlie.is_empty(),
         "org B's cache should still exist"
     );
 

@@ -28,6 +28,15 @@ pub enum RustcTarget {
     Specified(String),
 }
 
+impl RustcTarget {
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            RustcTarget::ImplicitHost => None,
+            RustcTarget::Specified(target) => Some(target),
+        }
+    }
+}
+
 impl From<RustcTarget> for Option<String> {
     fn from(value: RustcTarget) -> Self {
         match value {
@@ -53,7 +62,7 @@ impl Serialize for RustcTarget {
     where
         S: Serializer,
     {
-        Option::<String>::from(self.clone()).serialize(serializer)
+        self.as_str().serialize(serializer)
     }
 }
 
