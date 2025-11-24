@@ -7,7 +7,7 @@ use derive_more::From;
 use serde::{Deserialize, Serialize};
 use tap::Pipe;
 
-use crate::courier::v1::{Key, SavedUnit, SavedUnitHash};
+use crate::courier::v1::{SavedUnit, SavedUnitHash};
 
 /// Compound cache key for `SavedUnit`.
 ///
@@ -23,7 +23,7 @@ pub struct SavedUnitCacheKey {
 
     /// `SavedUnit` instances are primarily keyed by their hash.
     #[builder(into)]
-    pub unit: SavedUnitHash,
+    pub unit_hash: SavedUnitHash,
 }
 
 impl SavedUnitCacheKey {
@@ -49,17 +49,20 @@ impl SavedUnitCacheKey {
     pub fn stable_hash(&self) -> String {
         // When we add new fields, this will show a compile time error; if you got here
         // due to a compilation error please handle the new field(s) appropriately.
-        let Self { unit, generation } = self;
+        let Self {
+            unit_hash,
+            generation,
+        } = self;
         let mut hasher = blake3::Hasher::new();
         hasher.update(format!("{generation}").as_bytes());
-        hasher.update(unit.as_str().as_bytes());
+        hasher.update(unit_hash.as_str().as_bytes());
         hasher.finalize().to_hex().to_string()
     }
 }
 
 impl AsRef<SavedUnitHash> for SavedUnitCacheKey {
     fn as_ref(&self) -> &SavedUnitHash {
-        &self.unit
+        &self.unit_hash
     }
 }
 
@@ -85,9 +88,9 @@ pub struct CargoSaveUnitRequest {
 /// Request to save cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 #[non_exhaustive]
-pub struct CargoSaveRequest2(HashSet<CargoSaveUnitRequest>);
+pub struct CargoSaveRequest(HashSet<CargoSaveUnitRequest>);
 
-impl CargoSaveRequest2 {
+impl CargoSaveRequest {
     /// Create a new instance from the provided units.
     pub fn new(units: impl IntoIterator<Item = impl Into<CargoSaveUnitRequest>>) -> Self {
         units
@@ -103,7 +106,7 @@ impl CargoSaveRequest2 {
     }
 }
 
-impl IntoIterator for CargoSaveRequest2 {
+impl IntoIterator for CargoSaveRequest {
     type Item = CargoSaveUnitRequest;
     type IntoIter = std::collections::hash_set::IntoIter<CargoSaveUnitRequest>;
 
@@ -112,14 +115,14 @@ impl IntoIterator for CargoSaveRequest2 {
     }
 }
 
-impl FromIterator<CargoSaveUnitRequest> for CargoSaveRequest2 {
+impl FromIterator<CargoSaveUnitRequest> for CargoSaveRequest {
     fn from_iter<T: IntoIterator<Item = CargoSaveUnitRequest>>(iter: T) -> Self {
         Self::new(iter)
     }
 }
 
-impl From<&CargoSaveRequest2> for CargoSaveRequest2 {
-    fn from(req: &CargoSaveRequest2) -> Self {
+impl From<&CargoSaveRequest> for CargoSaveRequest {
+    fn from(req: &CargoSaveRequest) -> Self {
         req.clone()
     }
 }
@@ -127,9 +130,9 @@ impl From<&CargoSaveRequest2> for CargoSaveRequest2 {
 /// Request to restore cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 #[non_exhaustive]
-pub struct CargoRestoreRequest2(HashSet<SavedUnitCacheKey>);
+pub struct CargoRestoreRequest(HashSet<SavedUnitCacheKey>);
 
-impl CargoRestoreRequest2 {
+impl CargoRestoreRequest {
     /// Create a new instance from the provided hashes.
     pub fn new(units: impl IntoIterator<Item = impl Into<SavedUnitCacheKey>>) -> Self {
         units
@@ -145,7 +148,7 @@ impl CargoRestoreRequest2 {
     }
 }
 
-impl IntoIterator for CargoRestoreRequest2 {
+impl IntoIterator for CargoRestoreRequest {
     type Item = SavedUnitCacheKey;
     type IntoIter = std::collections::hash_set::IntoIter<SavedUnitCacheKey>;
 
@@ -154,22 +157,25 @@ impl IntoIterator for CargoRestoreRequest2 {
     }
 }
 
-impl FromIterator<SavedUnitCacheKey> for CargoRestoreRequest2 {
+impl FromIterator<SavedUnitCacheKey> for CargoRestoreRequest {
     fn from_iter<T: IntoIterator<Item = SavedUnitCacheKey>>(iter: T) -> Self {
         Self::new(iter)
     }
 }
 
-impl From<&CargoRestoreRequest2> for CargoRestoreRequest2 {
-    fn from(req: &CargoRestoreRequest2) -> Self {
+impl From<&CargoRestoreRequest> for CargoRestoreRequest {
+    fn from(req: &CargoRestoreRequest) -> Self {
         req.clone()
     }
 }
 
 /// Intermediate transport type used when requesting a restore.
 ///
-/// We can't use structs as keys in JSON encoding, so we work around that with
-/// this type when communicating between the client and server.
+/// JSON does not permit non-string keys in objects, and we would like to use
+/// the struct `SavedUnitCacheKey` as a key in our response map. We work around
+/// this by instead sending a list of (key, value) object pairs using this type
+/// instead of CargoRestoreResponse, and parsing the list of keys and values
+/// back into a map when received.
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 pub struct CargoRestoreResponseTransport(HashSet<(SavedUnitCacheKey, SavedUnit)>);
 
@@ -181,7 +187,7 @@ impl CargoRestoreResponseTransport {
     }
 }
 
-impl From<CargoRestoreResponseTransport> for CargoRestoreResponse2 {
+impl From<CargoRestoreResponseTransport> for CargoRestoreResponse {
     fn from(resp: CargoRestoreResponseTransport) -> Self {
         resp.into_iter().collect()
     }
@@ -207,9 +213,9 @@ impl FromIterator<(SavedUnitCacheKey, SavedUnit)> for CargoRestoreResponseTransp
 
 /// Response from restoring cargo cache metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
-pub struct CargoRestoreResponse2(HashMap<SavedUnitCacheKey, SavedUnit>);
+pub struct CargoRestoreResponse(HashMap<SavedUnitCacheKey, SavedUnit>);
 
-impl CargoRestoreResponse2 {
+impl CargoRestoreResponse {
     /// Create a new instance from the provided hashes.
     pub fn new<I, H, U>(units: I) -> Self
     where
@@ -228,9 +234,24 @@ impl CargoRestoreResponse2 {
     pub fn iter(&self) -> impl Iterator<Item = (&SavedUnitCacheKey, &SavedUnit)> {
         self.0.iter()
     }
+
+    /// Check if the response is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Get a unit by its cache key.
+    pub fn get(&self, key: &SavedUnitCacheKey) -> Option<&SavedUnit> {
+        self.0.get(key)
+    }
+
+    /// Consume a unit by its cache key, removing it from the response.
+    pub fn take(&mut self, key: &SavedUnitCacheKey) -> Option<SavedUnit> {
+        self.0.remove(key)
+    }
 }
 
-impl IntoIterator for CargoRestoreResponse2 {
+impl IntoIterator for CargoRestoreResponse {
     type Item = (SavedUnitCacheKey, SavedUnit);
     type IntoIter = std::collections::hash_map::IntoIter<SavedUnitCacheKey, SavedUnit>;
 
@@ -239,7 +260,7 @@ impl IntoIterator for CargoRestoreResponse2 {
     }
 }
 
-impl FromIterator<(SavedUnitCacheKey, SavedUnit)> for CargoRestoreResponse2 {
+impl FromIterator<(SavedUnitCacheKey, SavedUnit)> for CargoRestoreResponse {
     fn from_iter<I>(iter: I) -> Self
     where
         I: IntoIterator<Item = (SavedUnitCacheKey, SavedUnit)>,
@@ -248,182 +269,8 @@ impl FromIterator<(SavedUnitCacheKey, SavedUnit)> for CargoRestoreResponse2 {
     }
 }
 
-impl From<&CargoRestoreResponse2> for CargoRestoreResponse2 {
-    fn from(resp: &CargoRestoreResponse2) -> Self {
-        resp.clone()
-    }
-}
-
-/// An artifact file in the cargo cache.
-/// The path is stored as a JSON-encoded string.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]
-#[non_exhaustive]
-#[deprecated = "Replaced by `SavedFile`"]
-pub struct ArtifactFile {
-    pub mtime_nanos: u128,
-    pub executable: bool,
-
-    #[builder(into)]
-    pub object_key: Key,
-
-    #[builder(into)]
-    pub path: String,
-}
-
-impl From<&ArtifactFile> for ArtifactFile {
-    fn from(file: &ArtifactFile) -> Self {
-        file.clone()
-    }
-}
-
-/// Request to save cargo cache metadata.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]
-#[non_exhaustive]
-#[deprecated = "Replaced by `CargoSaveRequest2`"]
-pub struct CargoSaveRequest {
-    #[builder(into)]
-    pub package_name: String,
-
-    #[builder(into)]
-    pub package_version: String,
-
-    #[builder(into)]
-    pub target: String,
-
-    #[builder(into)]
-    pub library_crate_compilation_unit_hash: String,
-
-    #[builder(into)]
-    pub build_script_compilation_unit_hash: Option<String>,
-
-    #[builder(into)]
-    pub build_script_execution_unit_hash: Option<String>,
-
-    #[builder(into)]
-    pub content_hash: String,
-
-    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<ArtifactFile>>| i.into_iter().map(Into::into).collect())]
-    pub artifacts: Vec<ArtifactFile>,
-}
-
-impl From<&CargoSaveRequest> for CargoSaveRequest {
-    fn from(req: &CargoSaveRequest) -> Self {
-        req.clone()
-    }
-}
-
-/// Request to restore cargo cache metadata.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]
-#[non_exhaustive]
-#[deprecated = "Replaced by `CargoRestoreRequest2`"]
-pub struct CargoRestoreRequest {
-    #[builder(into)]
-    pub package_name: String,
-
-    #[builder(into)]
-    pub package_version: String,
-
-    #[builder(into)]
-    pub target: String,
-
-    #[builder(into)]
-    pub library_crate_compilation_unit_hash: String,
-
-    #[builder(into)]
-    pub build_script_compilation_unit_hash: Option<String>,
-
-    #[builder(into)]
-    pub build_script_execution_unit_hash: Option<String>,
-}
-
-impl CargoRestoreRequest {
-    pub fn hash(&self) -> Vec<u8> {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(self.package_name.as_bytes());
-        hasher.update(self.package_version.as_bytes());
-        hasher.update(self.target.as_bytes());
-        hasher.update(self.library_crate_compilation_unit_hash.as_bytes());
-        if let Some(hash) = &self.build_script_compilation_unit_hash {
-            hasher.update(hash.as_bytes());
-        }
-        if let Some(hash) = &self.build_script_execution_unit_hash {
-            hasher.update(hash.as_bytes());
-        }
-        hasher.finalize().as_bytes().to_vec()
-    }
-}
-
-impl From<&CargoRestoreRequest> for CargoRestoreRequest {
-    fn from(req: &CargoRestoreRequest) -> Self {
-        req.clone()
-    }
-}
-
-/// Response from restoring cargo cache metadata.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]
-#[non_exhaustive]
-#[deprecated = "Replaced by `CargoRestoreResponse2`"]
-pub struct CargoRestoreResponse {
-    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<ArtifactFile>>| i.into_iter().map(Into::into).collect())]
-    pub artifacts: Vec<ArtifactFile>,
-}
-
 impl From<&CargoRestoreResponse> for CargoRestoreResponse {
     fn from(resp: &CargoRestoreResponse) -> Self {
-        resp.clone()
-    }
-}
-
-/// Request to restore multiple cargo cache entries in bulk.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]
-#[non_exhaustive]
-#[deprecated = "Replaced by `CargoRestoreRequest2`"]
-pub struct CargoBulkRestoreRequest {
-    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<CargoRestoreRequest>>| i.into_iter().map(Into::into).collect())]
-    pub requests: Vec<CargoRestoreRequest>,
-}
-
-impl From<&CargoBulkRestoreRequest> for CargoBulkRestoreRequest {
-    fn from(req: &CargoBulkRestoreRequest) -> Self {
-        req.clone()
-    }
-}
-
-/// A single cache hit in a bulk restore operation.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder)]
-#[non_exhaustive]
-#[deprecated = "No longer used when we swap to `CargoRestoreRequest2`"]
-pub struct CargoBulkRestoreHit {
-    /// The original request that produced this hit
-    pub request: CargoRestoreRequest,
-
-    /// The artifacts for this cache entry
-    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<ArtifactFile>>| i.into_iter().map(Into::into).collect())]
-    pub artifacts: Vec<ArtifactFile>,
-}
-
-impl From<&CargoBulkRestoreHit> for CargoBulkRestoreHit {
-    fn from(hit: &CargoBulkRestoreHit) -> Self {
-        hit.clone()
-    }
-}
-
-/// Response from bulk restore operation.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Builder, Default)]
-#[non_exhaustive]
-#[deprecated = "No longer used when we swap to `CargoRestoreRequest2`"]
-pub struct CargoBulkRestoreResponse {
-    /// Requests that had matching cache entries
-    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<CargoBulkRestoreHit>>| i.into_iter().map(Into::into).collect())]
-    pub hits: Vec<CargoBulkRestoreHit>,
-
-    /// Requests that had no matching cache entry
-    #[builder(default, with = |i: impl IntoIterator<Item = impl Into<CargoRestoreRequest>>| i.into_iter().map(Into::into).collect())]
-    pub misses: Vec<CargoRestoreRequest>,
-}
-
-impl From<&CargoBulkRestoreResponse> for CargoBulkRestoreResponse {
-    fn from(resp: &CargoBulkRestoreResponse) -> Self {
         resp.clone()
     }
 }

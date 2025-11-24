@@ -1,8 +1,11 @@
 use clap::Args;
-use clients::{Courier, Token, courier::v1::cache::CargoRestoreRequest};
+use clients::{
+    Courier, Token,
+    courier::v1::cache::{CargoRestoreRequest, SavedUnitCacheKey},
+};
 use color_eyre::Result;
 use derive_more::Debug;
-use hurry::cargo::{CargoBuildArguments, Profile, Workspace};
+use hurry::cargo::{CargoBuildArguments, Workspace};
 use url::Url;
 
 #[derive(Clone, Args, Debug)]
@@ -32,17 +35,17 @@ pub struct Options {
 pub async fn exec(opts: Options) -> Result<()> {
     let args = CargoBuildArguments::empty();
     let workspace = Workspace::from_argv(args.clone()).await?;
-    let artifact_plan = workspace.artifact_plan(&Profile::Debug, args).await?;
-    let matching_artifacts = artifact_plan
-        .artifacts
+    let units = workspace.units(&args).await?;
+    let matching_units = units
         .into_iter()
-        .filter(|artifact| {
+        .filter(|unit| {
+            let info = unit.info();
             if let Some(name) = &opts.name
-                && &artifact.package_name != name
+                && &info.package_name != name
             {
                 false
             } else if let Some(version) = &opts.version
-                && &artifact.package_version != version
+                && &info.package_version != version
             {
                 false
             } else {
@@ -53,84 +56,59 @@ pub async fn exec(opts: Options) -> Result<()> {
 
     let courier = Courier::new(opts.courier_url, opts.courier_token)?;
 
-    println!("Found {} matching artifacts:", matching_artifacts.len());
-    for artifact in matching_artifacts {
-        println!("\n  ArtifactKey:");
-        println!("    name: {:?}", artifact.package_name);
-        println!("    version: {:?}", artifact.package_version);
-        println!("    files:");
-        println!("      library crate: [");
-        for file in artifact.lib_files {
-            println!("        {}", file);
-        }
-        println!("      ]");
+    println!("Found {} matching units:", matching_units.len());
+    for unit in matching_units {
+        let info = unit.info().clone();
+        println!("\n  UnitInfo: {{");
+        println!("    name: {:?}", info.package_name);
+        println!("    version: {:?}", info.package_version);
+        println!("    unit hash: {:?}", info.unit_hash);
 
-        match artifact.build_script_files {
-            Some(files) => {
-                println!("      build script: [");
-                println!("        compiled files: {}", files.compiled_dir);
-                println!("        execution output: {}", files.output_dir);
+        match unit {
+            hurry::cargo::UnitPlan::LibraryCrate(library_crate_unit_plan) => {
+                println!("    library crate: {{");
+                println!("      src path: {:?}", library_crate_unit_plan.src_path);
+                println!("      outputs: [");
+                for output in library_crate_unit_plan.outputs {
+                    println!("        {:?}", output);
+                }
                 println!("      ]");
+                println!("    }}");
             }
-            None => {
-                println!("      build script: N/A");
+            hurry::cargo::UnitPlan::BuildScriptCompilation(build_script_compilation_unit_plan) => {
+                println!("    build script compilation: {{");
+                println!(
+                    "      src path: {:?}",
+                    build_script_compilation_unit_plan.src_path
+                );
+                println!("    }}");
+            }
+            hurry::cargo::UnitPlan::BuildScriptExecution(build_script_execution_unit_plan) => {
+                println!("    build script execution: {{");
+                println!(
+                    "      build script program name: {:?}",
+                    build_script_execution_unit_plan.build_script_program_name
+                );
+                println!("    }}");
             }
         }
-        println!("    unit hashes:");
-        println!(
-            "      library crate: {:?}",
-            artifact.library_crate_compilation_unit_hash
-        );
-        println!(
-            "      build script compilation: {:?}",
-            artifact
-                .build_script_compilation_unit_hash
-                .clone()
-                .unwrap_or(String::from("N/A"))
-        );
-        println!(
-            "      build script execution: {:?}",
-            artifact
-                .build_script_execution_unit_hash
-                .clone()
-                .unwrap_or(String::from("N/A"))
-        );
 
-        let cached = courier
-            .cargo_cache_restore(
-                CargoRestoreRequest::builder()
-                    .package_name(artifact.package_name)
-                    .package_version(artifact.package_version)
-                    .target(artifact_plan.target.clone())
-                    .library_crate_compilation_unit_hash(
-                        artifact.library_crate_compilation_unit_hash,
-                    )
-                    .maybe_build_script_compilation_unit_hash(
-                        artifact.build_script_compilation_unit_hash,
-                    )
-                    .maybe_build_script_execution_unit_hash(
-                        artifact.build_script_execution_unit_hash,
-                    )
-                    .build(),
-            )
+        let key = SavedUnitCacheKey::builder()
+            .unit_hash(info.unit_hash.clone())
+            .build();
+        let mut cached = courier
+            .cargo_cache_restore(CargoRestoreRequest::new([key.clone()]))
             .await?;
 
-        match cached {
-            Some(mut cached) => {
-                println!("\n  Cached:");
-                println!("    Files ({}):", cached.artifacts.len());
-                cached.artifacts.sort_by(|f1, f2| f1.path.cmp(&f2.path));
-                for file in cached.artifacts {
-                    println!("      Path: {}", file.path);
-                    println!("        Mtime: {}", file.mtime_nanos);
-                    println!("        Executable: {}", file.executable);
-                    println!("        Key: {}", file.object_key);
-                }
+        match cached.take(&key) {
+            Some(cached) => {
+                println!("\n  Cached: {:?}", cached);
             }
             None => {
                 println!("\n  Cached: None");
             }
         }
+        println!("  }}");
     }
 
     Ok(())

@@ -39,7 +39,7 @@ use fslock::LockFile as FsLockFile;
 use futures::{Stream, TryStreamExt};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use tap::{Pipe, TapFallible};
+use tap::{Pipe, TapFallible, TryConv as _};
 use tokio::{fs::ReadDir, io::AsyncReadExt, sync::Mutex, task::spawn_blocking};
 use tracing::{debug, error, instrument, trace};
 
@@ -174,7 +174,7 @@ pub async fn user_global_cache_path() -> Result<AbsDirPath> {
     };
 
     base.join("v2")
-        .pipe(AbsDirPath::try_from)
+        .try_conv::<AbsDirPath>()
         .tap_ok(|dir| debug!(?dir, "user global cache path"))
 }
 
@@ -468,14 +468,9 @@ impl Metadata {
 
         // Make sure to set the file times last so that other modifications to
         // the metadata don't mess with these.
-        let mtime = FileTime::from_system_time(self.mtime);
-        let path = path.as_std_path().to_path_buf();
-        spawn_blocking(move || {
-            filetime::set_file_mtime(&path, mtime).tap_ok(|_| trace!(?path, ?mtime, "update mtime"))
-        })
-        .await
-        .context("join thread")?
-        .context("update handle")
+        set_mtime(path, self.mtime).await?;
+
+        Ok(())
     }
 }
 
@@ -539,6 +534,19 @@ pub async fn is_executable(path: impl AsRef<std::path::Path> + StdDebug) -> bool
         .expect("join task")
 }
 
+/// Set the mtime of the file.
+#[instrument]
+pub async fn set_mtime(path: &AbsFilePath, mtime: SystemTime) -> Result<()> {
+    let mtime = FileTime::from_system_time(mtime);
+    let path = path.as_std_path().to_path_buf();
+    spawn_blocking(move || {
+        filetime::set_file_mtime(&path, mtime).tap_ok(|_| trace!(?path, ?mtime, "update mtime"))
+    })
+    .await
+    .context("join thread")?
+    .context("update handle")
+}
+
 /// Set the file to be executable.
 ///
 /// ## Windows
@@ -574,6 +582,12 @@ pub async fn set_executable(path: &AbsFilePath, executable: bool) -> Result<()> 
 /// Create a hard link to the file.
 #[instrument]
 pub async fn hard_link(original: &AbsFilePath, link: &AbsFilePath) -> Result<()> {
+    if exists(link).await {
+        remove_file(link)
+            .await
+            .context("remove linked destination")?;
+    }
+
     tokio::fs::hard_link(original.as_std_path(), link.as_std_path())
         .await
         .context(format!("hard link {original:?} -> {link:?}"))

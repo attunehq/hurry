@@ -12,7 +12,7 @@ use url::Url;
 
 use clients::Token;
 use hurry::{
-    cargo::{self, CargoBuildArguments, CargoCache, Handles, Profile, Workspace},
+    cargo::{self, CargoBuildArguments, CargoCache, Handles, Workspace},
     progress::TransferBar,
 };
 
@@ -51,26 +51,25 @@ pub async fn exec(options: Options) -> Result<()> {
     let workspace = Workspace::from_argv(&args)
         .await
         .context("opening workspace")?;
-    let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
 
-    // Compute artifact plan, which provides expected artifacts. Note that
+    // Compute unit plan, which provides expected units. Note that
     // because we are not actually running build scripts, these "expected
-    // artifacts" do not contain fully unambiguous cache key information.
-    let artifact_plan = workspace
-        .artifact_plan(&profile, &args)
+    // units" do not contain fully unambiguous cache key information.
+    let units = workspace
+        .units(&args)
         .await
-        .context("calculating expected artifacts")?;
-    info!(target = ?artifact_plan.target, "restoring using target");
+        .context("calculating expected units")?;
+    info!(target = ?workspace.target_arch, "restoring using target");
 
     // Initialize cache.
     let cache = CargoCache::open(options.courier_url, options.courier_token, workspace)
         .await
         .context("opening cache")?;
 
-    // Restore artifacts.
-    let artifact_count = artifact_plan.artifacts.len() as u64;
-    let progress = TransferBar::new(artifact_count, "Restoring cache");
-    cache.restore(&artifact_plan, &progress).await?;
+    // Restore units.
+    let unit_count = units.len() as u64;
+    let progress = TransferBar::new(unit_count, "Restoring cache");
+    cache.restore(&units, &progress).await?;
     drop(progress);
 
     // Run build with `--message-format=json` for freshness indicators and
@@ -103,8 +102,8 @@ pub async fn exec(options: Options) -> Result<()> {
                 .repr
                 .starts_with("registry+https://github.com/rust-lang/crates.io-index#")
         {
-            // TODO: Only warn if _restored_ artifacts are not fresh.
-            warn!("artifact {:?} is not fresh", msg.package_id);
+            // TODO: Only warn if _restored_ units are not fresh.
+            warn!("unit {:?} is not fresh", msg.package_id);
             ok = false;
         }
     }
@@ -113,6 +112,6 @@ pub async fn exec(options: Options) -> Result<()> {
         info!("OK");
         Ok(())
     } else {
-        bail!("not all artifacts were fresh")
+        bail!("not all units were fresh")
     }
 }

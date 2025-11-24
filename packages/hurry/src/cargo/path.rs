@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    cargo::{RustcTarget, Workspace},
+    cargo::{RustcTarget, UnitPlanInfo, Workspace},
     fs,
-    path::{AbsDirPath, AbsFilePath, GenericPath, JoinWith as _, RelFilePath, RelativeTo as _},
+    path::{AbsFilePath, GenericPath, JoinWith as _, RelFilePath, RelativeTo as _},
 };
 
 /// A "qualified" path inside a Cargo project.
@@ -54,10 +54,18 @@ impl QualifiedPath {
     }
 
     #[instrument(name = "QualifiedPath::parse")]
-    pub async fn parse(ws: &Workspace, target: &RustcTarget, path: &GenericPath) -> Result<Self> {
+    pub async fn parse(
+        ws: &Workspace,
+        // TODO: This should be UnitPlanInfo so we can use
+        // ws.unit_profile_dir(), but we can't migrate over until all call-sites
+        // are ready (because we can easily construct a default RustcTarget but
+        // less so a default UnitPlanInfo).
+        target: &RustcTarget,
+        path: &GenericPath,
+    ) -> Result<Self> {
         // TODO: Do we see repeated paths a lot? Should we cache the
         // `fs::exists` calls?
-        let profile_dir = Self::unit_profile_dir(ws, target)?;
+        let profile_dir = ws.arch_profile_dir(target);
         Ok(if let Ok(rel) = RelFilePath::try_from(path) {
             if fs::exists(profile_dir.join(&rel).as_std_path()).await {
                 Self::RelativeTargetProfile(rel)
@@ -80,30 +88,22 @@ impl QualifiedPath {
     }
 
     #[instrument(name = "QualifiedPath::reconstruct_string")]
-    pub fn reconstruct_string(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
-        Self::reconstruct(self, ws, target).map(|p| p.to_string())
+    pub fn reconstruct_string(self, ws: &Workspace, target: &RustcTarget) -> String {
+        self.reconstruct_inner(ws, target).to_string()
     }
 
     #[instrument(name = "QualifiedPath::reconstruct")]
-    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<GenericPath> {
-        let profile_dir = Self::unit_profile_dir(ws, target)?;
-        Ok(match self {
+    pub fn reconstruct(self, ws: &Workspace, unit_info: &UnitPlanInfo) -> GenericPath {
+        self.reconstruct_inner(ws, &unit_info.target_arch)
+    }
+
+    fn reconstruct_inner(self, ws: &Workspace, target: &RustcTarget) -> GenericPath {
+        let profile_dir = ws.arch_profile_dir(target);
+        match self {
             QualifiedPath::Rootless(rel) => rel.into(),
             QualifiedPath::RelativeTargetProfile(rel) => profile_dir.join(rel).into(),
             QualifiedPath::RelativeCargoHome(rel) => ws.cargo_home.join(rel).into(),
             QualifiedPath::Absolute(abs) => abs.into(),
-        })
-    }
-
-    fn unit_profile_dir(ws: &Workspace, target: &RustcTarget) -> Result<AbsDirPath> {
-        Ok(match target {
-            RustcTarget::Specified(_) if *target == ws.target_arch => ws.target_profile_dir(),
-            RustcTarget::ImplicitHost => ws.host_profile_dir(),
-            RustcTarget::Specified(_) => bail!(
-                "target triple {:?} does not match workspace target triple {:?}",
-                target,
-                ws.target_arch
-            ),
-        })
+        }
     }
 }

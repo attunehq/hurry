@@ -823,11 +823,11 @@ impl TryJoinWith for TypedPath<Abs, Dir> {
     type OutputBase = Abs;
 
     fn try_join_dir(&self, other: impl AsRef<str>) -> Result<AbsDirPath> {
-        self.inner.join(other.as_ref()).pipe(AbsDirPath::try_from)
+        self.inner.join(other.as_ref()).try_into()
     }
 
     fn try_join_file(&self, other: impl AsRef<str>) -> Result<AbsFilePath> {
-        self.inner.join(other.as_ref()).pipe(AbsFilePath::try_from)
+        self.inner.join(other.as_ref()).try_into()
     }
 
     fn try_join_dirs(&self, dirs: impl IntoIterator<Item = impl AsRef<str>>) -> Result<AbsDirPath> {
@@ -847,7 +847,7 @@ impl TryJoinWith for TypedPath<Abs, Dir> {
         for other in dirs {
             inner = inner.join(other.as_ref());
         }
-        inner.join(file.as_ref()).pipe(AbsFilePath::try_from)
+        inner.join(file.as_ref()).try_into()
     }
 }
 
@@ -855,11 +855,11 @@ impl TryJoinWith for TypedPath<Rel, Dir> {
     type OutputBase = Rel;
 
     fn try_join_dir(&self, other: impl AsRef<str>) -> Result<RelDirPath> {
-        self.inner.join(other.as_ref()).pipe(RelDirPath::try_from)
+        self.inner.join(other.as_ref()).try_into()
     }
 
     fn try_join_file(&self, other: impl AsRef<str>) -> Result<RelFilePath> {
-        self.inner.join(other.as_ref()).pipe(RelFilePath::try_from)
+        self.inner.join(other.as_ref()).try_into()
     }
 
     fn try_join_dirs(&self, dirs: impl IntoIterator<Item = impl AsRef<str>>) -> Result<RelDirPath> {
@@ -879,7 +879,7 @@ impl TryJoinWith for TypedPath<Rel, Dir> {
         for other in dirs {
             inner = inner.join(other.as_ref());
         }
-        inner.join(file.as_ref()).pipe(RelFilePath::try_from)
+        inner.join(file.as_ref()).try_into()
     }
 }
 
@@ -1087,9 +1087,9 @@ mod tests {
 
         let generic = GenericPath::from(abs_dir.clone());
         let display = accepts_path_like(&generic);
-        assert!(display.len() > 0);
+        assert!(!display.is_empty());
 
         let display = accepts_path_like(rel_file);
-        assert!(display.len() > 0);
+        assert!(!display.is_empty());
     }
 }

@@ -27,7 +27,7 @@ fslock = { workspace = true }
 git-version = { workspace = true }
 homedir = { workspace = true }
 itertools = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive", "rc", "std"] }
 serde_json = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 subenum = { workspace = true }
@@ -60,7 +60,7 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 indicatif = { workspace = true }
 humansize = { workspace = true }
 scopeguard = { workspace = true }
-dashmap = { workspace = true }
+dashmap = { workspace = true, features = ["serde"] }
 console = { workspace = true }
 sysinfo = { workspace = true }
 axum = { workspace = true, features = ["macros"] }
@@ -69,6 +69,8 @@ signal-hook = { workspace = true }
 reqwest.workspace = true
 is_executable = { workspace = true }
 directories = { workspace = true }
+hex.workspace = true
+rustc-stable-hash = "0.1.2"
 
 [dev-dependencies]
 async-walkdir.workspace = true

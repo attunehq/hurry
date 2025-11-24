@@ -1,6 +1,6 @@
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
-use clients::courier::v1::cache::CargoSaveRequest2;
+use clients::courier::v1::cache::CargoSaveRequest;
 use color_eyre::eyre::Report;
 use tracing::{error, info};
 
@@ -10,7 +10,7 @@ use crate::{auth::AuthenticatedToken, db::Postgres};
 pub async fn handle(
     auth: AuthenticatedToken,
     Dep(db): Dep<Postgres>,
-    Json(request): Json<CargoSaveRequest2>,
+    Json(request): Json<CargoSaveRequest>,
 ) -> CacheSaveResponse {
     match db.cargo_cache_save(&auth, request).await {
         Ok(()) => {

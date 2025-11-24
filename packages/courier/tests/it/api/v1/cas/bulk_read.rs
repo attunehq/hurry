@@ -71,7 +71,7 @@ async fn bulk_read_missing_keys(pool: PgPool) -> Result<()> {
         .cas_write_bytes(&existing_key, existing_blob.clone())
         .await?;
 
-    let missing_key = test_blob(&vec![0u8; 32]);
+    let missing_key = test_blob(&[0u8; 32]);
 
     let mut bulk_read_stream = fixture
         .client_alice
@@ -237,7 +237,7 @@ async fn bulk_read_compressed_missing_keys(pool: PgPool) -> Result<()> {
         .cas_write_bytes(&existing_key, existing_blob.clone())
         .await?;
 
-    let missing_key = test_blob(&vec![0u8; 32]);
+    let missing_key = test_blob(&[0u8; 32]);
 
     let mut bulk_read_stream = fixture
         .client_alice

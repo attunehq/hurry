@@ -8,7 +8,7 @@ use derive_more::Display;
 use enum_assoc::Assoc;
 use itertools::PeekingNext;
 use parse_display::{Display as ParseDisplay, FromStr as ParseFromStr};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tracing::{instrument, trace};
 
 use crate::{cargo::CargoBuildArguments, path::AbsDirPath};
@@ -16,7 +16,7 @@ use crate::{cargo::CargoBuildArguments, path::AbsDirPath};
 /// These variants correspond to Cargo's internal `CompileKind`[^1].
 ///
 /// [^1]: https://github.com/rust-lang/cargo/blob/b5354b56860cd74469be873eb06220a4a5137c99/src/cargo/core/compiler/compile_kind.rs#L21-L30
-#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub enum RustcTarget {
     /// No `--target` flag was specified, and therefore the target architecture
     /// is implicitly the host architecture.
@@ -26,6 +26,15 @@ pub enum RustcTarget {
     /// cross-compilation mode even if the specified target architecture is the
     /// same as the host architecture.
     Specified(String),
+}
+
+impl RustcTarget {
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            RustcTarget::ImplicitHost => None,
+            RustcTarget::Specified(target) => Some(target),
+        }
+    }
 }
 
 impl From<RustcTarget> for Option<String> {
@@ -45,6 +54,27 @@ impl From<Option<String>> for RustcTarget {
             Some(target) => RustcTarget::Specified(target),
             None => RustcTarget::ImplicitHost,
         }
+    }
+}
+
+impl Serialize for RustcTarget {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.as_str().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RustcTarget {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match Option::<String>::deserialize(deserializer)? {
+            Some(target) => RustcTarget::Specified(target),
+            None => RustcTarget::ImplicitHost,
+        })
     }
 }
 
@@ -199,14 +229,9 @@ impl IntoIterator for RustcArguments {
     }
 }
 
-impl<'de> Deserialize<'de> for RustcArguments {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let mut raw = Vec::<String>::deserialize(deserializer)?
-            .into_iter()
-            .peekable();
+impl FromIterator<String> for RustcArguments {
+    fn from_iter<T: IntoIterator<Item = String>>(iter: T) -> Self {
+        let mut raw = iter.into_iter().peekable();
         let mut parsed = Vec::new();
         while let Some(arg) = raw.next() {
             let arg = RustcArgument::alias(&arg);
@@ -230,7 +255,16 @@ impl<'de> Deserialize<'de> for RustcArguments {
             }
         }
 
-        Ok(Self(parsed))
+        Self(parsed)
+    }
+}
+
+impl<'de> Deserialize<'de> for RustcArguments {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self::from_iter(Vec::<String>::deserialize(deserializer)?))
     }
 }
 

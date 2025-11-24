@@ -12,7 +12,7 @@ use clients::{
     courier::v1::{
         Client, Fingerprint, Key, LibraryCrateUnitPlan, LibraryFiles, SavedUnit, SavedUnitHash,
         UnitPlanInfo,
-        cache::{CargoSaveRequest2, CargoSaveUnitRequest, SavedUnitCacheKey},
+        cache::{CargoSaveRequest, CargoSaveUnitRequest, SavedUnitCacheKey},
     },
 };
 use color_eyre::{Result, eyre::Context};
@@ -281,11 +281,11 @@ pub fn test_saved_unit(unit_hash: impl Into<SavedUnitHash>) -> SavedUnit {
 /// Create a cargo save request from a unit with the given unit hash.
 pub fn test_cargo_save_request(
     unit_hash: impl Into<SavedUnitHash>,
-) -> (CargoSaveRequest2, SavedUnitCacheKey) {
+) -> (CargoSaveRequest, SavedUnitCacheKey) {
     let unit_hash = unit_hash.into();
     let unit = test_saved_unit(&unit_hash);
-    let key = SavedUnitCacheKey::builder().unit(&unit_hash).build();
+    let key = SavedUnitCacheKey::builder().unit_hash(&unit_hash).build();
     let request = CargoSaveUnitRequest::builder().key(&key).unit(unit).build();
-    let save_request = CargoSaveRequest2::new([request]);
+    let save_request = CargoSaveRequest::new([request]);
     (save_request, key)
 }

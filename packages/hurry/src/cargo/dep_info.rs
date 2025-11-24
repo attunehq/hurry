@@ -11,7 +11,7 @@ use tap::Pipe;
 use tracing::{instrument, trace};
 
 use crate::{
-    cargo::{QualifiedPath, RustcTarget, Workspace},
+    cargo::{QualifiedPath, RustcTarget, UnitPlanInfo, Workspace},
     ext::{then_context, then_with_context},
     fs::{self, DEFAULT_CONCURRENCY},
     path::AbsFilePath,
@@ -85,14 +85,13 @@ impl DepInfo {
     }
 
     /// Reconstruct the "dep-info" file in the context of the profile directory.
-    #[instrument(name = "DepInfo::reconstruct")]
-    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
+    #[instrument(name = "DepInfo::reconstruct", skip_all)]
+    pub fn reconstruct(self, ws: &Workspace, unit_info: &UnitPlanInfo) -> String {
         self.0
             .into_iter()
-            .map(|line| line.reconstruct(ws, target))
-            .try_collect::<_, Vec<_>, _>()?
+            .map(|line| line.reconstruct(ws, unit_info))
+            .collect::<Vec<_>>()
             .join("\n")
-            .pipe(Ok)
     }
 
     /// Iterate over the lines in the file.
@@ -185,21 +184,21 @@ impl DepInfoLine {
         })
     }
 
-    #[instrument(name = "DepInfoLine::reconstruct")]
-    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
-        Ok(match self {
+    #[instrument(name = "DepInfoLine::reconstruct", skip_all)]
+    pub fn reconstruct(self, ws: &Workspace, unit_info: &UnitPlanInfo) -> String {
+        match self {
             Self::Build(output, inputs) => {
-                let output = output.reconstruct_string(ws, target)?;
+                let output = output.reconstruct(ws, unit_info).to_string();
                 let inputs = inputs
                     .into_iter()
-                    .map(|input| input.reconstruct_string(ws, target))
-                    .try_collect::<_, Vec<_>, _>()?
+                    .map(|input| input.reconstruct(ws, unit_info).to_string())
+                    .collect::<Vec<_>>()
                     .join(" ");
                 format!("{output}: {inputs}")
             }
             DepInfoLine::Space => String::new(),
             DepInfoLine::Comment(comment) => format!("#{comment}"),
-        })
+        }
     }
 }
 

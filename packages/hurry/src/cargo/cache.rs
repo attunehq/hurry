@@ -2,23 +2,33 @@ use std::{env::VarError, process::Stdio, time::Duration};
 
 use color_eyre::{Result, Section, SectionExt, eyre::Context as _};
 use derive_more::Debug;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, trace};
 use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    cargo::{ArtifactPlan, Workspace},
+    cargo::{
+        QualifiedPath, UnitPlan, Workspace,
+        cache::{
+            build_script_compilation::BuildScriptCompiledFiles,
+            build_script_execution::BuildScriptOutputFiles, library_crate::LibraryFiles,
+        },
+    },
     cas::CourierCas,
     daemon::{CargoUploadRequest, DaemonPaths},
     progress::TransferBar,
 };
 use clients::{Courier, Token};
 
+mod build_script_compilation;
+mod build_script_execution;
+mod library_crate;
 mod restore;
 mod save;
 
-pub use restore::{Restored, restore_artifacts};
-pub use save::{SaveProgress, save_artifacts};
+pub use restore::{Restored, restore_units};
+pub use save::{SaveProgress, save_units};
 
 #[derive(Debug, Clone)]
 pub struct CargoCache {
@@ -45,20 +55,21 @@ impl CargoCache {
         })
     }
 
-    #[instrument(name = "CargoCache::save", skip(artifact_plan, restored))]
-    pub async fn save(&self, artifact_plan: ArtifactPlan, restored: Restored) -> Result<Uuid> {
-        trace!(?artifact_plan, "artifact plan");
+    #[instrument(name = "CargoCache::save", skip_all)]
+    pub async fn save(&self, units: Vec<UnitPlan>, restored: Restored) -> Result<Uuid> {
         let paths = DaemonPaths::initialize().await?;
 
-        // Start daemon if it's not already running. If it is, try to read its context
-        // file to get its url, which we need to know in order to communicate with it.
+        // Start daemon if it's not already running. If it is, try to read its
+        // context file to get its url, which we need to know in order to
+        // communicate with it.
         let daemon = if let Some(daemon) = paths.daemon_running().await? {
             daemon
         } else {
-            // TODO: Ideally we'd replace this with proper double-fork daemonization to
-            // avoid the security and compatibility concerns here: someone could replace the
-            // binary at this path in the time between when this binary launches and when it
-            // re-launches itself as a daemon.
+            // TODO: Ideally we'd replace this with proper double-fork
+            // daemonization to avoid the security and compatibility concerns
+            // here: someone could replace the binary at this path in the time
+            // between when this binary launches and when it re-launches itself
+            // as a daemon.
             let hurry_binary = std::env::current_exe().context("read current binary path")?;
 
             // Spawn self as a child and wait for the ready message on STDOUT.
@@ -102,9 +113,8 @@ impl CargoCache {
             courier_url: self.courier_url.clone(),
             courier_token: self.courier_token.clone(),
             ws: self.ws.clone(),
-            artifact_plan,
-            skip_artifacts: restored.artifacts.into_iter().collect(),
-            skip_objects: restored.objects.into_iter().collect(),
+            units,
+            skip: restored,
         };
         trace!(?request, "submitting upload request");
         let response = client
@@ -119,12 +129,15 @@ impl CargoCache {
         Ok(request_id)
     }
 
-    #[instrument(name = "CargoCache::restore", skip(artifact_plan, progress))]
-    pub async fn restore(
-        &self,
-        artifact_plan: &ArtifactPlan,
-        progress: &TransferBar,
-    ) -> Result<Restored> {
-        restore_artifacts(&self.courier, &self.cas, &self.ws, artifact_plan, progress).await
+    #[instrument(name = "CargoCache::restore", skip_all)]
+    pub async fn restore(&self, units: &Vec<UnitPlan>, progress: &TransferBar) -> Result<Restored> {
+        restore_units(&self.courier, &self.cas, &self.ws, units, progress).await
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SavedFile {
+    path: QualifiedPath,
+    contents: Vec<u8>,
+    executable: bool,
 }

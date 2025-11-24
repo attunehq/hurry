@@ -238,8 +238,8 @@ pub struct SavedUnitHash(String);
 
 impl SavedUnitHash {
     /// Create a new instance from a string.
-    pub fn new(path: impl Into<String>) -> Self {
-        Self(path.into())
+    pub fn new(hash: impl Into<String>) -> Self {
+        Self(hash.into())
     }
 
     /// View the underlying data as a string.

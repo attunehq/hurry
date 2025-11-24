@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::cargo::{CargoCompileMode, RustcArguments};
+use crate::cargo::{CargoCompileMode, RustcTarget};
 
 #[derive(Clone, Eq, PartialEq, Debug, Deserialize)]
 pub struct BuildPlan {
@@ -17,7 +17,8 @@ pub struct BuildPlanInvocation {
     pub package_name: String,
     pub package_version: String,
     pub target_kind: Vec<cargo_metadata::TargetKind>,
-    pub kind: Option<String>,
+    #[serde(rename = "kind")]
+    pub target_arch: RustcTarget,
     pub compile_mode: CargoCompileMode,
     pub deps: Vec<usize>,
     pub outputs: Vec<String>,
@@ -26,7 +27,10 @@ pub struct BuildPlanInvocation {
     // enumerate libraries being linked in.
     pub links: HashMap<String, String>,
     pub program: String,
-    pub args: RustcArguments,
+    // These are usually `rustc` arguments, but not always! For example, build
+    // script execution units' arguments are not technically `rustc` arguments
+    // (although in practice they appear to always be empty).
+    pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub cwd: String,
 }
