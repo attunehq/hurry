@@ -7,7 +7,9 @@ use derive_more::Debug;
 use futures::{StreamExt, future::BoxFuture};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap, sync::Arc, time::{Duration, SystemTime}
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, SystemTime},
 };
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, instrument, trace, warn};
@@ -162,7 +164,7 @@ pub async fn restore_units(
                 let fingerprint: cargo::Fingerprint =
                     serde_json::from_str(saved_library_files.fingerprint.as_str())?;
                 cache::LibraryFiles::restore_fingerprint(
-                    &*ws,
+                    &ws,
                     &mut dep_fingerprints,
                     fingerprint,
                     unit_plan,
@@ -235,7 +237,7 @@ pub async fn restore_units(
                 let fingerprint: cargo::Fingerprint =
                     serde_json::from_str(build_script_compiled_files.fingerprint.as_str())?;
                 cache::BuildScriptCompiledFiles::restore_fingerprint(
-                    &*ws,
+                    &ws,
                     &mut dep_fingerprints,
                     fingerprint,
                     unit_plan,
@@ -305,7 +307,7 @@ pub async fn restore_units(
                 let fingerprint: cargo::Fingerprint =
                     serde_json::from_str(build_script_output_files.fingerprint.as_str())?;
                 cache::BuildScriptOutputFiles::restore_fingerprint(
-                    &*ws,
+                    &ws,
                     &mut dep_fingerprints,
                     fingerprint,
                     unit_plan,

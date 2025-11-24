@@ -40,9 +40,8 @@ pub use unit_graph::{
     UnitGraph, UnitGraphDependency, UnitGraphProfile, UnitGraphProfilePanicStrategy, UnitGraphUnit,
 };
 pub use workspace::{
-    ArtifactKey, ArtifactPlan, BuildScriptCompilationUnitPlan, BuildScriptDirs,
-    BuildScriptExecutionUnitPlan, BuiltArtifact, LibraryCrateUnitPlan, UnitPlan, UnitPlanInfo,
-    Workspace,
+    BuildScriptCompilationUnitPlan, BuildScriptExecutionUnitPlan, LibraryCrateUnitPlan, UnitPlan,
+    UnitPlanInfo, Workspace,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Deserialize)]
