@@ -1087,9 +1087,9 @@ mod tests {
 
         let generic = GenericPath::from(abs_dir.clone());
         let display = accepts_path_like(&generic);
-        assert!(display.len() > 0);
+        assert!(!display.is_empty());
 
         let display = accepts_path_like(rel_file);
-        assert!(display.len() > 0);
+        assert!(!display.is_empty());
     }
 }

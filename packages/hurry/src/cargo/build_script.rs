@@ -373,8 +373,11 @@ mod tests {
     use simple_test_case::test_case;
 
     fn replace_path_placeholders(line: &str, ws: &Workspace) -> String {
-        line.replace("__PROFILE__", &ws.host_profile_dir().to_string())
-            .replace("__CARGO__", &ws.cargo_home.to_string())
+        line.replace(
+            "__PROFILE__",
+            &ws.arch_profile_dir(&RustcTarget::ImplicitHost).to_string(),
+        )
+        .replace("__CARGO__", &ws.cargo_home.to_string())
     }
 
     #[test_case("cargo:rerun-if-changed=__PROFILE__/out/build.rs", BuildScriptOutputLineStyle::Old, "__PROFILE__/out/build.rs"; "old_style_profile_root")]

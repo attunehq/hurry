@@ -131,35 +131,6 @@ impl Workspace {
         Self::from_argv_in_dir(&pwd, args).await
     }
 
-    /// Get the profile directory for intermediate build artifacts built for the
-    /// host architecture.
-    // TODO: Remove this once the migration is complete.
-    #[deprecated = "Use unit_profile_dir() instead"]
-    pub fn host_profile_dir(&self) -> AbsDirPath {
-        self.build_dir
-            .try_join_dir(self.profile.as_str())
-            .expect("profile should be valid directory name")
-    }
-
-    /// Get the profile directory for intermediate build artifacts built for the
-    /// target architecture.
-    ///
-    /// When `--target` is set, this is different from the host profile
-    /// directory (even if the target architecture is the same as the host
-    /// architecture!), and library and build script execution artifacts are
-    /// stored in the target profile directory.
-    // TODO: Remove this once the migration is complete.
-    #[deprecated = "Use unit_profile_dir() instead"]
-    pub fn target_profile_dir(&self) -> AbsDirPath {
-        match &self.target_arch {
-            RustcTarget::Specified(target_arch) => self
-                .build_dir
-                .try_join_dirs(vec![target_arch.as_str(), self.profile.as_str()])
-                .expect("target arch and profile should be valid directory names"),
-            RustcTarget::ImplicitHost => self.host_profile_dir(),
-        }
-    }
-
     /// Get the intermediate build artifacts directory for a specific unit.
     ///
     /// ## Cross-Compilation Directory Structure
@@ -435,7 +406,8 @@ impl Workspace {
                                 target_arch
                             );
                         }
-                        let profile_dir = self.host_profile_dir();
+                        // Build scripts are always compiled for the host architecture.
+                        let profile_dir = self.arch_profile_dir(&RustcTarget::ImplicitHost);
                         let bsc_unit = BuildScriptCompilationUnitPlan {
                             info: UnitPlanInfo {
                                 unit_hash: unit_hash.into(),
