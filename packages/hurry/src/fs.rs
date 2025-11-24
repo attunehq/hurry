@@ -39,7 +39,7 @@ use fslock::LockFile as FsLockFile;
 use futures::{Stream, TryStreamExt};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use tap::{Pipe, TapFallible};
+use tap::{Pipe, TapFallible, TryConv as _};
 use tokio::{fs::ReadDir, io::AsyncReadExt, sync::Mutex, task::spawn_blocking};
 use tracing::{debug, error, instrument, trace};
 
@@ -174,7 +174,7 @@ pub async fn user_global_cache_path() -> Result<AbsDirPath> {
     };
 
     base.join("v2")
-        .pipe(AbsDirPath::try_from)
+        .try_conv::<AbsDirPath>()
         .tap_ok(|dir| debug!(?dir, "user global cache path"))
 }
 

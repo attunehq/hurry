@@ -107,7 +107,7 @@ impl BuildScriptCompiledFiles {
         fs::write(
             &profile_dir.join(&unit_plan.dep_info_file()?),
             self.dep_info_file
-                .reconstruct(ws, &unit_plan.info.target_arch)?,
+                .reconstruct(ws, &unit_plan.info),
         )
         .await?;
 

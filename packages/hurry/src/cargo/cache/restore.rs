@@ -14,13 +14,11 @@ use std::{
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, instrument, trace, warn};
 
-use tap::Pipe as _;
-
 use crate::{
     cargo::{self, QualifiedPath, UnitPlan, Workspace, cache, workspace::UnitHash},
     cas::CourierCas,
     fs,
-    path::{AbsFilePath, JoinWith as _},
+    path::JoinWith as _,
     progress::TransferBar,
 };
 use clients::{
@@ -174,9 +172,7 @@ pub async fn restore_units(
                 // Queue the output files.
                 for file in saved_library_files.output_files {
                     let path: QualifiedPath = serde_json::from_str(file.path.as_str())?;
-                    let path = path
-                        .reconstruct(&ws, &unit_plan.info.target_arch)?
-                        .pipe(AbsFilePath::try_from)?;
+                    let path = path.reconstruct(&ws, &unit_plan.info).try_into()?;
                     let executable = file.executable;
 
                     files_to_restore.push(FileRestoreKey {
@@ -196,17 +192,16 @@ pub async fn restore_units(
                 let profile_dir = ws.unit_profile_dir(&unit_plan.info);
 
                 // Queue the dep-info file with reconstruction.
-                let ws_clone = ws.clone();
-                let unit_plan_clone = unit_plan.clone();
-                let path = profile_dir.join(&unit_plan_clone.dep_info_file()?);
+                let ws = ws.clone();
+                let info = unit_plan.info.clone();
+                let path = profile_dir.join(&unit_plan.dep_info_file()?);
                 files_to_restore.push(FileRestoreKey {
                     key: saved_library_files.dep_info_file.clone(),
                     write: Box::new(move |data| {
                         let data = data.clone();
                         Box::pin(async move {
                             let dep_info: cargo::DepInfo = serde_json::from_slice(&data)?;
-                            let dep_info = dep_info
-                                .reconstruct(&ws_clone, &unit_plan_clone.info.target_arch)?;
+                            let dep_info = dep_info.reconstruct(&ws, &info);
                             fs::write(&path, dep_info).await?;
                             fs::set_mtime(&path, mtime).await?;
                             Ok(())
@@ -266,8 +261,8 @@ pub async fn restore_units(
                 });
 
                 // Queue dep-info file with reconstruction.
-                let ws_clone = ws.clone();
-                let unit_plan_clone = unit_plan.clone();
+                let ws = ws.clone();
+                let info = unit_plan.info.clone();
                 let path = profile_dir.join(&unit_plan.dep_info_file()?);
                 files_to_restore.push(FileRestoreKey {
                     key: build_script_compiled_files.dep_info_file.clone(),
@@ -275,8 +270,7 @@ pub async fn restore_units(
                         let data = data.clone();
                         Box::pin(async move {
                             let dep_info: cargo::DepInfo = serde_json::from_slice(&data)?;
-                            let dep_info = dep_info
-                                .reconstruct(&ws_clone, &unit_plan_clone.info.target_arch)?;
+                            let dep_info = dep_info.reconstruct(&ws, &info);
                             fs::write(&path, dep_info).await?;
                             fs::set_mtime(&path, mtime).await?;
                             Ok(())
@@ -319,9 +313,7 @@ pub async fn restore_units(
                 // Queue all OUT_DIR files with executable flag handling.
                 for file in build_script_output_files.out_dir_files {
                     let path: QualifiedPath = serde_json::from_str(file.path.as_str())?;
-                    let path = path
-                        .reconstruct(&ws, &unit_plan.info.target_arch)?
-                        .pipe(AbsFilePath::try_from)?;
+                    let path = path.reconstruct(&ws, &unit_plan.info).try_into()?;
                     let executable = file.executable;
 
                     files_to_restore.push(FileRestoreKey {
@@ -339,8 +331,8 @@ pub async fn restore_units(
                 }
 
                 // Queue stdout with BuildScriptOutput reconstruction.
-                let ws_clone = ws.clone();
-                let unit_plan_clone = unit_plan.clone();
+                let ws = ws.clone();
+                let info = unit_plan.info.clone();
                 let path = profile_dir.join(&unit_plan.stdout_file()?);
                 files_to_restore.push(FileRestoreKey {
                     key: build_script_output_files.stdout.clone(),
@@ -348,8 +340,7 @@ pub async fn restore_units(
                         let data = data.clone();
                         Box::pin(async move {
                             let stdout: cargo::BuildScriptOutput = serde_json::from_slice(&data)?;
-                            let stdout =
-                                stdout.reconstruct(&ws_clone, &unit_plan_clone.info.target_arch)?;
+                            let stdout = stdout.reconstruct(&ws, &info);
                             fs::write(&path, stdout).await?;
                             fs::set_mtime(&path, mtime).await?;
                             Ok(())

@@ -7,58 +7,14 @@ use color_eyre::{
 use derive_more::Display;
 use enum_assoc::Assoc;
 use futures::{StreamExt, stream};
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use tap::{Pipe as _, TapFallible};
 use tracing::{instrument, trace};
 
 use crate::{
-    cargo::{QualifiedPath, RustcTarget, Workspace},
+    cargo::{QualifiedPath, RustcTarget, UnitPlanInfo, Workspace},
     fs,
     path::AbsFilePath,
 };
-
-/// Represents a "root output" file, used for build scripts.
-///
-/// This file contains the fully qualified path to `out`, which is the directory
-/// where script can output files (provided to the script as $OUT_DIR).
-///
-/// Example:
-/// ```not_rust
-/// /Users/jess/scratch/example/target/debug/build/rustls-5590c033895e7e9a/out
-/// ```
-#[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
-pub struct RootOutput(QualifiedPath);
-
-impl RootOutput {
-    /// Parse a "root output" file.
-    #[instrument(name = "RootOutput::from_file")]
-    pub async fn from_file(
-        ws: &Workspace,
-        target: &RustcTarget,
-        file: &AbsFilePath,
-    ) -> Result<Self> {
-        let content = fs::read_buffered_utf8(file)
-            .await
-            .context("read file")?
-            .ok_or_eyre("file does not exist")?;
-        let line = content
-            .lines()
-            .exactly_one()
-            .map_err(|_| eyre!("RootOutput file has more than one line: {content:?}"))?;
-        QualifiedPath::parse_string(ws, target, line)
-            .await
-            .context("parse file")
-            .map(Self)
-            .tap_ok(|parsed| trace!(?file, ?content, ?parsed, "parsed RootOutput file"))
-    }
-
-    /// Reconstruct the file in the context of the profile directory.
-    #[instrument(name = "RootOutput::reconstruct")]
-    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
-        self.0.reconstruct_string(ws, target)
-    }
-}
 
 /// Parsed representation of the output of a build script when it was executed.
 ///
@@ -104,13 +60,16 @@ impl BuildScriptOutput {
 
     /// Reconstruct the file in the context of the profile directory.
     #[instrument(name = "BuildScriptOutput::reconstruct")]
-    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
+    pub fn reconstruct(self, ws: &Workspace, unit_info: &UnitPlanInfo) -> String {
+        self.reconstruct_inner(ws, &unit_info.target_arch)
+    }
+
+    fn reconstruct_inner(self, ws: &Workspace, target: &RustcTarget) -> String {
         self.0
             .into_iter()
             .map(|line| line.reconstruct(ws, target))
-            .try_collect::<_, Vec<_>, _>()?
+            .collect::<Vec<_>>()
             .join("\n")
-            .pipe(Ok)
     }
 }
 
@@ -345,14 +304,14 @@ impl BuildScriptOutputLine {
 
     /// Reconstruct the line in the current context.
     #[instrument(name = "BuildScriptOutputLine::reconstruct")]
-    pub fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> Result<String> {
-        Ok(match self {
+    fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> String {
+        match self {
             Self::RerunIfChanged(style, path) => {
                 format!(
                     "{}{}={}",
                     style.as_str(),
                     Self::RERUN_IF_CHANGED,
-                    path.reconstruct_string(ws, target)?
+                    path.reconstruct_string(ws, target)
                 )
             }
             Self::RerunIfEnvChanged(style, var) => {
@@ -370,13 +329,13 @@ impl BuildScriptOutputLine {
                     style.as_str(),
                     Self::RUSTC_LINK_SEARCH,
                     kind,
-                    path.reconstruct_string(ws, target)?
+                    path.reconstruct_string(ws, target)
                 ),
                 None => format!(
                     "{}{}={}",
                     style.as_str(),
                     Self::RUSTC_LINK_SEARCH,
-                    path.reconstruct_string(ws, target)?
+                    path.reconstruct_string(ws, target)
                 ),
             },
             Self::RustcFlags(style, flags) => {
@@ -402,7 +361,7 @@ impl BuildScriptOutputLine {
                 format!("{}{}={}={}", style.as_str(), Self::METADATA, key, value)
             }
             Self::Other(s) => s.to_string(),
-        })
+        }
     }
 }
 
@@ -437,11 +396,7 @@ mod tests {
 
         match BuildScriptOutputLine::parse(&workspace, &target, &line).await {
             BuildScriptOutputLine::RerunIfChanged(style, path) => {
-                pretty_assert_eq!(
-                    path.reconstruct_string(&workspace, &target)
-                        .expect("reconstruct path"),
-                    expected_path
-                );
+                pretty_assert_eq!(path.reconstruct_string(&workspace, &target), expected_path);
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RerunIfChanged variant"),
@@ -532,11 +487,7 @@ mod tests {
         match BuildScriptOutputLine::parse(&workspace, &target, &line).await {
             BuildScriptOutputLine::RustcLinkSearch { style, kind, path } => {
                 pretty_assert_eq!(kind, None);
-                pretty_assert_eq!(
-                    path.reconstruct_string(&workspace, &target)
-                        .expect("reconstruct path"),
-                    expected_path
-                );
+                pretty_assert_eq!(path.reconstruct_string(&workspace, &target), expected_path);
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkSearch variant"),
@@ -562,11 +513,7 @@ mod tests {
         match BuildScriptOutputLine::parse(&workspace, &target, &line).await {
             BuildScriptOutputLine::RustcLinkSearch { style, kind, path } => {
                 pretty_assert_eq!(kind, Some(String::from(expected_kind)));
-                pretty_assert_eq!(
-                    path.reconstruct_string(&workspace, &target)
-                        .expect("reconstruct path"),
-                    expected_path
-                );
+                pretty_assert_eq!(path.reconstruct_string(&workspace, &target), expected_path);
                 pretty_assert_eq!(style, expected_style);
             }
             _ => panic!("Expected RustcLinkSearch variant"),
@@ -805,9 +752,7 @@ mod tests {
                 .await,
         );
 
-        let reconstructed = parsed
-            .reconstruct(&workspace, &target)
-            .expect("reconstruct path");
+        let reconstructed = parsed.reconstruct_inner(&workspace, &target);
         pretty_assert_eq!(reconstructed, input.trim_end());
     }
 
@@ -828,9 +773,7 @@ mod tests {
                 .await,
         );
 
-        let reconstructed = parsed
-            .reconstruct(&workspace, &target)
-            .expect("reconstruct path");
+        let reconstructed = parsed.reconstruct_inner(&workspace, &target);
         pretty_assert_eq!(reconstructed, input.trim_end());
     }
 
@@ -851,9 +794,7 @@ mod tests {
                 .await,
         );
 
-        let reconstructed = parsed
-            .reconstruct(&workspace, &target)
-            .expect("reconstruct path");
+        let reconstructed = parsed.reconstruct_inner(&workspace, &target);
         pretty_assert_eq!(reconstructed, input.trim_end());
     }
 
@@ -889,9 +830,7 @@ mod tests {
             _ => panic!("Expected RustcCfg with Current style"),
         }
 
-        let reconstructed = parsed
-            .reconstruct(&workspace, &target)
-            .expect("reconstruct path");
+        let reconstructed = parsed.reconstruct_inner(&workspace, &target);
         pretty_assert_eq!(reconstructed, input.trim_end());
     }
 }

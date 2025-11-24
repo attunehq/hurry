@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug, path::PathBuf};
+use std::fmt::Debug;
 
 use cargo_metadata::TargetKind;
 use color_eyre::{
@@ -9,15 +9,15 @@ use derive_more::{Debug as DebugExt, Display};
 use itertools::Itertools as _;
 use scopeguard::defer;
 use serde::{Deserialize, Serialize};
-use tap::{Conv as _, Pipe as _, Tap as _, TapFallible as _};
+use tap::{Conv as _, Pipe as _, Tap as _, TapFallible as _, TryConv as _};
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
 use crate::{
     cargo::{
-        self, BuildPlan, BuildScriptOutput, CargoBuildArguments, CargoCompileMode, Profile,
-        RustcArguments, RustcMetadata, RustcTarget,
+        self, BuildPlan, CargoBuildArguments, CargoCompileMode, Profile, RustcArguments,
+        RustcMetadata, RustcTarget,
     },
     fs, mk_rel_dir, mk_rel_file,
     path::{
@@ -106,7 +106,7 @@ impl Workspace {
         .await
         .context("join background task")?
         .context("get $CARGO_HOME")?
-        .pipe(AbsDirPath::try_from)
+        .try_into()
         .context("parse path as utf8")?;
 
         let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
@@ -214,10 +214,14 @@ impl Workspace {
     /// compilation versus execution, but upstream functions (like Cargo's build
     /// plan output) already handle this.
     pub fn unit_profile_dir(&self, unit_info: &UnitPlanInfo) -> AbsDirPath {
-        match &unit_info.target_arch {
+        self.arch_profile_dir(&unit_info.target_arch)
+    }
+
+    pub fn arch_profile_dir(&self, target_arch: &RustcTarget) -> AbsDirPath {
+        match target_arch {
             RustcTarget::Specified(target_arch) => self
                 .build_dir
-                .try_join_dirs(vec![target_arch.as_str(), self.profile.as_str()])
+                .try_join_dirs(vec![&target_arch, self.profile.as_str()])
                 .expect("target arch and build profile should be valid directory names"),
             RustcTarget::ImplicitHost => self
                 .build_dir
@@ -345,7 +349,7 @@ impl Workspace {
             // [^1]: https://doc.rust-lang.org/cargo/reference/environment-variables.html#:~:text=This%20is%20only%20set%20when%20compiling%20the%20package%20(not%20when%20running%20binaries%20or%20tests).
             if invocation
                 .cwd
-                .pipe(AbsFilePath::try_from)?
+                .try_conv::<AbsFilePath>()?
                 .relative_to(&self.cargo_home)
                 .is_err()
             {
@@ -422,7 +426,7 @@ impl Workspace {
                             .crate_name()
                             .ok_or_eyre("build script compilation should have a crate name")?
                             .to_string();
-                        let src_path = args.src_path().pipe(AbsFilePath::try_from)?;
+                        let src_path = args.src_path().try_into()?;
                         // Sanity check that constructed values match parsed
                         // values.
                         if target_arch != RustcTarget::ImplicitHost {
@@ -456,12 +460,12 @@ impl Workspace {
                         UnitPlan::BuildScriptCompilation(bsc_unit)
                     }
                     CargoCompileMode::RunCustomBuild => {
-                        let program = invocation.program.pipe(AbsFilePath::try_from)?;
+                        let program = invocation.program.try_conv::<AbsFilePath>()?;
                         let out_dir = invocation
                             .env
                             .remove("OUT_DIR")
                             .ok_or_eyre("build script execution should set OUT_DIR")?
-                            .pipe(AbsDirPath::try_from)?;
+                            .try_conv::<AbsDirPath>()?;
                         let unit_dir = out_dir.parent().ok_or_eyre("OUT_DIR should have parent")?;
                         let unit_hash = unit_dir
                             .file_name_str_lossy()
@@ -543,7 +547,7 @@ impl Workspace {
                     .collect::<Result<Vec<_>>>()?;
                 let args = RustcArguments::from_iter(invocation.args);
                 let crate_name = args.crate_name().ok_or_eyre("no crate name")?.to_owned();
-                let src_path = args.src_path().pipe(AbsFilePath::try_from)?;
+                let src_path = args.src_path().try_into()?;
                 // We could also parse this from `-C extra-filename`.
                 let unit_hash = {
                     let compiled_file = outputs.first().ok_or_eyre("no compiled files")?;

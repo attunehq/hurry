@@ -15,7 +15,7 @@ use crate::{
         cache::SavedFile,
     },
     fs,
-    path::{AbsFilePath, JoinWith as _},
+    path::JoinWith as _,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -99,8 +99,8 @@ impl BuildScriptOutputFiles {
         for saved_file in self.out_dir_files {
             let path = saved_file
                 .path
-                .reconstruct(ws, &unit_plan.info.target_arch)
-                .map(AbsFilePath::try_from)??;
+                .reconstruct(ws, &unit_plan.info)
+                .try_into()?;
             fs::write(&path, saved_file.contents).await?;
             fs::set_executable(&path, saved_file.executable).await?;
         }
@@ -108,7 +108,7 @@ impl BuildScriptOutputFiles {
         // Reconstruct and restore build script STDOUT.
         fs::write(
             &profile_dir.join(&unit_plan.stdout_file()?),
-            self.stdout.reconstruct(ws, &unit_plan.info.target_arch)?,
+            self.stdout.reconstruct(ws, &unit_plan.info),
         )
         .await?;
 

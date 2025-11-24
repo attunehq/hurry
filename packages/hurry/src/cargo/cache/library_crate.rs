@@ -14,7 +14,7 @@ use crate::{
         fingerprint,
     },
     fs,
-    path::{AbsFilePath, JoinWith as _},
+    path::JoinWith as _,
 };
 
 /// Libraries are usually associated with 7 files:
@@ -130,8 +130,8 @@ impl LibraryFiles {
         for saved_file in self.output_files {
             let path = saved_file
                 .path
-                .reconstruct(ws, &unit_plan.info.target_arch)
-                .map(AbsFilePath::try_from)??;
+                .reconstruct(ws, &unit_plan.info)
+                .try_into()?;
             fs::write(&path, saved_file.contents).await?;
             fs::set_executable(&path, saved_file.executable).await?;
         }
@@ -146,8 +146,7 @@ impl LibraryFiles {
         // Reconstruct and restore rustc dep-info file.
         fs::write(
             &profile_dir.join(&unit_plan.dep_info_file()?),
-            self.dep_info_file
-                .reconstruct(ws, &unit_plan.info.target_arch)?,
+            self.dep_info_file.reconstruct(ws, &unit_plan.info),
         )
         .await?;
 
