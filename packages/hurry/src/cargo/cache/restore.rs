@@ -69,7 +69,7 @@ struct FileRestoreKey {
 /// set before restoring any files.
 #[derive(Debug, Clone, Default)]
 struct RestoreProgress {
-    units: Arc<DashMap<UnitHash, DashMap<Key, u32>>>,
+    units: Arc<DashMap<UnitHash, DashSet<Key>>>,
 }
 
 #[instrument(skip(units, progress))]
@@ -164,7 +164,7 @@ pub async fn restore_units(
         // Mark the unit's restore as pending.
         restore_progress
             .units
-            .insert(unit_hash.clone(), DashMap::new());
+            .insert(unit_hash.clone(), DashSet::new());
         // Write the fingerprint and queue other files to be restored. Writing
         // fingerprints happens during this loop because fingerprint rewriting
         // must occur in dependency order.
@@ -196,12 +196,11 @@ pub async fn restore_units(
                     let path = path.reconstruct(&ws, &unit_plan.info).try_into()?;
                     let executable = file.executable;
 
-                    *restore_progress
+                    restore_progress
                         .units
                         .get_mut(&unit_hash)
                         .ok_or_eyre("unit hash restore progress not initialized")?
-                        .entry(file.object_key.clone())
-                        .or_insert(0) += 1;
+                        .insert(file.object_key.clone());
                     files_to_restore.push(FileRestoreKey {
                         unit_hash: unit_hash.clone(),
                         key: file.object_key.clone(),
@@ -223,12 +222,11 @@ pub async fn restore_units(
                 let ws = ws.clone();
                 let info = unit_plan.info.clone();
                 let path = profile_dir.join(&unit_plan.dep_info_file()?);
-                *restore_progress
+                restore_progress
                     .units
                     .get_mut(&unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
-                    .entry(saved_library_files.dep_info_file.clone())
-                    .or_insert(0) += 1;
+                    .insert(saved_library_files.dep_info_file.clone());
                 files_to_restore.push(FileRestoreKey {
                     unit_hash: unit_hash.clone(),
                     key: saved_library_files.dep_info_file.clone(),
@@ -246,12 +244,11 @@ pub async fn restore_units(
 
                 // Queue the encoded dep-info file (no transformation).
                 let path = profile_dir.join(&unit_plan.encoded_dep_info_file()?);
-                *restore_progress
+                restore_progress
                     .units
                     .get_mut(&unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
-                    .entry(saved_library_files.encoded_dep_info_file.clone())
-                    .or_insert(0) += 1;
+                    .insert(saved_library_files.encoded_dep_info_file.clone());
                 files_to_restore.push(FileRestoreKey {
                     unit_hash: unit_hash.clone(),
                     key: saved_library_files.encoded_dep_info_file.clone(),
@@ -286,12 +283,11 @@ pub async fn restore_units(
                 // Queue compiled program with hard link creation.
                 let path = profile_dir.join(unit_plan.program_file()?);
                 let linked_path = profile_dir.join(unit_plan.linked_program_file()?);
-                *restore_progress
+                restore_progress
                     .units
                     .get_mut(&unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
-                    .entry(build_script_compiled_files.compiled_program.clone())
-                    .or_insert(0) += 1;
+                    .insert(build_script_compiled_files.compiled_program.clone());
                 files_to_restore.push(FileRestoreKey {
                     unit_hash: unit_hash.clone(),
                     key: build_script_compiled_files.compiled_program.clone(),
@@ -313,12 +309,11 @@ pub async fn restore_units(
                 let ws = ws.clone();
                 let info = unit_plan.info.clone();
                 let path = profile_dir.join(&unit_plan.dep_info_file()?);
-                *restore_progress
+                restore_progress
                     .units
                     .get_mut(&unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
-                    .entry(build_script_compiled_files.dep_info_file.clone())
-                    .or_insert(0) += 1;
+                    .insert(build_script_compiled_files.dep_info_file.clone());
                 files_to_restore.push(FileRestoreKey {
                     unit_hash: unit_hash.clone(),
                     key: build_script_compiled_files.dep_info_file.clone(),
@@ -336,12 +331,11 @@ pub async fn restore_units(
 
                 // Queue encoded dep-info file (no transformation).
                 let path = profile_dir.join(&unit_plan.encoded_dep_info_file()?);
-                *restore_progress
+                restore_progress
                     .units
                     .get_mut(&unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
-                    .entry(build_script_compiled_files.encoded_dep_info_file.clone())
-                    .or_insert(0) += 1;
+                    .insert(build_script_compiled_files.encoded_dep_info_file.clone());
                 files_to_restore.push(FileRestoreKey {
                     unit_hash: unit_hash.clone(),
                     key: build_script_compiled_files.encoded_dep_info_file.clone(),
@@ -379,12 +373,11 @@ pub async fn restore_units(
                     let path = path.reconstruct(&ws, &unit_plan.info).try_into()?;
                     let executable = file.executable;
 
-                    *restore_progress
+                    restore_progress
                         .units
                         .get_mut(&unit_hash)
                         .ok_or_eyre("unit hash restore progress not initialized")?
-                        .entry(file.object_key.clone())
-                        .or_insert(0) += 1;
+                        .insert(file.object_key.clone());
                     files_to_restore.push(FileRestoreKey {
                         unit_hash: unit_hash.clone(),
                         key: file.object_key.clone(),
@@ -404,12 +397,11 @@ pub async fn restore_units(
                 let ws = ws.clone();
                 let info = unit_plan.info.clone();
                 let path = profile_dir.join(&unit_plan.stdout_file()?);
-                *restore_progress
+                restore_progress
                     .units
                     .get_mut(&unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
-                    .entry(build_script_output_files.stdout.clone())
-                    .or_insert(0) += 1;
+                    .insert(build_script_output_files.stdout.clone());
                 files_to_restore.push(FileRestoreKey {
                     unit_hash: unit_hash.clone(),
                     key: build_script_output_files.stdout.clone(),
@@ -427,12 +419,11 @@ pub async fn restore_units(
 
                 // Queue stderr (no transformation).
                 let path = profile_dir.join(&unit_plan.stderr_file()?);
-                *restore_progress
+                restore_progress
                     .units
                     .get_mut(&unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
-                    .entry(build_script_output_files.stderr.clone())
-                    .or_insert(0) += 1;
+                    .insert(build_script_output_files.stderr.clone());
                 files_to_restore.push(FileRestoreKey {
                     unit_hash: unit_hash.clone(),
                     key: build_script_output_files.stderr.clone(),
@@ -574,13 +565,17 @@ async fn restore_batch(
                     (file.write)(&data).await?;
                     debug!(?key, "done calling write callback");
 
-                    // Remove the file from the unit's pending files.
-                    let pending_files = restore_progress
+                    // Remove the key from the unit's pending keys.
+                    let pending_keys = restore_progress
                         .units
                         .get_mut(&file.unit_hash)
                         .ok_or_eyre("unit hash restore progress not initialized")?;
-                    pending_files.remove(&key);
-                    if pending_files.is_empty() {
+                    // We ignore whether the key is actually present, because
+                    // keys might be double-removed if they are present multiple
+                    // times in the same unit, which can occur if a unit has two
+                    // files that have the same contents (e.g. are both empty).
+                    pending_keys.remove(&key);
+                    if pending_keys.is_empty() {
                         debug!(?file.unit_hash, "unit has been fully restored");
                         progress.inc(1);
                     }
