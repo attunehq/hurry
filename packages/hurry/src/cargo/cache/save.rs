@@ -53,7 +53,7 @@ pub async fn save_units(
     let mut save_requests = Vec::new();
     for unit in units {
         if skip.units.contains(&unit.info().unit_hash) {
-            trace!(?unit, "skipping backup: unit was restored from cache");
+            trace!(?unit, "skipping unit backup: unit was restored from cache");
             progress.total_units -= 1;
             on_progress(&progress);
             continue;
@@ -67,35 +67,44 @@ pub async fn save_units(
 
                 // Prepare CAS objects.
                 let mut cas_uploads = Vec::new();
+
                 let mut output_files = Vec::new();
                 for output_file in files.output_files {
-                    progress.uploaded_files += 1;
-                    progress.uploaded_bytes += output_file.contents.len() as u64;
-
                     let object_key = Key::from_buffer(&output_file.contents);
-                    cas_uploads.push((object_key.clone(), output_file.contents));
                     output_files.push(
                         courier::SavedFile::builder()
-                            .object_key(object_key)
+                            .object_key(object_key.clone())
                             .executable(output_file.executable)
                             .path(serde_json::to_string(&output_file.path)?)
                             .build(),
                     );
+
+                    if !skip.files.contains(&object_key) {
+                        progress.uploaded_files += 1;
+                        progress.uploaded_bytes += output_file.contents.len() as u64;
+                        cas_uploads.push((object_key.clone(), output_file.contents));
+                    }
                 }
 
                 let dep_info_file_contents = serde_json::to_vec(&files.dep_info_file)?;
-                progress.uploaded_files += 1;
-                progress.uploaded_bytes += dep_info_file_contents.len() as u64;
                 let dep_info_file = Key::from_buffer(&dep_info_file_contents);
-                cas_uploads.push((dep_info_file.clone(), dep_info_file_contents));
+                if !skip.files.contains(&dep_info_file) {
+                    progress.uploaded_files += 1;
+                    progress.uploaded_bytes += dep_info_file_contents.len() as u64;
+                    cas_uploads.push((dep_info_file.clone(), dep_info_file_contents));
+                }
 
-                progress.uploaded_files += 1;
-                progress.uploaded_bytes += files.encoded_dep_info_file.len() as u64;
                 let encoded_dep_info_file = Key::from_buffer(&files.encoded_dep_info_file);
-                cas_uploads.push((encoded_dep_info_file.clone(), files.encoded_dep_info_file));
+                if !skip.files.contains(&encoded_dep_info_file) {
+                    progress.uploaded_files += 1;
+                    progress.uploaded_bytes += files.encoded_dep_info_file.len() as u64;
+                    cas_uploads.push((encoded_dep_info_file.clone(), files.encoded_dep_info_file));
+                }
 
                 // Save CAS objects.
-                cas.store_bulk(stream::iter(cas_uploads)).await?;
+                if !cas_uploads.is_empty() {
+                    cas.store_bulk(stream::iter(cas_uploads)).await?;
+                }
 
                 // Prepare save request.
                 let fingerprint = serde_json::to_string(&files.fingerprint)?;
@@ -125,24 +134,32 @@ pub async fn save_units(
                 // Prepare CAS objects.
                 let mut cas_uploads = Vec::new();
 
-                progress.uploaded_files += 1;
-                progress.uploaded_bytes += files.compiled_program.len() as u64;
                 let compiled_program = Key::from_buffer(&files.compiled_program);
-                cas_uploads.push((compiled_program.clone(), files.compiled_program));
+                if !skip.files.contains(&compiled_program) {
+                    progress.uploaded_files += 1;
+                    progress.uploaded_bytes += files.compiled_program.len() as u64;
+                    cas_uploads.push((compiled_program.clone(), files.compiled_program));
+                }
 
                 let dep_info_file_contents = serde_json::to_vec(&files.dep_info_file)?;
-                progress.uploaded_files += 1;
-                progress.uploaded_bytes += dep_info_file_contents.len() as u64;
                 let dep_info_file = Key::from_buffer(&dep_info_file_contents);
-                cas_uploads.push((dep_info_file.clone(), dep_info_file_contents));
+                if !skip.files.contains(&dep_info_file) {
+                    progress.uploaded_files += 1;
+                    progress.uploaded_bytes += dep_info_file_contents.len() as u64;
+                    cas_uploads.push((dep_info_file.clone(), dep_info_file_contents));
+                }
 
-                progress.uploaded_files += 1;
-                progress.uploaded_bytes += files.encoded_dep_info_file.len() as u64;
                 let encoded_dep_info_file = Key::from_buffer(&files.encoded_dep_info_file);
-                cas_uploads.push((encoded_dep_info_file.clone(), files.encoded_dep_info_file));
+                if !skip.files.contains(&encoded_dep_info_file) {
+                    progress.uploaded_files += 1;
+                    progress.uploaded_bytes += files.encoded_dep_info_file.len() as u64;
+                    cas_uploads.push((encoded_dep_info_file.clone(), files.encoded_dep_info_file));
+                }
 
                 // Save CAS objects.
-                cas.store_bulk(stream::iter(cas_uploads)).await?;
+                if !cas_uploads.is_empty() {
+                    cas.store_bulk(stream::iter(cas_uploads)).await?;
+                }
 
                 // Prepare save request.
                 let fingerprint = serde_json::to_string(&files.fingerprint)?;
@@ -171,35 +188,44 @@ pub async fn save_units(
 
                 // Prepare CAS objects.
                 let mut cas_uploads = Vec::new();
+
                 let mut out_dir_files = Vec::new();
                 for out_dir_file in files.out_dir_files {
-                    progress.uploaded_files += 1;
-                    progress.uploaded_bytes += out_dir_file.contents.len() as u64;
-
                     let object_key = Key::from_buffer(&out_dir_file.contents);
-                    cas_uploads.push((object_key.clone(), out_dir_file.contents));
                     out_dir_files.push(
                         courier::SavedFile::builder()
-                            .object_key(object_key)
+                            .object_key(object_key.clone())
                             .executable(out_dir_file.executable)
                             .path(serde_json::to_string(&out_dir_file.path)?)
                             .build(),
                     );
+
+                    if !skip.files.contains(&object_key) {
+                        progress.uploaded_files += 1;
+                        progress.uploaded_bytes += out_dir_file.contents.len() as u64;
+                        cas_uploads.push((object_key.clone(), out_dir_file.contents));
+                    }
                 }
 
                 let stdout_contents = serde_json::to_vec(&files.stdout)?;
-                progress.uploaded_files += 1;
-                progress.uploaded_bytes += stdout_contents.len() as u64;
                 let stdout = Key::from_buffer(&stdout_contents);
-                cas_uploads.push((stdout.clone(), stdout_contents));
+                if !skip.files.contains(&stdout) {
+                    progress.uploaded_files += 1;
+                    progress.uploaded_bytes += stdout_contents.len() as u64;
+                    cas_uploads.push((stdout.clone(), stdout_contents));
+                }
 
-                progress.uploaded_files += 1;
-                progress.uploaded_bytes += files.stderr.len() as u64;
                 let stderr = Key::from_buffer(&files.stderr);
-                cas_uploads.push((stderr.clone(), files.stderr));
+                if !skip.files.contains(&stderr) {
+                    progress.uploaded_files += 1;
+                    progress.uploaded_bytes += files.stderr.len() as u64;
+                    cas_uploads.push((stderr.clone(), files.stderr));
+                }
 
                 // Save CAS objects.
-                cas.store_bulk(stream::iter(cas_uploads)).await?;
+                if !cas_uploads.is_empty() {
+                    cas.store_bulk(stream::iter(cas_uploads)).await?;
+                }
 
                 // Prepare save request.
                 let fingerprint = serde_json::to_string(&files.fingerprint)?;
