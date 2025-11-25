@@ -2,7 +2,7 @@ use color_eyre::{
     Result,
     eyre::{Context as _, OptionExt as _, bail},
 };
-use dashmap::DashSet;
+use dashmap::{DashMap, DashSet};
 use derive_more::Debug;
 use futures::{StreamExt, future::BoxFuture};
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,7 @@ impl Restored {
 
 #[derive(Debug)]
 struct FileRestoreKey {
+    unit_hash: UnitHash,
     key: Key,
     #[allow(
         clippy::type_complexity,
@@ -60,13 +61,23 @@ struct FileRestoreKey {
     write: Box<dyn FnOnce(&Vec<u8>) -> BoxFuture<'static, Result<()>> + Send + Sync>,
 }
 
+/// Tracks restore progress. It does this by tracking which units have been
+/// queued for restore, and which of their files _remain_ to be restored. After
+/// each file is restored, we remove it from its unit's set of pending files.
+/// When the set of pending files for a unit is empty, we know that the unit has
+/// been fully restored, because we added all of the unit's files to its pending
+/// set before restoring any files.
+#[derive(Debug, Clone, Default)]
+struct RestoreProgress {
+    units: Arc<DashMap<UnitHash, DashMap<Key, u32>>>,
+}
+
 #[instrument(skip(units, progress))]
 pub async fn restore_units(
     courier: &Courier,
     cas: &CourierCas,
     ws: &Workspace,
     units: &Vec<UnitPlan>,
-    // artifact_plan: &ArtifactPlan,
     progress: &TransferBar,
 ) -> Result<Restored> {
     trace!(?units, "units");
@@ -86,6 +97,9 @@ pub async fn restore_units(
     }));
     let mut saved_units = courier.cargo_cache_restore(bulk_req).await?;
 
+    // Track restore progress.
+    let restore_progress = RestoreProgress::default();
+
     // Spawn concurrent workers for doing parallel downloads.
     let (tx, mut workers) = {
         let worker_count = num_cpus::get();
@@ -103,8 +117,11 @@ pub async fn restore_units(
             let cas = cas.clone();
             let progress = progress.clone();
             let restored = restored.clone();
+            let restore_progress = restore_progress.clone();
             let span = tracing::info_span!("restore_worker", worker_id);
-            workers.spawn(restore_worker(rx, cas, progress, restored).instrument(span));
+            workers.spawn(
+                restore_worker(rx, cas, progress, restored, restore_progress).instrument(span),
+            );
         }
         // Dropping the `rx` causes it to close, so we cannot drop it until all
         // workers have finished receiving files.
@@ -144,6 +161,10 @@ pub async fn restore_units(
         // [^1]: https://github.com/rust-lang/cargo/blob/c24e1064277fe51ab72011e2612e556ac56addf7/src/cargo/core/compiler/fingerprint/mod.rs#L1229-L1235
         let mtime = start_time + Duration::from_secs(i as u64);
 
+        // Mark the unit's restore as pending.
+        restore_progress
+            .units
+            .insert(unit_hash.clone(), DashMap::new());
         // Write the fingerprint and queue other files to be restored. Writing
         // fingerprints happens during this loop because fingerprint rewriting
         // must occur in dependency order.
@@ -175,7 +196,14 @@ pub async fn restore_units(
                     let path = path.reconstruct(&ws, &unit_plan.info).try_into()?;
                     let executable = file.executable;
 
+                    *restore_progress
+                        .units
+                        .get_mut(&unit_hash)
+                        .ok_or_eyre("unit hash restore progress not initialized")?
+                        .entry(file.object_key.clone())
+                        .or_insert(0) += 1;
                     files_to_restore.push(FileRestoreKey {
+                        unit_hash: unit_hash.clone(),
                         key: file.object_key.clone(),
                         write: Box::new(move |data| {
                             let data = data.clone();
@@ -195,7 +223,14 @@ pub async fn restore_units(
                 let ws = ws.clone();
                 let info = unit_plan.info.clone();
                 let path = profile_dir.join(&unit_plan.dep_info_file()?);
+                *restore_progress
+                    .units
+                    .get_mut(&unit_hash)
+                    .ok_or_eyre("unit hash restore progress not initialized")?
+                    .entry(saved_library_files.dep_info_file.clone())
+                    .or_insert(0) += 1;
                 files_to_restore.push(FileRestoreKey {
+                    unit_hash: unit_hash.clone(),
                     key: saved_library_files.dep_info_file.clone(),
                     write: Box::new(move |data| {
                         let data = data.clone();
@@ -211,7 +246,14 @@ pub async fn restore_units(
 
                 // Queue the encoded dep-info file (no transformation).
                 let path = profile_dir.join(&unit_plan.encoded_dep_info_file()?);
+                *restore_progress
+                    .units
+                    .get_mut(&unit_hash)
+                    .ok_or_eyre("unit hash restore progress not initialized")?
+                    .entry(saved_library_files.encoded_dep_info_file.clone())
+                    .or_insert(0) += 1;
                 files_to_restore.push(FileRestoreKey {
+                    unit_hash: unit_hash.clone(),
                     key: saved_library_files.encoded_dep_info_file.clone(),
                     write: Box::new(move |data| {
                         let data = data.clone();
@@ -244,7 +286,14 @@ pub async fn restore_units(
                 // Queue compiled program with hard link creation.
                 let path = profile_dir.join(unit_plan.program_file()?);
                 let linked_path = profile_dir.join(unit_plan.linked_program_file()?);
+                *restore_progress
+                    .units
+                    .get_mut(&unit_hash)
+                    .ok_or_eyre("unit hash restore progress not initialized")?
+                    .entry(build_script_compiled_files.compiled_program.clone())
+                    .or_insert(0) += 1;
                 files_to_restore.push(FileRestoreKey {
+                    unit_hash: unit_hash.clone(),
                     key: build_script_compiled_files.compiled_program.clone(),
                     write: Box::new(move |data| {
                         let data = data.clone();
@@ -264,7 +313,14 @@ pub async fn restore_units(
                 let ws = ws.clone();
                 let info = unit_plan.info.clone();
                 let path = profile_dir.join(&unit_plan.dep_info_file()?);
+                *restore_progress
+                    .units
+                    .get_mut(&unit_hash)
+                    .ok_or_eyre("unit hash restore progress not initialized")?
+                    .entry(build_script_compiled_files.dep_info_file.clone())
+                    .or_insert(0) += 1;
                 files_to_restore.push(FileRestoreKey {
+                    unit_hash: unit_hash.clone(),
                     key: build_script_compiled_files.dep_info_file.clone(),
                     write: Box::new(move |data| {
                         let data = data.clone();
@@ -280,7 +336,14 @@ pub async fn restore_units(
 
                 // Queue encoded dep-info file (no transformation).
                 let path = profile_dir.join(&unit_plan.encoded_dep_info_file()?);
+                *restore_progress
+                    .units
+                    .get_mut(&unit_hash)
+                    .ok_or_eyre("unit hash restore progress not initialized")?
+                    .entry(build_script_compiled_files.encoded_dep_info_file.clone())
+                    .or_insert(0) += 1;
                 files_to_restore.push(FileRestoreKey {
+                    unit_hash: unit_hash.clone(),
                     key: build_script_compiled_files.encoded_dep_info_file.clone(),
                     write: Box::new(move |data| {
                         let data = data.clone();
@@ -316,7 +379,14 @@ pub async fn restore_units(
                     let path = path.reconstruct(&ws, &unit_plan.info).try_into()?;
                     let executable = file.executable;
 
+                    *restore_progress
+                        .units
+                        .get_mut(&unit_hash)
+                        .ok_or_eyre("unit hash restore progress not initialized")?
+                        .entry(file.object_key.clone())
+                        .or_insert(0) += 1;
                     files_to_restore.push(FileRestoreKey {
+                        unit_hash: unit_hash.clone(),
                         key: file.object_key.clone(),
                         write: Box::new(move |data| {
                             let data = data.clone();
@@ -334,7 +404,14 @@ pub async fn restore_units(
                 let ws = ws.clone();
                 let info = unit_plan.info.clone();
                 let path = profile_dir.join(&unit_plan.stdout_file()?);
+                *restore_progress
+                    .units
+                    .get_mut(&unit_hash)
+                    .ok_or_eyre("unit hash restore progress not initialized")?
+                    .entry(build_script_output_files.stdout.clone())
+                    .or_insert(0) += 1;
                 files_to_restore.push(FileRestoreKey {
+                    unit_hash: unit_hash.clone(),
                     key: build_script_output_files.stdout.clone(),
                     write: Box::new(move |data| {
                         let data = data.clone();
@@ -350,7 +427,14 @@ pub async fn restore_units(
 
                 // Queue stderr (no transformation).
                 let path = profile_dir.join(&unit_plan.stderr_file()?);
+                *restore_progress
+                    .units
+                    .get_mut(&unit_hash)
+                    .ok_or_eyre("unit hash restore progress not initialized")?
+                    .entry(build_script_output_files.stderr.clone())
+                    .or_insert(0) += 1;
                 files_to_restore.push(FileRestoreKey {
+                    unit_hash: unit_hash.clone(),
                     key: build_script_output_files.stderr.clone(),
                     write: Box::new(move |data| {
                         let data = data.clone();
@@ -378,15 +462,11 @@ pub async fn restore_units(
         // this function will return an error if the restore doesn't happen
         // anyway.
         restored.record_unit(unit_hash);
-        // TODO: Ideally we would not increment this until the restore is
-        // actually finished, but we haven't plumbed that through yet.
-        progress.inc(1);
     }
 
     debug!("start sending files to restore workers");
     for file in files_to_restore {
         tx.send_async(file).await?;
-        progress.add_files(1);
     }
     drop(tx);
     debug!("done sending files to restore workers");
@@ -407,6 +487,7 @@ async fn restore_worker(
     cas: CourierCas,
     progress: TransferBar,
     restored: Restored,
+    restore_progress: RestoreProgress,
 ) -> Result<()> {
     const BATCH_SIZE: usize = 50;
     let mut batch = Vec::new();
@@ -425,7 +506,14 @@ async fn restore_worker(
 
         // Restore batches once full.
         let batch_to_restore = std::mem::take(&mut batch);
-        restore_batch(batch_to_restore, &cas, &progress, &restored).await?;
+        restore_batch(
+            batch_to_restore,
+            &cas,
+            &progress,
+            &restored,
+            &restore_progress,
+        )
+        .await?;
     }
     debug!("worker rx closed");
 
@@ -433,7 +521,7 @@ async fn restore_worker(
     // remaining. Restore the remaining files in the batch.
     if !batch.is_empty() {
         debug!(?batch, "restoring remaining batch");
-        restore_batch(batch, &cas, &progress, &restored).await?;
+        restore_batch(batch, &cas, &progress, &restored, &restore_progress).await?;
         debug!("done restoring remaining batch");
     }
 
@@ -446,6 +534,7 @@ async fn restore_batch(
     cas: &CourierCas,
     progress: &TransferBar,
     restored: &Restored,
+    restore_progress: &RestoreProgress,
 ) -> Result<()> {
     debug!(?batch, "restoring batch");
 
@@ -484,6 +573,17 @@ async fn restore_batch(
                     debug!(?key, "calling write callback");
                     (file.write)(&data).await?;
                     debug!(?key, "done calling write callback");
+
+                    // Remove the file from the unit's pending files.
+                    let pending_files = restore_progress
+                        .units
+                        .get_mut(&file.unit_hash)
+                        .ok_or_eyre("unit hash restore progress not initialized")?;
+                    pending_files.remove(&key);
+                    if pending_files.is_empty() {
+                        debug!(?file.unit_hash, "unit has been fully restored");
+                        progress.inc(1);
+                    }
                 }
             }
             Err(error) => {
