@@ -82,7 +82,7 @@ pub async fn save_units(
                     if !skip.files.contains(&object_key) {
                         progress.uploaded_files += 1;
                         progress.uploaded_bytes += output_file.contents.len() as u64;
-                        cas_uploads.push((object_key.clone(), output_file.contents));
+                        cas_uploads.push((object_key, output_file.contents));
                     }
                 }
 
@@ -203,7 +203,7 @@ pub async fn save_units(
                     if !skip.files.contains(&object_key) {
                         progress.uploaded_files += 1;
                         progress.uploaded_bytes += out_dir_file.contents.len() as u64;
-                        cas_uploads.push((object_key.clone(), out_dir_file.contents));
+                        cas_uploads.push((object_key, out_dir_file.contents));
                     }
                 }
 
