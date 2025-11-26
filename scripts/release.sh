@@ -12,7 +12,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 BUCKET="hurry-releases"
-AWS_PROFILE="PowerUserAccess/jess@attunehq.com"
+AWS_PROFILE="${AWS_PROFILE:-}"
 
 # Windows target choice: GNU vs MSVC
 # We use x86_64-pc-windows-gnu instead of x86_64-pc-windows-msvc because:
@@ -117,14 +117,20 @@ check_aws_auth() {
 
     step "Checking AWS authentication"
 
+    # Check that AWS_PROFILE is set
+    if [[ -z "$AWS_PROFILE" ]]; then
+        fail "AWS_PROFILE environment variable is not set.
+
+Please set AWS_PROFILE to your AWS SSO profile:
+  export AWS_PROFILE=your-profile-name"
+    fi
+
     # Try to get AWS identity using the configured profile
     if ! aws sts get-caller-identity --profile "$AWS_PROFILE" > /dev/null 2>&1; then
         fail "AWS authentication failed for profile '$AWS_PROFILE'.
 
 Please authenticate with AWS:
-  aws sso login --profile $AWS_PROFILE
-
-Or set a valid AWS_PROFILE environment variable."
+  aws sso login --profile $AWS_PROFILE"
     fi
 
     info "✓ AWS authentication verified"
