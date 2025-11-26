@@ -191,7 +191,7 @@ impl Postgres {
     /// generally available.
     #[allow(dead_code)]
     #[tracing::instrument(name = "Postgres::create_token")]
-    pub async fn create_token(&self, account: AccountId) -> Result<RawToken> {
+    pub async fn create_token(&self, account: AccountId, name: &str) -> Result<RawToken> {
         use rand::RngCore;
 
         let plaintext = {
@@ -205,10 +205,11 @@ impl Postgres {
         let token = TokenHash::new(&plaintext);
         sqlx::query!(
             r#"
-            INSERT INTO api_key (account_id, hash)
-            VALUES ($1, $2)
+            INSERT INTO api_key (account_id, name, hash)
+            VALUES ($1, $2, $3)
             "#,
             account.as_i64(),
+            name,
             token.as_bytes(),
         )
         .execute(&self.pool)

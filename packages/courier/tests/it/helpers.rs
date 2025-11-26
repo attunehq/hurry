@@ -206,7 +206,7 @@ impl TestAuth {
         let tokens = stream::iter(&account_ids)
             .then(|(account, &account_id)| async move {
                 let hash = db
-                    .create_token(account_id)
+                    .create_token(account_id, &format!("{account}-token"))
                     .await
                     .with_context(|| format!("set up {account}"))?;
                 Result::<_>::Ok((account.to_string(), hash))
@@ -217,7 +217,7 @@ impl TestAuth {
         let revoked_tokens = stream::iter(&account_ids)
             .then(|(account, &account_id)| async move {
                 let hash = db
-                    .create_token(account_id)
+                    .create_token(account_id, &format!("{account}-revoked"))
                     .await
                     .with_context(|| format!("set up {account}"))?;
                 db.revoke_token(&hash)
