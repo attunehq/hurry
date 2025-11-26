@@ -27,7 +27,7 @@
 
 FROM debian:bookworm-20251020
 
-RUN apt update && apt install -y curl git build-essential pkg-config libssl-dev libgpg-error-dev libgpgme-dev
+RUN apt update && apt install -y curl git build-essential pkg-config libssl-dev libgpg-error-dev libgpgme-dev file
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 WORKDIR /root
