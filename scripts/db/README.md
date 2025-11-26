@@ -72,9 +72,11 @@ Note: Will fail if the account has API keys.
 
 ### Create Token
 ```bash
-./scripts/db/token-create <account-id>
+./scripts/db/token-create <account-id> <name>
 ```
 This generates a new API token and displays it. **Save the token immediately** as it cannot be retrieved later.
+
+The `name` parameter is required and allows you to label the token (e.g., "production-ci", "dev-laptop"). This helps identify which token is being used where.
 
 ### List Tokens
 ```bash
@@ -115,16 +117,16 @@ Accepts either a numeric token ID or the plaintext token value.
 #   1 | 1 | user@acme.com | 2025-11-12 10:31:00-08
 
 # Create an API token for the account
-./scripts/db/token-create 1
+./scripts/db/token-create 1 "production-ci"
 # Output: API token created successfully:
-#   1 | 1 | 2025-11-12 10:32:00-08
+#   1 | 1 | production-ci | 2025-11-12 10:32:00-08
 #
 # TOKEN (save this, it will not be shown again):
 #   a3f8b9c... (64 character hex string)
 
 # List all tokens to see status
 ./scripts/db/token-list
-# Shows token ID, account ID, email, creation time, last access, and revocation status
+# Shows token ID, account ID, email, token name, creation time, last access, and revocation status
 
 # Look up a token by its plaintext value
 ./scripts/db/token-lookup "a3f8b9c..."
