@@ -24,7 +24,7 @@ env:
 jobs:
     rust:
         name: Build, check, and test Rust
-        runs-on: ubuntu-latest
+        runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
 
         services:
             postgres:
@@ -71,7 +71,7 @@ jobs:
 
     hurry-rust:
         name: Build with Hurry and check cache restores
-        runs-on: ubuntu-latest
+        runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
 
         steps:
             - name: Install Rust

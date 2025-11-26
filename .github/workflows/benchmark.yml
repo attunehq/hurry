@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
     clean:
-        runs-on: ubuntu-latest
+        runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
         outputs:
             duration: ${{ steps.build.outputs.duration }}
 
@@ -29,7 +29,7 @@ jobs:
                   echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
     hurry:
-        runs-on: ubuntu-latest
+        runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
         outputs:
             duration: ${{ steps.build.outputs.duration }}
 
@@ -50,7 +50,7 @@ jobs:
                   echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
     swatinem:
-        runs-on: ubuntu-latest
+        runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
         outputs:
             duration: ${{ steps.complete.outputs.duration }}
 
@@ -72,7 +72,7 @@ jobs:
                   echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
     sccache:
-        runs-on: ubuntu-latest
+        runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
         outputs:
             duration: ${{ steps.complete.outputs.duration }}
 
@@ -98,7 +98,7 @@ jobs:
 
     summary:
         name: Benchmark
-        runs-on: ubuntu-latest
+        runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
         needs: [clean, hurry, swatinem, sccache]
 
         steps:
