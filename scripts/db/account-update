@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -z "${COURIER_DATABASE_URL:-}" ]; then
+  echo "Error: COURIER_DATABASE_URL environment variable is not set" >&2
+  exit 1
+fi
+
+if [ $# -ne 2 ]; then
+  echo "Usage: $0 <account-id> <new-email>" >&2
+  echo "Update account email" >&2
+  exit 1
+fi
+
+ACCOUNT_ID="$1"
+NEW_EMAIL="$2"
+
+if ! [[ "$ACCOUNT_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Account ID must be a number" >&2
+  exit 1
+fi
+
+if ! RESULT=$(echo "UPDATE account SET email = :'new_email' WHERE id = :account_id RETURNING id, organization_id, email, created_at;" | psql "$COURIER_DATABASE_URL" -v account_id="$ACCOUNT_ID" -v new_email="$NEW_EMAIL" -t 2>&1); then
+  echo "Error: Failed to update account" >&2
+  echo "$RESULT" >&2
+  exit 1
+fi
+
+if [ -z "$(echo "$RESULT" | tr -d '[:space:]')" ]; then
+  echo "Error: Account with ID $ACCOUNT_ID not found" >&2
+  exit 1
+fi
+
+echo "Account updated successfully:"
+echo "$RESULT" | sed 's/^/  /'

@@ -1,25 +1,12 @@
-use std::{
-    path::PathBuf,
-    sync::atomic::Ordering,
-    time::{Duration, Instant},
-};
+use std::path::PathBuf;
 
 use aerosol::Aero;
-use atomic_time::AtomicInstant;
 use clap::Parser;
 use color_eyre::{Result, eyre::Context};
 use derive_more::Debug;
-use tap::Pipe;
 use tracing::level_filters::LevelFilter;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use tracing_tree::time::FormatTime;
-
-use crate::db::Postgres;
-
-mod api;
-mod db;
-mod storage;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -73,18 +60,14 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(ErrorLayer::default())
         .with(
-            tracing_tree::HierarchicalLayer::default()
-                .with_indent_lines(true)
-                .with_indent_amount(2)
-                .with_thread_ids(false)
-                .with_thread_names(false)
-                .with_verbose_exit(false)
-                .with_verbose_entry(false)
-                .with_deferred_spans(true)
-                .with_bracketed_fields(true)
-                .with_span_retrace(true)
-                .with_timer(Uptime::default())
-                .with_targets(false),
+            tracing_subscriber::fmt::layer()
+                .with_level(true)
+                .with_file(true)
+                .with_line_number(true)
+                .with_target(true)
+                .with_thread_ids(true)
+                .with_thread_names(true)
+                .pretty(),
         )
         .with(
             tracing_subscriber::EnvFilter::builder()
@@ -101,11 +84,11 @@ async fn main() -> Result<()> {
 
 async fn serve(config: ServeConfig) -> Result<()> {
     tracing::info!("constructing application router...");
-    let storage = storage::Disk::new(&config.cas_root);
-    let db = Postgres::connect(&config.database_url)
+    let storage = courier::storage::Disk::new(&config.cas_root);
+    let db = courier::db::Postgres::connect(&config.database_url)
         .await
         .context("connect to database")?;
-    let router = api::router(Aero::new().with(storage).with(db));
+    let router = courier::api::router(Aero::new().with(storage).with(db));
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -155,68 +138,15 @@ async fn shutdown_signal() {
 async fn migrate(config: MigrateConfig) -> Result<()> {
     tracing::info!("applying migrations...");
 
-    let pool = Postgres::connect(&config.database_url)
+    let pool = courier::db::Postgres::connect(&config.database_url)
         .await
         .context("connect to database")?;
 
-    Postgres::MIGRATOR
+    courier::db::Postgres::MIGRATOR
         .run(pool.as_ref())
         .await
         .context("apply migrations")?;
 
     tracing::info!("migrations applied successfully");
     Ok(())
-}
-
-/// Prints the overall latency and latency between tracing events.
-struct Uptime {
-    start: Instant,
-    prior: AtomicInstant,
-}
-
-impl Uptime {
-    /// Get the [`Duration`] since the last time this function was called.
-    /// Uses relaxed atomic ordering; this isn't meant to be super precise-
-    /// just fast to run and good enough for humans to eyeball.
-    ///
-    /// If the function hasn't yet been called, it returns the time
-    /// since the overall [`Uptime`] struct was created.
-    fn elapsed_since_prior(&self) -> Duration {
-        const RELAXED: Ordering = Ordering::Relaxed;
-        self.prior
-            .fetch_update(RELAXED, RELAXED, |_| Some(Instant::now()))
-            .unwrap_or_else(|_| Instant::now())
-            .pipe(|prior| prior.elapsed())
-    }
-}
-
-impl Default for Uptime {
-    fn default() -> Self {
-        Self {
-            start: Instant::now(),
-            prior: AtomicInstant::now(),
-        }
-    }
-}
-
-impl FormatTime for Uptime {
-    // Prints the total runtime for the program.
-    fn format_time(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
-        let elapsed = self.start.elapsed();
-        let seconds = elapsed.as_secs_f64();
-        write!(w, "{seconds:.03}s")
-    }
-
-    // Elapsed here is the total time _in this span_,
-    // but we want "the time since the last message was printed"
-    // so we use `self.prior`.
-    fn style_timestamp(
-        &self,
-        _ansi: bool,
-        _elapsed: Duration,
-        w: &mut impl std::fmt::Write,
-    ) -> std::fmt::Result {
-        let elapsed = self.elapsed_since_prior().as_millis();
-        write!(w, "{elapsed: >3}ms")
-    }
 }

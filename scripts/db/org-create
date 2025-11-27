@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -z "${COURIER_DATABASE_URL:-}" ]; then
+  echo "Error: COURIER_DATABASE_URL environment variable is not set" >&2
+  exit 1
+fi
+
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <org-name>" >&2
+  echo "Create a new organization" >&2
+  exit 1
+fi
+
+ORG_NAME="$1"
+
+if ! RESULT=$(echo "INSERT INTO organization (name) VALUES (:'org_name') RETURNING id, name, created_at;" | psql "$COURIER_DATABASE_URL" -v org_name="$ORG_NAME" -t 2>&1); then
+  echo "Error: Failed to create organization" >&2
+  echo "$RESULT" >&2
+  exit 1
+fi
+
+echo "Organization created successfully:"
+echo "$RESULT" | sed 's/^/  /'

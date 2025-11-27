@@ -5,13 +5,12 @@ use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context, OptionExt as _, bail, eyre},
 };
+use serde::{Deserialize, Serialize};
+use tap::Conv as _;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::{
-    cargo::{
-        ArtifactKey, ArtifactPlan, BuildPlan, BuildScriptDirs, CargoBuildArguments,
-        CargoCompileMode, Profile, Workspace,
-    },
+    cargo::{BuildPlan, CargoBuildArguments, CargoCompileMode, Profile, Workspace},
     cross::{self, CrossConfigGuard},
     fs::{self},
     path::{AbsDirPath, AbsFilePath},
@@ -24,7 +23,7 @@ use crate::{
 /// workspace target directory.
 fn convert_container_path_to_host(path: &str, workspace: &Workspace) -> String {
     if let Some(suffix) = path.strip_prefix("/target") {
-        format!("{}{}", workspace.target.as_std_path().display(), suffix)
+        format!("{}{}", workspace.build_dir.as_std_path().display(), suffix)
     } else {
         path.to_string()
     }
@@ -47,7 +46,7 @@ async fn build_plan(
     // We convert the error case to `Ok` because if the rename fails (e.g.,
     // permissions, cross-device), we can proceed without it; this will then
     // have the original issue but at least won't break the build.
-    let _rename_guard = fs::rename_temporary(&workspace.target)
+    let _rename_guard = fs::rename_temporary(workspace.build_dir.as_ref())
         .await
         .inspect_err(|error| {
             warn!(
@@ -365,7 +364,7 @@ pub async fn artifact_plan(
             // Note: This is more reliable than parsing rustc args because cargo
             // always sets this field correctly regardless of whether cross or cargo
             // invoked the build.
-            let target = invocation.kind.clone();
+            let target = invocation.target_arch.clone().into();
             debug!(
                 package = invocation.package_name,
                 ?target,
@@ -402,7 +401,7 @@ pub async fn artifact_plan(
     let target = args
         .as_ref()
         .target()
-        .map(String::from)
+        .conv::<Option<String>>()
         .unwrap_or_else(|| rustc.host_target.clone());
 
     Ok(ArtifactPlan {
@@ -410,4 +409,59 @@ pub async fn artifact_plan(
         target,
         profile: profile.clone(),
     })
+}
+
+/// An ArtifactPlan represents the collection of information known about the
+/// artifacts for a build statically at compile-time.
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+pub struct ArtifactPlan {
+    pub profile: Profile,
+    pub target: String,
+    pub artifacts: Vec<ArtifactKey>,
+}
+
+/// An ArtifactKey represents the information known about a library unit (i.e.
+/// a library crate, its build script, and its build script outputs) statically
+/// at plan-time.
+///
+/// In particular, this information does _not_ include information derived from
+/// compiling and running the build script, such as `rustc` flags from build
+/// script output directives.
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+pub struct ArtifactKey {
+    // Partial artifact key information. Note that this is only derived from the
+    // build plan, and therefore is missing essential information (e.g. `rustc`
+    // flags from build script output directives) that can only be determined
+    // interactively.
+    //
+    // TODO: There are more fields here that we can know from the planning stage
+    // that need to be added (e.g. features).
+    pub package_name: String,
+    pub package_version: String,
+
+    // Artifact folders to save and restore.
+    pub lib_files: Vec<AbsFilePath>,
+    pub build_script_files: Option<BuildScriptDirs>,
+
+    // Unit hashes.
+    pub library_crate_compilation_unit_hash: String,
+    pub build_script_compilation_unit_hash: Option<String>,
+    pub build_script_execution_unit_hash: Option<String>,
+
+    /// The target triple from the `--target` flag in the rustc invocation for
+    /// the _library crate_ of the artifact, if one was specified.
+    ///
+    /// Note: build scripts ignore this and always build for the local target.
+    pub target: Option<String>,
+
+    /// The profile for the _library crate_ of the artifact.
+    ///
+    /// Note: build scripts ignore this and always build a set profile.
+    pub profile: Profile,
+}
+
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+pub struct BuildScriptDirs {
+    pub compiled_dir: AbsDirPath,
+    pub output_dir: AbsDirPath,
 }

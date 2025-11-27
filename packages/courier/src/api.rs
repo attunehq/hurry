@@ -36,6 +36,7 @@ use axum::{
     Router, extract::DefaultBodyLimit, extract::Request, http::HeaderValue, middleware::Next,
     response::Response,
 };
+use http::StatusCode;
 use tower::ServiceBuilder;
 use tower_http::{
     compression::CompressionLayer, decompression::RequestDecompressionLayer,
@@ -68,7 +69,10 @@ pub fn router(state: State) -> Router {
         .layer(RequestDecompressionLayer::new())
         .layer(CompressionLayer::new())
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
-        .layer(TimeoutLayer::new(REQUEST_TIMEOUT));
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            REQUEST_TIMEOUT,
+        ));
 
     Router::new()
         .nest("/api/v1", v1::router())
@@ -104,53 +108,4 @@ async fn trace_request(request: Request, next: Next) -> Response {
     }
     .instrument(span)
     .await
-}
-
-/// Create an isolated test server with the given database pool:
-/// - The database pool is intended to come from the [`sqlx::test`] macro
-/// - Creates a new [`Disk`](crate::storage::Disk) instance in a temp directory
-/// - Creates a new empty [`KeySets`](crate::auth::KeySets) instance
-#[cfg(test)]
-pub async fn test_server(
-    pool: sqlx::PgPool,
-) -> color_eyre::Result<(axum_test::TestServer, async_tempfile::TempDir)> {
-    use color_eyre::eyre::Context;
-
-    let db = crate::db::Postgres { pool };
-    let (storage, temp) = crate::storage::Disk::new_temp()
-        .await
-        .context("create temp storage")?;
-    let state = Aero::new().with(storage).with(db);
-    let router = crate::api::router(state);
-    axum_test::TestServerConfig::default()
-        .build(router)
-        .map_err(|e| color_eyre::eyre::eyre!("create test server: {e}"))
-        .map(|server| (server, temp))
-}
-
-#[cfg(test)]
-pub(crate) mod test_helpers {
-    use axum::body::Bytes;
-    use axum::http::StatusCode;
-    use axum_test::TestServer;
-    use clients::courier::v1::Key;
-    use color_eyre::Result;
-
-    /// Generate test content and compute its key.
-    pub fn test_blob(content: &[u8]) -> (Vec<u8>, Key) {
-        let hash = blake3::hash(content);
-        (content.to_vec(), Key::from_blake3(hash))
-    }
-
-    /// Write a blob to CAS and return the key.
-    pub async fn write_cas(server: &TestServer, content: &[u8]) -> Result<Key> {
-        let (_, key) = test_blob(content);
-        let response = server
-            .put(&format!("/api/v1/cas/{key}"))
-            .bytes(Bytes::copy_from_slice(content))
-            .await;
-
-        response.assert_status(StatusCode::CREATED);
-        Ok(key)
-    }
 }

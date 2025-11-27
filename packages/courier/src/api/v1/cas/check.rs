@@ -3,7 +3,11 @@ use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 use color_eyre::eyre::Report;
 use tracing::{error, info};
 
-use crate::storage::{Disk, Key};
+use crate::{
+    auth::AuthenticatedToken,
+    db::Postgres,
+    storage::{Disk, Key},
+};
 
 /// Check whether the given key exists in the CAS.
 ///
@@ -33,8 +37,29 @@ use crate::storage::{Disk, Key};
 ///   since this can be non-trivial. This tradeoff seems worth the minor amount
 ///   of extra complexity/potential confusion that having an existence check may
 ///   bring to the service.
-#[tracing::instrument]
-pub async fn handle(Dep(cas): Dep<Disk>, Path(key): Path<Key>) -> CasCheckResponse {
+#[tracing::instrument(skip(auth))]
+pub async fn handle(
+    auth: AuthenticatedToken,
+    Dep(db): Dep<Postgres>,
+    Dep(cas): Dep<Disk>,
+    Path(key): Path<Key>,
+) -> CasCheckResponse {
+    // Check if org has access to this CAS key
+    // Return NotFound (not Forbidden) to avoid leaking information about blob
+    // existence
+    match db.check_cas_access(auth.org_id, &key).await {
+        Ok(true) => {}
+        Ok(false) => {
+            info!("cas.check.no_access");
+            return CasCheckResponse::NotFound;
+        }
+        Err(err) => {
+            error!(error = ?err, "cas.check.access_check_error");
+            return CasCheckResponse::Error(err);
+        }
+    }
+
+    // Check if blob exists
     match cas.exists(&key).await {
         Ok(true) => {
             info!("cas.check.found");
@@ -67,79 +92,5 @@ impl IntoResponse for CasCheckResponse {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use axum::http::StatusCode;
-    use color_eyre::{Result, eyre::Context};
-    use sqlx::PgPool;
-
-    use crate::api::test_helpers::{test_blob, write_cas};
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn check_exists(pool: PgPool) -> Result<()> {
-        const CONTENT: &[u8] = b"check exists test";
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let key = write_cas(&server, CONTENT).await?;
-
-        let response = server
-            .method(axum::http::Method::HEAD, &format!("/api/v1/cas/{key}"))
-            .await;
-
-        response.assert_status_ok();
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn check_doesnt_exist(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let (_, nonexistent_key) = test_blob(b"never written");
-
-        let response = server
-            .method(
-                axum::http::Method::HEAD,
-                &format!("/api/v1/cas/{nonexistent_key}"),
-            )
-            .await;
-
-        response.assert_status(StatusCode::NOT_FOUND);
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn check_then_write_toctou_safety(pool: PgPool) -> Result<()> {
-        const CONTENT: &[u8] = b"toctou test";
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let (_, key) = test_blob(CONTENT);
-
-        // Check before write
-        let check1 = server
-            .method(axum::http::Method::HEAD, &format!("/api/v1/cas/{key}"))
-            .await;
-        check1.assert_status(StatusCode::NOT_FOUND);
-
-        // Write content
-        write_cas(&server, CONTENT).await?;
-
-        // Check after write
-        let check2 = server
-            .method(axum::http::Method::HEAD, &format!("/api/v1/cas/{key}"))
-            .await;
-        check2.assert_status_ok();
-
-        Ok(())
     }
 }

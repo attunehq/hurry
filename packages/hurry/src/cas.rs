@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, convert::identity, fmt::Debug};
 
-use clients::{Courier, courier::v1::Key};
+use clients::{Courier, Token, courier::v1::Key};
 use color_eyre::{Result, eyre::OptionExt};
 use derive_more::Display;
 use futures::Stream;
@@ -20,10 +20,10 @@ impl CourierCas {
         Self { client }
     }
 
-    /// Create a new instance with the provided base url.
+    /// Create a new instance with the provided base url and token.
     /// Instantiates a new [`Courier`] instance.
-    pub fn new_client(base: Url) -> Result<Self> {
-        let client = Courier::new(base)?;
+    pub fn new_client(base: Url, token: Token) -> Result<Self> {
+        let client = Courier::new(base, token)?;
         Ok(Self { client })
     }
 

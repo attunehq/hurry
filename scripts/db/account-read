@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -z "${COURIER_DATABASE_URL:-}" ]; then
+  echo "Error: COURIER_DATABASE_URL environment variable is not set" >&2
+  exit 1
+fi
+
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <account-id>" >&2
+  echo "Read account details by ID" >&2
+  exit 1
+fi
+
+ACCOUNT_ID="$1"
+
+if ! [[ "$ACCOUNT_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Account ID must be a number" >&2
+  exit 1
+fi
+
+if ! RESULT=$(echo "SELECT a.id, a.organization_id, o.name as org_name, a.email, a.created_at FROM account a JOIN organization o ON a.organization_id = o.id WHERE a.id = :account_id;" | psql "$COURIER_DATABASE_URL" -v account_id="$ACCOUNT_ID" 2>&1); then
+  echo "Error: Failed to read account" >&2
+  echo "$RESULT" >&2
+  exit 1
+fi
+
+if echo "$RESULT" | grep -q "(0 rows)"; then
+  echo "Error: Account with ID $ACCOUNT_ID not found" >&2
+  exit 1
+fi
+
+echo "$RESULT"

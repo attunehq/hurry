@@ -1,89 +1,73 @@
-use std::{
-    fmt::Debug,
-    path::{Path, PathBuf},
-};
+use std::fmt::Debug;
 
 use color_eyre::{Result, eyre::bail};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    cargo::Workspace,
+    cargo::{RustcTarget, UnitPlanInfo, Workspace},
     fs,
-    path::{AbsDirPath, AbsFilePath, JoinWith as _, RelFilePath, RelativeTo as _},
+    path::{AbsFilePath, GenericPath, JoinWith as _, RelFilePath, RelativeTo as _},
 };
 
 /// A "qualified" path inside a Cargo project.
 ///
-/// Paths in some files, such as "dep-info" files or build script outputs, are
-/// sometimes written using absolute paths. However `hurry` wants to know what
-/// these paths are relative to so that it can back up and restore paths in
-/// different workspaces and machines. This type supports `hurry` being able to
-/// determine what kind of path is being referenced.
+/// Semantically relative paths in some files (e.g. dep-info files, build script
+/// outputs, etc.) are sometimes written as resolved absolute paths. However,
+/// `hurry` needs to recognize that these paths are relative so it can rewrite
+/// them when restoring artifacts to different machines with different paths.
+/// This type implements path parsing and rewriting.
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
 #[serde(tag = "t", content = "c")]
 pub enum QualifiedPath {
-    /// The path is "natively" relative without a root prior to `hurry` making
-    /// it relative. Such paths are backed up and restored "as-is".
-    ///
-    /// Note: Since these paths are natively written as relative paths,
-    /// it's not necessarily clear to what file these are referring without more
-    /// context (such as the kind of file that contained the path and its
-    /// location). If this is ever a problem, we'll probably need to change how
-    /// we represent this type- maybe e.g. provide a "computed" path relative to
-    /// a known root along with the "native" version of the path.
+    /// The path is originally written as relative. Such paths are backed up and
+    /// restored "as-is".
     Rootless(RelFilePath),
 
-    /// The path is relative to the workspace target profile directory.
+    /// The absolute path is relative to the workspace target profile directory.
     RelativeTargetProfile(RelFilePath),
 
-    /// The path is relative to `$CARGO_HOME` for the user.
+    /// The absolute path is relative to `$CARGO_HOME` for the user.
     RelativeCargoHome(RelFilePath),
 
-    /// The path is an absolute path.
+    /// The absolute path is not relative to any known root.
     ///
-    /// In practice, we think this means it's SDK headers, system libraries,
-    /// etc; items that are _assumed_ to be available on any machine where the
-    /// build is restored.
+    /// In practice, these are paths to SDK headers, system libraries, etc.
+    /// items that are at known paths on machines. Crates semantically should
+    /// not be referencing absolute paths without also emitting Cargo directives
+    /// to invalidate builds when the files at those paths change (e.g. see how
+    /// the openssl build script discovers the system SSL library[^1]).
     ///
-    /// The reason we consider this safe is because we cache artifacts by Rust
-    /// target triple along with other values; these should make it such that
-    /// different operating systems don't end up having different system paths.
+    /// We handle these paths by handling build script output directives.
     ///
-    /// As a future optimization we may want to enumerate and add various system
-    /// path roots (e.g. the macOS SDK root, etc) that go through more specific
-    /// handling before ultimately falling back to this option.
+    /// In the future, we'll enumerate more roots (e.g. macOS SDK, Homebrew) and
+    /// add specific handling if needed.
+    ///
+    /// [^1]: https://github.com/rust-openssl/rust-openssl/blob/09b90d036ec5341deefb7fce86748e176379d01a/openssl-sys/build/find_normal.rs#L72
     Absolute(AbsFilePath),
 }
 
 impl QualifiedPath {
     #[instrument(name = "QualifiedPath::parse_string")]
-    pub async fn parse_string(ws: &Workspace, path: &str) -> Result<Self> {
-        Ok(if let Ok(rel) = RelFilePath::try_from(path) {
-            if fs::exists(ws.profile_dir.join(&rel).as_std_path()).await {
-                Self::RelativeTargetProfile(rel)
-            } else if fs::exists(ws.cargo_home.join(&rel).as_std_path()).await {
-                Self::RelativeCargoHome(rel)
-            } else {
-                Self::Rootless(rel)
-            }
-        } else if let Ok(abs) = AbsFilePath::try_from(path) {
-            if let Ok(rel) = abs.relative_to(&ws.profile_dir) {
-                Self::RelativeTargetProfile(rel)
-            } else if let Ok(rel) = abs.relative_to(&ws.cargo_home) {
-                Self::RelativeCargoHome(rel)
-            } else {
-                Self::Absolute(abs)
-            }
-        } else {
-            bail!("unknown kind of path: {path:?}")
-        })
+    pub async fn parse_string(ws: &Workspace, target: &RustcTarget, path: &str) -> Result<Self> {
+        Self::parse(ws, target, &GenericPath::try_from(path)?).await
     }
 
     #[instrument(name = "QualifiedPath::parse")]
-    pub async fn parse(ws: &Workspace, path: &Path) -> Result<Self> {
+    pub async fn parse(
+        ws: &Workspace,
+        // TODO: This should be UnitPlanInfo so we can use
+        // ws.unit_profile_dir(), but we can't migrate over until all call-sites
+        // are ready (because we can easily construct a default RustcTarget but
+        // less so a default UnitPlanInfo).
+        target: &RustcTarget,
+        path: &GenericPath,
+    ) -> Result<Self> {
+        // TODO: Do we see repeated paths a lot? Should we cache the
+        // `fs::exists` calls?
+        let profile_dir = ws.arch_profile_dir(target);
         Ok(if let Ok(rel) = RelFilePath::try_from(path) {
-            if fs::exists(ws.profile_dir.join(&rel).as_std_path()).await {
+            if fs::exists(profile_dir.join(&rel).as_std_path()).await {
                 Self::RelativeTargetProfile(rel)
             } else if fs::exists(ws.cargo_home.join(&rel).as_std_path()).await {
                 Self::RelativeCargoHome(rel)
@@ -91,7 +75,7 @@ impl QualifiedPath {
                 Self::Rootless(rel)
             }
         } else if let Ok(abs) = AbsFilePath::try_from(path) {
-            if let Ok(rel) = abs.relative_to(&ws.profile_dir) {
+            if let Ok(rel) = abs.relative_to(&profile_dir) {
                 Self::RelativeTargetProfile(rel)
             } else if let Ok(rel) = abs.relative_to(&ws.cargo_home) {
                 Self::RelativeCargoHome(rel)
@@ -104,46 +88,22 @@ impl QualifiedPath {
     }
 
     #[instrument(name = "QualifiedPath::reconstruct_string")]
-    pub fn reconstruct_string(&self, ws: &Workspace) -> String {
-        match self {
-            QualifiedPath::Rootless(rel) => rel.to_string(),
-            QualifiedPath::RelativeTargetProfile(rel) => ws.profile_dir.join(rel).to_string(),
-            QualifiedPath::RelativeCargoHome(rel) => ws.cargo_home.join(rel).to_string(),
-            QualifiedPath::Absolute(abs) => abs.to_string(),
-        }
+    pub fn reconstruct_string(self, ws: &Workspace, target: &RustcTarget) -> String {
+        self.reconstruct_inner(ws, target).to_string()
     }
 
     #[instrument(name = "QualifiedPath::reconstruct")]
-    pub fn reconstruct(&self, ws: &Workspace) -> PathBuf {
+    pub fn reconstruct(self, ws: &Workspace, unit_info: &UnitPlanInfo) -> GenericPath {
+        self.reconstruct_inner(ws, &unit_info.target_arch)
+    }
+
+    fn reconstruct_inner(self, ws: &Workspace, target: &RustcTarget) -> GenericPath {
+        let profile_dir = ws.arch_profile_dir(target);
         match self {
             QualifiedPath::Rootless(rel) => rel.into(),
-            QualifiedPath::RelativeTargetProfile(rel) => ws.profile_dir.join(rel).into(),
+            QualifiedPath::RelativeTargetProfile(rel) => profile_dir.join(rel).into(),
             QualifiedPath::RelativeCargoHome(rel) => ws.cargo_home.join(rel).into(),
-            QualifiedPath::Absolute(abs) => abs.as_std_path().into(),
-        }
-    }
-
-    #[instrument(name = "QualifiedPath::reconstruct_raw")]
-    pub fn reconstruct_raw(&self, profile_root: &AbsDirPath, cargo_home: &AbsDirPath) -> PathBuf {
-        match self {
-            QualifiedPath::Rootless(rel) => rel.into(),
-            QualifiedPath::RelativeTargetProfile(rel) => profile_root.join(rel).into(),
-            QualifiedPath::RelativeCargoHome(rel) => cargo_home.join(rel).into(),
-            QualifiedPath::Absolute(abs) => abs.as_std_path().into(),
-        }
-    }
-
-    #[instrument(name = "QualifiedPath::reconstruct_raw_string")]
-    pub fn reconstruct_raw_string(
-        &self,
-        profile_root: &AbsDirPath,
-        cargo_home: &AbsDirPath,
-    ) -> String {
-        match self {
-            QualifiedPath::Rootless(rel) => rel.to_string(),
-            QualifiedPath::RelativeTargetProfile(rel) => profile_root.join(rel).to_string(),
-            QualifiedPath::RelativeCargoHome(rel) => cargo_home.join(rel).to_string(),
-            QualifiedPath::Absolute(abs) => abs.to_string(),
+            QualifiedPath::Absolute(abs) => abs.into(),
         }
     }
 }

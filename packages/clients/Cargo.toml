@@ -17,13 +17,14 @@ futures = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 async-tar = { workspace = true, optional = true }
 piper = { workspace = true, optional = true }
-tap = { workspace = true, optional = true }
+tap = { workspace = true }
 tracing = { workspace = true }
 flume = { workspace = true, optional = true }
 enum-assoc.workspace = true
 async-compression = { workspace = true, features = ["tokio", "zstd"], optional = true }
 zstd = { workspace = true, optional = true }
 http = { workspace = true }
+serde_json.workspace = true
 
 [features]
 default = []
@@ -35,7 +36,6 @@ client = [
     "dep:url",
     "dep:async-tar",
     "dep:piper",
-    "dep:tap",
     "dep:flume",
     "dep:async-compression",
     "dep:zstd"

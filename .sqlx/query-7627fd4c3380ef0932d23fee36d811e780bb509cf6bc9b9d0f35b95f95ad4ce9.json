@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into cargo_saved_unit (organization_id, cache_key, data)\n                values ($1, $2, $3)\n                on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7627fd4c3380ef0932d23fee36d811e780bb509cf6bc9b9d0f35b95f95ad4ce9"
+}

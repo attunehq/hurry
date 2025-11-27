@@ -9,7 +9,7 @@ use color_eyre::{
     Result,
     eyre::{Context, bail},
 };
-use itertools::Itertools;
+use serde::Deserialize;
 use tokio::process::Child;
 use tracing::{instrument, trace};
 
@@ -19,6 +19,7 @@ mod build_script;
 mod cache;
 mod dep_info;
 mod dependency;
+mod fingerprint;
 mod path;
 mod profile;
 mod rustc;
@@ -26,22 +27,34 @@ mod unit_graph;
 mod workspace;
 
 pub use build_args::{CargoBuildArgument, CargoBuildArguments, ColorWhen, MessageFormat};
-pub use build_plan::{BuildPlan, RustcInvocationArgument};
-pub use build_script::{BuildScriptOutput, RootOutput};
-pub use cache::{CargoCache, Restored, SaveProgress, save_artifacts};
+pub use build_plan::BuildPlan;
+pub use build_script::BuildScriptOutput;
+pub use cache::{CargoCache, Restored, SaveProgress, save_units};
 pub use dep_info::{DepInfo, DepInfoLine};
-pub use dependency::{Dependency, DependencyBuild, Optimizations};
+// pub use dependency::{Dependency, DependencyBuild, Optimizations};
+pub use fingerprint::Fingerprint;
 pub use path::QualifiedPath;
 pub use profile::Profile;
-pub use rustc::{
-    INVOCATION_LOG_DIR_ENV_VAR, RawRustcInvocation, RustcInvocation, RustcMetadata,
-    invocation_log_dir,
-};
+pub use rustc::{RustcArgument, RustcArguments, RustcMetadata, RustcTarget};
 pub use unit_graph::{
-    CargoCompileMode, UnitGraph, UnitGraphDependency, UnitGraphProfile,
-    UnitGraphProfilePanicStrategy, UnitGraphUnit,
+    UnitGraph, UnitGraphDependency, UnitGraphProfile, UnitGraphProfilePanicStrategy, UnitGraphUnit,
 };
-pub use workspace::{ArtifactKey, ArtifactPlan, BuildScriptDirs, BuiltArtifact, Workspace};
+pub use workspace::{
+    BuildScriptCompilationUnitPlan, BuildScriptExecutionUnitPlan, LibraryCrateUnitPlan, UnitPlan,
+    UnitPlanInfo, Workspace,
+};
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CargoCompileMode {
+    Test,
+    Build,
+    Check,
+    Doc,
+    Doctest,
+    Docscrape,
+    RunCustomBuild,
+}
 
 /// Execute Cargo without a subcommand with specified arguments.
 #[instrument]
@@ -148,55 +161,4 @@ pub async fn invoke_with(
     cmd.stderr(handles.stderr);
 
     cmd.spawn().context("could not spawn cargo")
-}
-
-/// Extract the value of a command line flag from argument vector.
-///
-/// Supports both space-separated (`--flag value`) and equals-separated
-/// (`--flag=value`) flag formats. Returns the first matching value found.
-///
-/// ## Examples
-/// ```not_rust
-/// let args = vec!["--profile".to_string(), "release".to_string()];
-/// assert_eq!(read_argv(&args, "--profile"), Some("release"));
-///
-/// let args = vec!["--profile=debug".to_string()];
-/// assert_eq!(read_argv(&args, "--profile"), Some("debug"));
-/// ```
-#[instrument]
-pub fn read_argv<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
-    debug_assert!(flag.starts_with("--"), "flag {flag:?} must start with `--`");
-    argv.iter().tuple_windows().find_map(|(a, b)| {
-        let (a, b) = (a.trim(), b.trim());
-
-        // Handle the `--flag value` case, where the flag and its value
-        // are distinct entries in `argv`.
-        if a == flag {
-            return Some(b);
-        }
-
-        // Handle the `--flag=value` case, where the flag and its value
-        // are the same entry in `argv`.
-        //
-        // Due to how tuple windows work, this case could be in either
-        // `a` or `b`. If `b` is the _last_ element in `argv`,
-        // it won't be iterated over again as a future `a`,
-        // so we have to check both.
-        //
-        // Unfortunately this leads to rework as all but the last `b`
-        // will be checked again as a future `a`, but since `argv`
-        // is relatively small this shouldn't be an issue in practice.
-        //
-        // Just in case I've thrown an `instrument` call on the function,
-        // but this is extremely unlikely to ever be an issue.
-        for v in [a, b] {
-            if let Some((a, b)) = v.split_once('=')
-                && a == flag
-            {
-                return Some(b);
-            }
-        }
-
-        None
-    })
 }

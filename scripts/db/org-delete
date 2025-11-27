@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -z "${COURIER_DATABASE_URL:-}" ]; then
+  echo "Error: COURIER_DATABASE_URL environment variable is not set" >&2
+  exit 1
+fi
+
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <org-id>" >&2
+  echo "Delete organization (will fail if accounts exist)" >&2
+  exit 1
+fi
+
+ORG_ID="$1"
+
+if ! [[ "$ORG_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Organization ID must be a number" >&2
+  exit 1
+fi
+
+if ! RESULT=$(echo "DELETE FROM organization WHERE id = :org_id RETURNING id, name;" | psql "$COURIER_DATABASE_URL" -v org_id="$ORG_ID" -t 2>&1); then
+  echo "Error: Failed to delete organization" >&2
+  echo "$RESULT" >&2
+  exit 1
+fi
+
+if [ -z "$(echo "$RESULT" | tr -d '[:space:]')" ]; then
+  echo "Error: Organization with ID $ORG_ID not found" >&2
+  exit 1
+fi
+
+echo "Organization deleted successfully:"
+echo "$RESULT" | sed 's/^/  /'

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -z "${COURIER_DATABASE_URL:-}" ]; then
+  echo "Error: COURIER_DATABASE_URL environment variable is not set" >&2
+  exit 1
+fi
+
+if [ $# -ne 2 ]; then
+  echo "Usage: $0 <org-id> <new-name>" >&2
+  echo "Update organization name" >&2
+  exit 1
+fi
+
+ORG_ID="$1"
+NEW_NAME="$2"
+
+if ! [[ "$ORG_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Organization ID must be a number" >&2
+  exit 1
+fi
+
+if ! RESULT=$(echo "UPDATE organization SET name = :'new_name' WHERE id = :org_id RETURNING id, name, created_at;" | psql "$COURIER_DATABASE_URL" -v org_id="$ORG_ID" -v new_name="$NEW_NAME" -t 2>&1); then
+  echo "Error: Failed to update organization" >&2
+  echo "$RESULT" >&2
+  exit 1
+fi
+
+if [ -z "$(echo "$RESULT" | tr -d '[:space:]')" ]; then
+  echo "Error: Organization with ID $ORG_ID not found" >&2
+  exit 1
+fi
+
+echo "Organization updated successfully:"
+echo "$RESULT" | sed 's/^/  /'

@@ -9,15 +9,17 @@ use std::time::Duration;
 use clap::Args;
 use color_eyre::{
     Result, Section as _, SectionExt as _,
-    eyre::{Context, OptionExt as _, bail},
+    eyre::{Context, OptionExt as _, bail, eyre},
 };
 use derive_more::Debug;
 use tracing::{debug, info, instrument, trace, warn};
 use url::Url;
 use uuid::Uuid;
 
+use clients::Token;
 use hurry::{
-    cargo::{self, CargoBuildArguments, CargoCache, Profile, Workspace},
+    cargo::{self, CargoBuildArguments, CargoCache, Workspace},
+    ci::is_ci,
     daemon::{CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse, DaemonPaths},
     progress::TransferBar,
 };
@@ -44,6 +46,13 @@ pub struct Options {
     #[debug("{courier_url}")]
     courier_url: Url,
 
+    /// Authentication token for the Courier instance.
+    // Note: this field is not _actually_ optional for `hurry` to operate; we're just telling clap
+    // that it is so that if the user runs with the `-h` or `--help` arguments we can not require
+    // the token in that case.
+    #[arg(long = "hurry-courier-token", env = "HURRY_COURIER_TOKEN")]
+    courier_token: Option<Token>,
+
     /// Skip backing up the cache.
     #[arg(long = "hurry-skip-backup", default_value_t = false)]
     skip_backup: bool,
@@ -57,8 +66,28 @@ pub struct Options {
     skip_restore: bool,
 
     /// Wait for all new artifacts to upload to cache to finish before exiting.
-    #[arg(long = "hurry-wait-for-upload", default_value_t = false)]
-    wait_for_upload: bool,
+    ///
+    /// When not provided, automatically decides based on environment:
+    /// - In CI, defaults to waiting.
+    /// - In local development, defaults to async upload.
+    /// - If desired, override CI behavior using `=false`.
+    //
+    // This grossly byzantine way of parsing is required to support:
+    // --hurry-wait-for-upload (no arg) -> true
+    // --hurry-wait-for-upload=true -> true
+    // --hurry-wait-for-upload=false -> false
+    //
+    // Sadly this breaks if we set `require_equals` to false: clap then eagerly parses the next
+    // argument and chokes if it's not present.
+    #[arg(
+        long = "hurry-wait-for-upload",
+        env = "HURRY_WAIT_FOR_UPLOAD",
+        num_args = 0..=1,
+        default_value = None,
+        default_missing_value = "true",
+        require_equals = true,
+    )]
+    wait_for_upload: Option<bool>,
 
     /// Show help for `hurry cargo build`.
     #[arg(long = "hurry-help", default_value_t = false)]
@@ -96,6 +125,14 @@ pub async fn exec(options: Options) -> Result<()> {
         return cargo::invoke("build", &options.argv).await;
     }
 
+    // We make the courier token required here; if we make it required in the actual
+    // clap state then we aren't able to support e.g. `cargo build -h` passthrough.
+    let Some(token) = &options.courier_token else {
+        return Err(eyre!("Courier authentication token is required"))
+            .suggestion("Set the `HURRY_COURIER_TOKEN` environment variable")
+            .suggestion("Provide it with the `--hurry-courier-token` argument");
+    };
+
     info!("Starting");
 
     // Parse and validate cargo build arguments.
@@ -106,26 +143,26 @@ pub async fn exec(options: Options) -> Result<()> {
     let workspace = Workspace::from_argv(&args)
         .await
         .context("opening workspace")?;
-    let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
 
-    // Compute artifact plan, which provides expected artifacts. Note that
-    // because we are not actually running build scripts, these "expected
-    // artifacts" do not contain fully unambiguous cache key information.
-    let artifact_plan = workspace
-        .artifact_plan(&profile, &args)
+    // Compute expected unit plans. Note that because we are not actually
+    // running build scripts, these "unit plans" do not contain fully
+    // unambiguous cache key information (e.g. they do not provide build script
+    // outputs).
+    let units = workspace
+        .units(&args)
         .await
-        .context("calculating expected artifacts")?;
+        .context("calculating expected units")?;
 
     // Initialize cache.
-    let cache = CargoCache::open(options.courier_url, workspace)
+    let cache = CargoCache::open(options.courier_url, token.clone(), workspace)
         .await
         .context("opening cache")?;
 
     // Restore artifacts.
-    let artifact_count = artifact_plan.artifacts.len() as u64;
+    let unit_count = units.len() as u64;
     let restored = if !options.skip_restore {
-        let progress = TransferBar::new(artifact_count, "Restoring cache");
-        cache.restore(&artifact_plan, &progress).await?
+        let progress = TransferBar::new(unit_count, "Restoring cache");
+        cache.restore(&units, &progress).await?
     } else {
         Default::default()
     };
@@ -209,9 +246,9 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Cache the built artifacts.
     if !options.skip_backup {
-        let upload_id = cache.save(artifact_plan, restored).await?;
-        if options.wait_for_upload {
-            let progress = TransferBar::new(artifact_count, "Uploading cache");
+        let upload_id = cache.save(units, restored).await?;
+        if WaitForUpload::from(options.wait_for_upload).should_wait() {
+            let progress = TransferBar::new(unit_count, "Uploading cache");
             wait_for_upload(upload_id, &progress).await?;
         }
     }
@@ -266,16 +303,48 @@ async fn wait_for_upload(request_id: Uuid, progress: &TransferBar) -> Result<()>
                 last_uploaded_files = save_progress.uploaded_files;
                 progress.inc(
                     save_progress
-                        .uploaded_artifacts
+                        .uploaded_units
                         .saturating_sub(last_uploaded_artifacts),
                 );
-                last_uploaded_artifacts = save_progress.uploaded_artifacts;
-                progress
-                    .dec_length(last_total_artifacts.saturating_sub(save_progress.total_artifacts));
-                last_total_artifacts = save_progress.total_artifacts;
+                last_uploaded_artifacts = save_progress.uploaded_units;
+                progress.dec_length(last_total_artifacts.saturating_sub(save_progress.total_units));
+                last_total_artifacts = save_progress.total_units;
             }
         }
     }
 
     Ok(())
+}
+
+/// Control whether to wait for artifact uploads to complete.
+#[derive(Clone, Copy, Debug)]
+enum WaitForUpload {
+    /// Automatically decide based on environment
+    Auto,
+
+    /// Wait for uploads
+    ExplicitWait,
+
+    /// Don't wait for uploads
+    ExplicitAsync,
+}
+
+impl WaitForUpload {
+    fn should_wait(self) -> bool {
+        match self {
+            Self::ExplicitWait => true,
+            Self::ExplicitAsync => false,
+            Self::Auto => is_ci(),
+        }
+    }
+}
+
+impl From<Option<bool>> for WaitForUpload {
+    fn from(value: Option<bool>) -> Self {
+        match value {
+            None => Self::Auto,
+            Some(true) => Self::ExplicitWait,
+            Some(false) => Self::ExplicitAsync,
+        }
+    }
 }

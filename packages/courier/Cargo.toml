@@ -7,10 +7,6 @@ edition = "2024"
 name = "cas_transport"
 harness = false
 
-[[bench]]
-name = "cache_restore"
-harness = false
-
 [dependencies]
 clients = { workspace = true }
 axum = { workspace = true }
@@ -18,11 +14,10 @@ tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["compat", "io"] }
 tower = { workspace = true, features = ["buffer", "limit", "load-shed"] }
 tower-http = { workspace = true, features = ["trace", "limit", "timeout", "compression-full", "decompression-full"] }
-sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate", "bigdecimal"] }
+sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate", "bigdecimal", "time"] }
 async-compression = { workspace = true, features = ["tokio", "zstd"] }
 blake3 = { workspace = true }
 hex = { workspace = true }
-zstd = { workspace = true }
 color-eyre = { workspace = true }
 tracing = { workspace = true }
 tracing-error = { workspace = true }
@@ -32,17 +27,19 @@ clap = { workspace = true, features = ["derive", "env"] }
 atomic-time = { workspace = true }
 tap = { workspace = true }
 derive_more = { workspace = true, features = ["full"] }
+serde = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 aerosol = { workspace = true, features = ["async", "axum", "axum-extra", "tracing"] }
 futures = { workspace = true }
-num-traits = { workspace = true }
-bigdecimal = { workspace = true }
 async-tar = { workspace = true }
 piper = { workspace = true }
-maplit = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+serde_json.workspace = true
+async-tempfile.workspace = true
+http.workspace = true
 
 [dev-dependencies]
-async-tempfile = { workspace = true }
 axum-test = { workspace = true, features = ["all"] }
 clients = { workspace = true, features = ["client"] }
 divan = { workspace = true }
@@ -50,6 +47,7 @@ futures = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }
+reqwest.workspace = true
 serde_json.workspace = true
 simple_test_case.workspace = true
 test-log = { workspace = true, features = ["trace"] }

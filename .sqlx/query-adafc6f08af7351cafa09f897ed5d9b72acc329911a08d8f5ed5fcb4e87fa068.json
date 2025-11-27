@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO cas_key (content)\n            VALUES ($1)\n            ON CONFLICT (content) DO UPDATE SET content = EXCLUDED.content\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "adafc6f08af7351cafa09f897ed5d9b72acc329911a08d8f5ed5fcb4e87fa068"
+}

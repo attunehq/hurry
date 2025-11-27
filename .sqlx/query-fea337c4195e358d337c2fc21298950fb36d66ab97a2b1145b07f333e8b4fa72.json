@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT cas_key.content\n            FROM cas_key\n            JOIN cas_access ON cas_key.id = cas_access.cas_key_id\n            WHERE cas_access.organization_id = $1\n            AND cas_key.content = ANY($2)\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "ByteaArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fea337c4195e358d337c2fc21298950fb36d66ab97a2b1145b07f333e8b4fa72"
+}

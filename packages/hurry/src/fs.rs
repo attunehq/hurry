@@ -25,13 +25,7 @@
 )]
 
 use std::{
-    collections::HashSet,
-    convert::identity,
-    fmt::Debug as StdDebug,
-    marker::PhantomData,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::SystemTime,
+    convert::identity, fmt::Debug as StdDebug, marker::PhantomData, sync::Arc, time::SystemTime,
 };
 
 use bon::Builder;
@@ -42,19 +36,19 @@ use color_eyre::{
 use derive_more::{Debug, Display};
 use filetime::FileTime;
 use fslock::LockFile as FsLockFile;
-use futures::{Stream, TryStreamExt, future};
+use futures::{Stream, TryStreamExt};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use tap::{Conv, Pipe, TapFallible};
+use tap::{Pipe, TapFallible, TryConv as _};
 use tokio::{fs::ReadDir, io::AsyncReadExt, sync::Mutex, task::spawn_blocking};
 use tracing::{debug, error, instrument, trace, warn};
 
 use clients::courier::v1::Key;
 use uuid::Uuid;
 
-use crate::{
-    ext::then_context,
-    path::{AbsDirPath, AbsFilePath, JoinWith, RelFilePath, RelativeTo},
+use crate::path::{
+    Abs, AbsDirPath, AbsFilePath, JoinWith as _, RelativeTo as _, SomeType, TryJoinWith as _,
+    TypedPath,
 };
 
 /// The default level of concurrency used in hurry `fs` operations.
@@ -149,58 +143,6 @@ impl LockFile<Locked> {
     }
 }
 
-/// File index of a directory.
-#[derive(Clone, Debug)]
-pub struct Index {
-    /// The root directory of the index.
-    pub root: AbsDirPath,
-
-    /// Files are relative to `root`.
-    //
-    // TODO: May want to make this a trie or something.
-    // https://docs.rs/fs-tree/0.2.2/fs_tree/ looked like it might work,
-    // but the API was sketchy so I didn't use it for now.
-    #[debug("{}", files.len())]
-    pub files: HashSet<RelFilePath>,
-}
-
-impl Index {
-    /// Index the provided path recursively.
-    #[instrument(name = "Index::recursive")]
-    pub async fn recursive(root: &AbsDirPath) -> Result<Self> {
-        let root = root.clone();
-        let files = walk_files(&root)
-            .and_then(|entry| future::ready(entry.relative_to(&root)))
-            .try_collect::<HashSet<_>>()
-            .await?;
-
-        Ok(Self { root, files })
-    }
-}
-
-/// An entry for a file that was indexed in [`Index`].
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub struct IndexEntry {
-    /// The hash of the file's contents.
-    pub hash: Key,
-
-    /// The metadata of the file.
-    pub metadata: Metadata,
-}
-
-impl IndexEntry {
-    /// Construct the entry from the provided file on disk.
-    #[instrument(name = "IndexEntry::from_file")]
-    pub async fn from_file(path: &AbsFilePath) -> Result<Self> {
-        let hash = hash_file(path).then_context("hash file").await?;
-        let metadata = Metadata::from_file(path)
-            .then_context("get metadata")
-            .await?
-            .ok_or_eyre(format!("file {path:?} should exist"))?;
-        Ok(Self { hash, metadata })
-    }
-}
-
 /// Determine the canonical cache path for the current user, if possible.
 ///
 /// ## Strategy
@@ -236,7 +178,7 @@ pub async fn user_global_cache_path() -> Result<AbsDirPath> {
     };
 
     base.join("v2")
-        .pipe(AbsDirPath::try_from)
+        .try_conv::<AbsDirPath>()
         .tap_ok(|dir| debug!(?dir, "user global cache path"))
 }
 
@@ -448,15 +390,10 @@ pub async fn remove_file(path: &AbsFilePath) -> Result<()> {
         .tap_ok(|_| trace!(?path, "remove file"))
 }
 
-/// Rename a file or directory.
+/// Rename a file or folder, overwriting the destination if it already exists.
 #[instrument]
-pub async fn rename(
-    from: impl AsRef<Path> + StdDebug,
-    to: impl AsRef<Path> + StdDebug,
-) -> Result<()> {
-    let from = from.as_ref();
-    let to = to.as_ref();
-    tokio::fs::rename(from, to)
+pub async fn rename<T>(from: &TypedPath<Abs, T>, to: &TypedPath<Abs, T>) -> Result<()> {
+    tokio::fs::rename(from.as_std_path(), to.as_std_path())
         .await
         .with_context(|| format!("rename {from:?} to {to:?}"))
         .tap_ok(|_| trace!(?from, ?to, "rename"))
@@ -488,21 +425,26 @@ pub async fn rename(
 /// /some/path/to/entity.ext.2f5ba9bf-0672-47eb-8542-710b0967330c
 /// ```
 #[instrument]
-pub async fn rename_temporary(from: impl Into<PathBuf> + StdDebug) -> Result<RenameGuard> {
-    let from = from.conv::<PathBuf>();
+pub async fn rename_temporary(from: &TypedPath<Abs, SomeType>) -> Result<RenameGuard> {
     let Some(parent) = from.parent() else {
         bail!("path does not have a parent: {from:?}");
     };
     let Some(name) = from.file_name() else {
         bail!("path does not have a name: {from:?}");
     };
-    let to = parent.join(format!(
-        "{}.{}",
-        String::from_utf8_lossy(name.as_encoded_bytes()),
-        Uuid::new_v4()
-    ));
+    // HACK: We just use try_join_file here because there's no try_join for
+    // arbitrary T and the validators don't do anything yet anyway for Dir/File.
+    let to: TypedPath<Abs, SomeType> = parent
+        .try_join_file(format!(
+            "{}.{}",
+            String::from_utf8_lossy(name.as_encoded_bytes()),
+            Uuid::new_v4()
+        ))?
+        .into();
 
-    rename(&from, &to).await.map(|_| RenameGuard::new(from, to))
+    rename(&from, &to)
+        .await
+        .map(|_| RenameGuard::new(from.clone(), to.clone()))
 }
 
 /// Restore a file or directory to its original location when dropped.
@@ -516,13 +458,13 @@ pub async fn rename_temporary(from: impl Into<PathBuf> + StdDebug) -> Result<Ren
 #[derive(Debug)]
 pub struct RenameGuard {
     restored: bool,
-    original: PathBuf,
-    renamed: PathBuf,
+    original: TypedPath<Abs, SomeType>,
+    renamed: TypedPath<Abs, SomeType>,
 }
 
 impl RenameGuard {
     /// Create a new instance with the provided paths.
-    fn new(original: PathBuf, renamed: PathBuf) -> Self {
+    fn new(original: TypedPath<Abs, SomeType>, renamed: TypedPath<Abs, SomeType>) -> Self {
         trace!(?original, ?renamed, "temporarily renamed path");
         Self {
             restored: false,
@@ -576,8 +518,8 @@ impl Drop for RenameGuard {
 pub async fn read_dir(path: &AbsDirPath) -> Result<ReadDir> {
     tokio::fs::read_dir(path.as_std_path())
         .await
-        .with_context(|| format!("read directory: {path:?}"))
         .tap_ok(|_| trace!(?path, "read directory"))
+        .map_err(|err| err.into())
 }
 
 /// The set of metadata that hurry cares about.
@@ -640,37 +582,13 @@ impl Metadata {
     /// the path extension or the file itself.
     #[instrument(name = "Metadata::set_file")]
     pub async fn set_file(&self, path: &AbsFilePath) -> Result<()> {
-        // We read the current metadata for the file so that we don't
-        // accidentally clobber other fields (although it's not clear
-        // that this is necessary- we mostly do this out of an abundance
-        // of caution as we want to avoid breaking things).
-        // If this ends up being too much of a performance hit we should
-        // revisit.
-        #[cfg(not(target_os = "windows"))]
-        if self.executable {
-            use std::os::unix::fs::PermissionsExt;
-
-            let metadata = tokio::fs::metadata(path.as_std_path())
-                .await
-                .context("get metadata")?;
-            let mut permissions = metadata.permissions();
-            permissions.set_mode(permissions.mode() | 0o111);
-            tokio::fs::set_permissions(path.as_std_path(), permissions.clone())
-                .await
-                .context("set permissions")
-                .tap_ok(|_| trace!(?path, ?permissions, "set permissions"))?;
-        }
+        set_executable(path, self.executable).await?;
 
         // Make sure to set the file times last so that other modifications to
         // the metadata don't mess with these.
-        let mtime = FileTime::from_system_time(self.mtime);
-        let path = path.as_std_path().to_path_buf();
-        spawn_blocking(move || {
-            filetime::set_file_mtime(&path, mtime).tap_ok(|_| trace!(?path, ?mtime, "update mtime"))
-        })
-        .await
-        .context("join thread")?
-        .context("update handle")
+        set_mtime(path, self.mtime).await?;
+
+        Ok(())
     }
 }
 
@@ -712,7 +630,7 @@ pub async fn metadata(
 /// Check whether the file exists.
 ///
 /// Returns `false` if there is an error checking whether the path exists.
-/// Note that this sort of check is prone to race conditions- if you plan
+/// Note that this sort of check is prone to race conditions - if you plan
 /// to do anything with the file after checking, you should probably
 /// just try to do the operation and handle the case of the file not existing.
 #[instrument]
@@ -732,6 +650,65 @@ pub async fn is_executable(path: impl AsRef<std::path::Path> + StdDebug) -> bool
     spawn_blocking(move || is_executable::is_executable(path))
         .await
         .expect("join task")
+}
+
+/// Set the mtime of the file.
+#[instrument]
+pub async fn set_mtime(path: &AbsFilePath, mtime: SystemTime) -> Result<()> {
+    let mtime = FileTime::from_system_time(mtime);
+    let path = path.as_std_path().to_path_buf();
+    spawn_blocking(move || {
+        filetime::set_file_mtime(&path, mtime).tap_ok(|_| trace!(?path, ?mtime, "update mtime"))
+    })
+    .await
+    .context("join thread")?
+    .context("update handle")
+}
+
+/// Set the file to be executable.
+///
+/// ## Windows
+///
+/// This function does not attempt to set whether a file is executable on
+/// Windows: in Windows files do not have "executable bits" and
+/// therefore whether they are executable is an intrinsic property of either
+/// the path extension or the file itself.
+#[instrument]
+pub async fn set_executable(path: &AbsFilePath, executable: bool) -> Result<()> {
+    // We read the current metadata for the file so that we don't accidentally
+    // clobber other fields (although it's not clear that this is necessary - we
+    // mostly do this out of an abundance of caution as we want to avoid
+    // breaking things). If this ends up being too much of a performance hit we
+    // should revisit.
+    #[cfg(not(target_os = "windows"))]
+    if executable {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let metadata = tokio::fs::metadata(path.as_std_path())
+            .await
+            .context("get metadata")?;
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(permissions.mode() | 0o111);
+        tokio::fs::set_permissions(path.as_std_path(), permissions.clone())
+            .await
+            .context("set permissions")
+            .tap_ok(|_| trace!(?path, ?permissions, "set permissions"))?;
+    }
+    Ok(())
+}
+
+/// Create a hard link to the file.
+#[instrument]
+pub async fn hard_link(original: &AbsFilePath, link: &AbsFilePath) -> Result<()> {
+    if exists(link).await {
+        remove_file(link)
+            .await
+            .context("remove linked destination")?;
+    }
+
+    tokio::fs::hard_link(original.as_std_path(), link.as_std_path())
+        .await
+        .context(format!("hard link {original:?} -> {link:?}"))
 }
 
 /// Return whether the path represents a directory.

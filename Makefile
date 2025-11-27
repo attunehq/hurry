@@ -1,19 +1,20 @@
-.PHONY: help format check check-fix autoinherit machete machete-fix precommit dev release sqlx-prepare install install-dev reset-local-cache
+.PHONY: help format check check-fix autoinherit machete machete-fix precommit dev release sqlx-prepare install install-dev reset-local-cache courier-local-auth
 
 .DEFAULT_GOAL := help
 
 help:
 	@echo "Available commands:"
-	@echo "  make format            - Format code with cargo +nightly fmt"
-	@echo "  make check             - Run clippy linter"
-	@echo "  make check-fix         - Run clippy with automatic fixes"
-	@echo "  make precommit         - Run checks and automated fixes before committing"
-	@echo "  make dev               - Build in debug mode"
-	@echo "  make release           - Build in release mode"
-	@echo "  make sqlx-prepare      - Prepare sqlx metadata for courier and hurry"
-	@echo "  make install           - Install hurry locally"
-	@echo "  make install-dev       - Install hurry locally, renaming to 'hurry-dev'"
-	@echo "  make reset-local-cache - Reset local courier instance (docker down, clear data, migrate)"
+	@echo "  make format             - Format code with cargo +nightly fmt"
+	@echo "  make check              - Run clippy linter"
+	@echo "  make check-fix          - Run clippy with automatic fixes"
+	@echo "  make precommit          - Run checks and automated fixes before committing"
+	@echo "  make dev                - Build in debug mode"
+	@echo "  make release            - Build in release mode"
+	@echo "  make sqlx-prepare       - Prepare sqlx metadata for courier and hurry"
+	@echo "  make install            - Install hurry locally"
+	@echo "  make install-dev        - Install hurry locally, renaming to 'hurry-dev'"
+	@echo "  make reset-local-cache  - Reset local courier instance (docker down, clear data, migrate)"
+	@echo "  make courier-local-auth - Load auth fixture data into local courier database"
 
 format:
 	cargo +nightly fmt
@@ -42,7 +43,7 @@ release:
 	cargo build --release
 
 sqlx-prepare:
-	cd packages/courier && cargo sqlx prepare --database-url $(COURIER_DATABASE_URL)
+	cargo sqlx prepare --database-url $(COURIER_DATABASE_URL) --workspace
 
 install:
 	@CARGO_HOME=$${CARGO_HOME:-$$HOME/.cargo} && \
@@ -66,8 +67,27 @@ install-dev:
 		VERSION=$$($$CARGO_HOME/bin/hurry-dev --version) && \
 		echo "Installed '$$VERSION' to $$CARGO_HOME/bin/hurry-dev"
 
+courier-local-auth:
+	@echo "Loading auth fixtures..."
+	@psql -h localhost -d courier -U courier -f packages/courier/schema/fixtures/auth.sql > /dev/null
+	@echo ""
+	@echo "Local auth fixture loaded. Available tokens:"
+	@echo "  acme-alice-token-001         (alice@acme.com, Acme Corp)"
+	@echo "  acme-bob-token-001           (bob@acme.com, Acme Corp)"
+	@echo "  widget-charlie-token-001     (charlie@widget.com, Widget Inc)"
+	@echo ""
+
 reset-local-cache:
-	docker compose down
-	rm -rf .hurrydata
-	docker compose up -d postgres
-	cargo sqlx migrate run --source packages/courier/schema/migrations --database-url $(COURIER_DATABASE_URL)
+	@echo "Stopping containers..."
+	@docker compose down
+	@echo "Clearing local data..."
+	@rm -rf .hurrydata
+	@echo "Starting postgres..."
+	@docker compose up -d postgres
+	@echo "Waiting for postgres to be ready..."
+	@until docker compose exec -T postgres pg_isready -U courier > /dev/null 2>&1; do \
+		sleep 0.5; \
+	done
+	@echo "Running migrations..."
+	@cargo sqlx migrate run --source packages/courier/schema/migrations --database-url $(COURIER_DATABASE_URL)
+	@$(MAKE) courier-local-auth

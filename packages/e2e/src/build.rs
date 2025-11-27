@@ -5,12 +5,12 @@ use cargo_metadata::Message;
 use color_eyre::{Result, Section, SectionExt, eyre::Context};
 use tracing::instrument;
 
-use crate::{Command, Container};
+use crate::Command;
 
 /// Construct a command for building a package with Cargo.
 ///
-/// This type provides an abstracted interface for running the build locally or
-/// in a docker context.
+/// This type provides an abstracted interface for running the build in
+/// testcontainers compose environments.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Builder)]
 #[builder(start_fn = new, finish_fn = finish)]
 pub struct Build {
@@ -55,6 +55,20 @@ pub struct Build {
     /// Whether to build in release mode.
     #[builder(default)]
     release: bool,
+
+    /// The Courier API URL for distributed caching.
+    ///
+    /// If provided, this is passed to hurry via the `HURRY_COURIER_URL`
+    /// environment variable.
+    #[builder(into)]
+    courier_url: Option<String>,
+
+    /// The Courier API token for authentication.
+    ///
+    /// If provided, this is passed to hurry via the `HURRY_COURIER_TOKEN`
+    /// environment variable.
+    #[builder(into)]
+    courier_token: Option<String>,
 }
 
 impl Build {
@@ -64,26 +78,16 @@ impl Build {
     /// The default set of arguments that are always provided to build commands.
     pub const DEFAULT_ARGS: [&str; 3] = ["build", "-v", "--message-format=json-render-diagnostics"];
 
-    /// Run the build locally.
-    #[instrument]
-    pub fn run_local(&self) -> Result<Vec<Message>> {
-        Self::capture_local(self.as_command()).with_context(|| {
-            format!(
-                "'cargo build' {:?}/{:?} in {:?}",
-                self.package, self.bin, self.pwd
-            )
-        })
-    }
-
-    /// Run the build inside the container.
+    /// Run the build inside a compose container.
+    ///
+    /// Uses the Docker container ID from a Docker Compose stack managed by
+    /// testcontainers.
     ///
     /// Note: The `pwd` and other paths/binaries/etc specified in the command
-    /// are all inside the _container_ context, not the host machine; this
-    /// command does nothing to e.g. move the working directory to the container
-    /// or anything similar.
-    #[instrument]
-    pub async fn run_docker(&self, container: &Container) -> Result<Vec<Message>> {
-        Self::capture_docker(self.as_command(), container)
+    /// are all inside the _container_ context, not the host machine.
+    #[instrument(skip(self, container_id), fields(package = ?self.package, bin = ?self.bin, pwd = ?self.pwd))]
+    pub async fn run_compose(&self, container_id: impl AsRef<str> + Debug) -> Result<Vec<Message>> {
+        Self::capture_compose(self.as_command(), container_id.as_ref())
             .await
             .with_context(|| {
                 format!(
@@ -94,11 +98,13 @@ impl Build {
     }
 
     fn as_command(&self) -> Command {
-        let cmd = match &self.wrapper {
+        let mut cmd = match &self.wrapper {
             Some(wrapper) => Command::new().name(wrapper).arg("cargo"),
             None => Command::new().name("cargo"),
         };
-        cmd.args(Self::DEFAULT_ARGS)
+
+        cmd = cmd
+            .args(Self::DEFAULT_ARGS)
             .arg_maybe("--bin", self.bin.as_ref())
             .arg_maybe("--package", self.package.as_ref())
             .arg_if(self.release, "--release")
@@ -107,26 +113,32 @@ impl Build {
                 format!("--features={}", self.features.join(",")),
             )
             .args(&self.additional_args)
-            .envs(self.envs.iter().map(|(k, v)| (k, v)))
-            .pwd(&self.pwd)
-            .finish()
+            .envs(self.envs.iter().map(|(k, v)| (k, v)));
+
+        // We pass these as environment variables so that we can avoid the annoyance
+        // around argument ordering; see https://github.com/attunehq/hurry/issues/170
+        // This also lets us not have to worry about whether we're using a wrapper or
+        // not, since non-hurry binaries will just ignore these.
+        if let Some(url) = &self.courier_url {
+            cmd = cmd.env("HURRY_COURIER_URL", url);
+        }
+        if let Some(token) = &self.courier_token {
+            cmd = cmd.env("HURRY_COURIER_TOKEN", token);
+        }
+
+        // Always wait for uploads in tests to ensure artifacts are available for
+        // subsequent builds.
+        cmd = cmd.env("HURRY_WAIT_FOR_UPLOAD", "true");
+
+        cmd.pwd(&self.pwd).finish()
     }
 
-    fn capture_local(cmd: Command) -> Result<Vec<Message>> {
-        let output = cmd.run_local_with_output().context("run build command")?;
-        let reader = Cursor::new(&output.stdout);
-        Message::parse_stream(reader)
-            .map(|m| m.context("parse message"))
-            .collect::<Result<Vec<_>>>()
-            .context("parse messages")
-            .with_section(|| output.stdout_lossy_string().header("Stdout:"))
-    }
-
-    async fn capture_docker(cmd: Command, container: &Container) -> Result<Vec<Message>> {
+    #[instrument(skip_all)]
+    async fn capture_compose(cmd: Command, container_id: &str) -> Result<Vec<Message>> {
         let output = cmd
-            .run_docker_with_output(container)
+            .run_compose_with_output(container_id)
             .await
-            .context("run command in docker")?;
+            .context("run command in compose container")?;
         let reader = Cursor::new(&output.stdout);
         Message::parse_stream(reader)
             .map(|m| m.context("parse message"))

@@ -40,6 +40,8 @@ jobs:
                   rustup show
             - uses: ./.github/actions/hurry-dev
             - id: build
+              env:
+                  HURRY_COURIER_TOKEN: ${{ secrets.HURRY_COURIER_TOKEN }}
               run: |
                   START=$(date +%s)
                   hurry-dev cargo build --verbose
@@ -50,46 +52,48 @@ jobs:
     swatinem:
         runs-on: ubuntu-latest
         outputs:
-            duration: ${{ steps.build.outputs.duration }}
+            duration: ${{ steps.complete.outputs.duration }}
 
         steps:
             - uses: actions/checkout@v4
             - run: |
                   rustup toolchain install stable
                   rustup show
+            - id: build
+              run: echo "start=$(date +%s)" >> $GITHUB_OUTPUT
             - uses: Swatinem/rust-cache@v2
               with:
                   shared-key: benchmark
-            - id: build
+            - run: cargo build --verbose
+            - id: complete
               run: |
-                  START=$(date +%s)
-                  cargo build --verbose
                   END=$(date +%s)
-                  DURATION=$((END - START))
+                  DURATION=$((END - ${{ steps.build.outputs.start }}))
                   echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
     sccache:
         runs-on: ubuntu-latest
         outputs:
-            duration: ${{ steps.build.outputs.duration }}
+            duration: ${{ steps.complete.outputs.duration }}
 
         steps:
             - uses: actions/checkout@v4
             - run: |
                   rustup toolchain install stable
                   rustup show
+            - id: build
+              run: echo "start=$(date +%s)" >> $GITHUB_OUTPUT
             - uses: mozilla-actions/sccache-action@v0.0.9
               with:
                   disable_annotations: true
-            - id: build
-              env:
+            - env:
                   SCCACHE_GHA_ENABLED: "true"
                   RUSTC_WRAPPER: sccache
+              run: cargo build --verbose
+            - id: complete
               run: |
-                  START=$(date +%s)
-                  cargo build --verbose
                   END=$(date +%s)
-                  DURATION=$((END - START))
+                  DURATION=$((END - ${{ steps.build.outputs.start }}))
                   echo "duration=$DURATION" >> $GITHUB_OUTPUT
 
     summary:
@@ -101,6 +105,7 @@ jobs:
             - run: |
                   echo "> [!IMPORTANT]" >> $GITHUB_STEP_SUMMARY
                   echo "> Caches are relative to the last successful benchmark." >> $GITHUB_STEP_SUMMARY
+                  echo "> Times include cache restore/transfer overhead for all solutions." >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
                   echo "## Build Time Comparison" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY

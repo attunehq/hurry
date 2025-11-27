@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -z "${COURIER_DATABASE_URL:-}" ]; then
+  echo "Error: COURIER_DATABASE_URL environment variable is not set" >&2
+  exit 1
+fi
+
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <account-id>" >&2
+  echo "Delete account (will fail if API keys exist)" >&2
+  exit 1
+fi
+
+ACCOUNT_ID="$1"
+
+if ! [[ "$ACCOUNT_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Account ID must be a number" >&2
+  exit 1
+fi
+
+if ! RESULT=$(echo "DELETE FROM account WHERE id = :account_id RETURNING id, email;" | psql "$COURIER_DATABASE_URL" -v account_id="$ACCOUNT_ID" -t 2>&1); then
+  echo "Error: Failed to delete account" >&2
+  echo "$RESULT" >&2
+  exit 1
+fi
+
+if [ -z "$(echo "$RESULT" | tr -d '[:space:]')" ]; then
+  echo "Error: Account with ID $ACCOUNT_ID not found" >&2
+  exit 1
+fi
+
+echo "Account deleted successfully:"
+echo "$RESULT" | sed 's/^/  /'

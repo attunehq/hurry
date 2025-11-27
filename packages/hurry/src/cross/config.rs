@@ -58,7 +58,7 @@ impl CrossConfigGuard {
             if has_rustc_bootstrap_passthrough(&content) {
                 ConfigState::AlreadyConfigured
             } else {
-                let backup = fs::rename_temporary(&config)
+                let backup = fs::rename_temporary(config.as_ref())
                     .await
                     .context("backup Cross.toml")?;
 

@@ -371,12 +371,6 @@ impl<B, T> AsRef<Path> for TypedPath<B, T> {
     }
 }
 
-impl<B, T> AsRef<TypedPath<B, T>> for TypedPath<B, T> {
-    fn as_ref(&self) -> &TypedPath<B, T> {
-        self
-    }
-}
-
 impl<B, T> From<TypedPath<B, T>> for std::path::PathBuf {
     fn from(value: TypedPath<B, T>) -> Self {
         value.inner
@@ -424,13 +418,17 @@ impl<B, T> Serialize for TypedPath<B, T> {
 
 impl<B, T> std::fmt::Debug for TypedPath<B, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "TypedPath::<{}, {}>::({:?})",
-            type_name::<B>(),
-            type_name::<T>(),
-            self.inner
-        )
+        if f.alternate() {
+            write!(
+                f,
+                "TypedPath::<{}, {}>::({:?})",
+                type_name::<B>(),
+                type_name::<T>(),
+                self.inner
+            )
+        } else {
+            write!(f, "{}", self.inner.display())
+        }
     }
 }
 
@@ -454,74 +452,246 @@ impl<B> TypedPath<B, ty> {
     }
 }
 
-// All paths can be converted to generic paths infallibly.
+// All paths can be converted to more generic types infallibly.
+// Abs/Rel + Dir/File -> SomeBase + SomeType (fully generic)
 duplicate! {
     [
         from_base;
         [ Abs ];
         [ Rel ];
-        [ SomeBase ];
     ]
     duplicate!{
         [
             from_ty;
             [ Dir ];
             [ File ];
-            [ SomeType ];
         ]
-        impl TypedPath<from_base, from_ty> {
-            /// Convert the type to a generic path.
-            pub fn as_generic(&self) -> TypedPath<SomeBase, SomeType> {
-                TypedPath::<SomeBase, SomeType>::new_unchecked(&self.inner)
+        impl From<TypedPath<from_base, from_ty>> for TypedPath<from_base, SomeType> {
+            fn from(path: TypedPath<from_base, from_ty>) -> Self {
+                TypedPath::<from_base, SomeType>::new_unchecked(path.inner)
             }
+        }
+        impl From<TypedPath<from_base, from_ty>> for TypedPath<SomeBase, from_ty> {
+            fn from(path: TypedPath<from_base, from_ty>) -> Self {
+                TypedPath::<SomeBase, from_ty>::new_unchecked(path.inner)
+            }
+        }
+        impl From<TypedPath<from_base, from_ty>> for TypedPath<SomeBase, SomeType> {
+            fn from(path: TypedPath<from_base, from_ty>) -> Self {
+                TypedPath::<SomeBase, SomeType>::new_unchecked(path.inner)
+            }
+        }
+    }
+}
+
+// Abs/Rel + SomeType -> SomeBase + SomeType
+duplicate! {
+    [
+        from_base;
+        [ Abs ];
+        [ Rel ];
+    ]
+    impl From<TypedPath<from_base, SomeType>> for TypedPath<SomeBase, SomeType> {
+        fn from(path: TypedPath<from_base, SomeType>) -> Self {
+            TypedPath::<SomeBase, SomeType>::new_unchecked(path.inner)
+        }
+    }
+}
+
+// SomeBase + Dir/File -> SomeBase + SomeType
+duplicate! {
+    [
+        from_ty;
+        [ Dir ];
+        [ File ];
+    ]
+    impl From<TypedPath<SomeBase, from_ty>> for TypedPath<SomeBase, SomeType> {
+        fn from(path: TypedPath<SomeBase, from_ty>) -> Self {
+            TypedPath::<SomeBase, SomeType>::new_unchecked(path.inner)
+        }
+    }
+}
+
+// All paths can be borrowed as more generic types infallibly.
+// Abs/Rel + Dir/File -> SomeBase + SomeType (fully generic)
+duplicate! {
+    [
+        from_base;
+        [ Abs ];
+        [ Rel ];
+    ]
+    duplicate!{
+        [
+            from_ty;
+            [ Dir ];
+            [ File ];
+        ]
+        impl AsRef<TypedPath<from_base, SomeType>> for TypedPath<from_base, from_ty> {
+            fn as_ref(&self) -> &TypedPath<from_base, SomeType> {
+                // The no-op destructuring helps us catch future unsafety: if we
+                // change B and T to be non-phantom, this will fail to compile.
+                let Self { base, ty, inner } = self;
+                let _b: &PhantomData<from_base> = base;
+                let _t: &PhantomData<from_ty> = ty;
+                let _i: &PathBuf = inner;
+                // SAFETY: this is safe because we are transmuting to the same
+                // struct _and_ the generics B and T are only ever used by
+                // PhantomData markers.
+                unsafe { &*(std::ptr::from_ref(self) as *const TypedPath<from_base, SomeType>) }
+            }
+        }
+        impl AsRef<TypedPath<SomeBase, from_ty>> for TypedPath<from_base, from_ty> {
+            fn as_ref(&self) -> &TypedPath<SomeBase, from_ty> {
+                // The no-op destructuring helps us catch future unsafety: if we
+                // change B and T to be non-phantom, this will fail to compile.
+                let Self { base, ty, inner } = self;
+                let _b: &PhantomData<from_base> = base;
+                let _t: &PhantomData<from_ty> = ty;
+                let _i: &PathBuf = inner;
+                // SAFETY: this is safe because we are transmuting to the same
+                // struct _and_ the generics B and T are only ever used by
+                // PhantomData markers.
+                unsafe { &*(std::ptr::from_ref(self) as *const TypedPath<SomeBase, from_ty>) }
+            }
+        }
+        impl AsRef<TypedPath<SomeBase, SomeType>> for TypedPath<from_base, from_ty> {
+            fn as_ref(&self) -> &TypedPath<SomeBase, SomeType> {
+                // The no-op destructuring helps us catch future unsafety: if we
+                // change B and T to be non-phantom, this will fail to compile.
+                let Self { base, ty, inner } = self;
+                let _b: &PhantomData<from_base> = base;
+                let _t: &PhantomData<from_ty> = ty;
+                let _i: &PathBuf = inner;
+                // SAFETY: this is safe because we are transmuting to the same
+                // struct _and_ the generics B and T are only ever used by
+                // PhantomData markers.
+                unsafe { &*(std::ptr::from_ref(self) as *const TypedPath<SomeBase, SomeType>) }
+            }
+        }
+    }
+}
+
+// Abs/Rel + SomeType -> SomeBase + SomeType
+duplicate! {
+    [
+        from_base;
+        [ Abs ];
+        [ Rel ];
+    ]
+    impl AsRef<TypedPath<SomeBase, SomeType>> for TypedPath<from_base, SomeType> {
+        fn as_ref(&self) -> &TypedPath<SomeBase, SomeType> {
+            // The no-op destructuring helps us catch future unsafety: if we
+            // change B and T to be non-phantom, this will fail to compile.
+            let Self { base, ty, inner } = self;
+            let _b: &PhantomData<from_base> = base;
+            let _t: &PhantomData<SomeType> = ty;
+            let _i: &PathBuf = inner;
+            // SAFETY: this is safe because we are transmuting to the same
+            // struct _and_ the generics B and T are only ever used by
+            // PhantomData markers.
+            unsafe { &*(std::ptr::from_ref(self) as *const TypedPath<SomeBase, SomeType>) }
+        }
+    }
+}
+
+// SomeBase + Dir/File -> SomeBase + SomeType
+duplicate! {
+    [
+        from_ty;
+        [ Dir ];
+        [ File ];
+    ]
+    impl AsRef<TypedPath<SomeBase, SomeType>> for TypedPath<SomeBase, from_ty> {
+        fn as_ref(&self) -> &TypedPath<SomeBase, SomeType> {
+            // The no-op destructuring helps us catch future unsafety: if we
+            // change B and T to be non-phantom, this will fail to compile.
+            let Self { base, ty, inner } = self;
+            let _b: &PhantomData<SomeBase> = base;
+            let _t: &PhantomData<from_ty> = ty;
+            let _i: &PathBuf = inner;
+            // SAFETY: this is safe because we are transmuting to the same
+            // struct _and_ the generics B and T are only ever used by
+            // PhantomData markers.
+            unsafe { &*(std::ptr::from_ref(self) as *const TypedPath<SomeBase, SomeType>) }
         }
     }
 }
 
 // All combinations of bases and types can be _fallibly_ converted to
 // `Abs`/`Rel` bases and `Dir`/`File` types.
+// SomeBase -> Abs/Rel
 duplicate! {
     [
-        from_base;
-        [ Abs ];
-        [ Rel ];
-        [ SomeBase ];
+        from_ty;
+        [ Dir ];
+        [ File ];
+        [ SomeType ];
     ]
-    duplicate!{
+    duplicate! {
         [
-            from_ty;
-            [ Dir ];
-            [ File ];
-            [ SomeType ];
+            to_base;
+            [ Abs ];
+            [ Rel ];
         ]
-        duplicate! {
+        duplicate!{
             [
-                to_base to_base_name;
-                [ Abs ] [ abs ];
-                [ Rel ] [ rel ];
+                to_ty;
+                [ Dir ];
+                [ File ];
             ]
-            duplicate!{
-                [
-                    to_ty to_ty_name;
-                    [ Dir ] [ dir ];
-                    [ File ] [ file ];
-                ]
-                impl TypedPath<from_base, from_ty> {
-                    paste! {
-                        /// Try to convert into the specified type.
-                        pub fn [<try_as_ to_base_name _ to_ty_name>](&self) -> Result<TypedPath<to_base, to_ty>> {
-                            TypedPath::<to_base, to_ty>::try_from(&self.inner)
-                        }
-                    }
+            impl TryFrom<TypedPath<SomeBase, from_ty>> for TypedPath<to_base, to_ty> {
+                type Error = Report;
+
+                fn try_from(path: TypedPath<SomeBase, from_ty>) -> Result<Self, Self::Error> {
+                    Self::try_from(&path.inner)
+                }
+            }
+
+            impl TryFrom<&TypedPath<SomeBase, from_ty>> for TypedPath<to_base, to_ty> {
+                type Error = Report;
+
+                fn try_from(path: &TypedPath<SomeBase, from_ty>) -> Result<Self, Self::Error> {
+                    Self::try_from(&path.inner)
                 }
             }
         }
     }
 }
 
-// Relative or generic bases of all types can be fallibly converted
-// to absolute bases of the same or less generic type
-// using the process CWD if they are not currently absolute.
+// Abs/Rel + SomeType -> Abs/Rel + Dir/File
+duplicate! {
+    [
+        ty_base;
+        [ Abs ];
+        [ Rel ];
+    ]
+    duplicate!{
+        [
+            to_ty;
+            [ Dir ];
+            [ File ];
+        ]
+        impl TryFrom<TypedPath<ty_base, SomeType>> for TypedPath<ty_base, to_ty> {
+            type Error = Report;
+
+            fn try_from(path: TypedPath<ty_base, SomeType>) -> Result<Self, Self::Error> {
+                Self::try_from(&path.inner)
+            }
+        }
+
+        impl TryFrom<&TypedPath<ty_base, SomeType>> for TypedPath<ty_base, to_ty> {
+            type Error = Report;
+
+            fn try_from(path: &TypedPath<ty_base, SomeType>) -> Result<Self, Self::Error> {
+                Self::try_from(&path.inner)
+            }
+        }
+    }
+}
+
+// Relative or generic bases of all types can be fallibly converted to absolute
+// bases of the same or less generic type using the process CWD if they are not
+// currently absolute.
 duplicate! {
     [
         from_base;
@@ -539,9 +709,8 @@ duplicate! {
         ]
         impl TypedPath<from_base, from_ty> {
             paste! {
-                /// Try to convert into the specified type,
-                /// using the current working directory to promote
-                /// the path if needed.
+                /// Try to convert into the specified type, using the current
+                /// working directory to promote the path if needed.
                 ///
                 /// ## Fallibility
                 ///
@@ -614,21 +783,26 @@ duplicate! {
 ///
 /// For more details on how `Validator` works, view the docs for [`TypedPath`].
 pub trait TryJoinWith {
+    type OutputBase;
+
     /// Join `dir` to `self` as a directory.
     ///
     /// If joining multiple items, consider [`TryJoinWith::try_join_dirs`]
     /// or [`TryJoinWith::try_join_combined`] as these are more efficient.
-    fn try_join_dir(&self, dir: impl AsRef<str>) -> Result<AbsDirPath>;
+    fn try_join_dir(&self, dir: impl AsRef<str>) -> Result<TypedPath<Self::OutputBase, Dir>>;
 
     /// Join `file` to `self` as a file.
     ///
     /// If joining multiple items, consider [`TryJoinWith::try_join_dirs`]
     /// or [`TryJoinWith::try_join_combined`] as these are more efficient.
-    fn try_join_file(&self, file: impl AsRef<str>) -> Result<AbsFilePath>;
+    fn try_join_file(&self, file: impl AsRef<str>) -> Result<TypedPath<Self::OutputBase, File>>;
 
     /// Join multiple directories to `self`.
     /// The overall path is checked at the end instead of piece by piece.
-    fn try_join_dirs(&self, dirs: impl IntoIterator<Item = impl AsRef<str>>) -> Result<AbsDirPath>;
+    fn try_join_dirs(
+        &self,
+        dirs: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<TypedPath<Self::OutputBase, Dir>>;
 
     /// Join multiple directories, followed by a file, to `self`.
     /// The overall path is checked at the end instead of piece by piece.
@@ -636,16 +810,18 @@ pub trait TryJoinWith {
         &self,
         dirs: impl IntoIterator<Item = impl AsRef<str>>,
         file: impl AsRef<str>,
-    ) -> Result<AbsFilePath>;
+    ) -> Result<TypedPath<Self::OutputBase, File>>;
 }
 
 impl TryJoinWith for TypedPath<Abs, Dir> {
+    type OutputBase = Abs;
+
     fn try_join_dir(&self, other: impl AsRef<str>) -> Result<AbsDirPath> {
-        self.inner.join(other.as_ref()).pipe(AbsDirPath::try_from)
+        self.inner.join(other.as_ref()).try_into()
     }
 
     fn try_join_file(&self, other: impl AsRef<str>) -> Result<AbsFilePath> {
-        self.inner.join(other.as_ref()).pipe(AbsFilePath::try_from)
+        self.inner.join(other.as_ref()).try_into()
     }
 
     fn try_join_dirs(&self, dirs: impl IntoIterator<Item = impl AsRef<str>>) -> Result<AbsDirPath> {
@@ -665,7 +841,39 @@ impl TryJoinWith for TypedPath<Abs, Dir> {
         for other in dirs {
             inner = inner.join(other.as_ref());
         }
-        inner.join(file.as_ref()).pipe(AbsFilePath::try_from)
+        inner.join(file.as_ref()).try_into()
+    }
+}
+
+impl TryJoinWith for TypedPath<Rel, Dir> {
+    type OutputBase = Rel;
+
+    fn try_join_dir(&self, other: impl AsRef<str>) -> Result<RelDirPath> {
+        self.inner.join(other.as_ref()).try_into()
+    }
+
+    fn try_join_file(&self, other: impl AsRef<str>) -> Result<RelFilePath> {
+        self.inner.join(other.as_ref()).try_into()
+    }
+
+    fn try_join_dirs(&self, dirs: impl IntoIterator<Item = impl AsRef<str>>) -> Result<RelDirPath> {
+        let mut inner = self.inner.clone();
+        for other in dirs {
+            inner = inner.join(other.as_ref());
+        }
+        RelDirPath::try_from(inner)
+    }
+
+    fn try_join_combined(
+        &self,
+        dirs: impl IntoIterator<Item = impl AsRef<str>>,
+        file: impl AsRef<str>,
+    ) -> Result<RelFilePath> {
+        let mut inner = self.inner.clone();
+        for other in dirs {
+            inner = inner.join(other.as_ref());
+        }
+        inner.join(file.as_ref()).try_into()
     }
 }
 
@@ -677,22 +885,31 @@ pub trait JoinWith<Other> {
     fn join(&self, other: Other) -> Self::Output;
 }
 
-// We can always join typed relative paths of any type with absolute dir paths,
-// and the output is always an absolute path of the same type.
-#[duplicate_item(
-    ty_other ty_output;
-    [ TypedPath<Rel, Dir> ] [ TypedPath<Abs, Dir> ];
-    [ &TypedPath<Rel, Dir> ] [ TypedPath<Abs, Dir> ];
-    [ TypedPath<Rel, File> ] [ TypedPath<Abs, File> ];
-    [ &TypedPath<Rel, File> ] [ TypedPath<Abs, File> ];
-)]
-impl JoinWith<ty_other> for TypedPath<Abs, Dir> {
-    type Output = ty_output;
+// We can always join relative paths of any type onto directory paths of any
+// base, and the output is always a path with the original base and type.
+duplicate! {
+    [
+        ty_base;
+        [ Abs ];
+        [ Rel ];
+    ]
+    #[duplicate_item(
+        ty_other ty_output;
+        [ TypedPath<Rel, Dir> ] [ TypedPath<ty_base, Dir> ];
+        [ &TypedPath<Rel, Dir> ] [ TypedPath<ty_base, Dir> ];
+        [ TypedPath<Rel, File> ] [ TypedPath<ty_base, File> ];
+        [ &TypedPath<Rel, File> ] [ TypedPath<ty_base, File> ];
+        [ TypedPath<Rel, SomeType> ] [ TypedPath<ty_base, SomeType> ];
+        [ &TypedPath<Rel, SomeType> ] [ TypedPath<ty_base, SomeType> ];
+    )]
+    impl JoinWith<ty_other> for TypedPath<ty_base, Dir> {
+        type Output = ty_output;
 
-    fn join(&self, other: ty_other) -> Self::Output {
-        self.as_std_path()
-            .join(other.as_std_path())
-            .pipe(TypedPath::new_unchecked)
+        fn join(&self, other: ty_other) -> Self::Output {
+            self.as_std_path()
+                .join(other.as_std_path())
+                .pipe(TypedPath::new_unchecked)
+        }
     }
 }
 
@@ -745,5 +962,128 @@ impl Validator for Abs {
 impl Validator for ty_self {
     fn validate(_: &Path) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_into_sometype() {
+        let abs = AbsDirPath::current().expect("current dir");
+        let _ = AbsSomePath::from(abs);
+
+        let abs = AbsDirPath::current()
+            .expect("current dir")
+            .join(mk_rel_file!("somefile"));
+        let _ = AbsSomePath::from(abs);
+
+        let rel = mk_rel_dir!("somedir");
+        let _ = RelSomePath::from(rel);
+
+        let rel = mk_rel_file!("somefile");
+        let _ = RelSomePath::from(rel);
+    }
+
+    #[test]
+    fn from_into_somebase() {
+        let abs = AbsDirPath::current().expect("current dir");
+        let _ = SomeDirPath::from(abs);
+
+        let abs = AbsDirPath::current()
+            .expect("current dir")
+            .join(mk_rel_file!("somefile"));
+        let _ = SomeFilePath::from(abs);
+
+        let rel = mk_rel_dir!("somedir");
+        let _ = SomeDirPath::from(rel);
+
+        let rel = mk_rel_file!("somefile");
+        let _ = SomeFilePath::from(rel);
+    }
+
+    #[test]
+    fn from_into_generic() {
+        let abs = AbsDirPath::current().expect("current dir");
+        let _ = GenericPath::from(abs);
+
+        let abs = AbsDirPath::current()
+            .expect("current dir")
+            .join(mk_rel_file!("somefile"));
+        let _ = GenericPath::from(abs);
+
+        let rel = mk_rel_dir!("somedir");
+        let _ = GenericPath::from(rel);
+
+        let rel = mk_rel_file!("somefile");
+        let _ = GenericPath::from(rel);
+    }
+
+    #[test]
+    fn try_from_narrows_successfully() {
+        let abs_dir = AbsDirPath::current().expect("current dir");
+        let generic = GenericPath::from(abs_dir.clone());
+
+        let narrowed = AbsDirPath::try_from(generic).expect("should narrow successfully");
+        assert_eq!(narrowed.as_std_path(), abs_dir.as_std_path());
+
+        let rel_file = mk_rel_file!("src/main.rs");
+        let some_path = RelSomePath::from(rel_file.clone());
+
+        let narrowed = RelFilePath::try_from(some_path).expect("should narrow successfully");
+        assert_eq!(narrowed.as_std_path(), rel_file.as_std_path());
+    }
+
+    #[test]
+    fn try_from_fails_when_validators_fail() {
+        let abs_dir = AbsDirPath::current().expect("current dir");
+        let generic = GenericPath::from(abs_dir);
+
+        let result = RelDirPath::try_from(generic);
+        assert!(
+            result.is_err(),
+            "should fail to convert absolute to relative"
+        );
+
+        let rel_dir = mk_rel_dir!("src");
+        let some_path = SomeDirPath::from(rel_dir);
+
+        let result = AbsDirPath::try_from(some_path);
+        assert!(
+            result.is_err(),
+            "should fail to convert relative to absolute"
+        );
+    }
+
+    #[test]
+    fn try_from_with_reference() {
+        let abs_dir = AbsDirPath::current().expect("current dir");
+        let generic = GenericPath::from(abs_dir.clone());
+
+        let narrowed = AbsDirPath::try_from(&generic).expect("should narrow from reference");
+        assert_eq!(narrowed.as_std_path(), abs_dir.as_std_path());
+    }
+
+    #[test]
+    fn as_ref_path() {
+        let abs_dir = AbsDirPath::current().expect("current dir");
+        let path_ref: &Path = abs_dir.as_ref();
+        assert_eq!(path_ref, abs_dir.as_std_path());
+
+        let rel_file = mk_rel_file!("src/main.rs");
+        let path_ref: &Path = rel_file.as_ref();
+        assert_eq!(path_ref, rel_file.as_std_path());
+
+        fn accepts_path_like(p: impl AsRef<Path>) -> String {
+            p.as_ref().display().to_string()
+        }
+
+        let generic = GenericPath::from(abs_dir.clone());
+        let display = accepts_path_like(&generic);
+        assert!(!display.is_empty());
+
+        let display = accepts_path_like(rel_file);
+        assert!(!display.is_empty());
     }
 }

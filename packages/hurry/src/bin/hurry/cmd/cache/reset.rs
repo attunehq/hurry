@@ -6,7 +6,7 @@ use inquire::Confirm;
 use tracing::instrument;
 use url::Url;
 
-use clients::Courier;
+use clients::{Courier, Token};
 
 #[derive(Clone, Args, Debug)]
 pub struct Options {
@@ -22,6 +22,10 @@ pub struct Options {
     )]
     #[debug("{courier_url}")]
     courier_url: Url,
+
+    /// Authentication token for the Courier instance.
+    #[arg(long = "courier-token", env = "HURRY_COURIER_TOKEN")]
+    courier_token: Token,
 
     /// Delete remote cache.
     // TODO: Once we have a tiered local cache, add a `--local` option.
@@ -52,7 +56,7 @@ pub async fn exec(options: Options) -> Result<()> {
         }
     }
     if options.remote {
-        let courier = Courier::new(options.courier_url)?;
+        let courier = Courier::new(options.courier_url, options.courier_token)?;
         courier.ping().await.context("ping courier service")?;
 
         println!("Resetting remote cache...");

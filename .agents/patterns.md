@@ -57,6 +57,54 @@ This prevents calling methods on incorrect states at compile time.
 - Use factory methods for different construction paths: `Email::from_str()`, `UserId::new()`
 - See: https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 
+### Exhaustive Field Destructuring for Future-Proofing
+
+When writing methods that must process **all fields** of a struct (like hashing, serialization, or validation), use exhaustive destructuring to get compile-time errors when fields are added:
+
+```rust
+pub struct CacheKey {
+    pub unit_hash: String,
+    // Future: will add libc_version, etc.
+}
+
+impl CacheKey {
+    pub fn compute_hash(&self) -> String {
+        // This pattern forces you to handle new fields when they're added
+        let Self { unit_hash } = self;
+
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(unit_hash.as_bytes());
+        hasher.finalize().to_hex().to_string()
+    }
+}
+```
+
+**When to use this pattern:**
+- Methods that must include **all fields** in their computation
+- Hashing functions (where missing a field breaks equality)
+- Serialization/deserialization that must be exhaustive
+- Validation that checks every field
+
+**Why this works:**
+When you add a new field like `libc_version`, the destructuring pattern will fail to compile with "pattern requires `..` due to inaccessible fields". This forces you to update the method intentionally.
+
+**What to include in the method:**
+- Add a comment explaining why exhaustive destructuring is used
+- Mention what should be done when the compile error occurs
+
+```rust
+// When we add new fields, this will show a compile time error; if you got here
+// due to a compilation error please handle the new field(s) appropriately.
+let Self { unit_hash } = self;
+```
+
+**When NOT to use this pattern:**
+- Methods that only need a subset of fields (just access them directly)
+- Hot path code where the compiler might not optimize away the destructuring
+- When the struct has many fields but the method only needs a few
+
+**Real example:** See `SavedUnitCacheKey::stable_hash()` in `packages/clients/src/courier/v1/cache.rs`
+
 ### Type Aliases for Complex Generics
 Define type aliases to simplify complex generic types:
 

@@ -19,7 +19,6 @@ concurrency:
 
 env:
     CARGO_TERM_COLOR: always
-    SQLX_OFFLINE: 1
     COURIER_DATABASE_URL: postgres://postgres:postgres@localhost:5432/courier_test
 
 jobs:
@@ -47,10 +46,13 @@ jobs:
                   rustup toolchain install nightly
                   rustup component add --toolchain nightly rustfmt
                   rustup show
-            - uses: taiki-e/install-action@nextest
+            - uses: taiki-e/install-action@v2
+              with:
+                  tool: nextest,sqlx-cli
             - uses: actions/checkout@v4
 
             - uses: Swatinem/rust-cache@v2
+            - run: cargo sqlx migrate run --source packages/courier/schema/migrations/ --database-url $COURIER_DATABASE_URL
 
             - name: Check format
               run: cargo +nightly fmt --all --check
@@ -78,14 +80,15 @@ jobs:
                   rustup component add --toolchain nightly rustfmt
                   rustup show
             - uses: actions/checkout@v4
-
             - name: Setup hurry-dev
               uses: ./.github/actions/hurry-dev
 
             - name: Populate cache if needed
-              run: SQLX_OFFLINE=1 hurry-dev cargo build --hurry-wait-for-upload --verbose
+              run: hurry-dev cargo build --verbose
 
             - name: Check that cache restores are fresh
+              env:
+                  HURRY_LOG: hurry::cmd::debug::check=info
               run: |
-                cargo clean
-                SQLX_OFFLINE=1 HURRY_LOG=hurry::cmd::debug::check=info hurry-dev debug check
+                  cargo clean
+                  hurry-dev debug check

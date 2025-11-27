@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -z "${COURIER_DATABASE_URL:-}" ]; then
+  echo "Error: COURIER_DATABASE_URL environment variable is not set" >&2
+  exit 1
+fi
+
+# Optional: filter by org ID
+if [ $# -eq 1 ]; then
+  ORG_ID="$1"
+  if ! [[ "$ORG_ID" =~ ^[0-9]+$ ]]; then
+    echo "Error: Organization ID must be a number" >&2
+    exit 1
+  fi
+  if ! RESULT=$(echo "SELECT a.id, a.organization_id, o.name as org_name, a.email, a.created_at FROM account a JOIN organization o ON a.organization_id = o.id WHERE a.organization_id = :org_id ORDER BY a.id;" | psql "$COURIER_DATABASE_URL" -v org_id="$ORG_ID" 2>&1); then
+    echo "Error: Failed to list accounts" >&2
+    echo "$RESULT" >&2
+    exit 1
+  fi
+else
+  if ! RESULT=$(echo "SELECT a.id, a.organization_id, o.name as org_name, a.email, a.created_at FROM account a JOIN organization o ON a.organization_id = o.id ORDER BY a.id;" | psql "$COURIER_DATABASE_URL" 2>&1); then
+    echo "Error: Failed to list accounts" >&2
+    echo "$RESULT" >&2
+    exit 1
+  fi
+fi
+
+echo "$RESULT"

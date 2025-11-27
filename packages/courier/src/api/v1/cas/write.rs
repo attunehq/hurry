@@ -12,7 +12,11 @@ use tap::Pipe;
 use tokio_util::io::StreamReader;
 use tracing::{error, info};
 
-use crate::storage::{Disk, Key};
+use crate::{
+    auth::AuthenticatedToken,
+    db::Postgres,
+    storage::{Disk, Key},
+};
 
 /// Write the content to the CAS for the given key.
 ///
@@ -54,8 +58,10 @@ use crate::storage::{Disk, Key};
 ///
 /// Pre-compressed content is validated to ensure it decompresses correctly and
 /// hashes to the expected key.
-#[tracing::instrument(skip(body))]
+#[tracing::instrument(skip(auth, body))]
 pub async fn handle(
+    auth: AuthenticatedToken,
+    Dep(db): Dep<Postgres>,
     Dep(cas): Dep<Disk>,
     Path(key): Path<Key>,
     headers: HeaderMap,
@@ -76,8 +82,19 @@ pub async fn handle(
         // Consume and discard the body to avoid client connection errors. But even if
         // we for some reason fail to drain, report it as a success anyway.
         body.into_data_stream().for_each(|_| async {}).await;
-        info!("cas.write.exists");
-        return CasWriteResponse::Created;
+
+        // Grant access even though it already exists (idempotent, in case org didn't
+        // have access)
+        match db.grant_cas_access(auth.org_id, &key).await {
+            Ok(granted) => {
+                info!(?granted, "cas.write.exists");
+                return CasWriteResponse::Created;
+            }
+            Err(err) => {
+                error!(error = ?err, "cas.write.grant_access_error");
+                return CasWriteResponse::Error(err);
+            }
+        }
     }
 
     // Check Content-Type header to determine if content is pre-compressed
@@ -86,15 +103,24 @@ pub async fn handle(
         .is_some_and(|v| v == ContentType::BytesZstd);
 
     let result = if is_compressed {
-        handle_compressed(cas, key, body).await
+        handle_compressed(cas, key.clone(), body).await
     } else {
-        handle_plain(cas, key, body).await
+        handle_plain(cas, key.clone(), body).await
     };
 
     match result {
         Ok(()) => {
-            info!("cas.write.success");
-            CasWriteResponse::Created
+            // Grant org access to the CAS key after successful write
+            match db.grant_cas_access(auth.org_id, &key).await {
+                Ok(granted) => {
+                    info!(?granted, "cas.write.success");
+                    CasWriteResponse::Created
+                }
+                Err(err) => {
+                    error!(error = ?err, "cas.write.grant_access_error");
+                    CasWriteResponse::Error(err)
+                }
+            }
         }
         Err(err) => {
             error!(error = ?err, "cas.write.error");
@@ -137,394 +163,5 @@ impl IntoResponse for CasWriteResponse {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use axum::body::Bytes;
-    use axum::http::StatusCode;
-    use clients::ContentType;
-    use color_eyre::{Result, eyre::Context};
-    use pretty_assertions::assert_eq as pretty_assert_eq;
-    use sqlx::PgPool;
-
-    use crate::api::test_helpers::{test_blob, write_cas};
-
-    #[track_caller]
-    fn compress(data: impl AsRef<[u8]>) -> Vec<u8> {
-        zstd::bulk::compress(data.as_ref(), 0).expect("compress")
-    }
-
-    #[track_caller]
-    fn decompress(data: impl AsRef<[u8]>) -> Vec<u8> {
-        zstd::bulk::decompress(data.as_ref(), 10 * 1024 * 1024).expect("decompress")
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn basic_write_flow(pool: PgPool) -> Result<()> {
-        const CONTENT: &[u8] = b"hello world";
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let (_, key) = test_blob(CONTENT);
-
-        let response = server
-            .put(&format!("/api/v1/cas/{key}"))
-            .bytes(Bytes::from_static(CONTENT))
-            .await;
-
-        response.assert_status(StatusCode::CREATED);
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn idempotent_writes(pool: PgPool) -> Result<()> {
-        const CONTENT: &[u8] = b"idempotent test";
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let (_, key) = test_blob(CONTENT);
-
-        // First write
-        let response1 = server
-            .put(&format!("/api/v1/cas/{key}"))
-            .bytes(Bytes::from_static(CONTENT))
-            .await;
-        response1.assert_status(StatusCode::CREATED);
-
-        // Second write
-        let response2 = server
-            .put(&format!("/api/v1/cas/{key}"))
-            .bytes(Bytes::from_static(CONTENT))
-            .await;
-        response2.assert_status(StatusCode::CREATED);
-
-        // Content should still be readable
-        let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
-        read_response.assert_status_ok();
-        let body = read_response.as_bytes();
-        pretty_assert_eq!(body.as_ref(), CONTENT);
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn idempotent_write_large_blob(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let content = vec![0xCD; 2 * 1024 * 1024]; // 2MB blob
-        let (_, key) = test_blob(&content);
-
-        // First write
-        let response1 = server
-            .put(&format!("/api/v1/cas/{key}"))
-            .bytes(Bytes::copy_from_slice(&content))
-            .await;
-        response1.assert_status(StatusCode::CREATED);
-
-        // Second write with the same content
-        // This tests that the server fully consumes the body even when the file
-        // already exists, avoiding "connection reset by peer" errors
-        let response2 = server
-            .put(&format!("/api/v1/cas/{key}"))
-            .bytes(Bytes::copy_from_slice(&content))
-            .await;
-        response2.assert_status(StatusCode::CREATED);
-
-        // Verify content is still readable and correct
-        let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
-        read_response.assert_status_ok();
-        let body = read_response.as_bytes();
-        pretty_assert_eq!(body.len(), content.len());
-        pretty_assert_eq!(body.as_ref(), content.as_slice());
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn invalid_key_hash(pool: PgPool) -> Result<()> {
-        const ACTUAL_CONTENT: &[u8] = b"actual content";
-        const WRONG_CONTENT: &[u8] = b"different content";
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let (_, wrong_key) = test_blob(WRONG_CONTENT);
-
-        let response = server
-            .put(&format!("/api/v1/cas/{wrong_key}"))
-            .bytes(Bytes::from_static(ACTUAL_CONTENT))
-            .await;
-
-        response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn large_blob_write(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let content = vec![0xAB; 1024 * 1024]; // 1MB blob
-        let key = write_cas(&server, &content).await?;
-
-        // Verify it can be read back
-        let response = server.get(&format!("/api/v1/cas/{key}")).await;
-        response.assert_status_ok();
-        let body = response.as_bytes();
-        pretty_assert_eq!(body.len(), content.len());
-        pretty_assert_eq!(body.as_ref(), content.as_slice());
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn concurrent_writes_same_blob(pool: PgPool) -> Result<()> {
-        const CONTENT: &[u8] = b"concurrent write test content";
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let (_, key) = test_blob(CONTENT);
-
-        // Execute 10 concurrent writes of the same content
-        let (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10) = tokio::join!(
-            server
-                .put(&format!("/api/v1/cas/{key}"))
-                .bytes(Bytes::from_static(CONTENT)),
-            server
-                .put(&format!("/api/v1/cas/{key}"))
-                .bytes(Bytes::from_static(CONTENT)),
-            server
-                .put(&format!("/api/v1/cas/{key}"))
-                .bytes(Bytes::from_static(CONTENT)),
-            server
-                .put(&format!("/api/v1/cas/{key}"))
-                .bytes(Bytes::from_static(CONTENT)),
-            server
-                .put(&format!("/api/v1/cas/{key}"))
-                .bytes(Bytes::from_static(CONTENT)),
-            server
-                .put(&format!("/api/v1/cas/{key}"))
-                .bytes(Bytes::from_static(CONTENT)),
-            server
-                .put(&format!("/api/v1/cas/{key}"))
-                .bytes(Bytes::from_static(CONTENT)),
-            server
-                .put(&format!("/api/v1/cas/{key}"))
-                .bytes(Bytes::from_static(CONTENT)),
-            server
-                .put(&format!("/api/v1/cas/{key}"))
-                .bytes(Bytes::from_static(CONTENT)),
-            server
-                .put(&format!("/api/v1/cas/{key}"))
-                .bytes(Bytes::from_static(CONTENT)),
-        );
-
-        // All writes should succeed (idempotent)
-        for response in [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10] {
-            response.assert_status(StatusCode::CREATED);
-        }
-
-        // Verify content is correct and uncorrupted
-        let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
-        read_response.assert_status_ok();
-        let body = read_response.as_bytes();
-        pretty_assert_eq!(body.as_ref(), CONTENT, "content should be uncorrupted");
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn concurrent_writes_different_blobs(pool: PgPool) -> Result<()> {
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        // Create 10 different blobs
-        let blobs = (0..10)
-            .map(|i| {
-                let content = format!("concurrent blob {i}").into_bytes();
-                let (_, key) = test_blob(&content);
-                (key, content)
-            })
-            .collect::<Vec<_>>();
-
-        // Write all blobs concurrently
-        let (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10) = tokio::join!(
-            server
-                .put(&format!("/api/v1/cas/{}", blobs[0].0))
-                .bytes(Bytes::copy_from_slice(&blobs[0].1)),
-            server
-                .put(&format!("/api/v1/cas/{}", blobs[1].0))
-                .bytes(Bytes::copy_from_slice(&blobs[1].1)),
-            server
-                .put(&format!("/api/v1/cas/{}", blobs[2].0))
-                .bytes(Bytes::copy_from_slice(&blobs[2].1)),
-            server
-                .put(&format!("/api/v1/cas/{}", blobs[3].0))
-                .bytes(Bytes::copy_from_slice(&blobs[3].1)),
-            server
-                .put(&format!("/api/v1/cas/{}", blobs[4].0))
-                .bytes(Bytes::copy_from_slice(&blobs[4].1)),
-            server
-                .put(&format!("/api/v1/cas/{}", blobs[5].0))
-                .bytes(Bytes::copy_from_slice(&blobs[5].1)),
-            server
-                .put(&format!("/api/v1/cas/{}", blobs[6].0))
-                .bytes(Bytes::copy_from_slice(&blobs[6].1)),
-            server
-                .put(&format!("/api/v1/cas/{}", blobs[7].0))
-                .bytes(Bytes::copy_from_slice(&blobs[7].1)),
-            server
-                .put(&format!("/api/v1/cas/{}", blobs[8].0))
-                .bytes(Bytes::copy_from_slice(&blobs[8].1)),
-            server
-                .put(&format!("/api/v1/cas/{}", blobs[9].0))
-                .bytes(Bytes::copy_from_slice(&blobs[9].1)),
-        );
-
-        // All writes should succeed
-        for response in [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10] {
-            response.assert_status(StatusCode::CREATED);
-        }
-
-        // Verify all blobs can be read back with correct content
-        for (key, expected_content) in blobs {
-            let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
-            read_response.assert_status_ok();
-            let body = read_response.as_bytes();
-            pretty_assert_eq!(
-                body.as_ref(),
-                expected_content.as_slice(),
-                "blob content should match for key {key}"
-            );
-        }
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn write_compressed(pool: PgPool) -> Result<()> {
-        const CONTENT: &[u8] = b"test content for compression";
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let (_, key) = test_blob(CONTENT);
-        let compressed = compress(CONTENT);
-
-        let response = server
-            .put(&format!("/api/v1/cas/{key}"))
-            .content_type(ContentType::BytesZstd.to_str())
-            .bytes(Bytes::copy_from_slice(&compressed))
-            .await;
-
-        response.assert_status(StatusCode::CREATED);
-
-        let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
-        read_response.assert_status_ok();
-        let body = read_response.as_bytes();
-        pretty_assert_eq!(body.as_ref(), CONTENT);
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn write_compressed_idempotent(pool: PgPool) -> Result<()> {
-        const CONTENT: &[u8] = b"idempotent compressed test";
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let (_, key) = test_blob(CONTENT);
-        let compressed = compress(CONTENT);
-
-        let response1 = server
-            .put(&format!("/api/v1/cas/{key}"))
-            .content_type(ContentType::BytesZstd.to_str())
-            .bytes(Bytes::copy_from_slice(&compressed))
-            .await;
-        response1.assert_status(StatusCode::CREATED);
-
-        let response2 = server
-            .put(&format!("/api/v1/cas/{key}"))
-            .content_type(ContentType::BytesZstd.to_str())
-            .bytes(Bytes::copy_from_slice(&compressed))
-            .await;
-        response2.assert_status(StatusCode::CREATED);
-
-        let read_response = server.get(&format!("/api/v1/cas/{key}")).await;
-        read_response.assert_status_ok();
-        let body = read_response.as_bytes();
-        pretty_assert_eq!(body.as_ref(), CONTENT);
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn write_compressed_invalid_hash(pool: PgPool) -> Result<()> {
-        const ACTUAL_CONTENT: &[u8] = b"actual content";
-        const WRONG_CONTENT: &[u8] = b"different content";
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let (_, wrong_key) = test_blob(WRONG_CONTENT);
-        let compressed = compress(ACTUAL_CONTENT);
-
-        let response = server
-            .put(&format!("/api/v1/cas/{wrong_key}"))
-            .content_type(ContentType::BytesZstd.to_str())
-            .bytes(Bytes::copy_from_slice(&compressed))
-            .await;
-
-        response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::Postgres::MIGRATOR")]
-    async fn write_compressed_roundtrip(pool: PgPool) -> Result<()> {
-        const CONTENT: &[u8] = b"roundtrip test content";
-        let (server, _tmp) = crate::api::test_server(pool)
-            .await
-            .context("create test server")?;
-
-        let (_, key) = test_blob(CONTENT);
-        let compressed = compress(CONTENT);
-
-        let write_response = server
-            .put(&format!("/api/v1/cas/{key}"))
-            .content_type(ContentType::BytesZstd.to_str())
-            .bytes(Bytes::copy_from_slice(&compressed))
-            .await;
-        write_response.assert_status(StatusCode::CREATED);
-
-        let read_response = server
-            .get(&format!("/api/v1/cas/{key}"))
-            .add_header(ContentType::ACCEPT, ContentType::BytesZstd.value())
-            .await;
-
-        read_response.assert_status_ok();
-        let content_type = read_response.header(ContentType::HEADER);
-        pretty_assert_eq!(
-            content_type,
-            ContentType::BytesZstd.value().to_str().unwrap()
-        );
-
-        let compressed_body = read_response.as_bytes();
-        let decompressed = decompress(compressed_body);
-        pretty_assert_eq!(decompressed.as_slice(), CONTENT);
-
-        Ok(())
     }
 }

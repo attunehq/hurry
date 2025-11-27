@@ -1,11 +1,7 @@
 use enum_assoc::Assoc;
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use strum::{EnumIter, IntoEnumIterator};
 use subenum::subenum;
-use tracing::instrument;
-
-use super::read_argv;
 
 /// Cargo build profile specification.
 ///
@@ -51,37 +47,6 @@ pub enum Profile {
     /// A custom user-specified profile.
     #[assoc(as_str = _0.as_str())]
     Custom(String),
-}
-
-impl Profile {
-    /// Parse the build profile from command line arguments.
-    ///
-    /// Checks for `--profile <name>` or `--release` flags in argv.
-    /// Defaults to [`Profile::Debug`] if no profile is specified.
-    ///
-    /// ## Parsing Rules
-    /// - `--profile <name>` → Profile::from(name)
-    /// - `--release` → Profile::Release
-    /// - No flags → Profile::Debug
-    #[instrument(name = "Profile::from_argv")]
-    pub fn from_argv(argv: &[String]) -> Profile {
-        if let Some(profile) = read_argv(argv, "--profile") {
-            return Profile::from(profile);
-        }
-
-        // TODO: today this will never result in `bench` or `test` profiles;
-        // how should we detect and handle these?
-        argv.iter()
-            .tuple_windows()
-            .find_map(|(a, b)| {
-                if a == "--release" || b == "--release" {
-                    Some(Profile::Release)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(Profile::Debug)
-    }
 }
 
 impl std::fmt::Display for Profile {

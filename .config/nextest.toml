@@ -1,5 +1,11 @@
 [profile.default]
 
+# hurry tests invoke cargo build --build-plan on the current project, which
+# moves the target directory temporarily, so they cannot run in parallel.
+[[profile.default.overrides]]
+filter = 'package(hurry)'
+threads-required = "num-cpus"
+
 # e2e tests invoke `cargo build`, which uses all available CPUs.
 # These tests are also fairly slow because they clone and build real projects
 # from scratch without caching.
@@ -10,6 +16,12 @@ slow-timeout = "5m"
 
 [profile.ci]
 fail-fast = false
+
+# hurry tests invoke cargo build --build-plan on the current project, which
+# moves the target directory temporarily, so they cannot run in parallel.
+[[profile.ci.overrides]]
+filter = 'package(hurry)'
+threads-required = "num-cpus"
 
 # e2e tests invoke `cargo build`, which uses all available CPUs.
 # These tests are also fairly slow because they clone and build real projects

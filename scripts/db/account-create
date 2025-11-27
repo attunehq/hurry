@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -z "${COURIER_DATABASE_URL:-}" ]; then
+  echo "Error: COURIER_DATABASE_URL environment variable is not set" >&2
+  exit 1
+fi
+
+if [ $# -ne 2 ]; then
+  echo "Usage: $0 <org-id> <email>" >&2
+  echo "Create a new account in an organization" >&2
+  exit 1
+fi
+
+ORG_ID="$1"
+EMAIL="$2"
+
+if ! [[ "$ORG_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Organization ID must be a number" >&2
+  exit 1
+fi
+
+if ! RESULT=$(echo "INSERT INTO account (organization_id, email) VALUES (:org_id, :'email') RETURNING id, organization_id, email, created_at;" | psql "$COURIER_DATABASE_URL" -v org_id="$ORG_ID" -v email="$EMAIL" -t 2>&1); then
+  echo "Error: Failed to create account" >&2
+  echo "$RESULT" >&2
+  exit 1
+fi
+
+echo "Account created successfully:"
+echo "$RESULT" | sed 's/^/  /'
