@@ -18,20 +18,19 @@ mod build_plan;
 mod build_script;
 mod cache;
 mod dep_info;
-mod dependency;
 mod fingerprint;
 mod path;
 mod profile;
 mod rustc;
 mod unit_graph;
+mod units;
 mod workspace;
 
 pub use build_args::{CargoBuildArgument, CargoBuildArguments, ColorWhen, MessageFormat};
 pub use build_plan::BuildPlan;
 pub use build_script::BuildScriptOutput;
-pub use cache::{CargoCache, Restored, SaveProgress, save_units};
+pub use cache::{CargoCache, Restored, SaveProgress, SavedFile, save_units};
 pub use dep_info::{DepInfo, DepInfoLine};
-// pub use dependency::{Dependency, DependencyBuild, Optimizations};
 pub use fingerprint::Fingerprint;
 pub use path::QualifiedPath;
 pub use profile::Profile;
@@ -39,10 +38,11 @@ pub use rustc::{RustcArgument, RustcArguments, RustcMetadata, RustcTarget};
 pub use unit_graph::{
     UnitGraph, UnitGraphDependency, UnitGraphProfile, UnitGraphProfilePanicStrategy, UnitGraphUnit,
 };
-pub use workspace::{
-    BuildScriptCompilationUnitPlan, BuildScriptExecutionUnitPlan, LibraryCrateUnitPlan, UnitPlan,
-    UnitPlanInfo, Workspace,
+pub use units::{
+    BuildScriptCompilationUnitPlan, BuildScriptCompiledFiles, BuildScriptExecutionUnitPlan,
+    BuildScriptOutputFiles, LibraryCrateUnitPlan, LibraryFiles,
 };
+pub use workspace::{UnitHash, UnitPlan, UnitPlanInfo, Workspace};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]

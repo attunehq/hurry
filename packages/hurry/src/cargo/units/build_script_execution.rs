@@ -1,22 +1,80 @@
 use std::{collections::HashMap, sync::Arc};
 
+use clients::courier::v1 as courier;
 use color_eyre::{
     Result,
-    eyre::{OptionExt as _, bail},
+    eyre::{self, OptionExt as _, bail},
 };
 use derive_more::Debug;
-use futures::TryStreamExt as _;
+use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
+use tap::Pipe as _;
 use tracing::debug;
 
 use crate::{
-    cargo::{
-        BuildScriptExecutionUnitPlan, BuildScriptOutput, Fingerprint, QualifiedPath, Workspace,
-        cache::SavedFile,
-    },
-    fs,
-    path::JoinWith as _,
+    cargo::{BuildScriptOutput, Fingerprint, QualifiedPath, SavedFile, UnitPlanInfo, Workspace},
+    fs, mk_rel_dir, mk_rel_file,
+    path::{JoinWith as _, RelDirPath, RelFilePath, TryJoinWith as _},
 };
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct BuildScriptExecutionUnitPlan {
+    // Note that we don't save src_path for build script execution because this
+    // field is always set to `""` in the fingerprint for build script execution
+    // units[^1].
+    //
+    // [^1]: https://github.com/attunehq/cargo/blob/7a93b36f1ae2f524d93efd16cd42864675f3e15b/src/cargo/core/compiler/fingerprint/mod.rs#L1665
+    pub info: UnitPlanInfo,
+
+    /// The entrypoint module name of the compiled build script program after
+    /// linkage (i.e. using the original build script name, which is what Cargo
+    /// uses to name the execution unit files).
+    pub build_script_program_name: String,
+}
+
+impl BuildScriptExecutionUnitPlan {
+    pub fn fingerprint_json_file(&self) -> Result<RelFilePath> {
+        self.info.fingerprint_dir()?.try_join_file(format!(
+            "run-build-script-{}.json",
+            self.build_script_program_name
+        ))
+    }
+
+    pub fn fingerprint_hash_file(&self) -> Result<RelFilePath> {
+        self.info.fingerprint_dir()?.try_join_file(format!(
+            "run-build-script-{}",
+            self.build_script_program_name
+        ))
+    }
+
+    pub fn out_dir(&self) -> Result<RelDirPath> {
+        Ok(self.info.build_dir()?.join(mk_rel_dir!("out")))
+    }
+
+    pub fn stdout_file(&self) -> Result<RelFilePath> {
+        Ok(self.info.build_dir()?.join(mk_rel_file!("output")))
+    }
+
+    pub fn stderr_file(&self) -> Result<RelFilePath> {
+        Ok(self.info.build_dir()?.join(mk_rel_file!("stderr")))
+    }
+
+    pub fn root_output_file(&self) -> Result<RelFilePath> {
+        Ok(self.info.build_dir()?.join(mk_rel_file!("root-output")))
+    }
+}
+
+impl TryFrom<BuildScriptExecutionUnitPlan> for courier::BuildScriptExecutionUnitPlan {
+    type Error = eyre::Report;
+
+    fn try_from(value: BuildScriptExecutionUnitPlan) -> Result<Self> {
+        Self::builder()
+            .info(value.info)
+            .build_script_program_name(value.build_script_program_name)
+            .build()
+            .pipe(Ok)
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BuildScriptOutputFiles {

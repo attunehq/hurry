@@ -8,22 +8,13 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    cargo::{
-        QualifiedPath, UnitPlan, Workspace,
-        cache::{
-            build_script_compilation::BuildScriptCompiledFiles,
-            build_script_execution::BuildScriptOutputFiles, library_crate::LibraryFiles,
-        },
-    },
+    cargo::{QualifiedPath, UnitPlan, Workspace},
     cas::CourierCas,
     daemon::{CargoUploadRequest, DaemonPaths},
     progress::TransferBar,
 };
 use clients::{Courier, Token};
 
-mod build_script_compilation;
-mod build_script_execution;
-mod library_crate;
 mod restore;
 mod save;
 
@@ -137,7 +128,7 @@ impl CargoCache {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SavedFile {
-    path: QualifiedPath,
-    contents: Vec<u8>,
-    executable: bool,
+    pub path: QualifiedPath,
+    pub contents: Vec<u8>,
+    pub executable: bool,
 }

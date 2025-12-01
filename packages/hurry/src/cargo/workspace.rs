@@ -3,27 +3,25 @@ use std::fmt::Debug;
 use cargo_metadata::TargetKind;
 use color_eyre::{
     Result, Section, SectionExt,
-    eyre::{self, Context, OptionExt as _, bail, eyre},
+    eyre::{Context, OptionExt as _, bail, eyre},
 };
 use derive_more::{Debug as DebugExt, Display};
 use itertools::Itertools as _;
 use scopeguard::defer;
 use serde::{Deserialize, Serialize};
-use tap::{Conv as _, Pipe as _, Tap as _, TapFallible as _, TryConv as _};
+use tap::{Conv as _, Tap as _, TapFallible as _, TryConv as _};
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
 use crate::{
     cargo::{
-        self, BuildPlan, CargoBuildArguments, CargoCompileMode, Profile, RustcArguments,
+        self, BuildPlan, BuildScriptCompilationUnitPlan, BuildScriptExecutionUnitPlan,
+        CargoBuildArguments, CargoCompileMode, LibraryCrateUnitPlan, Profile, RustcArguments,
         RustcMetadata, RustcTarget,
     },
-    fs, mk_rel_dir, mk_rel_file,
-    path::{
-        AbsDirPath, AbsFilePath, JoinWith as _, RelDirPath, RelFilePath, RelativeTo as _,
-        TryJoinWith as _,
-    },
+    fs, mk_rel_dir,
+    path::{AbsDirPath, AbsFilePath, RelDirPath, RelativeTo as _, TryJoinWith as _},
 };
 use clients::courier::v1 as courier;
 
@@ -705,213 +703,6 @@ impl UnitPlan {
             UnitPlan::BuildScriptCompilation(plan) => &plan.info,
             UnitPlan::BuildScriptExecution(plan) => &plan.info,
         }
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct LibraryCrateUnitPlan {
-    pub info: UnitPlanInfo,
-    pub src_path: AbsFilePath,
-    pub outputs: Vec<AbsFilePath>,
-}
-
-impl LibraryCrateUnitPlan {
-    pub fn dep_info_file(&self) -> Result<RelFilePath> {
-        self.info.deps_dir()?.try_join_file(format!(
-            "{}-{}.d",
-            self.info.crate_name, self.info.unit_hash
-        ))
-    }
-
-    pub fn encoded_dep_info_file(&self) -> Result<RelFilePath> {
-        self.info
-            .fingerprint_dir()?
-            .try_join_file(format!("dep-lib-{}", self.info.crate_name))
-    }
-
-    pub fn fingerprint_json_file(&self) -> Result<RelFilePath> {
-        self.info
-            .fingerprint_dir()?
-            .try_join_file(format!("lib-{}.json", self.info.crate_name))
-    }
-
-    pub fn fingerprint_hash_file(&self) -> Result<RelFilePath> {
-        self.info
-            .fingerprint_dir()?
-            .try_join_file(format!("lib-{}", self.info.crate_name))
-    }
-}
-
-impl TryFrom<LibraryCrateUnitPlan> for courier::LibraryCrateUnitPlan {
-    type Error = eyre::Report;
-
-    fn try_from(value: LibraryCrateUnitPlan) -> Result<Self> {
-        Self::builder()
-            .info(value.info)
-            .src_path(serde_json::to_string(&value.src_path)?)
-            .outputs(
-                value
-                    .outputs
-                    .into_iter()
-                    .map(|p| Result::<_>::Ok(serde_json::to_string(&p)?.into()))
-                    .try_collect::<_, Vec<_>, _>()?,
-            )
-            .build()
-            .pipe(Ok)
-    }
-}
-
-impl TryFrom<BuildScriptCompilationUnitPlan> for courier::BuildScriptCompilationUnitPlan {
-    type Error = eyre::Report;
-
-    fn try_from(value: BuildScriptCompilationUnitPlan) -> Result<Self> {
-        Self::builder()
-            .info(value.info)
-            .src_path(serde_json::to_string(&value.src_path)?)
-            .build()
-            .pipe(Ok)
-    }
-}
-
-impl TryFrom<BuildScriptExecutionUnitPlan> for courier::BuildScriptExecutionUnitPlan {
-    type Error = eyre::Report;
-
-    fn try_from(value: BuildScriptExecutionUnitPlan) -> Result<Self> {
-        Self::builder()
-            .info(value.info)
-            .build_script_program_name(value.build_script_program_name)
-            .build()
-            .pipe(Ok)
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct BuildScriptCompilationUnitPlan {
-    pub info: UnitPlanInfo,
-
-    /// The path to the build script's main entrypoint source file. This is
-    /// usually `build.rs` within the package's source code, but can vary if
-    /// the package author sets `package.build` in the package's
-    /// `Cargo.toml`, which changes the build script's name[^1].
-    ///
-    /// This is parsed from the rustc invocation arguments in the unit's
-    /// build plan invocation.
-    ///
-    /// This is used to rewrite the build script compilation's fingerprint
-    /// on restore.
-    ///
-    /// [^1]: https://doc.rust-lang.org/cargo/reference/manifest.html#the-build-field
-    pub src_path: AbsFilePath,
-}
-
-impl BuildScriptCompilationUnitPlan {
-    fn entrypoint_module_name(&self) -> Result<String> {
-        let src_path_filename = self
-            .src_path
-            .file_name_str_lossy()
-            .ok_or_eyre("build script source path has no name")?;
-        Ok(src_path_filename
-            .strip_suffix(".rs")
-            .ok_or_eyre("build script source path has no `.rs` extension")?
-            .to_string())
-    }
-
-    /// Build scripts always compile to a single program and a renamed hard
-    /// link to the same program.
-    ///
-    /// This is parsed from the `outputs` and `links` paths in the unit's
-    /// build plan invocation.
-    ///
-    /// These file paths must have their mtimes modified to be later than
-    /// the fingerprint's invoked timestamp for the unit to be marked fresh.
-    pub fn program_file(&self) -> Result<RelFilePath> {
-        self.info.build_dir()?.try_join_file(format!(
-            "build_script_{}-{}",
-            self.entrypoint_module_name()?.replace("-", "_"),
-            self.info.unit_hash
-        ))
-    }
-
-    pub fn linked_program_file(&self) -> Result<RelFilePath> {
-        self.info
-            .build_dir()?
-            .try_join_file(format!("build-script-{}", self.entrypoint_module_name()?))
-    }
-
-    pub fn dep_info_file(&self) -> Result<RelFilePath> {
-        self.info.build_dir()?.try_join_file(format!(
-            "build_script_{}-{}.d",
-            self.entrypoint_module_name()?.replace("-", "_"),
-            self.info.unit_hash
-        ))
-    }
-
-    pub fn encoded_dep_info_file(&self) -> Result<RelFilePath> {
-        self.info.fingerprint_dir()?.try_join_file(format!(
-            "dep-build-script-build-script-{}",
-            self.entrypoint_module_name()?
-        ))
-    }
-
-    pub fn fingerprint_json_file(&self) -> Result<RelFilePath> {
-        self.info.fingerprint_dir()?.try_join_file(format!(
-            "build-script-build-script-{}.json",
-            self.entrypoint_module_name()?
-        ))
-    }
-
-    pub fn fingerprint_hash_file(&self) -> Result<RelFilePath> {
-        self.info.fingerprint_dir()?.try_join_file(format!(
-            "build-script-build-script-{}",
-            self.entrypoint_module_name()?
-        ))
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct BuildScriptExecutionUnitPlan {
-    // Note that we don't save src_path for build script execution because this
-    // field is always set to `""` in the fingerprint for build script execution
-    // units[^1].
-    //
-    // [^1]: https://github.com/attunehq/cargo/blob/7a93b36f1ae2f524d93efd16cd42864675f3e15b/src/cargo/core/compiler/fingerprint/mod.rs#L1665
-    pub info: UnitPlanInfo,
-
-    /// The entrypoint module name of the compiled build script program after
-    /// linkage (i.e. using the original build script name, which is what Cargo
-    /// uses to name the execution unit files).
-    pub build_script_program_name: String,
-}
-
-impl BuildScriptExecutionUnitPlan {
-    pub fn fingerprint_json_file(&self) -> Result<RelFilePath> {
-        self.info.fingerprint_dir()?.try_join_file(format!(
-            "run-build-script-{}.json",
-            self.build_script_program_name
-        ))
-    }
-
-    pub fn fingerprint_hash_file(&self) -> Result<RelFilePath> {
-        self.info.fingerprint_dir()?.try_join_file(format!(
-            "run-build-script-{}",
-            self.build_script_program_name
-        ))
-    }
-
-    pub fn out_dir(&self) -> Result<RelDirPath> {
-        Ok(self.info.build_dir()?.join(mk_rel_dir!("out")))
-    }
-
-    pub fn stdout_file(&self) -> Result<RelFilePath> {
-        Ok(self.info.build_dir()?.join(mk_rel_file!("output")))
-    }
-
-    pub fn stderr_file(&self) -> Result<RelFilePath> {
-        Ok(self.info.build_dir()?.join(mk_rel_file!("stderr")))
-    }
-
-    pub fn root_output_file(&self) -> Result<RelFilePath> {
-        Ok(self.info.build_dir()?.join(mk_rel_file!("root-output")))
     }
 }
 

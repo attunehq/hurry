@@ -15,7 +15,7 @@ use tokio::task::JoinSet;
 use tracing::{Instrument, debug, instrument, trace, warn};
 
 use crate::{
-    cargo::{self, QualifiedPath, UnitPlan, Workspace, cache, workspace::UnitHash},
+    cargo::{self, QualifiedPath, UnitHash, UnitPlan, Workspace},
     cas::CourierCas,
     fs,
     path::JoinWith as _,
@@ -182,7 +182,7 @@ pub async fn restore_units(
                 // rewriting needs to occur in dependency order.
                 let fingerprint: cargo::Fingerprint =
                     serde_json::from_str(saved_library_files.fingerprint.as_str())?;
-                cache::LibraryFiles::restore_fingerprint(
+                cargo::LibraryFiles::restore_fingerprint(
                     &ws,
                     &mut dep_fingerprints,
                     fingerprint,
@@ -270,7 +270,7 @@ pub async fn restore_units(
                 // rewriting needs to occur in dependency order.
                 let fingerprint: cargo::Fingerprint =
                     serde_json::from_str(build_script_compiled_files.fingerprint.as_str())?;
-                cache::BuildScriptCompiledFiles::restore_fingerprint(
+                cargo::BuildScriptCompiledFiles::restore_fingerprint(
                     &ws,
                     &mut dep_fingerprints,
                     fingerprint,
@@ -357,7 +357,7 @@ pub async fn restore_units(
                 // rewriting needs to occur in dependency order.
                 let fingerprint: cargo::Fingerprint =
                     serde_json::from_str(build_script_output_files.fingerprint.as_str())?;
-                cache::BuildScriptOutputFiles::restore_fingerprint(
+                cargo::BuildScriptOutputFiles::restore_fingerprint(
                     &ws,
                     &mut dep_fingerprints,
                     fingerprint,

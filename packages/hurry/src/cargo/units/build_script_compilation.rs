@@ -1,18 +1,115 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+use clients::courier::v1 as courier;
 use color_eyre::{
     Result,
-    eyre::{OptionExt as _, bail},
+    eyre::{self, OptionExt as _, bail},
 };
 use derive_more::Debug;
 use serde::{Deserialize, Serialize};
+use tap::Pipe as _;
 use tracing::debug;
 
 use crate::{
-    cargo::{BuildScriptCompilationUnitPlan, DepInfo, Fingerprint, Workspace, fingerprint},
+    cargo::{DepInfo, Fingerprint, UnitPlanInfo, Workspace, fingerprint},
     fs,
-    path::JoinWith as _,
+    path::{AbsFilePath, JoinWith as _, RelFilePath, TryJoinWith as _},
 };
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct BuildScriptCompilationUnitPlan {
+    pub info: UnitPlanInfo,
+
+    /// The path to the build script's main entrypoint source file. This is
+    /// usually `build.rs` within the package's source code, but can vary if
+    /// the package author sets `package.build` in the package's
+    /// `Cargo.toml`, which changes the build script's name[^1].
+    ///
+    /// This is parsed from the rustc invocation arguments in the unit's
+    /// build plan invocation.
+    ///
+    /// This is used to rewrite the build script compilation's fingerprint
+    /// on restore.
+    ///
+    /// [^1]: https://doc.rust-lang.org/cargo/reference/manifest.html#the-build-field
+    pub src_path: AbsFilePath,
+}
+
+impl BuildScriptCompilationUnitPlan {
+    fn entrypoint_module_name(&self) -> Result<String> {
+        let src_path_filename = self
+            .src_path
+            .file_name_str_lossy()
+            .ok_or_eyre("build script source path has no name")?;
+        Ok(src_path_filename
+            .strip_suffix(".rs")
+            .ok_or_eyre("build script source path has no `.rs` extension")?
+            .to_string())
+    }
+
+    /// Build scripts always compile to a single program and a renamed hard
+    /// link to the same program.
+    ///
+    /// This is parsed from the `outputs` and `links` paths in the unit's
+    /// build plan invocation.
+    ///
+    /// These file paths must have their mtimes modified to be later than
+    /// the fingerprint's invoked timestamp for the unit to be marked fresh.
+    pub fn program_file(&self) -> Result<RelFilePath> {
+        self.info.build_dir()?.try_join_file(format!(
+            "build_script_{}-{}",
+            self.entrypoint_module_name()?.replace("-", "_"),
+            self.info.unit_hash
+        ))
+    }
+
+    pub fn linked_program_file(&self) -> Result<RelFilePath> {
+        self.info
+            .build_dir()?
+            .try_join_file(format!("build-script-{}", self.entrypoint_module_name()?))
+    }
+
+    pub fn dep_info_file(&self) -> Result<RelFilePath> {
+        self.info.build_dir()?.try_join_file(format!(
+            "build_script_{}-{}.d",
+            self.entrypoint_module_name()?.replace("-", "_"),
+            self.info.unit_hash
+        ))
+    }
+
+    pub fn encoded_dep_info_file(&self) -> Result<RelFilePath> {
+        self.info.fingerprint_dir()?.try_join_file(format!(
+            "dep-build-script-build-script-{}",
+            self.entrypoint_module_name()?
+        ))
+    }
+
+    pub fn fingerprint_json_file(&self) -> Result<RelFilePath> {
+        self.info.fingerprint_dir()?.try_join_file(format!(
+            "build-script-build-script-{}.json",
+            self.entrypoint_module_name()?
+        ))
+    }
+
+    pub fn fingerprint_hash_file(&self) -> Result<RelFilePath> {
+        self.info.fingerprint_dir()?.try_join_file(format!(
+            "build-script-build-script-{}",
+            self.entrypoint_module_name()?
+        ))
+    }
+}
+
+impl TryFrom<BuildScriptCompilationUnitPlan> for courier::BuildScriptCompilationUnitPlan {
+    type Error = eyre::Report;
+
+    fn try_from(value: BuildScriptCompilationUnitPlan) -> Result<Self> {
+        Self::builder()
+            .info(value.info)
+            .src_path(serde_json::to_string(&value.src_path)?)
+            .build()
+            .pipe(Ok)
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BuildScriptCompiledFiles {
