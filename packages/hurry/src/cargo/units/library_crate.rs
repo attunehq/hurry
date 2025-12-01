@@ -1,21 +1,74 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+use clients::courier::v1 as courier;
 use color_eyre::{
     Result,
-    eyre::{OptionExt as _, bail},
+    eyre::{self, OptionExt as _, bail},
 };
 use derive_more::Debug;
+use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
+use tap::Pipe as _;
 use tracing::debug;
 
 use crate::{
-    cargo::{
-        DepInfo, Fingerprint, LibraryCrateUnitPlan, QualifiedPath, Workspace, cache::SavedFile,
-        fingerprint,
-    },
+    cargo::{DepInfo, Fingerprint, QualifiedPath, SavedFile, UnitPlanInfo, Workspace, fingerprint},
     fs,
-    path::JoinWith as _,
+    path::{AbsFilePath, JoinWith as _, RelFilePath, TryJoinWith as _},
 };
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct LibraryCrateUnitPlan {
+    pub info: UnitPlanInfo,
+    pub src_path: AbsFilePath,
+    pub outputs: Vec<AbsFilePath>,
+}
+
+impl LibraryCrateUnitPlan {
+    pub fn dep_info_file(&self) -> Result<RelFilePath> {
+        self.info.deps_dir()?.try_join_file(format!(
+            "{}-{}.d",
+            self.info.crate_name, self.info.unit_hash
+        ))
+    }
+
+    pub fn encoded_dep_info_file(&self) -> Result<RelFilePath> {
+        self.info
+            .fingerprint_dir()?
+            .try_join_file(format!("dep-lib-{}", self.info.crate_name))
+    }
+
+    pub fn fingerprint_json_file(&self) -> Result<RelFilePath> {
+        self.info
+            .fingerprint_dir()?
+            .try_join_file(format!("lib-{}.json", self.info.crate_name))
+    }
+
+    pub fn fingerprint_hash_file(&self) -> Result<RelFilePath> {
+        self.info
+            .fingerprint_dir()?
+            .try_join_file(format!("lib-{}", self.info.crate_name))
+    }
+}
+
+impl TryFrom<LibraryCrateUnitPlan> for courier::LibraryCrateUnitPlan {
+    type Error = eyre::Report;
+
+    fn try_from(value: LibraryCrateUnitPlan) -> Result<Self> {
+        Self::builder()
+            .info(value.info)
+            .src_path(serde_json::to_string(&value.src_path)?)
+            .outputs(
+                value
+                    .outputs
+                    .into_iter()
+                    .map(|p| Result::<_>::Ok(serde_json::to_string(&p)?.into()))
+                    .try_collect::<_, Vec<_>, _>()?,
+            )
+            .build()
+            .pipe(Ok)
+    }
+}
 
 /// Libraries are usually associated with 7 files:
 ///
