@@ -7,7 +7,7 @@ use derive_more::Debug;
 use futures::{StreamExt, future::BoxFuture};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -83,18 +83,38 @@ pub async fn restore_units(
     trace!(?units, "units");
 
     let restored = Restored::default();
-    let start_time = SystemTime::now();
 
-    // TODO: Check which units are already fresh on disk, and don't attempt to
-    // restore them.
+    // Check which units are already on disk, and don't attempt to restore them.
+    // Note that this does not attempt to check actual _freshness_, since that
+    // logic is quite complicated[^1] and involves synthesizing a complete
+    // fingerprint for comparison. Instead, we merely check for _presence_,
+    // since it would be pretty unlikely for a unit's folder to exist already
+    // but for the unit to be dirty. In either case, Cargo's own freshness
+    // detection still runs when we shell out to it, so present-but-not-fresh
+    // units are still compiled.
+    //
+    // [^1]: https://github.com/attunehq/cargo/blob/10fcf1b64e201d1754b50be76a7d2db269d81408/src/cargo/core/compiler/fingerprint/mod.rs#L994
+    let mut units_to_skip: HashSet<UnitHash> = HashSet::new();
+    for unit in units {
+        let info = unit.info();
+        let fingerprint_dir = ws.unit_profile_dir(info).join(info.fingerprint_dir()?);
+        if fs::exists(&fingerprint_dir).await {
+            units_to_skip.insert(info.unit_hash.clone());
+        }
+    }
 
     // Load unit information from remote cache. Note that this does NOT download
     // the actual files, which are loaded as CAS keys.
-    let bulk_req = CargoRestoreRequest::new(units.iter().map(|unit| {
-        SavedUnitCacheKey::builder()
-            .unit_hash(unit.info().unit_hash.clone())
-            .build()
-    }));
+    let bulk_req = CargoRestoreRequest::new(
+        units
+            .iter()
+            .filter(|unit| !units_to_skip.contains(&unit.info().unit_hash))
+            .map(|unit| {
+                SavedUnitCacheKey::builder()
+                    .unit_hash(unit.info().unit_hash.clone())
+                    .build()
+            }),
+    );
     let mut saved_units = courier.cargo_cache_restore(bulk_req).await?;
 
     // Track restore progress.
@@ -130,10 +150,38 @@ pub async fn restore_units(
 
     let mut dep_fingerprints = HashMap::new();
     let mut files_to_restore = Vec::<FileRestoreKey>::new();
+    // We anchor the starting mtime to the Unix epoch to avoid dirtying
+    // first-party package builds in multi-package workspaces when we restore
+    // dependencies.
+    //
+    // For example, consider the case where A depends on B depends on C, where A
+    // and B are first-party packages and C is a third-party dependency. Imagine
+    // first compiling B, and then compiling A. The sequence of events would
+    // then be:
+    //
+    // 0. Restore A from cache.
+    // 1. Compile B.
+    // 2. Restore A from cache (which is a no-op transfer but still sets mtimes).
+    // 3. Compile A.
+    //
+    // The problem is that A now has mtime 2 and B has mtime 1, so B is marked
+    // dirty _even though it isn't_. In order to avoid this problem, we fix the
+    // mtime of restored dependencies to 0, because hopefully none of our users
+    // have a time machine capable of travelling back to 1970. This way,
+    // dependency mtimes will _always_ be older than first-party package mtimes,
+    // even after multiple restores.
+    //
+    // This works because third-party packages can never depend on local
+    // first-party workspace packages. When we begin caching first-party
+    // workspace packages as well, all of this logic needs to change (either by
+    // setting all mtimes or by building some sort of constrained-graph mtime
+    // solver).
+    let starting_mtime = SystemTime::UNIX_EPOCH;
     // Shared references to clone once here instead of cloning once per unit.
     let ws = Arc::new(ws.clone());
+
     for (i, unit) in units.iter().enumerate() {
-        let unit_hash = unit.info().unit_hash.clone();
+        let unit_hash = &unit.info().unit_hash;
 
         // Load the saved file info from the response.
         let saved = saved_units.take(
@@ -143,6 +191,13 @@ pub async fn restore_units(
         );
         let Some(saved) = saved else {
             debug!(?unit_hash, "unit missing from cache");
+            // Even when skipped, unit mtimes must be updated to maintain the
+            // invariant that dependencies always have older mtimes than their
+            // dependents. Otherwise, units that are skipped may have mtimes
+            // that are out of sync with units that are restored.
+            if units_to_skip.contains(unit_hash) {
+                todo!()
+            }
             progress.dec_length(1);
             continue;
         };
@@ -159,7 +214,7 @@ pub async fn restore_units(
         // timestamp comparison logic.[^1]
         //
         // [^1]: https://github.com/rust-lang/cargo/blob/c24e1064277fe51ab72011e2612e556ac56addf7/src/cargo/core/compiler/fingerprint/mod.rs#L1229-L1235
-        let mtime = start_time + Duration::from_secs(i as u64);
+        let mtime = starting_mtime + Duration::from_secs(i as u64);
 
         // Mark the unit's restore as pending.
         restore_progress
@@ -167,12 +222,17 @@ pub async fn restore_units(
             .insert(unit_hash.clone(), DashSet::new());
         // Write the fingerprint and queue other files to be restored. Writing
         // fingerprints happens during this loop because fingerprint rewriting
-        // must occur in dependency order.
+        // must occur in dependency order because a unit's fingerprint depends
+        // on its dependencies' fingerprints.
         //
         // TODO: Ideally, we would only write fingerprints _after_ all the files
         // for the unit are restored, to be maximally correct. This requires
         // plumbing some sort of work-dependency relationship between units and
         // restores.
+        //
+        // TODO: Maybe instead of this whole fingerprint-rewriting song and
+        // dance, we should just fork and/or upstream relocatable fingerprints
+        // into Cargo.
         match (saved, unit) {
             (
                 SavedUnit::LibraryCrate(saved_library_files, _),
@@ -450,9 +510,9 @@ pub async fn restore_units(
         }
 
         // Mark the unit as restored. It's not _technically_ restored yet, but
-        // this function will return an error if the restore doesn't happen
-        // anyway.
-        restored.record_unit(unit_hash);
+        // this function will return an error later on when the workers join if
+        // the restore doesn't succeed.
+        restored.record_unit(unit_hash.clone());
     }
 
     debug!("start sending files to restore workers");
