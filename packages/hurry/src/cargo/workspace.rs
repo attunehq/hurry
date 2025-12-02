@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, time::SystemTime};
 
 use cargo_metadata::TargetKind;
 use color_eyre::{
@@ -21,7 +21,7 @@ use crate::{
         RustcMetadata, RustcTarget,
     },
     fs, mk_rel_dir,
-    path::{AbsDirPath, AbsFilePath, RelDirPath, RelativeTo as _, TryJoinWith as _},
+    path::{AbsDirPath, AbsFilePath, RelDirPath, RelFilePath, RelativeTo as _, TryJoinWith as _},
 };
 use clients::courier::v1 as courier;
 
@@ -702,6 +702,22 @@ impl UnitPlan {
             UnitPlan::LibraryCrate(plan) => &plan.info,
             UnitPlan::BuildScriptCompilation(plan) => &plan.info,
             UnitPlan::BuildScriptExecution(plan) => &plan.info,
+        }
+    }
+
+    pub async fn touch(&self, ws: &Workspace, mtime: SystemTime) -> Result<()> {
+        match self {
+            UnitPlan::LibraryCrate(plan) => plan.touch(ws, mtime).await,
+            UnitPlan::BuildScriptCompilation(plan) => plan.touch(ws, mtime).await,
+            UnitPlan::BuildScriptExecution(plan) => plan.touch(ws, mtime).await,
+        }
+    }
+
+    pub async fn fingerprint_json_file(&self) -> Result<RelFilePath> {
+        match self {
+            UnitPlan::LibraryCrate(plan) => plan.fingerprint_json_file(),
+            UnitPlan::BuildScriptCompilation(plan) => plan.fingerprint_json_file(),
+            UnitPlan::BuildScriptExecution(plan) => plan.fingerprint_json_file(),
         }
     }
 }

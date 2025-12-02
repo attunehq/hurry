@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{instrument, trace};
 
 use crate::{
-    cargo::{self, Restored, UnitPlan, Workspace},
+    cargo::{Restored, UnitPlan, Workspace},
     cas::CourierCas,
 };
 use clients::{
@@ -63,7 +63,7 @@ pub async fn save_units(
         match unit {
             UnitPlan::LibraryCrate(plan) => {
                 // Read unit files.
-                let files = cargo::LibraryFiles::read(&ws, &plan).await?;
+                let files = plan.read(&ws).await?;
 
                 // Prepare CAS objects.
                 let mut cas_uploads = Vec::new();
@@ -129,7 +129,7 @@ pub async fn save_units(
             }
             UnitPlan::BuildScriptCompilation(plan) => {
                 // Read unit files.
-                let files = cargo::BuildScriptCompiledFiles::read(&ws, &plan).await?;
+                let files = plan.read(&ws).await?;
 
                 // Prepare CAS objects.
                 let mut cas_uploads = Vec::new();
@@ -184,7 +184,7 @@ pub async fn save_units(
             }
             UnitPlan::BuildScriptExecution(plan) => {
                 // Read unit files.
-                let files = cargo::BuildScriptOutputFiles::read(&ws, &plan).await?;
+                let files = plan.read(&ws).await?;
 
                 // Prepare CAS objects.
                 let mut cas_uploads = Vec::new();

@@ -88,18 +88,28 @@ pub async fn restore_units(
     // Note that this does not attempt to check actual _freshness_, since that
     // logic is quite complicated[^1] and involves synthesizing a complete
     // fingerprint for comparison. Instead, we merely check for _presence_,
-    // since it would be pretty unlikely for a unit's folder to exist already
-    // but for the unit to be dirty. In either case, Cargo's own freshness
-    // detection still runs when we shell out to it, so present-but-not-fresh
-    // units are still compiled.
+    // since it would be pretty unlikely for a unit's fingerprint to exist
+    // already but for the unit to be dirty. In either case, Cargo's own
+    // freshness detection still runs when we shell out to it, so
+    // present-but-not-fresh units are still compiled.
     //
     // [^1]: https://github.com/attunehq/cargo/blob/10fcf1b64e201d1754b50be76a7d2db269d81408/src/cargo/core/compiler/fingerprint/mod.rs#L994
     let mut units_to_skip: HashSet<UnitHash> = HashSet::new();
     for unit in units {
         let info = unit.info();
-        let fingerprint_dir = ws.unit_profile_dir(info).join(info.fingerprint_dir()?);
-        if fs::exists(&fingerprint_dir).await {
+        // Note that it's not enough to check that the fingerprint _directory_
+        // is present, since this directory is actually constructed when we call
+        // `cargo build --build-plan`. Instead, we check whether the fingerprint
+        // JSON files are present, since those are not written until the unit is
+        // actually completed.
+        if fs::exists(
+            &ws.unit_profile_dir(info)
+                .join(unit.fingerprint_json_file().await?),
+        )
+        .await
+        {
             units_to_skip.insert(info.unit_hash.clone());
+            restored.units.insert(info.unit_hash.clone());
         }
     }
 
@@ -183,25 +193,6 @@ pub async fn restore_units(
     for (i, unit) in units.iter().enumerate() {
         let unit_hash = &unit.info().unit_hash;
 
-        // Load the saved file info from the response.
-        let saved = saved_units.take(
-            &SavedUnitCacheKey::builder()
-                .unit_hash(unit_hash.clone())
-                .build(),
-        );
-        let Some(saved) = saved else {
-            debug!(?unit_hash, "unit missing from cache");
-            // Even when skipped, unit mtimes must be updated to maintain the
-            // invariant that dependencies always have older mtimes than their
-            // dependents. Otherwise, units that are skipped may have mtimes
-            // that are out of sync with units that are restored.
-            if units_to_skip.contains(unit_hash) {
-                todo!()
-            }
-            progress.dec_length(1);
-            continue;
-        };
-
         // Calculate the mtime for files to be restored. All output file mtimes
         // for a unit U must be after those of U's dependencies (i.e. all of U's
         // mtimes must be before its dependents). To satisfy this property
@@ -215,6 +206,30 @@ pub async fn restore_units(
         //
         // [^1]: https://github.com/rust-lang/cargo/blob/c24e1064277fe51ab72011e2612e556ac56addf7/src/cargo/core/compiler/fingerprint/mod.rs#L1229-L1235
         let mtime = starting_mtime + Duration::from_secs(i as u64);
+
+        // Load the saved file info from the response.
+        let saved = saved_units.take(
+            &SavedUnitCacheKey::builder()
+                .unit_hash(unit_hash.clone())
+                .build(),
+        );
+        let Some(saved) = saved else {
+            debug!(?unit_hash, "unit missing from cache");
+            // Even when skipped, unit mtimes must be updated to maintain the
+            // invariant that dependencies always have older mtimes than their
+            // dependents. Otherwise, units that are skipped may have mtimes
+            // that are out of sync with units that are restored.
+            if units_to_skip.contains(unit_hash) {
+                match unit.touch(&ws, starting_mtime).await {
+                    Ok(()) => {}
+                    Err(err) => {
+                        warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
+                    }
+                }
+            }
+            progress.dec_length(1);
+            continue;
+        };
 
         // Mark the unit's restore as pending.
         restore_progress
@@ -258,7 +273,7 @@ pub async fn restore_units(
 
                     restore_progress
                         .units
-                        .get_mut(&unit_hash)
+                        .get_mut(unit_hash)
                         .ok_or_eyre("unit hash restore progress not initialized")?
                         .insert(file.object_key.clone());
                     files_to_restore.push(FileRestoreKey {
@@ -284,7 +299,7 @@ pub async fn restore_units(
                 let path = profile_dir.join(&unit_plan.dep_info_file()?);
                 restore_progress
                     .units
-                    .get_mut(&unit_hash)
+                    .get_mut(unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
                     .insert(saved_library_files.dep_info_file.clone());
                 files_to_restore.push(FileRestoreKey {
@@ -306,7 +321,7 @@ pub async fn restore_units(
                 let path = profile_dir.join(&unit_plan.encoded_dep_info_file()?);
                 restore_progress
                     .units
-                    .get_mut(&unit_hash)
+                    .get_mut(unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
                     .insert(saved_library_files.encoded_dep_info_file.clone());
                 files_to_restore.push(FileRestoreKey {
@@ -345,7 +360,7 @@ pub async fn restore_units(
                 let linked_path = profile_dir.join(unit_plan.linked_program_file()?);
                 restore_progress
                     .units
-                    .get_mut(&unit_hash)
+                    .get_mut(unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
                     .insert(build_script_compiled_files.compiled_program.clone());
                 files_to_restore.push(FileRestoreKey {
@@ -371,7 +386,7 @@ pub async fn restore_units(
                 let path = profile_dir.join(&unit_plan.dep_info_file()?);
                 restore_progress
                     .units
-                    .get_mut(&unit_hash)
+                    .get_mut(unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
                     .insert(build_script_compiled_files.dep_info_file.clone());
                 files_to_restore.push(FileRestoreKey {
@@ -393,7 +408,7 @@ pub async fn restore_units(
                 let path = profile_dir.join(&unit_plan.encoded_dep_info_file()?);
                 restore_progress
                     .units
-                    .get_mut(&unit_hash)
+                    .get_mut(unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
                     .insert(build_script_compiled_files.encoded_dep_info_file.clone());
                 files_to_restore.push(FileRestoreKey {
@@ -435,7 +450,7 @@ pub async fn restore_units(
 
                     restore_progress
                         .units
-                        .get_mut(&unit_hash)
+                        .get_mut(unit_hash)
                         .ok_or_eyre("unit hash restore progress not initialized")?
                         .insert(file.object_key.clone());
                     files_to_restore.push(FileRestoreKey {
@@ -459,7 +474,7 @@ pub async fn restore_units(
                 let path = profile_dir.join(&unit_plan.stdout_file()?);
                 restore_progress
                     .units
-                    .get_mut(&unit_hash)
+                    .get_mut(unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
                     .insert(build_script_output_files.stdout.clone());
                 files_to_restore.push(FileRestoreKey {
@@ -481,7 +496,7 @@ pub async fn restore_units(
                 let path = profile_dir.join(&unit_plan.stderr_file()?);
                 restore_progress
                     .units
-                    .get_mut(&unit_hash)
+                    .get_mut(unit_hash)
                     .ok_or_eyre("unit hash restore progress not initialized")?
                     .insert(build_script_output_files.stderr.clone());
                 files_to_restore.push(FileRestoreKey {

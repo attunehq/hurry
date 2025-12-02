@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::SystemTime};
 
 use clients::courier::v1 as courier;
 use color_eyre::{
@@ -48,6 +48,87 @@ impl LibraryCrateUnitPlan {
         self.info
             .fingerprint_dir()?
             .try_join_file(format!("lib-{}", self.info.crate_name))
+    }
+
+    pub async fn read(&self, ws: &Workspace) -> Result<LibraryFiles> {
+        let profile_dir = ws.unit_profile_dir(&self.info);
+
+        // There should only be 1-3 files here, it's a very small number.
+        let output_files = {
+            let mut output_files = Vec::new();
+            for output_file_path in &self.outputs {
+                let path =
+                    QualifiedPath::parse(ws, &self.info.target_arch, output_file_path.as_ref())
+                        .await?;
+                let contents = fs::must_read_buffered(output_file_path).await?;
+                let executable = fs::is_executable(output_file_path.as_std_path()).await;
+                output_files.push(SavedFile {
+                    path,
+                    contents,
+                    executable,
+                });
+            }
+            output_files
+        };
+
+        let dep_info_file = DepInfo::from_file(
+            ws,
+            &self.info.target_arch,
+            &profile_dir.join(&self.dep_info_file()?),
+        )
+        .await?;
+
+        let encoded_dep_info_file =
+            fs::must_read_buffered(&profile_dir.join(&self.encoded_dep_info_file()?)).await?;
+
+        let fingerprint = {
+            let fingerprint_json =
+                fs::must_read_buffered_utf8(&profile_dir.join(&self.fingerprint_json_file()?))
+                    .await?;
+            let fingerprint: Fingerprint = serde_json::from_str(&fingerprint_json)?;
+
+            let fingerprint_hash =
+                fs::must_read_buffered_utf8(&profile_dir.join(&self.fingerprint_hash_file()?))
+                    .await?;
+
+            // Sanity check that the fingerprint hashes match.
+            if fingerprint.fingerprint_hash() != fingerprint_hash {
+                bail!("fingerprint hash mismatch");
+            }
+
+            fingerprint
+        };
+
+        Ok(LibraryFiles {
+            output_files,
+            dep_info_file,
+            fingerprint,
+            encoded_dep_info_file,
+        })
+    }
+
+    /// Set the mtime for all output files of this unit. This function assumes
+    /// these files are present on disk, and will return an error if they are
+    /// not.
+    pub async fn touch(&self, ws: &Workspace, mtime: SystemTime) -> Result<()> {
+        let profile_dir = ws.unit_profile_dir(&self.info);
+
+        // Set output file mtimes.
+        for path in &self.outputs {
+            fs::set_mtime(path, mtime).await?;
+        }
+
+        // Set dep info file mtime.
+        fs::set_mtime(&profile_dir.join(&self.dep_info_file()?), mtime).await?;
+
+        // Set encoded dep info file mtime.
+        fs::set_mtime(&profile_dir.join(&self.encoded_dep_info_file()?), mtime).await?;
+
+        // Set fingerprint file mtimes.
+        fs::set_mtime(&profile_dir.join(&self.fingerprint_json_file()?), mtime).await?;
+        fs::set_mtime(&profile_dir.join(&self.fingerprint_hash_file()?), mtime).await?;
+
+        Ok(())
     }
 }
 
@@ -110,66 +191,6 @@ pub struct LibraryFiles {
 }
 
 impl LibraryFiles {
-    pub async fn read(ws: &Workspace, unit_plan: &LibraryCrateUnitPlan) -> Result<Self> {
-        let profile_dir = ws.unit_profile_dir(&unit_plan.info);
-
-        // There should only be 1-3 files here, it's a very small number.
-        let output_files = {
-            let mut output_files = Vec::new();
-            for output_file_path in &unit_plan.outputs {
-                let path = QualifiedPath::parse(
-                    ws,
-                    &unit_plan.info.target_arch,
-                    output_file_path.as_ref(),
-                )
-                .await?;
-                let contents = fs::must_read_buffered(output_file_path).await?;
-                let executable = fs::is_executable(output_file_path.as_std_path()).await;
-                output_files.push(SavedFile {
-                    path,
-                    contents,
-                    executable,
-                });
-            }
-            output_files
-        };
-
-        let dep_info_file = DepInfo::from_file(
-            ws,
-            &unit_plan.info.target_arch,
-            &profile_dir.join(&unit_plan.dep_info_file()?),
-        )
-        .await?;
-
-        let encoded_dep_info_file =
-            fs::must_read_buffered(&profile_dir.join(&unit_plan.encoded_dep_info_file()?)).await?;
-
-        let fingerprint = {
-            let fingerprint_json =
-                fs::must_read_buffered_utf8(&profile_dir.join(&unit_plan.fingerprint_json_file()?))
-                    .await?;
-            let fingerprint: Fingerprint = serde_json::from_str(&fingerprint_json)?;
-
-            let fingerprint_hash =
-                fs::must_read_buffered_utf8(&profile_dir.join(&unit_plan.fingerprint_hash_file()?))
-                    .await?;
-
-            // Sanity check that the fingerprint hashes match.
-            if fingerprint.fingerprint_hash() != fingerprint_hash {
-                bail!("fingerprint hash mismatch");
-            }
-
-            fingerprint
-        };
-
-        Ok(Self {
-            output_files,
-            dep_info_file,
-            fingerprint,
-            encoded_dep_info_file,
-        })
-    }
-
     #[allow(unused, reason = "documents how to restore in-memory unit")]
     pub async fn restore(
         self,
