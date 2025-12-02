@@ -97,11 +97,10 @@ pub async fn restore_units(
     let mut units_to_skip: HashSet<UnitHash> = HashSet::new();
     for unit in units {
         let info = unit.info();
-        // Note that it's not enough to check that the fingerprint _directory_
-        // is present, since this directory is actually constructed when we call
-        // `cargo build --build-plan`. Instead, we check whether the fingerprint
-        // JSON files are present, since those are not written until the unit is
-        // actually completed.
+        // TODO: We should really just check the existence of the entire unit's
+        // expected outputs, since sometimes a partial restore interrupted by ^C
+        // will pass this check but fail to build because the small fingerprints
+        // restored but the large libraries did not.
         if fs::exists(
             &ws.unit_profile_dir(info)
                 .join(unit.fingerprint_json_file().await?),
@@ -219,14 +218,11 @@ pub async fn restore_units(
             // invariant that dependencies always have older mtimes than their
             // dependents. Otherwise, units that are skipped may have mtimes
             // that are out of sync with units that are restored.
-            if units_to_skip.contains(unit_hash) {
-                match unit.touch(&ws, starting_mtime).await {
-                    Ok(()) => {}
-                    Err(err) => {
-                        warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
-                    }
-                }
-            }
+            if units_to_skip.contains(unit_hash)
+                && let Err(err) = unit.touch(&ws, starting_mtime).await
+            {
+                warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
+            };
             progress.dec_length(1);
             continue;
         };
@@ -442,6 +438,11 @@ pub async fn restore_units(
 
                 let profile_dir = ws.unit_profile_dir(&unit_plan.info);
 
+                // Create the OUT_DIR directory explicitly. This way, build
+                // script execution units that have no OUT_DIR files will still
+                // correctly have an empty OUT_DIR folder.
+                fs::create_dir_all(&profile_dir.join(unit_plan.out_dir()?)).await?;
+
                 // Queue all OUT_DIR files with executable flag handling.
                 for file in build_script_output_files.out_dir_files {
                     let path: QualifiedPath = serde_json::from_str(file.path.as_str())?;
@@ -453,6 +454,7 @@ pub async fn restore_units(
                         .get_mut(unit_hash)
                         .ok_or_eyre("unit hash restore progress not initialized")?
                         .insert(file.object_key.clone());
+
                     files_to_restore.push(FileRestoreKey {
                         unit_hash: unit_hash.clone(),
                         key: file.object_key.clone(),
