@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::SystemTime};
 
 use clients::courier::v1 as courier;
 use color_eyre::{
@@ -97,6 +97,70 @@ impl BuildScriptCompilationUnitPlan {
             self.entrypoint_module_name()?
         ))
     }
+
+    pub async fn read(&self, ws: &Workspace) -> Result<BuildScriptCompiledFiles> {
+        let profile_dir = ws.unit_profile_dir(&self.info);
+
+        let compiled_program =
+            fs::must_read_buffered(&profile_dir.join(self.program_file()?)).await?;
+
+        let dep_info_file = DepInfo::from_file(
+            ws,
+            &self.info.target_arch,
+            &profile_dir.join(&self.dep_info_file()?),
+        )
+        .await?;
+
+        let encoded_dep_info_file =
+            fs::must_read_buffered(&profile_dir.join(&self.encoded_dep_info_file()?)).await?;
+
+        let fingerprint = {
+            let fingerprint_json =
+                fs::must_read_buffered_utf8(&profile_dir.join(&self.fingerprint_json_file()?))
+                    .await?;
+            let fingerprint: Fingerprint = serde_json::from_str(&fingerprint_json)?;
+
+            let fingerprint_hash =
+                fs::must_read_buffered_utf8(&profile_dir.join(&self.fingerprint_hash_file()?))
+                    .await?;
+
+            // Sanity check that the fingerprint hashes match.
+            if fingerprint.fingerprint_hash() != fingerprint_hash {
+                bail!("fingerprint hash mismatch");
+            }
+
+            fingerprint
+        };
+
+        Ok(BuildScriptCompiledFiles {
+            compiled_program,
+            dep_info_file,
+            fingerprint,
+            encoded_dep_info_file,
+        })
+    }
+
+    /// Set the mtime for all output files of this unit. This function assumes
+    /// these files are present on disk, and will return an error if they are
+    /// not.
+    pub async fn touch(&self, ws: &Workspace, mtime: SystemTime) -> Result<()> {
+        let profile_dir = ws.unit_profile_dir(&self.info);
+
+        tokio::try_join!(
+            // Set compiled program and hard link mtime.
+            async { fs::set_mtime(&profile_dir.join(self.program_file()?), mtime).await },
+            async { fs::set_mtime(&profile_dir.join(self.linked_program_file()?), mtime).await },
+            // Set dep info file mtime.
+            async { fs::set_mtime(&profile_dir.join(self.dep_info_file()?), mtime).await },
+            // Set encoded dep info file mtime.
+            async { fs::set_mtime(&profile_dir.join(self.encoded_dep_info_file()?), mtime).await },
+            // Set fingerprint file mtimes.
+            async { fs::set_mtime(&profile_dir.join(self.fingerprint_json_file()?), mtime).await },
+            async { fs::set_mtime(&profile_dir.join(self.fingerprint_hash_file()?), mtime).await },
+        )?;
+
+        Ok(())
+    }
 }
 
 impl TryFrom<BuildScriptCompilationUnitPlan> for courier::BuildScriptCompilationUnitPlan {
@@ -132,48 +196,6 @@ pub struct BuildScriptCompiledFiles {
 }
 
 impl BuildScriptCompiledFiles {
-    pub async fn read(ws: &Workspace, unit: &BuildScriptCompilationUnitPlan) -> Result<Self> {
-        let profile_dir = ws.unit_profile_dir(&unit.info);
-
-        let compiled_program =
-            fs::must_read_buffered(&profile_dir.join(unit.program_file()?)).await?;
-
-        let dep_info_file = DepInfo::from_file(
-            ws,
-            &unit.info.target_arch,
-            &profile_dir.join(&unit.dep_info_file()?),
-        )
-        .await?;
-
-        let encoded_dep_info_file =
-            fs::must_read_buffered(&profile_dir.join(&unit.encoded_dep_info_file()?)).await?;
-
-        let fingerprint = {
-            let fingerprint_json =
-                fs::must_read_buffered_utf8(&profile_dir.join(&unit.fingerprint_json_file()?))
-                    .await?;
-            let fingerprint: Fingerprint = serde_json::from_str(&fingerprint_json)?;
-
-            let fingerprint_hash =
-                fs::must_read_buffered_utf8(&profile_dir.join(&unit.fingerprint_hash_file()?))
-                    .await?;
-
-            // Sanity check that the fingerprint hashes match.
-            if fingerprint.fingerprint_hash() != fingerprint_hash {
-                bail!("fingerprint hash mismatch");
-            }
-
-            fingerprint
-        };
-
-        Ok(Self {
-            compiled_program,
-            dep_info_file,
-            fingerprint,
-            encoded_dep_info_file,
-        })
-    }
-
     #[allow(unused, reason = "documents how to restore in-memory unit")]
     pub async fn restore(
         self,

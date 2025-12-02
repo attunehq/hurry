@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::SystemTime};
 
 use clients::courier::v1 as courier;
 use color_eyre::{
@@ -62,6 +62,95 @@ impl BuildScriptExecutionUnitPlan {
     pub fn root_output_file(&self) -> Result<RelFilePath> {
         Ok(self.info.build_dir()?.join(mk_rel_file!("root-output")))
     }
+
+    pub async fn read(&self, ws: &Workspace) -> Result<BuildScriptOutputFiles> {
+        let profile_dir = ws.unit_profile_dir(&self.info);
+
+        let stdout = BuildScriptOutput::from_file(
+            ws,
+            &self.info.target_arch,
+            &profile_dir.join(&self.stdout_file()?),
+        )
+        .await?;
+        let stderr = fs::must_read_buffered(&profile_dir.join(&self.stderr_file()?)).await?;
+        let out_dir_files = {
+            let files = fs::walk_files(&profile_dir.join(&self.out_dir()?))
+                .try_collect::<Vec<_>>()
+                .await?;
+            let mut out_dir_files = Vec::new();
+            for file in files {
+                let path = QualifiedPath::parse(ws, &self.info.target_arch, file.as_ref()).await?;
+                let executable = fs::is_executable(&file).await;
+                let contents = fs::must_read_buffered(&file).await?;
+                out_dir_files.push(SavedFile {
+                    path,
+                    executable,
+                    contents,
+                });
+            }
+            out_dir_files
+        };
+
+        let fingerprint = {
+            let fingerprint_json =
+                fs::must_read_buffered_utf8(&profile_dir.join(self.fingerprint_json_file()?))
+                    .await?;
+            let fingerprint: Fingerprint = serde_json::from_str(&fingerprint_json)?;
+
+            let fingerprint_hash =
+                fs::must_read_buffered_utf8(&profile_dir.join(self.fingerprint_hash_file()?))
+                    .await?;
+
+            // Sanity check that the fingerprint hashes match.
+            if fingerprint.fingerprint_hash() != fingerprint_hash {
+                bail!("fingerprint hash mismatch");
+            }
+
+            fingerprint
+        };
+
+        // Note that we don't save
+        // `{profile_dir}/.fingerprint/{package_name}-{unit_hash}/root-output`
+        // because it is fully reconstructible from the workspace and the unit
+        // plan.
+        Ok(BuildScriptOutputFiles {
+            out_dir_files,
+            stdout,
+            stderr,
+            fingerprint,
+        })
+    }
+
+    /// Set the mtime for all output files of this unit. This function assumes
+    /// these files are present on disk, and will return an error if they are
+    /// not.
+    pub async fn touch(&self, ws: &Workspace, mtime: SystemTime) -> Result<()> {
+        let profile_dir = ws.unit_profile_dir(&self.info);
+
+        tokio::try_join!(
+            // Touch the stdout file mtime.
+            async { fs::set_mtime(&profile_dir.join(self.stdout_file()?), mtime).await },
+            // Touch the stderr file mtime.
+            async { fs::set_mtime(&profile_dir.join(self.stderr_file()?), mtime).await },
+            // Touch every file in the OUT_DIR.
+            async {
+                let out_dir_files = fs::walk_files(&profile_dir.join(&self.out_dir()?))
+                    .try_collect::<Vec<_>>()
+                    .await?;
+                for file in out_dir_files {
+                    fs::set_mtime(&file, mtime).await?;
+                }
+                Ok(())
+            },
+            // Touch the root output file mtime.
+            async { fs::set_mtime(&profile_dir.join(self.root_output_file()?), mtime).await },
+            // Touch the fingerprint file mtimes.
+            async { fs::set_mtime(&profile_dir.join(self.fingerprint_json_file()?), mtime).await },
+            async { fs::set_mtime(&profile_dir.join(self.fingerprint_hash_file()?), mtime).await },
+        )?;
+
+        Ok(())
+    }
 }
 
 impl TryFrom<BuildScriptExecutionUnitPlan> for courier::BuildScriptExecutionUnitPlan {
@@ -85,65 +174,6 @@ pub struct BuildScriptOutputFiles {
 }
 
 impl BuildScriptOutputFiles {
-    pub async fn read(ws: &Workspace, unit_plan: &BuildScriptExecutionUnitPlan) -> Result<Self> {
-        let profile_dir = ws.unit_profile_dir(&unit_plan.info);
-
-        let stdout = BuildScriptOutput::from_file(
-            ws,
-            &unit_plan.info.target_arch,
-            &profile_dir.join(&unit_plan.stdout_file()?),
-        )
-        .await?;
-        let stderr = fs::must_read_buffered(&profile_dir.join(&unit_plan.stderr_file()?)).await?;
-        let out_dir_files = {
-            let files = fs::walk_files(&profile_dir.join(&unit_plan.out_dir()?))
-                .try_collect::<Vec<_>>()
-                .await?;
-            let mut out_dir_files = Vec::new();
-            for file in files {
-                let path =
-                    QualifiedPath::parse(ws, &unit_plan.info.target_arch, file.as_ref()).await?;
-                let executable = fs::is_executable(&file).await;
-                let contents = fs::must_read_buffered(&file).await?;
-                out_dir_files.push(SavedFile {
-                    path,
-                    executable,
-                    contents,
-                });
-            }
-            out_dir_files
-        };
-
-        let fingerprint = {
-            let fingerprint_json =
-                fs::must_read_buffered_utf8(&profile_dir.join(unit_plan.fingerprint_json_file()?))
-                    .await?;
-            let fingerprint: Fingerprint = serde_json::from_str(&fingerprint_json)?;
-
-            let fingerprint_hash =
-                fs::must_read_buffered_utf8(&profile_dir.join(unit_plan.fingerprint_hash_file()?))
-                    .await?;
-
-            // Sanity check that the fingerprint hashes match.
-            if fingerprint.fingerprint_hash() != fingerprint_hash {
-                bail!("fingerprint hash mismatch");
-            }
-
-            fingerprint
-        };
-
-        // Note that we don't save
-        // `{profile_dir}/.fingerprint/{package_name}-{unit_hash}/root-output`
-        // because it is fully reconstructible from the workspace and the unit
-        // plan.
-        Ok(Self {
-            out_dir_files,
-            stdout,
-            stderr,
-            fingerprint,
-        })
-    }
-
     #[allow(unused, reason = "documents how to restore in-memory unit")]
     pub async fn restore(
         self,

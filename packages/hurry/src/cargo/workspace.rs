@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, time::SystemTime};
 
 use cargo_metadata::TargetKind;
 use color_eyre::{
@@ -7,7 +7,6 @@ use color_eyre::{
 };
 use derive_more::{Debug as DebugExt, Display};
 use itertools::Itertools as _;
-use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use tap::{Conv as _, Tap as _, TapFallible as _, TryConv as _};
 use tokio::task::spawn_blocking;
@@ -21,7 +20,7 @@ use crate::{
         RustcMetadata, RustcTarget,
     },
     fs, mk_rel_dir,
-    path::{AbsDirPath, AbsFilePath, RelDirPath, RelativeTo as _, TryJoinWith as _},
+    path::{AbsDirPath, AbsFilePath, RelDirPath, RelFilePath, RelativeTo as _, TryJoinWith as _},
 };
 use clients::courier::v1 as courier;
 
@@ -206,27 +205,50 @@ impl Workspace {
         &self,
         args: impl AsRef<CargoBuildArguments> + std::fmt::Debug,
     ) -> Result<BuildPlan> {
-        // Running `cargo build --build-plan` deletes a bunch of items in the `target`
-        // directory. To work around this we temporarily move `target` -> run
-        // the build plan -> move it back. If the rename fails (e.g., permissions,
-        // cross-device), we proceed without it; this will then have the original issue
-        // but at least won't break the build.
-        let temp = self
-            .root
-            .try_join_dir(format!("target.backup.{}", Uuid::new_v4()))?;
+        // Running `cargo build --build-plan` resets the state in the `target`
+        // directory. To work around this we temporarily rename `target`, run
+        // the build plan, and move it back. If the rename fails (e.g.,
+        // permissions, cross-device), we proceed without it; this will then
+        // have the original issue but at least won't break the build.
+        let renamed = if fs::exists(&self.build_dir).await {
+            debug!("target exists before running build plan, renaming");
+            let temp = self
+                .root
+                .try_join_dir(format!("target.backup.{}", Uuid::new_v4()))?;
 
-        let renamed = fs::rename(&self.build_dir, &temp).await.is_ok();
+            let renamed = fs::rename(&self.build_dir, &temp).await.is_ok();
+            debug!(?renamed, ?temp, "renamed temp target");
+            if renamed { Some(temp) } else { None }
+        } else {
+            debug!("target does not exist before running build plan");
+            None
+        };
 
-        defer! {
-            if renamed {
-                let target = self.build_dir.as_std_path();
-                #[allow(clippy::disallowed_methods, reason = "cannot use async in defer")]
-                let _ = std::fs::remove_dir_all(target);
-                #[allow(clippy::disallowed_methods, reason = "cannot use async in defer")]
-                let _ = std::fs::rename(&temp, target);
-            }
+        let ret = self.build_plan_inner(args).await;
+
+        if let Some(temp) = renamed {
+            debug!("restoring original target");
+            fs::remove_dir_all(&self.build_dir).await?;
+            fs::rename(&temp, &self.build_dir).await?;
+            debug!("restored original target");
+        } else {
+            // When the build directory didn't exist at the start, we need to
+            // clean up the newly created extraneous build directory.
+            debug!(build_dir = ?self.build_dir, "build plan done, cleaning up target");
+            fs::remove_dir_all(&self.build_dir).await?;
+            debug!("build plan done, done cleaning target");
         }
 
+        ret
+    }
+
+    #[instrument(name = "Workspace::build_plan_inner")]
+    async fn build_plan_inner(
+        &self,
+        args: impl AsRef<CargoBuildArguments> + std::fmt::Debug,
+    ) -> Result<BuildPlan> {
+        // TODO: Handle cases where users pass weird options, including if the
+        // user themselves passed `--build-plan`.
         let mut build_args = args.as_ref().to_argv();
         build_args.extend([
             String::from("--build-plan"),
@@ -702,6 +724,22 @@ impl UnitPlan {
             UnitPlan::LibraryCrate(plan) => &plan.info,
             UnitPlan::BuildScriptCompilation(plan) => &plan.info,
             UnitPlan::BuildScriptExecution(plan) => &plan.info,
+        }
+    }
+
+    pub async fn touch(&self, ws: &Workspace, mtime: SystemTime) -> Result<()> {
+        match self {
+            UnitPlan::LibraryCrate(plan) => plan.touch(ws, mtime).await,
+            UnitPlan::BuildScriptCompilation(plan) => plan.touch(ws, mtime).await,
+            UnitPlan::BuildScriptExecution(plan) => plan.touch(ws, mtime).await,
+        }
+    }
+
+    pub async fn fingerprint_json_file(&self) -> Result<RelFilePath> {
+        match self {
+            UnitPlan::LibraryCrate(plan) => plan.fingerprint_json_file(),
+            UnitPlan::BuildScriptCompilation(plan) => plan.fingerprint_json_file(),
+            UnitPlan::BuildScriptExecution(plan) => plan.fingerprint_json_file(),
         }
     }
 }
