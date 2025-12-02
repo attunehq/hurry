@@ -113,20 +113,22 @@ impl LibraryCrateUnitPlan {
     pub async fn touch(&self, ws: &Workspace, mtime: SystemTime) -> Result<()> {
         let profile_dir = ws.unit_profile_dir(&self.info);
 
-        // Set output file mtimes.
-        for path in &self.outputs {
-            fs::set_mtime(path, mtime).await?;
-        }
-
-        // Set dep info file mtime.
-        fs::set_mtime(&profile_dir.join(&self.dep_info_file()?), mtime).await?;
-
-        // Set encoded dep info file mtime.
-        fs::set_mtime(&profile_dir.join(&self.encoded_dep_info_file()?), mtime).await?;
-
-        // Set fingerprint file mtimes.
-        fs::set_mtime(&profile_dir.join(&self.fingerprint_json_file()?), mtime).await?;
-        fs::set_mtime(&profile_dir.join(&self.fingerprint_hash_file()?), mtime).await?;
+        tokio::try_join!(
+            // Set output file mtimes.
+            async {
+                for path in &self.outputs {
+                    fs::set_mtime(path, mtime).await?;
+                }
+                Ok(())
+            },
+            // Set dep info file mtime.
+            async { fs::set_mtime(&profile_dir.join(&self.dep_info_file()?), mtime).await },
+            // Set encoded dep info file mtime.
+            async { fs::set_mtime(&profile_dir.join(&self.encoded_dep_info_file()?), mtime).await },
+            // Set fingerprint file mtimes.
+            async { fs::set_mtime(&profile_dir.join(&self.fingerprint_json_file()?), mtime).await },
+            async { fs::set_mtime(&profile_dir.join(&self.fingerprint_hash_file()?), mtime).await },
+        )?;
 
         Ok(())
     }

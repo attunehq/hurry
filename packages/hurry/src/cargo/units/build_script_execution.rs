@@ -127,26 +127,27 @@ impl BuildScriptExecutionUnitPlan {
     pub async fn touch(&self, ws: &Workspace, mtime: SystemTime) -> Result<()> {
         let profile_dir = ws.unit_profile_dir(&self.info);
 
-        // Touch the stdout file mtime.
-        fs::set_mtime(&profile_dir.join(self.stdout_file()?), mtime).await?;
-
-        // Touch the stderr file mtime.
-        fs::set_mtime(&profile_dir.join(self.stderr_file()?), mtime).await?;
-
-        // Touch every file in the OUT_DIR.
-        let out_dir_files = fs::walk_files(&profile_dir.join(&self.out_dir()?))
-            .try_collect::<Vec<_>>()
-            .await?;
-        for file in out_dir_files {
-            fs::set_mtime(&file, mtime).await?;
-        }
-
-        // Touch the root output file mtime.
-        fs::set_mtime(&profile_dir.join(self.root_output_file()?), mtime).await?;
-
-        // Touch the fingerprint file mtimes.
-        fs::set_mtime(&profile_dir.join(self.fingerprint_json_file()?), mtime).await?;
-        fs::set_mtime(&profile_dir.join(self.fingerprint_hash_file()?), mtime).await?;
+        tokio::try_join!(
+            // Touch the stdout file mtime.
+            async { fs::set_mtime(&profile_dir.join(self.stdout_file()?), mtime).await },
+            // Touch the stderr file mtime.
+            async { fs::set_mtime(&profile_dir.join(self.stderr_file()?), mtime).await },
+            // Touch every file in the OUT_DIR.
+            async {
+                let out_dir_files = fs::walk_files(&profile_dir.join(&self.out_dir()?))
+                    .try_collect::<Vec<_>>()
+                    .await?;
+                for file in out_dir_files {
+                    fs::set_mtime(&file, mtime).await?;
+                }
+                Ok(())
+            },
+            // Touch the root output file mtime.
+            async { fs::set_mtime(&profile_dir.join(self.root_output_file()?), mtime).await },
+            // Touch the fingerprint file mtimes.
+            async { fs::set_mtime(&profile_dir.join(self.fingerprint_json_file()?), mtime).await },
+            async { fs::set_mtime(&profile_dir.join(self.fingerprint_hash_file()?), mtime).await },
+        )?;
 
         Ok(())
     }

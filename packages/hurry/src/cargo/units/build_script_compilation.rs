@@ -146,19 +146,18 @@ impl BuildScriptCompilationUnitPlan {
     pub async fn touch(&self, ws: &Workspace, mtime: SystemTime) -> Result<()> {
         let profile_dir = ws.unit_profile_dir(&self.info);
 
-        // Set compiled program and hard link mtime.
-        fs::set_mtime(&profile_dir.join(self.program_file()?), mtime).await?;
-        fs::set_mtime(&profile_dir.join(self.linked_program_file()?), mtime).await?;
-
-        // Set dep info file mtime.
-        fs::set_mtime(&profile_dir.join(self.dep_info_file()?), mtime).await?;
-
-        // Set encoded dep info file mtime.
-        fs::set_mtime(&profile_dir.join(self.encoded_dep_info_file()?), mtime).await?;
-
-        // Set fingerprint file mtimes.
-        fs::set_mtime(&profile_dir.join(self.fingerprint_json_file()?), mtime).await?;
-        fs::set_mtime(&profile_dir.join(self.fingerprint_hash_file()?), mtime).await?;
+        tokio::try_join!(
+            // Set compiled program and hard link mtime.
+            async { fs::set_mtime(&profile_dir.join(self.program_file()?), mtime).await },
+            async { fs::set_mtime(&profile_dir.join(self.linked_program_file()?), mtime).await },
+            // Set dep info file mtime.
+            async { fs::set_mtime(&profile_dir.join(self.dep_info_file()?), mtime).await },
+            // Set encoded dep info file mtime.
+            async { fs::set_mtime(&profile_dir.join(self.encoded_dep_info_file()?), mtime).await },
+            // Set fingerprint file mtimes.
+            async { fs::set_mtime(&profile_dir.join(self.fingerprint_json_file()?), mtime).await },
+            async { fs::set_mtime(&profile_dir.join(self.fingerprint_hash_file()?), mtime).await },
+        )?;
 
         Ok(())
     }
