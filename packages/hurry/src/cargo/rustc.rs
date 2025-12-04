@@ -145,7 +145,7 @@ impl TryFrom<&str> for RustcTargetPlatform {
     type Error = eyre::Report;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::try_from_str(value).ok_or_eyre("unsupported target platform")
+        Self::try_from_str(value).ok_or_eyre(format!("unsupported target platform: {}", value))
     }
 }
 
