@@ -47,6 +47,7 @@ pub struct CargoUploadRequest {
     pub ws: Workspace,
     #[debug(skip)]
     pub units: Vec<UnitPlan>,
+    #[debug(skip)]
     pub skip: Restored,
 }
 
@@ -55,7 +56,7 @@ pub struct CargoUploadResponse {
     pub ok: bool,
 }
 
-#[instrument]
+#[instrument(skip(state))]
 async fn upload(
     State(state): State<CargoDaemonState>,
     Json(req): Json<CargoUploadRequest>,

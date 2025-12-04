@@ -1,4 +1,4 @@
-use std::{env::VarError, process::Stdio, time::Duration};
+use std::{process::Stdio, time::Duration};
 
 use color_eyre::{Result, Section, SectionExt, eyre::Context as _};
 use derive_more::Debug;
@@ -69,12 +69,6 @@ impl CargoCache {
                 .arg("start")
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-
-            // If `HURRY_LOG` is not set, set it to `debug` by default so the
-            // logs are useful.
-            if let Err(VarError::NotPresent) = std::env::var("HURRY_LOG") {
-                cmd.env("HURRY_LOG", "debug");
-            }
 
             cmd.spawn()?;
 
