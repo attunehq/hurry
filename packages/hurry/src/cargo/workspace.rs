@@ -113,7 +113,8 @@ impl Workspace {
         let host_arch = {
             let mut cmd = tokio::process::Command::new("cargo");
             cmd.args(["-Z", "unstable-options", "rustc", "--print", "host-tuple"]);
-            // This is apparently still unstable[^1].
+            // This is apparently still unstable[^1] when invoked as `cargo
+            // rustc`.
             //
             // [^1]: https://github.com/rust-lang/cargo/issues/9357
             cmd.env("RUSTC_BOOTSTRAP", "1");
@@ -131,7 +132,10 @@ impl Workspace {
                             .header("Stderr:")
                     });
             }
-            String::from_utf8(output.stdout)?.trim().to_owned()
+            String::from_utf8(output.stdout)
+                .context("parse rustc output")?
+                .trim()
+                .to_owned()
         };
 
         let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);

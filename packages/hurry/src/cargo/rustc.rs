@@ -1,17 +1,12 @@
 use std::{fmt::Debug, str::FromStr};
 
-use color_eyre::{
-    Report, Result, Section, SectionExt,
-    eyre::{Context, eyre},
-};
+use color_eyre::{Report, Result, eyre::Context};
 use derive_more::Display;
 use enum_assoc::Assoc;
 use itertools::PeekingNext;
 use parse_display::{Display as ParseDisplay, FromStr as ParseFromStr};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use tracing::{instrument, trace};
-
-use crate::{cargo::CargoBuildArguments, path::AbsDirPath};
+use tracing::trace;
 
 /// These variants correspond to Cargo's internal `CompileKind`[^1].
 ///
