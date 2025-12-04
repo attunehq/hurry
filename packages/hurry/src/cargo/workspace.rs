@@ -189,7 +189,7 @@ impl Workspace {
         match target_arch {
             RustcTarget::Specified(target_arch) => self
                 .build_dir
-                .try_join_dirs(vec![&target_arch, self.profile.as_str()])
+                .try_join_dirs(vec![target_arch.as_str(), self.profile.as_str()])
                 .expect("target arch and build profile should be valid directory names"),
             RustcTarget::ImplicitHost => self
                 .build_dir
