@@ -143,6 +143,7 @@ pub async fn exec(options: Options) -> Result<()> {
     let workspace = Workspace::from_argv(&args)
         .await
         .context("opening workspace")?;
+    debug!(?workspace, "opened workspace");
 
     // Compute expected unit plans. Note that because we are not actually
     // running build scripts, these "unit plans" do not contain fully

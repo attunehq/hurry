@@ -34,7 +34,7 @@ pub use dep_info::{DepInfo, DepInfoLine};
 pub use fingerprint::Fingerprint;
 pub use path::QualifiedPath;
 pub use profile::Profile;
-pub use rustc::{RustcArgument, RustcArguments, RustcMetadata, RustcTarget};
+pub use rustc::{RustcArgument, RustcArguments, RustcTarget};
 pub use unit_graph::{
     UnitGraph, UnitGraphDependency, UnitGraphProfile, UnitGraphProfilePanicStrategy, UnitGraphUnit,
 };
