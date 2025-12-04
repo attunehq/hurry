@@ -1,0 +1,20 @@
+version: 1
+
+rules:
+  - name: no-bold-bullets
+    description: Don't bold bullet points in markdown
+    message: Remove bold formatting from this bullet point (use "- Hook:" not "- **Hook:**"), then retry.
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "**/*.md"
+        content:
+          - kind: Regex
+            pattern: '(?m)^[ \t]*[-*+]\s+\*\*[^*]+\*\*:'
+      - hook: PreToolUse
+        tool: Edit
+        file: "**/*.md"
+        new_content:
+          - kind: Regex
+            pattern: '(?m)^[ \t]*[-*+]\s+\*\*[^*]+\*\*:'
+

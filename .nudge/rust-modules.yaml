@@ -1,0 +1,19 @@
+version: 1
+
+rules:
+  - name: no-mod-rs
+    description: Use my_module.rs instead of my_module/mod.rs
+    message: Stop. Rename this file to match the parent directory name (e.g., my_module.rs), then retry.
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "**/mod.rs"
+        content:
+          - kind: Regex
+            pattern: '(?s).*'
+      - hook: PreToolUse
+        tool: Edit
+        file: "**/mod.rs"
+        new_content:
+          - kind: Regex
+            pattern: '(?s).*'

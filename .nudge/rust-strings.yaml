@@ -1,0 +1,53 @@
+version: 1
+
+rules:
+  - name: no-to-string-on-literals
+    description: Use String::from() for string literals instead of .to_string()
+    message: Replace with String::from("...") instead of "...".to_string(), then retry.
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '"[^"]*"\.to_string\(\)'
+      - hook: PreToolUse
+        tool: Edit
+        file: "**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '"[^"]*"\.to_string\(\)'
+
+  - name: no-to-string-on-empty-string
+    description: Use String::new() for empty strings instead of "".to_string()
+    message: Replace with String::new() instead of "".to_string(), then retry.
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '""\.to_string\(\)'
+      - hook: PreToolUse
+        tool: Edit
+        file: "**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '""\.to_string\(\)'
+
+  - name: no-into-on-literals
+    description: Use String::from() for string literals instead of .into()
+    message: Replace with String::from("...") instead of "...".into(), then retry.
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '"[^"]*"\.into\(\)'
+      - hook: PreToolUse
+        tool: Edit
+        file: "**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '"[^"]*"\.into\(\)'
