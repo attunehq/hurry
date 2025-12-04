@@ -1,11 +1,18 @@
-use std::{fmt::Debug, str::FromStr};
+use std::{
+    fmt::{Debug, Display},
+    str::FromStr,
+};
 
-use color_eyre::{Report, Result, eyre::Context};
+use color_eyre::{
+    Report, Result,
+    eyre::{Context, OptionExt as _},
+};
 use derive_more::Display;
 use enum_assoc::Assoc;
 use itertools::PeekingNext;
 use parse_display::{Display as ParseDisplay, FromStr as ParseFromStr};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use tap::Pipe as _;
 use tracing::trace;
 
 /// These variants correspond to Cargo's internal `CompileKind`[^1].
@@ -20,14 +27,14 @@ pub enum RustcTarget {
     /// the specific target architecture. Note that this causes Cargo to run in
     /// cross-compilation mode even if the specified target architecture is the
     /// same as the host architecture.
-    Specified(String),
+    Specified(RustcTargetPlatform),
 }
 
 impl RustcTarget {
-    fn as_str(&self) -> Option<&str> {
+    pub fn as_str(&self) -> Option<&str> {
         match self {
             RustcTarget::ImplicitHost => None,
-            RustcTarget::Specified(target) => Some(target),
+            RustcTarget::Specified(target) => Some(target.as_str()),
         }
     }
 }
@@ -36,18 +43,7 @@ impl From<RustcTarget> for Option<String> {
     fn from(value: RustcTarget) -> Self {
         match value {
             RustcTarget::ImplicitHost => None,
-            RustcTarget::Specified(target) => Some(target),
-        }
-    }
-}
-
-// TODO: Maybe get rid of this once we port over all the logic? After all, we
-// should really only be constructing these from explicit argv parsing.
-impl From<Option<String>> for RustcTarget {
-    fn from(value: Option<String>) -> Self {
-        match value {
-            Some(target) => RustcTarget::Specified(target),
-            None => RustcTarget::ImplicitHost,
+            RustcTarget::Specified(target) => Some(target.as_str().to_string()),
         }
     }
 }
@@ -67,9 +63,114 @@ impl<'de> Deserialize<'de> for RustcTarget {
         D: Deserializer<'de>,
     {
         Ok(match Option::<String>::deserialize(deserializer)? {
-            Some(target) => RustcTarget::Specified(target),
+            Some(target) => RustcTargetPlatform::try_from_str(&target)
+                .unwrap_or(RustcTargetPlatform::Unsupported(target))
+                .pipe(RustcTarget::Specified),
             None => RustcTarget::ImplicitHost,
         })
+    }
+}
+
+/// These variants are parsed Rust "target triples", and their associated
+/// properties (e.g. whether they compile against glibc).
+///
+/// For a full list of target triples, see the rustc book[^1].
+///
+/// [^1]: https://doc.rust-lang.org/rustc/platform-support.html
+#[derive(Debug, Clone, Assoc, Eq, PartialEq, Hash)]
+#[func(pub fn as_str(&self) -> &str)]
+#[func(pub fn try_from_str(s: &str) -> Option<Self>)]
+#[func(pub fn supported(&self) -> bool)]
+#[func(pub fn uses_glibc(&self) -> bool)]
+pub enum RustcTargetPlatform {
+    // These are all the Tier 1 target platforms, which are the ones we support.
+    #[assoc(as_str = "aarch64-apple-darwin")]
+    #[assoc(try_from_str = "aarch64-apple-darwin")]
+    #[assoc(supported = true)]
+    #[assoc(uses_glibc = false)]
+    Arm64Darwin,
+    #[assoc(as_str = "aarch64-pc-windows-msvc")]
+    #[assoc(try_from_str = "aarch64-pc-windows-msvc")]
+    #[assoc(supported = true)]
+    #[assoc(uses_glibc = false)]
+    Arm64WindowsMSVC,
+    #[assoc(as_str = "aarch64-unknown-linux-gnu")]
+    #[assoc(try_from_str = "aarch64-unknown-linux-gnu")]
+    #[assoc(supported = true)]
+    #[assoc(uses_glibc = true)]
+    Arm64LinuxGNU,
+    #[assoc(as_str = "i686-pc-windows-msvc")]
+    #[assoc(try_from_str = "i686-pc-windows-msvc")]
+    #[assoc(supported = true)]
+    #[assoc(uses_glibc = false)]
+    I686WindowsMSVC,
+    #[assoc(as_str = "i686-unknown-linux-gnu")]
+    #[assoc(try_from_str = "i686-unknown-linux-gnu")]
+    #[assoc(supported = true)]
+    #[assoc(uses_glibc = true)]
+    I686LinuxGNU,
+    #[assoc(as_str = "x86_64-pc-windows-gnu")]
+    #[assoc(try_from_str = "x86_64-pc-windows-gnu")]
+    #[assoc(supported = true)]
+    #[assoc(uses_glibc = false)]
+    X86_64WindowsGNU,
+    #[assoc(as_str = "x86_64-pc-windows-msvc")]
+    #[assoc(try_from_str = "x86_64-pc-windows-msvc")]
+    #[assoc(supported = true)]
+    #[assoc(uses_glibc = false)]
+    X86_64WindowsMSVC,
+    #[assoc(as_str = "x86_64-unknown-linux-gnu")]
+    #[assoc(try_from_str = "x86_64-unknown-linux-gnu")]
+    #[assoc(supported = true)]
+    #[assoc(uses_glibc = true)]
+    X86_64LinuxGNU,
+
+    // This is a catch-all for all other unrecognized target triple strings.
+    // This variant mainly exists so that unsupported target triples do not
+    // cause errors on JSON deserialization. Otherwise, we would generally
+    // prefer to force callers to explicitly handle the case of unsupported
+    // triples.
+    #[assoc(as_str = _0.as_str())]
+    #[assoc(supported = false)]
+    #[assoc(uses_glibc = false)]
+    Unsupported(String),
+}
+
+// Even though we could implement `From` and provide `Unsupported` as a default,
+// we explicitly want to force callers to check for whether the target triple is
+// supported on conversions.
+impl TryFrom<&str> for RustcTargetPlatform {
+    type Error = Report;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::try_from_str(value).ok_or_eyre(format!("unsupported target platform: {}", value))
+    }
+}
+
+impl Display for RustcTargetPlatform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for RustcTargetPlatform {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.as_str().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RustcTargetPlatform {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::try_from_str(&s)
+            .unwrap_or(Self::Unsupported(s))
+            .pipe(Ok)
     }
 }
 

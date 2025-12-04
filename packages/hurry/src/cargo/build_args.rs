@@ -6,7 +6,7 @@ use itertools::PeekingNext;
 use parse_display::{Display as ParseDisplay, FromStr as ParseFromStr};
 use tracing::trace;
 
-use crate::cargo::rustc::RustcTarget;
+use crate::cargo::{RustcTarget, RustcTargetPlatform};
 
 /// Parsed arguments for a `cargo build` invocation.
 ///
@@ -75,7 +75,10 @@ impl CargoBuildArguments {
         self.0
             .iter()
             .find_map(|arg| match arg {
-                CargoBuildArgument::Target(Some(t)) => Some(RustcTarget::Specified(t.clone())),
+                CargoBuildArgument::Target(Some(t)) => Some(RustcTarget::Specified(
+                    RustcTargetPlatform::try_from_str(t)
+                        .unwrap_or(RustcTargetPlatform::Unsupported(t.clone())),
+                )),
                 _ => None,
             })
             .unwrap_or(RustcTarget::ImplicitHost)
@@ -720,7 +723,7 @@ mod tests {
         let parsed = CargoBuildArguments::from_iter(args.to_vec());
         pretty_assert_eq!(
             parsed.target(),
-            RustcTarget::Specified(String::from("x86_64-unknown-linux-gnu"))
+            RustcTarget::Specified(RustcTargetPlatform::X86_64LinuxGNU)
         );
     }
 
