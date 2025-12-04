@@ -17,7 +17,7 @@ use crate::{
     cargo::{
         self, BuildPlan, BuildScriptCompilationUnitPlan, BuildScriptExecutionUnitPlan,
         CargoBuildArguments, CargoCompileMode, LibraryCrateUnitPlan, Profile, RustcArguments,
-        RustcTarget,
+        RustcTarget, RustcTargetPlatform,
     },
     fs, mk_rel_dir,
     path::{AbsDirPath, AbsFilePath, RelDirPath, RelFilePath, RelativeTo as _, TryJoinWith as _},
@@ -56,7 +56,7 @@ pub struct Workspace {
     pub target_arch: RustcTarget,
 
     /// The architecture of the host machine.
-    pub host_arch: String,
+    pub host_arch: RustcTargetPlatform,
 }
 
 impl Workspace {
@@ -133,9 +133,10 @@ impl Workspace {
                     });
             }
             String::from_utf8(output.stdout)
-                .context("parse rustc output")?
+                .context("parse rustc output as UTF-8")?
                 .trim()
-                .to_owned()
+                .try_into()
+                .context("parse host tuple")?
         };
 
         let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
