@@ -17,7 +17,7 @@ use crate::{
     cargo::{
         self, BuildPlan, BuildScriptCompilationUnitPlan, BuildScriptExecutionUnitPlan,
         CargoBuildArguments, CargoCompileMode, LibraryCrateUnitPlan, Profile, RustcArguments,
-        RustcMetadata, RustcTarget,
+        RustcTarget,
     },
     fs, mk_rel_dir,
     path::{AbsDirPath, AbsFilePath, RelDirPath, RelFilePath, RelativeTo as _, TryJoinWith as _},
@@ -52,7 +52,11 @@ pub struct Workspace {
     /// The build profile of this workspace invocation.
     pub profile: Profile,
 
+    /// The architecture specified for the build via `--target`.
     pub target_arch: RustcTarget,
+
+    /// The architecture of the host machine.
+    pub host_arch: String,
 }
 
 impl Workspace {
@@ -106,6 +110,34 @@ impl Workspace {
         .try_into()
         .context("parse path as utf8")?;
 
+        let host_arch = {
+            let mut cmd = tokio::process::Command::new("cargo");
+            cmd.args(["-Z", "unstable-options", "rustc", "--print", "host-tuple"]);
+            // This is apparently still unstable[^1] when invoked as `cargo
+            // rustc`.
+            //
+            // [^1]: https://github.com/rust-lang/cargo/issues/9357
+            cmd.env("RUSTC_BOOTSTRAP", "1");
+            let output = cmd.output().await.context("run rustc")?;
+            if !output.status.success() {
+                return Err(eyre!("invoke rustc"))
+                    .with_section(|| {
+                        String::from_utf8_lossy(&output.stdout)
+                            .to_string()
+                            .header("Stdout:")
+                    })
+                    .with_section(|| {
+                        String::from_utf8_lossy(&output.stderr)
+                            .to_string()
+                            .header("Stderr:")
+                    });
+            }
+            String::from_utf8(output.stdout)
+                .context("parse rustc output")?
+                .trim()
+                .to_owned()
+        };
+
         let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
         let target_arch = args.target();
 
@@ -115,6 +147,7 @@ impl Workspace {
             cargo_home,
             profile,
             target_arch,
+            host_arch,
         })
     }
 
@@ -291,11 +324,6 @@ impl Workspace {
         // TODO: These should just use self.args.
         args: impl AsRef<CargoBuildArguments> + std::fmt::Debug,
     ) -> Result<Vec<UnitPlan>> {
-        let rustc = RustcMetadata::from_argv(&self.root, &args)
-            .await
-            .context("parsing rustc metadata")?;
-        trace!(?rustc, "rustc metadata");
-
         // Note that build plans as a feature are deprecated[^1]. If a stable
         // alternative comes along, we should migrate.
         //
