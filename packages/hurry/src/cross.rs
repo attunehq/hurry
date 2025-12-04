@@ -18,6 +18,10 @@ use color_eyre::{
 use tokio::process::Child;
 use tracing::{instrument, trace};
 
+mod config;
+
+pub use config::CrossConfigGuard;
+
 #[derive(Debug)]
 pub struct Handles {
     pub stdout: Stdio,
