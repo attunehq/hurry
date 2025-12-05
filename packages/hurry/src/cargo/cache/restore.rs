@@ -108,6 +108,16 @@ pub async fn restore_units(
         )
         .await
         {
+            // TODO: We actually don't want to always skip uploading the unit
+            // because we might not have the unit uploaded remotely. What we
+            // really want to do is:
+            //
+            // 1. Calculate the unit plan.
+            // 2. Call the API for _all_ units in the plan, so we know which are
+            //    and are not stored but not present.
+            // 3. Iterate through all units in the unit plan, restoring it only
+            //    if it is not present, and marking it for upload if it is not
+            //    stored.
             units_to_skip.insert(info.unit_hash.clone());
             restored.units.insert(info.unit_hash.clone());
         }

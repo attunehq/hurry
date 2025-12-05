@@ -1,12 +1,11 @@
-use color_eyre::{
-    Result,
-    eyre::{OptionExt as _, bail},
-};
+use std::collections::HashMap;
+
+use color_eyre::{Result, eyre::bail};
 use futures::stream;
 use goblin::Object;
 use serde::{Deserialize, Serialize};
 use tap::TryConv;
-use tracing::{info, instrument, trace};
+use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     cargo::{Restored, RustcTarget, UnitPlan, Workspace},
@@ -86,11 +85,102 @@ pub async fn save_units(
                         .clone()
                         .reconstruct(&ws, &plan.info)
                         .try_conv::<AbsFilePath>()?;
-                    if unit_arch.uses_glibc() && path.as_std_path().ends_with(".so") {
+                    if unit_arch.uses_glibc()
+                        && path
+                            .as_std_path()
+                            .extension()
+                            .is_some_and(|ext| ext == "so")
+                    {
+                        debug!(?path, "checking glibc version");
                         let object = Object::parse(&output_file.contents)?;
                         match object {
-                            Object::Elf(elf) => {
-                                info!(?elf, "elf");
+                            Object::Elf(elf) => 'elf: {
+                                // Dynamic symbol versions are stored
+                                // weirdly[^1]. Each symbol in the dynsyms
+                                // section has a corresponding name in the
+                                // dynstrtab section.
+                                //
+                                // Each symbol then also has a corresponding
+                                // entry in the versym section. Each versym
+                                // entry is a single value, which can be masked
+                                // to remove its top bit to get a "file version
+                                // identifier" (unless the value is one of the
+                                // special values 0 or 1).
+                                //
+                                // Versions of symbols _imported_ from other
+                                // objects are defined in the "Version
+                                // Requirements" section, called verneed. Each
+                                // verneed entry corresponds to a file, and each
+                                // file has multiple "auxiliary" entries that
+                                // correspond to specific versions of symbols
+                                // imported from that file (this is what you see
+                                // when you run `ldd -v` on the object). Each of
+                                // these auxiliary entries also has a "file
+                                // version identifier" stored in vna_other that
+                                // matches up with the identifier in each versym
+                                // entry (this is what you see when you run
+                                // `objdump -T` on the object).
+                                //
+                                // [^1]: https://refspecs.linuxbase.org/LSB_5.0.0/LSB-Core-generic/LSB-Core-generic/symversion.html
+
+                                let Some(versym) = elf.versym else {
+                                    debug!("no versioned dynamic symbols");
+                                    break 'elf;
+                                };
+                                let Some(verneed) = elf.verneed else {
+                                    debug!(
+                                        "versioned dynamic symbols are all exports, not imports"
+                                    );
+                                    break 'elf;
+                                };
+
+                                // We start by building a map of file version
+                                // identifiers to (file, version) indexes.
+                                let mut fvid_to_idx = HashMap::new();
+                                for (fidx, need_file) in verneed.iter().enumerate() {
+                                    for (vidx, need_ver) in need_file.iter().enumerate() {
+                                        fvid_to_idx.insert(need_ver.vna_other, (fidx, vidx));
+                                    }
+                                }
+
+                                // Now we can iterate through the versym
+                                // section, and map each versioned dynamic
+                                // symbol to the file and version it needs.
+                                let mut symbol_to_fv = HashMap::new();
+                                for (sym, versym) in elf.dynsyms.iter().zip(versym.iter()) {
+                                    if versym.is_local() || versym.is_global() {
+                                        continue;
+                                    }
+
+                                    let symbol = elf.dynstrtab.get_at(sym.st_name);
+                                    let fvid = versym.version();
+                                    let (fidx, vidx) = match fvid_to_idx.get(&fvid) {
+                                        Some((fidx, vidx)) => (fidx, vidx),
+                                        None => {
+                                            warn!("unknown file version identifier: {fvid}");
+                                            continue;
+                                        }
+                                    };
+                                    let vn = match verneed.iter().nth(*fidx) {
+                                        Some(vn) => vn,
+                                        None => {
+                                            warn!("unknown Verneed index: {fidx}");
+                                            continue;
+                                        }
+                                    };
+                                    let file = elf.dynstrtab.get_at(vn.vn_file);
+                                    let vna = match vn.iter().nth(*vidx) {
+                                        Some(vna) => vna,
+                                        None => {
+                                            warn!("unknown Vernaux index: {vidx}");
+                                            continue;
+                                        }
+                                    };
+                                    let name = elf.dynstrtab.get_at(vna.vna_name);
+                                    symbol_to_fv.insert(symbol, (file, name));
+                                }
+
+                                debug!(?symbol_to_fv, "versioned dynamic symbols");
                             }
                             object => {
                                 bail!("expected ELF object, got {:?}", object)

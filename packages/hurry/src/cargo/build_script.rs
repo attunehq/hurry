@@ -216,7 +216,6 @@ impl BuildScriptOutputLine {
     const METADATA: &str = "metadata";
 
     /// Parse a line of the build script file.
-    #[instrument(name = "BuildScriptOutputLine::parse")]
     pub async fn parse(ws: &Workspace, target: &RustcTarget, line: &str) -> Self {
         match Self::parse_inner(ws, target, line).await {
             Ok(parsed) => parsed,
@@ -303,7 +302,6 @@ impl BuildScriptOutputLine {
     }
 
     /// Reconstruct the line in the current context.
-    #[instrument(name = "BuildScriptOutputLine::reconstruct")]
     fn reconstruct(self, ws: &Workspace, target: &RustcTarget) -> String {
         match self {
             Self::RerunIfChanged(style, path) => {
