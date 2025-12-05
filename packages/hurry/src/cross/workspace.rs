@@ -18,7 +18,7 @@ use tracing::{debug, instrument};
 use uuid::Uuid;
 
 use crate::{
-    cargo::{BuildPlan, CargoBuildArguments, Workspace},
+    cargo::{BuildPlan, CargoBuildArguments, UnitPlan, Workspace},
     cross::{self, CrossConfigGuard},
     fs,
     path::TryJoinWith as _,
@@ -102,6 +102,27 @@ fn convert_build_plan_paths(build_plan: &mut BuildPlan, workspace: &Workspace) {
 }
 
 impl Workspace {
+    /// Compute the unit plans for a cross build.
+    ///
+    /// This is similar to `units()` but uses `cross_build_plan()` which:
+    /// 1. Runs the build plan inside the cross container
+    /// 2. Converts container paths to host paths
+    ///
+    /// Since the paths are converted to host paths before unit parsing,
+    /// the rest of the logic is identical to regular cargo builds.
+    /// We delegate to the shared `units_from_build_plan()` helper
+    /// to avoid code duplication.
+    #[instrument(name = "Workspace::cross_units")]
+    pub async fn cross_units(
+        &self,
+        args: impl AsRef<CargoBuildArguments> + Debug,
+    ) -> Result<Vec<UnitPlan>> {
+        let build_plan = self.cross_build_plan(&args).await?;
+        // The rest of the parsing logic is the same as units()
+        // because we've already converted the paths to host paths.
+        self.units_from_build_plan(build_plan).await
+    }
+
     /// Get the build plan by running `cross build --build-plan`.
     ///
     /// This is similar to the regular `build_plan()` method but with key
