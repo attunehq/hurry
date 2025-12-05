@@ -71,7 +71,6 @@ directories = { workspace = true }
 hex.workspace = true
 rustc-stable-hash = { workspace = true }
 libc = { workspace = true }
-goblin = { workspace = true }
 
 [dev-dependencies]
 async-walkdir.workspace = true

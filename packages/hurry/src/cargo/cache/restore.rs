@@ -113,18 +113,17 @@ pub async fn restore_units(
             // really want to do is:
             //
             // 1. Calculate the unit plan.
-            // 2. Call the API for _all_ units in the plan, so we know which are
-            //    and are not stored but not present.
-            // 3. Iterate through all units in the unit plan, restoring it only
-            //    if it is not present, and marking it for upload if it is not
-            //    stored.
+            // 2. Call the API for _all_ units in the plan, so we know which are and are not
+            //    stored but not present.
+            // 3. Iterate through all units in the unit plan, restoring it only if it is not
+            //    present, and marking it for upload if it is not stored.
             units_to_skip.insert(info.unit_hash.clone());
             restored.units.insert(info.unit_hash.clone());
         }
     }
 
-    // TODO: If this build is against glibc, we need to know the glibc symbol
-    // version so we don't restore objects that link to missing symbols.
+    // TODO: If this build is against glibc, we need to know the glibc version
+    // so we don't restore objects that link to missing symbols.
     let host_glibc_symbol_version = host_glibc_version()?;
 
     // Load unit information from remote cache. Note that this does NOT download
