@@ -19,6 +19,7 @@ use tokio::process::Child;
 use tracing::{instrument, trace};
 
 mod config;
+mod workspace;
 
 pub use config::CrossConfigGuard;
 
