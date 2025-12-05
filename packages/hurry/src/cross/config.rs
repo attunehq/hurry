@@ -171,12 +171,12 @@ impl CrossConfigGuard {
 impl Drop for CrossConfigGuard {
     fn drop(&mut self) {
         // Best effort cleanup - log errors but don't panic
-        if self.created || self.backup_path.is_some() {
-            if let Err(e) = tokio::task::block_in_place(|| {
+        if (self.created || self.backup_path.is_some())
+            && let Err(e) = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(self.cleanup())
-            }) {
-                debug!(?e, "failed to cleanup Cross.toml on drop");
-            }
+            })
+        {
+            debug!(?e, "failed to cleanup Cross.toml on drop");
         }
     }
 }
