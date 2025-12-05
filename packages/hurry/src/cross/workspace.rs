@@ -67,31 +67,21 @@ fn convert_container_path_to_host(path: &str, workspace: &Workspace) -> String {
 }
 
 /// Convert all container paths in a build plan to host paths.
-///
-/// This modifies the build plan in-place, converting:
-/// - All output file paths in each invocation
-/// - Link target paths (for symlinks)
-/// - The program path for build script executions
-/// - OUT_DIR environment variable paths
 fn convert_build_plan_paths(build_plan: &mut BuildPlan, workspace: &Workspace) {
     for invocation in &mut build_plan.invocations {
-        // Convert output file paths
         for output in &mut invocation.outputs {
             *output = convert_container_path_to_host(output, workspace);
         }
 
-        // Convert link target paths (symlinks)
-        // links is HashMap<String, String> where keys are targets
+        // links is HashMap<String, String> where keys are link targets
         let links = std::mem::take(&mut invocation.links);
         invocation.links = links
             .into_iter()
             .map(|(target, link)| (convert_container_path_to_host(&target, workspace), link))
             .collect();
 
-        // Convert program path (for build script executions)
         invocation.program = convert_container_path_to_host(&invocation.program, workspace);
 
-        // Convert OUT_DIR in environment variables
         if let Some(out_dir) = invocation.env.get("OUT_DIR") {
             let converted = convert_container_path_to_host(out_dir, workspace);
             invocation.env.insert(String::from("OUT_DIR"), converted);
@@ -116,8 +106,6 @@ impl Workspace {
         args: impl AsRef<CargoBuildArguments> + Debug,
     ) -> Result<Vec<UnitPlan>> {
         let build_plan = self.cross_build_plan(&args).await?;
-        // The rest of the parsing logic is the same as units()
-        // because we've already converted the paths to host paths.
         self.units_from_build_plan(build_plan).await
     }
 
@@ -181,13 +169,11 @@ impl Workspace {
         &self,
         args: impl AsRef<CargoBuildArguments> + Debug,
     ) -> Result<BuildPlan> {
-        // Set up Cross.toml to pass through RUSTC_BOOTSTRAP
-        // This guard will clean up when dropped
+        // Guard cleans up Cross.toml modifications when dropped
         let _config_guard = CrossConfigGuard::setup(&self.root)
             .await
             .context("set up Cross.toml configuration")?;
 
-        // Build the arguments for cross build --build-plan
         let mut build_args = args.as_ref().to_argv();
         build_args.extend([
             String::from("--build-plan"),
@@ -195,23 +181,19 @@ impl Workspace {
             String::from("unstable-options"),
         ]);
 
-        // Run cross build --build-plan with RUSTC_BOOTSTRAP=1
         let output = cross::invoke_output("build", build_args, [("RUSTC_BOOTSTRAP", "1")])
             .await
-            .context("run cross command")?;
+            .context("invoke cross")?;
 
-        // Parse the build plan from NDJSON output
-        // (Same logic as cargo: handle --message-format=json)
+        // Handle --message-format=json which produces NDJSON output
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
             if let Ok(mut plan) = serde_json::from_str::<BuildPlan>(line) {
-                // Convert all container paths to host paths
                 convert_build_plan_paths(&mut plan, self);
                 return Ok(plan);
             }
         }
 
-        // If we didn't find a valid build plan, return an error with context
         Err(eyre!("no valid build plan found in output"))
             .context("parse build plan")
             .with_section(move || stdout.to_string().header("Stdout:"))
