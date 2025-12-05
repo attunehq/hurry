@@ -1,9 +1,28 @@
-use clap::Parser;
-use color_eyre::Result;
+use std::ffi::OsString;
+
+use clap::{Args, CommandFactory, Parser};
+use color_eyre::{Result, eyre::Context};
 use hurry::cross;
 use tracing::debug;
 
 mod build;
+
+/// Helper type for parsing options with `clap`.
+#[derive(Parser)]
+struct CommandOptions<T: Args> {
+    #[clap(flatten)]
+    opts: T,
+}
+
+impl<T: Args> CommandOptions<T> {
+    fn parse(args: impl IntoIterator<Item = impl Into<OsString> + Clone>) -> Result<Self> {
+        Self::try_parse_from(args).context("parse options")
+    }
+
+    fn into_inner(self) -> T {
+        self.opts
+    }
+}
 
 /// Execute a cross command by dispatching based on the first argument.
 pub async fn exec(arguments: Vec<String>) -> Result<()> {
@@ -36,8 +55,17 @@ pub async fn exec(arguments: Vec<String>) -> Result<()> {
     // statement with other functions similar to the one we use for `build`.
     match command.as_str() {
         "build" | "b" => {
-            let opts = build::Options::parse_from(arguments);
-            build::exec(opts).await
+            let opts = CommandOptions::<build::Options>::parse(&arguments)?;
+            if opts.opts.help {
+                // Help flag handling happens here because `build --help` passes
+                // through to `cross build --help`, and we need the `Command`
+                // struct in order to print the generated help text.
+                let mut cmd = CommandOptions::<build::Options>::command();
+                cmd = cmd.about("Run `cross build` with Hurry build acceleration");
+                cmd.print_help()?;
+                return Ok(());
+            }
+            build::exec(opts.into_inner()).await
         }
         _ => cross::invoke(command, options).await,
     }

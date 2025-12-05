@@ -25,7 +25,7 @@ use hurry::{
 };
 
 /// Options for `cross build`.
-#[derive(Clone, clap::Parser, Debug)]
+#[derive(Clone, clap::Args, Debug)]
 #[command(disable_help_flag = true)]
 pub struct Options {
     /// Base URL for the Courier instance.
