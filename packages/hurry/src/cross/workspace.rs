@@ -85,9 +85,7 @@ fn convert_build_plan_paths(build_plan: &mut BuildPlan, workspace: &Workspace) {
         let links = std::mem::take(&mut invocation.links);
         invocation.links = links
             .into_iter()
-            .map(|(target, link)| {
-                (convert_container_path_to_host(&target, workspace), link)
-            })
+            .map(|(target, link)| (convert_container_path_to_host(&target, workspace), link))
             .collect();
 
         // Convert program path (for build script executions)
@@ -128,7 +126,8 @@ impl Workspace {
     /// This is similar to the regular `build_plan()` method but with key
     /// differences:
     ///
-    /// 1. The build plan is executed through `cross` (inside a Docker container)
+    /// 1. The build plan is executed through `cross` (inside a Docker
+    ///    container)
     /// 2. Container paths are converted to host paths after parsing
     /// 3. Cross.toml is configured to pass through RUSTC_BOOTSTRAP
     ///

@@ -1,8 +1,8 @@
 //! Cross.toml configuration management for RUSTC_BOOTSTRAP passthrough.
 //!
-//! This module provides utilities for managing Cross.toml configuration to ensure
-//! RUSTC_BOOTSTRAP environment variable is passed through to Docker containers,
-//! which is required for using unstable features like --build-plan.
+//! This module provides utilities for managing Cross.toml configuration to
+//! ensure RUSTC_BOOTSTRAP environment variable is passed through to Docker
+//! containers, which is required for using unstable features like --build-plan.
 
 use std::path::{Path, PathBuf};
 
@@ -16,13 +16,16 @@ use crate::path::AbsDirPath;
 #[cfg(test)]
 use tempfile::TempDir;
 
-/// RAII guard that manages Cross.toml configuration for RUSTC_BOOTSTRAP passthrough.
+/// RAII guard that manages Cross.toml configuration for RUSTC_BOOTSTRAP
+/// passthrough.
 ///
 /// This guard ensures that the Cross.toml file has the necessary configuration
-/// to pass through RUSTC_BOOTSTRAP to Docker containers. It handles three scenarios:
+/// to pass through RUSTC_BOOTSTRAP to Docker containers. It handles three
+/// scenarios:
 ///
 /// 1. No Cross.toml exists: Creates a temporary config, removes it on drop
-/// 2. Cross.toml exists without RUSTC_BOOTSTRAP: Backs up, modifies, restores on drop
+/// 2. Cross.toml exists without RUSTC_BOOTSTRAP: Backs up, modifies, restores
+///    on drop
 /// 3. Cross.toml exists with RUSTC_BOOTSTRAP: No-op (doesn't touch the file)
 #[derive(Debug)]
 pub struct CrossConfigGuard {
@@ -37,8 +40,9 @@ pub struct CrossConfigGuard {
 impl CrossConfigGuard {
     /// Set up Cross.toml configuration for RUSTC_BOOTSTRAP passthrough.
     ///
-    /// This analyzes the existing Cross.toml (if any) and modifies or creates it
-    /// as needed to ensure RUSTC_BOOTSTRAP is passed through to the container.
+    /// This analyzes the existing Cross.toml (if any) and modifies or creates
+    /// it as needed to ensure RUSTC_BOOTSTRAP is passed through to the
+    /// container.
     pub async fn setup(workspace_root: &AbsDirPath) -> Result<Self> {
         let config_path = workspace_root.as_std_path().join("Cross.toml");
 
@@ -60,8 +64,8 @@ impl CrossConfigGuard {
             .context("failed to read Cross.toml")?;
 
         // Parse the config
-        let config = toml::from_str::<CrossConfig>(&contents)
-            .context("failed to parse Cross.toml")?;
+        let config =
+            toml::from_str::<CrossConfig>(&contents).context("failed to parse Cross.toml")?;
 
         // Check if RUSTC_BOOTSTRAP is already in passthrough
         if Self::has_rustc_bootstrap_passthrough(&config) {
@@ -105,8 +109,7 @@ impl CrossConfigGuard {
             }),
         };
 
-        let contents = toml::to_string_pretty(&config)
-            .context("failed to serialize Cross.toml")?;
+        let contents = toml::to_string_pretty(&config).context("failed to serialize Cross.toml")?;
 
         fs::write(path, contents)
             .await
@@ -135,8 +138,8 @@ impl CrossConfigGuard {
         }
 
         // Write modified config
-        let contents = toml::to_string_pretty(&config)
-            .context("failed to serialize modified Cross.toml")?;
+        let contents =
+            toml::to_string_pretty(&config).context("failed to serialize modified Cross.toml")?;
 
         fs::write(path, contents)
             .await

@@ -345,12 +345,13 @@ impl Workspace {
 
     /// Parse unit plans from a build plan.
     ///
-    /// This is the core parsing logic shared by both `units()` and cross-compilation
-    /// variants. It takes a build plan (which may come from cargo or cross) and
-    /// parses it into unit structures.
+    /// This is the core parsing logic shared by both `units()` and
+    /// cross-compilation variants. It takes a build plan (which may come
+    /// from cargo or cross) and parses it into unit structures.
     ///
-    /// The build plan must have host-relative paths (for cross builds, container
-    /// paths should already be converted before calling this method).
+    /// The build plan must have host-relative paths (for cross builds,
+    /// container paths should already be converted before calling this
+    /// method).
     #[instrument(name = "Workspace::units_from_build_plan", skip(build_plan))]
     pub(crate) async fn units_from_build_plan(
         &self,
