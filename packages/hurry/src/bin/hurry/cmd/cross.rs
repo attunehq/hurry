@@ -1,6 +1,9 @@
+use clap::Parser;
 use color_eyre::Result;
 use hurry::cross;
 use tracing::debug;
+
+mod build;
 
 /// Execute a cross command by dispatching based on the first argument.
 pub async fn exec(arguments: Vec<String>) -> Result<()> {
@@ -32,8 +35,10 @@ pub async fn exec(arguments: Vec<String>) -> Result<()> {
     // As we add special cased handling for more subcommands we'll extend this match
     // statement with other functions similar to the one we use for `build`.
     match command.as_str() {
-        // TODO: Add special handling for build subcommand once implemented
-        // "build" => build::exec(opts.into_inner()).await,
+        "build" | "b" => {
+            let opts = build::Options::parse_from(arguments);
+            build::exec(opts).await
+        }
         _ => cross::invoke(command, options).await,
     }
 }
