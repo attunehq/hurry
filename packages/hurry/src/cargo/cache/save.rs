@@ -85,6 +85,13 @@ pub async fn save_units(
                 on_progress(&progress);
                 continue;
             }
+            // TODO: This isn't _technically_ correct. You could, in theory,
+            // configure Cargo or your linker to link against against a version
+            // of glibc different from your standard glibc. I'm not completely
+            // sure how we would query that out of Cargo, rustc, or the linker,
+            // (maybe `cc --print-filename=libc.so.6` when we can infer that the
+            // linker is `cc`, or emulating `LD_LIBRARY_PATH` when it's `ld`?),
+            // so for now such a configuration is unsupported.
             host_glibc_version()?
         } else {
             None

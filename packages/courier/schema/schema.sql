@@ -86,10 +86,10 @@ CREATE TABLE cargo_saved_unit (
   -- files as outputs, or they were linked against different native libraries
   -- (this list is non-exhaustive).
   unit_hash TEXT NOT NULL,
-  -- The compiled architecture target triple of the unit. Note that this is
+  -- The resolved architecture target triple of the unit. Note that this is
   -- subtly different from "the value of the `--target` flag", because it
   -- defaults to the host architecture when `--target` is unset.
-  compiled_arch TEXT NOT NULL,
+  unit_resolved_target TEXT NOT NULL,
   -- If the unit was compiled for a Linux target that links against glibc (e.g.
   -- `x86_64-unknown-linux-gnu`) and the unit contains shared library object
   -- files (e.g. if the unit kind is `proc-macro` or `cdylib`), this field
