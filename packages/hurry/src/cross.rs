@@ -22,6 +22,7 @@ mod config;
 mod workspace;
 
 pub use config::CrossConfigGuard;
+pub use workspace::extract_host_arch;
 
 #[derive(Debug)]
 pub struct Handles {

@@ -14,15 +14,24 @@ use color_eyre::{
     Result, Section, SectionExt,
     eyre::{Context as _, eyre},
 };
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
 use crate::{
-    cargo::{BuildPlan, CargoBuildArguments, UnitPlan, Workspace},
+    cargo::{BuildPlan, CargoBuildArguments, RustcTargetPlatform, UnitPlan, Workspace},
     cross::{self, CrossConfigGuard},
     fs,
     path::TryJoinWith as _,
 };
+
+/// Prefix used by cross to mount the target directory.
+const CONTAINER_TARGET_PREFIX: &str = "/target";
+
+/// Prefix used by cross to mount the cargo home directory.
+const CONTAINER_CARGO_PREFIX: &str = "/cargo";
+
+/// Prefix used by cross to mount the workspace root.
+const CONTAINER_PROJECT_PREFIX: &str = "/project";
 
 /// Convert a Docker container path to a host filesystem path.
 ///
@@ -31,60 +40,90 @@ use crate::{
 /// This function translates the paths reported by the build plan inside the
 /// container to paths on the local system.
 ///
-/// Cross mounts the workspace root at `/project` and the target directory at
-/// `/target` inside the container. We need to convert these container paths
-/// back to host paths.
+/// # Container Path Conventions
 ///
-/// # Examples
+/// Cross v0.2.5 (the current tagged release) mounts directories at fixed paths:
+/// - `/project` → workspace root
+/// - `/target` → target directory
+/// - `/cargo` → cargo home directory
 ///
-/// ```ignore
-/// let ws = Workspace { build_dir: "/Users/jess/project/target", .. };
-///
-/// // Container target paths get converted to host paths
-/// assert_eq!(
-///     convert_container_path_to_host("/target/debug/libfoo.rlib", &ws),
-///     "/Users/jess/project/target/debug/libfoo.rlib"
-/// );
-///
-/// // Other absolute paths are preserved
-/// assert_eq!(
-///     convert_container_path_to_host("/usr/lib/libsystem.so", &ws),
-///     "/usr/lib/libsystem.so"
-/// );
-///
-/// // Relative paths are preserved
-/// assert_eq!(
-///     convert_container_path_to_host("src/main.rs", &ws),
-///     "src/main.rs"
-/// );
-/// ```
+/// The untagged development version of cross uses the actual host paths for
+/// `/cargo` and `/project`, but still uses `/target` for the target directory.
+/// We need to handle both, because 0.2.5 was tagged years ago and developers
+/// are increasingly likely to be using the development version due to the work
+/// done on it since: https://github.com/cross-rs/cross/issues/1659
+#[instrument]
 fn convert_container_path_to_host(path: &str, workspace: &Workspace) -> String {
-    if let Some(suffix) = path.strip_prefix("/target") {
+    trace!(?path, "converting container path to host");
+    if let Some(suffix) = path.strip_prefix(CONTAINER_TARGET_PREFIX) {
+        trace!(?suffix, prefix = ?CONTAINER_TARGET_PREFIX, "stripped target prefix");
         format!("{}{}", workspace.build_dir.as_std_path().display(), suffix)
+    } else if let Some(suffix) = path.strip_prefix(CONTAINER_CARGO_PREFIX) {
+        trace!(?suffix, prefix = ?CONTAINER_CARGO_PREFIX, "stripped cargo prefix");
+        format!("{}{}", workspace.cargo_home.as_std_path().display(), suffix)
+    } else if let Some(suffix) = path.strip_prefix(CONTAINER_PROJECT_PREFIX) {
+        trace!(?suffix, prefix = ?CONTAINER_PROJECT_PREFIX, "stripped project prefix");
+        format!("{}{}", workspace.root.as_std_path().display(), suffix)
     } else {
+        trace!(?path, "not a container path, returning unchanged");
         path.to_string()
     }
+}
+
+/// Extract the host architecture from the build plan.
+///
+/// Cross containers have a specific host architecture (typically
+/// `x86_64-unknown-linux-gnu`) that may differ from the target. Build script
+/// execution units have a `HOST` environment variable that tells us the
+/// container's host triple.
+///
+/// Returns `None` if no build script execution units are found (which would
+/// be unusual but possible for projects with no build scripts).
+pub fn extract_host_arch(build_plan: &BuildPlan) -> Option<RustcTargetPlatform> {
+    for invocation in &build_plan.invocations {
+        if invocation.compile_mode == crate::cargo::CargoCompileMode::RunCustomBuild
+            && let Some(host) = invocation.env.get("HOST")
+            && let Ok(platform) = RustcTargetPlatform::try_from(host.as_str())
+        {
+            return Some(platform);
+        }
+    }
+    None
 }
 
 /// Convert all container paths in a build plan to host paths.
 fn convert_build_plan_paths(build_plan: &mut BuildPlan, workspace: &Workspace) {
     for invocation in &mut build_plan.invocations {
+        // Convert output paths
         for output in &mut invocation.outputs {
             *output = convert_container_path_to_host(output, workspace);
         }
 
-        // links is HashMap<String, String> where keys are link targets
+        // Convert links (HashMap<String, String> where keys are link targets)
         let links = std::mem::take(&mut invocation.links);
         invocation.links = links
             .into_iter()
-            .map(|(target, link)| (convert_container_path_to_host(&target, workspace), link))
+            .map(|(target, link)| {
+                (
+                    convert_container_path_to_host(&target, workspace),
+                    convert_container_path_to_host(&link, workspace),
+                )
+            })
             .collect();
 
+        // Convert program path
         invocation.program = convert_container_path_to_host(&invocation.program, workspace);
 
-        if let Some(out_dir) = invocation.env.get("OUT_DIR") {
-            let converted = convert_container_path_to_host(out_dir, workspace);
-            invocation.env.insert(String::from("OUT_DIR"), converted);
+        // Convert cwd
+        invocation.cwd = convert_container_path_to_host(&invocation.cwd, workspace);
+
+        // Convert environment variables that contain paths
+        let env_keys_to_convert = ["OUT_DIR", "CARGO_MANIFEST_DIR", "CARGO_MANIFEST_PATH"];
+        for key in env_keys_to_convert {
+            if let Some(value) = invocation.env.get(key) {
+                let converted = convert_container_path_to_host(value, workspace);
+                invocation.env.insert(String::from(key), converted);
+            }
         }
     }
 }
@@ -207,13 +246,18 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::path::AbsDirPath;
+    use std::collections::HashMap;
 
-    fn workspace(root: &str) -> Workspace {
+    use super::*;
+    use crate::{
+        cargo::{BuildPlanInvocation, CargoCompileMode},
+        path::AbsDirPath,
+    };
+
+    fn workspace(root: &str, cargo_home: &str) -> Workspace {
         let root = AbsDirPath::try_from(root).unwrap();
         let build_dir = root.try_join_dir("target").unwrap();
-        let cargo_home = root.try_join_dir(".cargo").unwrap();
+        let cargo_home = AbsDirPath::try_from(cargo_home).unwrap();
 
         Workspace {
             root,
@@ -226,9 +270,23 @@ mod tests {
         }
     }
 
+    // Helper for creating test workspaces with default cargo_home
+    fn default_workspace(root: &str) -> Workspace {
+        let cargo_home = if root.starts_with("/home/") {
+            // Linux-style: /home/user/.cargo
+            let user = root.split('/').nth(2).unwrap_or("user");
+            format!("/home/{user}/.cargo")
+        } else {
+            // macOS-style: /Users/user/.cargo
+            let user = root.split('/').nth(2).unwrap_or("jess");
+            format!("/Users/{user}/.cargo")
+        };
+        workspace(root, &cargo_home)
+    }
+
     #[test]
     fn converts_container_target_path() {
-        let ws = workspace("/Users/jess/project");
+        let ws = default_workspace("/Users/jess/project");
         assert_eq!(
             convert_container_path_to_host("/target/debug/libfoo.rlib", &ws),
             "/Users/jess/project/target/debug/libfoo.rlib"
@@ -237,7 +295,7 @@ mod tests {
 
     #[test]
     fn converts_container_target_path_with_triple() {
-        let ws = workspace("/home/user/myproject");
+        let ws = default_workspace("/home/user/myproject");
         assert_eq!(
             convert_container_path_to_host(
                 "/target/x86_64-unknown-linux-gnu/debug/deps/libbar-abc123.rmeta",
@@ -248,8 +306,38 @@ mod tests {
     }
 
     #[test]
+    fn converts_container_cargo_path() {
+        let ws = workspace("/home/eliza/src/myproject", "/home/eliza/.cargo");
+        assert_eq!(
+            convert_container_path_to_host(
+                "/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.0.0/src/lib.rs",
+                &ws
+            ),
+            "/home/eliza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.0.0/src/lib.rs"
+        );
+    }
+
+    #[test]
+    fn converts_container_project_path() {
+        let ws = default_workspace("/home/user/myproject");
+        assert_eq!(
+            convert_container_path_to_host("/project/src/main.rs", &ws),
+            "/home/user/myproject/src/main.rs"
+        );
+    }
+
+    #[test]
+    fn converts_container_project_subdir_path() {
+        let ws = default_workspace("/home/user/myproject");
+        assert_eq!(
+            convert_container_path_to_host("/project/packages/foo/src/lib.rs", &ws),
+            "/home/user/myproject/packages/foo/src/lib.rs"
+        );
+    }
+
+    #[test]
     fn preserves_absolute_paths() {
-        let ws = workspace("/Users/jess/project");
+        let ws = default_workspace("/Users/jess/project");
         assert_eq!(
             convert_container_path_to_host("/usr/lib/libfoo.so", &ws),
             "/usr/lib/libfoo.so"
@@ -258,7 +346,7 @@ mod tests {
 
     #[test]
     fn preserves_relative_paths() {
-        let ws = workspace("/Users/jess/project");
+        let ws = default_workspace("/Users/jess/project");
         assert_eq!(
             convert_container_path_to_host("src/main.rs", &ws),
             "src/main.rs"
@@ -267,17 +355,129 @@ mod tests {
 
     #[test]
     fn preserves_empty_strings() {
-        let ws = workspace("/Users/jess/project");
+        let ws = default_workspace("/Users/jess/project");
         assert_eq!(convert_container_path_to_host("", &ws), "");
     }
 
     #[test]
     fn handles_target_in_middle_of_path() {
         // Paths with /target in the middle (not at start) should not be converted
-        let ws = workspace("/Users/jess/project");
+        let ws = default_workspace("/Users/jess/project");
         assert_eq!(
             convert_container_path_to_host("/some/target/path", &ws),
             "/some/target/path"
         );
+    }
+
+    fn make_invocation(
+        cwd: &str,
+        outputs: Vec<&str>,
+        manifest_dir: Option<&str>,
+    ) -> BuildPlanInvocation {
+        let mut env = HashMap::new();
+        if let Some(dir) = manifest_dir {
+            env.insert(String::from("CARGO_MANIFEST_DIR"), String::from(dir));
+        }
+        BuildPlanInvocation {
+            package_name: String::from("test-pkg"),
+            package_version: String::from("1.0.0"),
+            target_kind: vec![],
+            target_arch: crate::cargo::RustcTarget::ImplicitHost,
+            compile_mode: CargoCompileMode::Build,
+            deps: vec![],
+            outputs: outputs.into_iter().map(String::from).collect(),
+            links: HashMap::new(),
+            program: String::from("rustc"),
+            args: vec![],
+            env,
+            cwd: String::from(cwd),
+        }
+    }
+
+    #[test]
+    fn converts_host_paths_unchanged() {
+        // Dev version of cross uses actual host paths - these should pass through
+        // unchanged
+        let ws = workspace("/home/user/myproject", "/home/user/.cargo");
+
+        // Host cargo path should be unchanged
+        assert_eq!(
+            convert_container_path_to_host(
+                "/home/user/.cargo/registry/src/index.crates.io-xxx/foo-1.0/src/lib.rs",
+                &ws
+            ),
+            "/home/user/.cargo/registry/src/index.crates.io-xxx/foo-1.0/src/lib.rs"
+        );
+
+        // Host project path should be unchanged
+        assert_eq!(
+            convert_container_path_to_host("/home/user/myproject/src/main.rs", &ws),
+            "/home/user/myproject/src/main.rs"
+        );
+    }
+
+    #[test]
+    fn converts_mixed_paths_correctly() {
+        // Dev version still uses /target, so we need to convert that
+        let ws = workspace("/home/user/myproject", "/home/user/.cargo");
+
+        // /target paths still need conversion (used by both versions)
+        assert_eq!(
+            convert_container_path_to_host("/target/debug/libfoo.rlib", &ws),
+            "/home/user/myproject/target/debug/libfoo.rlib"
+        );
+
+        // Host paths pass through
+        assert_eq!(
+            convert_container_path_to_host("/home/user/.cargo/registry/src/foo/lib.rs", &ws),
+            "/home/user/.cargo/registry/src/foo/lib.rs"
+        );
+    }
+
+    fn make_build_script_invocation(host: &str) -> BuildPlanInvocation {
+        let mut env = HashMap::new();
+        env.insert(String::from("HOST"), String::from(host));
+        env.insert(
+            String::from("TARGET"),
+            String::from("aarch64-unknown-linux-gnu"),
+        );
+        BuildPlanInvocation {
+            package_name: String::from("test-pkg"),
+            package_version: String::from("1.0.0"),
+            target_kind: vec![],
+            target_arch: crate::cargo::RustcTarget::ImplicitHost,
+            compile_mode: CargoCompileMode::RunCustomBuild,
+            deps: vec![],
+            outputs: vec![],
+            links: HashMap::new(),
+            program: String::from("/target/debug/build/test-pkg/build-script-build"),
+            args: vec![],
+            env,
+            cwd: String::from("/cargo/registry/src/test-pkg"),
+        }
+    }
+
+    #[test]
+    fn extract_host_arch_finds_host_from_build_script() {
+        let plan = BuildPlan {
+            invocations: vec![make_build_script_invocation("x86_64-unknown-linux-gnu")],
+            inputs: vec![],
+        };
+        let host = extract_host_arch(&plan);
+        assert!(host.is_some());
+        assert_eq!(host.unwrap().as_str(), "x86_64-unknown-linux-gnu");
+    }
+
+    #[test]
+    fn extract_host_arch_returns_none_without_build_scripts() {
+        let plan = BuildPlan {
+            invocations: vec![make_invocation(
+                "/cargo/registry/src/foo",
+                vec!["/target/debug/libfoo.rlib"],
+                None,
+            )],
+            inputs: vec![],
+        };
+        assert!(extract_host_arch(&plan).is_none());
     }
 }

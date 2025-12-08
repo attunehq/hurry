@@ -129,18 +129,21 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Compute expected unit plans using cross build plan.
     // If this fails (unsupported target, etc.), fall back to passthrough.
+    println!("[hurry] Computing build plan inside Cross context");
     let units = match workspace.cross_units(&args).await {
         Ok(units) => units,
-        Err(e) => {
+        Err(error) => {
             warn!(
-                error = ?e,
+                ?error,
                 "Cross acceleration not available for this configuration, \
                  falling back to passthrough build"
             );
-            info!("Running cross build without caching");
+
+            println!("[hurry] Running cross build without caching");
             return cross::invoke("build", &options.argv)
                 .await
-                .context("build with cross (passthrough)");
+                .context("passthrough build with cross")
+                .with_warning(|| format!("{error:?}").header("Cross acceleration error:"));
         }
     };
 
@@ -160,7 +163,7 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Run the cross build.
     if !options.skip_build {
-        info!("Building target directory with cross");
+        println!("[hurry] Building with Cross");
 
         cross::invoke("build", &options.argv)
             .await
