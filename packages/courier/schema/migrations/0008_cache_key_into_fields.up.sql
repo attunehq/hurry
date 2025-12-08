@@ -4,7 +4,7 @@ ALTER TABLE cargo_saved_unit
   DROP COLUMN cache_key,
   ADD COLUMN unit_hash TEXT NOT NULL,
   ADD COLUMN unit_resolved_target TEXT NOT NULL,
-  ADD COLUMN linux_so_glibc_version TEXT;
+  ADD COLUMN linux_glibc_version TEXT;
 
 DROP INDEX IF EXISTS idx_cargo_saved_unit_org_key;
 

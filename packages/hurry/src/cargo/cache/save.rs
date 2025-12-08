@@ -11,7 +11,7 @@ use clients::{
     Courier,
     courier::v1::{
         self as courier, Key,
-        cache::{CargoSaveRequest, CargoSaveUnitRequest, SavedUnitCacheKey},
+        cache::{CargoSaveRequest, CargoSaveUnitRequest},
     },
 };
 
@@ -59,7 +59,7 @@ pub async fn save_units(
         // so we don't later restore the unit on a host machine that does not
         // have the needed glibc symbols.
         let unit_arch = match &unit.info().target_arch {
-            RustcTarget::Specified(target_arch) => target_arch,
+            RustcTarget::Specified(target_arch) => &target_arch.clone(),
             RustcTarget::ImplicitHost => &ws.host_arch,
         };
         let glibc_version = if unit_arch.uses_glibc() {
@@ -147,11 +147,6 @@ pub async fn save_units(
                 // Prepare save request.
                 let fingerprint = serde_json::to_string(&files.fingerprint)?;
                 let save_request = CargoSaveUnitRequest::builder()
-                    .key(
-                        SavedUnitCacheKey::builder()
-                            .unit_hash(plan.info.clone().unit_hash)
-                            .build(),
-                    )
                     .unit(courier::SavedUnit::LibraryCrate(
                         courier::LibraryFiles::builder()
                             .output_files(output_files)
@@ -161,6 +156,8 @@ pub async fn save_units(
                             .build(),
                         plan.try_into()?,
                     ))
+                    .resolved_target(unit_arch.as_str().to_string())
+                    .maybe_linux_glibc_version(glibc_version.map(|v| v.to_string()))
                     .build();
 
                 save_requests.push(save_request);
@@ -202,11 +199,6 @@ pub async fn save_units(
                 // Prepare save request.
                 let fingerprint = serde_json::to_string(&files.fingerprint)?;
                 let save_request = CargoSaveUnitRequest::builder()
-                    .key(
-                        SavedUnitCacheKey::builder()
-                            .unit_hash(plan.info.clone().unit_hash)
-                            .build(),
-                    )
                     .unit(courier::SavedUnit::BuildScriptCompilation(
                         courier::BuildScriptCompiledFiles::builder()
                             .compiled_program(compiled_program)
@@ -216,6 +208,8 @@ pub async fn save_units(
                             .build(),
                         plan.try_into()?,
                     ))
+                    .resolved_target(unit_arch.as_str().to_string())
+                    .maybe_linux_glibc_version(glibc_version.map(|v| v.to_string()))
                     .build();
 
                 save_requests.push(save_request);
@@ -268,11 +262,6 @@ pub async fn save_units(
                 // Prepare save request.
                 let fingerprint = serde_json::to_string(&files.fingerprint)?;
                 let save_request = CargoSaveUnitRequest::builder()
-                    .key(
-                        SavedUnitCacheKey::builder()
-                            .unit_hash(plan.info.clone().unit_hash)
-                            .build(),
-                    )
                     .unit(courier::SavedUnit::BuildScriptExecution(
                         courier::BuildScriptOutputFiles::builder()
                             .out_dir_files(out_dir_files)
@@ -282,6 +271,8 @@ pub async fn save_units(
                             .build(),
                         plan.try_into()?,
                     ))
+                    .resolved_target(unit_arch.as_str().to_string())
+                    .maybe_linux_glibc_version(glibc_version.map(|v| v.to_string()))
                     .build();
 
                 save_requests.push(save_request);

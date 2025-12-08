@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, ffi::CStr};
+use std::{cmp::Ordering, ffi::CStr, fmt::Display};
 
 use color_eyre::{
     Result,
@@ -11,6 +11,12 @@ pub struct GLIBCVersion {
     major: u32,
     minor: u32,
     patch: u32,
+}
+
+impl Display for GLIBCVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
 }
 
 impl TryFrom<&str> for GLIBCVersion {

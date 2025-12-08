@@ -102,7 +102,9 @@ CREATE TABLE cargo_saved_unit (
   -- glibc seems to be the only one commonly using symbol versioning that Rust
   -- projects dynamically link against without declaring a dependency in their
   -- build scripts.
-  linux_so_glibc_version TEXT,
+  --
+  -- For other compilation targets, this field is NULL.
+  linux_glibc_version TEXT,
   -- Note that elements in this JSONB blob reference CAS keys.
   --
   -- TODO: Normalize this JSONB blob into tables? Or at least add a version

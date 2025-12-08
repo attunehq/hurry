@@ -1,11 +1,11 @@
 use clap::Args;
 use clients::{
     Courier, Token,
-    courier::v1::cache::{CargoRestoreRequest, SavedUnitCacheKey},
+    courier::v1::{SavedUnitHash, cache::CargoRestoreRequest},
 };
 use color_eyre::Result;
 use derive_more::Debug;
-use hurry::cargo::{CargoBuildArguments, Workspace};
+use hurry::cargo::{CargoBuildArguments, Workspace, host_glibc_version};
 use url::Url;
 
 #[derive(Clone, Args, Debug)]
@@ -93,11 +93,12 @@ pub async fn exec(opts: Options) -> Result<()> {
             }
         }
 
-        let key = SavedUnitCacheKey::builder()
-            .unit_hash(info.unit_hash.clone())
-            .build();
+        let key = SavedUnitHash::new(info.unit_hash.clone());
         let mut cached = courier
-            .cargo_cache_restore(CargoRestoreRequest::new([key.clone()]))
+            .cargo_cache_restore(CargoRestoreRequest::new(
+                [&key],
+                host_glibc_version()?.map(|v| v.to_string()),
+            ))
             .await?;
 
         match cached.take(&key) {
