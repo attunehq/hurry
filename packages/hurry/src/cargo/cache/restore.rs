@@ -12,7 +12,6 @@ use dashmap::{DashMap, DashSet};
 use derive_more::Debug;
 use futures::{StreamExt, future::BoxFuture};
 use serde::{Deserialize, Serialize};
-use tap::Conv as _;
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, instrument, trace, warn};
 
@@ -25,7 +24,7 @@ use crate::{
 };
 use clients::{
     Courier,
-    courier::v1::{Key, SavedUnit, SavedUnitHash, cache::CargoRestoreRequest},
+    courier::v1::{Key, SavedUnit, cache::CargoRestoreRequest},
 };
 
 /// Tracks items that were restored from the cache.
@@ -131,7 +130,7 @@ pub async fn restore_units(
             .iter()
             .filter(|unit| !units_to_skip.contains(&unit.info().unit_hash))
             .map(|unit| unit.info().unit_hash.clone()),
-        host_glibc_symbol_version.map(|v| v.to_string()),
+        host_glibc_symbol_version,
     );
     let mut saved_units = courier.cargo_cache_restore(bulk_req).await?;
 
@@ -216,8 +215,7 @@ pub async fn restore_units(
         let mtime = starting_mtime + Duration::from_secs(i as u64);
 
         // Load the saved file info from the response.
-        let Some(saved) = saved_units.take(&SavedUnitHash::new(unit_hash.clone().conv::<String>()))
-        else {
+        let Some(saved) = saved_units.take(&unit_hash.into()) else {
             debug!(?unit_hash, "unit missing from cache");
             // Even when skipped, unit mtimes must be updated to maintain the
             // invariant that dependencies always have older mtimes than their

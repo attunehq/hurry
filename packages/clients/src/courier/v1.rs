@@ -38,8 +38,10 @@
 //! needing to know or care about the difference: it just stores and returns
 //! what Courier provides.
 
+use std::{cmp::Ordering, fmt::Display};
+
 use bon::Builder;
-use color_eyre::eyre::{Context, bail};
+use color_eyre::eyre::{self, Context, bail, eyre};
 use derive_more::{Debug, Display};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tracing::{instrument, trace};
@@ -541,5 +543,64 @@ pub struct BuildScriptExecutionUnitPlan {
 impl From<&BuildScriptExecutionUnitPlan> for BuildScriptExecutionUnitPlan {
     fn from(plan: &BuildScriptExecutionUnitPlan) -> Self {
         plan.clone()
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct GLIBCVersion {
+    major: u32,
+    minor: u32,
+    patch: u32,
+}
+
+impl Display for GLIBCVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+impl TryFrom<&str> for GLIBCVersion {
+    type Error = eyre::Report;
+
+    // For reference, see the full list of glibc versions[^1].
+    //
+    // [^1]: https://sourceware.org/glibc/wiki/Glibc%20Timeline
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        let mut parts = s.split('.');
+        let major = parts
+            .next()
+            .ok_or(eyre!("invalid glibc version"))?
+            .parse()?;
+        let minor = parts
+            .next()
+            .ok_or(eyre!("invalid glibc version"))?
+            .parse()?;
+        // Patch versions are optional, and default to zero for comparison
+        // purposes.
+        let patch = parts.next().map(str::parse::<u32>).unwrap_or(Ok(0))?;
+        // Make sure there are no remaining parts.
+        if parts.next().is_some() {
+            bail!("invalid glibc version");
+        }
+        Ok(Self {
+            major,
+            minor,
+            patch,
+        })
+    }
+}
+
+impl Ord for GLIBCVersion {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.major
+            .cmp(&other.major)
+            .then_with(|| self.minor.cmp(&other.minor))
+            .then_with(|| self.patch.cmp(&other.patch))
+    }
+}
+
+impl PartialOrd for GLIBCVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }

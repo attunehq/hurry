@@ -157,7 +157,7 @@ pub async fn save_units(
                         plan.try_into()?,
                     ))
                     .resolved_target(unit_arch.as_str().to_string())
-                    .maybe_linux_glibc_version(glibc_version.map(|v| v.to_string()))
+                    .maybe_linux_glibc_version(glibc_version)
                     .build();
 
                 save_requests.push(save_request);
@@ -209,7 +209,7 @@ pub async fn save_units(
                         plan.try_into()?,
                     ))
                     .resolved_target(unit_arch.as_str().to_string())
-                    .maybe_linux_glibc_version(glibc_version.map(|v| v.to_string()))
+                    .maybe_linux_glibc_version(glibc_version)
                     .build();
 
                 save_requests.push(save_request);
@@ -272,7 +272,7 @@ pub async fn save_units(
                         plan.try_into()?,
                     ))
                     .resolved_target(unit_arch.as_str().to_string())
-                    .maybe_linux_glibc_version(glibc_version.map(|v| v.to_string()))
+                    .maybe_linux_glibc_version(glibc_version)
                     .build();
 
                 save_requests.push(save_request);

@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO cargo_saved_unit (organization_id, unit_hash, unit_resolved_target, linux_glibc_version, data)\n                VALUES ($1, $2, $3, $4, $5)\n                ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0b8e3a8f5d17c7d1fd3a8a2c903be0405cd32f2d2628f6006d96a179413402a1"
+}

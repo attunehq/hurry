@@ -22,7 +22,7 @@ use crate::{
     fs, mk_rel_dir,
     path::{AbsDirPath, AbsFilePath, RelDirPath, RelFilePath, RelativeTo as _, TryJoinWith as _},
 };
-use clients::courier::v1 as courier;
+use clients::courier::v1::{self as courier};
 
 /// The Cargo workspace of a build.
 ///
@@ -613,15 +613,26 @@ impl Workspace {
 #[derive(Debug, Display, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct UnitHash(String);
 
+impl From<UnitHash> for String {
+    fn from(value: UnitHash) -> Self {
+        value.0
+    }
+}
+impl From<&UnitHash> for String {
+    fn from(value: &UnitHash) -> Self {
+        value.0.clone()
+    }
+}
+
 impl From<String> for UnitHash {
     fn from(value: String) -> Self {
         Self(value)
     }
 }
 
-impl From<UnitHash> for String {
-    fn from(value: UnitHash) -> Self {
-        value.0
+impl From<&UnitHash> for UnitHash {
+    fn from(value: &UnitHash) -> Self {
+        value.clone()
     }
 }
 

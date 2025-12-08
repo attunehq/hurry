@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use clients::courier::v1::{
-    Key, SavedUnit, SavedUnitHash,
+    GLIBCVersion, Key, SavedUnit, SavedUnitHash,
     cache::{CargoRestoreRequest, CargoSaveRequest},
 };
 use color_eyre::{
@@ -85,7 +85,7 @@ impl Postgres {
                 auth.org_id.as_i64(),
                 item.unit.unit_hash().as_str(),
                 item.resolved_target,
-                item.linux_glibc_version,
+                item.linux_glibc_version.map(|v| v.to_string()),
                 data,
             )
             .execute(tx.as_mut())
@@ -121,11 +121,22 @@ impl Postgres {
         while let Some(row) = rows.next().await {
             let row = row.context("read rows")?;
 
-            let key = SavedUnitHash::new(row.unit_hash);
+            let key = row.unit_hash.into();
             let unit = serde_json::from_value::<SavedUnit>(row.data)
                 .with_context(|| format!("deserialize value for cache key: {}", key))?;
 
             // TODO: Check for glibc version compatibility.
+            if let Some(ref host_glibc) = request.host_glibc_version {
+                let Some(saved_glibc_string) = row.linux_glibc_version else {
+                    // Skip units without glibc version info
+                    continue;
+                };
+                let saved_glibc = GLIBCVersion::try_from(saved_glibc_string.as_str())?;
+                if *host_glibc < saved_glibc {
+                    // Skip units with incompatible glibc versions
+                    continue;
+                }
+            }
 
             artifacts.insert(key, unit);
         }
