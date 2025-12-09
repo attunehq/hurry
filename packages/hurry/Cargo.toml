@@ -24,7 +24,6 @@ derive_more = { workspace = true, features = ["full"] }
 enum-assoc = { workspace = true }
 filetime = { workspace = true }
 fslock = { workspace = true }
-git-version = { workspace = true }
 homedir = { workspace = true }
 itertools = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc", "std"] }
@@ -70,6 +69,9 @@ is_executable = { workspace = true }
 directories = { workspace = true }
 hex.workspace = true
 rustc-stable-hash = "0.1.2"
+
+[build-dependencies]
+blake3 = { workspace = true }
 
 [dev-dependencies]
 async-walkdir.workspace = true
