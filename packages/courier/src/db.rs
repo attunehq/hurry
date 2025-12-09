@@ -125,17 +125,26 @@ impl Postgres {
             let unit = serde_json::from_value::<SavedUnit>(row.data)
                 .with_context(|| format!("deserialize value for cache key: {}", key))?;
 
-            // TODO: Check for glibc version compatibility.
+            // Check for glibc version compatibility for units that compile
+            // against glibc.
             if let Some(ref host_glibc) = request.host_glibc_version {
                 let Some(saved_glibc_string) = row.linux_glibc_version else {
-                    // Skip units without glibc version info
+                    // Skip units without glibc version info. Note that this
+                    // should never happen, since all units with a matching unit
+                    // hash will all be on the same target, and all units of a
+                    // target either do or do not have glibc version info.
                     continue;
                 };
                 let saved_glibc = GLIBCVersion::try_from(saved_glibc_string.as_str())?;
                 if *host_glibc < saved_glibc {
-                    // Skip units with incompatible glibc versions
+                    // Skip units with incompatible glibc versions.
                     continue;
                 }
+            } else if let Some(_) = row.linux_glibc_version {
+                // Skip units that have glibc version info when host doesn't
+                // have glibc version info (i.e., non-linux targets). This is
+                // another thing that should never happen.
+                continue;
             }
 
             artifacts.insert(key, unit);
