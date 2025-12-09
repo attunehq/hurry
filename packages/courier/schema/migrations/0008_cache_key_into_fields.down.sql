@@ -1,3 +1,5 @@
+TRUNCATE cargo_saved_unit;
+
 ALTER TABLE cargo_saved_unit
   DROP COLUMN unit_hash,
   DROP COLUMN unit_resolved_target,
