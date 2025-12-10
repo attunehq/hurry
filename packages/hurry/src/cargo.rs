@@ -33,7 +33,7 @@ pub use build_script::BuildScriptOutput;
 pub use cache::{CargoCache, Restored, SaveProgress, SavedFile, save_units};
 pub use dep_info::{DepInfo, DepInfoLine};
 pub use fingerprint::Fingerprint;
-pub use glibc::{host_glibc_version};
+pub use glibc::host_glibc_version;
 pub use path::QualifiedPath;
 pub use profile::Profile;
 pub use rustc::{RustcArgument, RustcArguments, RustcTarget, RustcTargetPlatform};
