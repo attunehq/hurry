@@ -79,7 +79,9 @@ pub async fn save_units(
                 // Maybe we can directly ask the native compilers? `cc
                 // --print-file-name=libc.so.6` and `aarch64-linux-gnu-gcc
                 // --print-file-name=libc.so.6`? And from then we can open the
-                // ELF and look at the verdef section?
+                // ELF and look at the verdef section? But how do we know which
+                // linker Cargo will use for any particular build, and what flag
+                // that linker accepts to query the libc file?
                 error!("backing up cross-compiled units is not yet supported");
                 progress.total_units -= 1;
                 on_progress(&progress);

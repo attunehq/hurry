@@ -98,6 +98,9 @@ pub enum RustcTargetPlatform {
     #[assoc(try_from_str = "aarch64-unknown-linux-gnu")]
     #[assoc(supported = true)]
     #[assoc(uses_glibc = true)]
+    // TODO: Here and in the other GNU variants, should we store the
+    // GLIBCVersion within the sum variant? That feels the most correct, and
+    // avoids carrying around an `Option` around with us everywhere.
     Arm64LinuxGNU,
     #[assoc(as_str = "i686-pc-windows-msvc")]
     #[assoc(try_from_str = "i686-pc-windows-msvc")]

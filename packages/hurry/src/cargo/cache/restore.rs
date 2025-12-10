@@ -119,8 +119,8 @@ pub async fn restore_units(
         }
     }
 
-    // TODO: If this build is against glibc, we need to know the glibc version
-    // so we don't restore objects that link to missing symbols.
+    // If this build is against glibc, we need to know the glibc version so we
+    // don't restore objects that link to missing symbols.
     let host_glibc_symbol_version = host_glibc_version()?;
 
     // Load unit information from remote cache. Note that this does NOT download

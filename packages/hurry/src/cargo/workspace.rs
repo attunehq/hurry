@@ -22,7 +22,7 @@ use crate::{
     fs, mk_rel_dir,
     path::{AbsDirPath, AbsFilePath, RelDirPath, RelFilePath, RelativeTo as _, TryJoinWith as _},
 };
-use clients::courier::v1::{self as courier};
+use clients::courier::v1 as courier;
 
 /// The Cargo workspace of a build.
 ///
