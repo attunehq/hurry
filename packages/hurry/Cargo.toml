@@ -24,7 +24,6 @@ derive_more = { workspace = true, features = ["full"] }
 enum-assoc = { workspace = true }
 filetime = { workspace = true }
 fslock = { workspace = true }
-git-version = { workspace = true }
 homedir = { workspace = true }
 itertools = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc", "std"] }
