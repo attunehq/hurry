@@ -90,3 +90,4 @@ testcontainers = { git = "https://github.com/testcontainers/testcontainers-rs.gi
 monostate = "1.0.2"
 rustc-stable-hash = "0.1.2"
 base64 = "0.22.1"
+oauth2 = "5.0.0"

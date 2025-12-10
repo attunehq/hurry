@@ -42,6 +42,19 @@ struct ServeConfig {
     /// Root path to store CAS blobs
     #[arg(long, env = "CAS_ROOT")]
     cas_root: PathBuf,
+
+    /// GitHub OAuth Client ID (optional, enables OAuth if provided)
+    #[arg(long, env = "GITHUB_CLIENT_ID")]
+    github_client_id: Option<String>,
+
+    /// GitHub OAuth Client Secret
+    #[arg(long, env = "GITHUB_CLIENT_SECRET")]
+    #[debug(ignore)]
+    github_client_secret: Option<String>,
+
+    /// Allowed redirect URIs for OAuth (comma-separated)
+    #[arg(long, env = "OAUTH_REDIRECT_ALLOWLIST", value_delimiter = ',')]
+    oauth_redirect_allowlist: Vec<String>,
 }
 
 #[derive(Parser, Debug)]
