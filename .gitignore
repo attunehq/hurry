@@ -1,5 +1,5 @@
 .env
-.scratch
+# .scratch - temporarily un-ignored to share WIP state (re-ignore before merging)
 .vscode
 .hurrydata
 target
