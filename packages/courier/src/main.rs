@@ -90,7 +90,8 @@ async fn serve(config: ServeConfig) -> Result<()> {
         .context("connect to database")?;
 
     // Validate all migrations have been applied before starting the server.
-    // This ensures we don't serve traffic until the separate migration job has completed.
+    // This ensures we don't serve traffic until the separate migration job has
+    // completed.
     db.validate_migrations()
         .await
         .context("validate database migrations")?;

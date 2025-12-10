@@ -19,8 +19,8 @@ use color_eyre::{
 };
 use derive_more::Debug;
 use futures::StreamExt;
-use sqlx::{PgPool, migrate::Migrator};
 use sqlx::migrate::Migrate;
+use sqlx::{PgPool, migrate::Migrator};
 use tracing::debug;
 
 use crate::{
@@ -64,8 +64,8 @@ impl Postgres {
     /// This checks that:
     /// 1. All migrations in the codebase have been applied
     /// 2. Applied migrations have matching checksums (no modified migrations)
-    /// 3. No migrations exist in the database that are missing from the codebase
-    ///    (unless `ignore_missing` is set in the MIGRATOR)
+    /// 3. No migrations exist in the database that are missing from the
+    ///    codebase (unless `ignore_missing` is set in the MIGRATOR)
     ///
     /// This is intended for use at server startup to ensure the database schema
     /// is up-to-date before serving traffic. It does NOT apply migrations;
@@ -123,7 +123,8 @@ impl Postgres {
             );
         }
 
-        // Checksum mismatches occur when a migration file was modified after being applied.
+        // Checksum mismatches occur when a migration file was modified after being
+        // applied.
         let mismatched = expected
             .iter()
             .filter_map(|m| {
@@ -149,7 +150,8 @@ impl Postgres {
             );
         }
 
-        // Missing migrations are applied to the database but not present in the codebase.
+        // Missing migrations are applied to the database but not present in the
+        // codebase.
         if !Self::MIGRATOR.ignore_missing {
             let mut missing = applied_versions
                 .difference(&expected_versions)

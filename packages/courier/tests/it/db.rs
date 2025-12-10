@@ -7,7 +7,8 @@ use sqlx::PgPool;
 /// Test that migration validation fails when migrations haven't been applied.
 ///
 /// This test uses `migrations = false` to get a database without migrations,
-/// then verifies that `validate_migrations` correctly detects the pending state.
+/// then verifies that `validate_migrations` correctly detects the pending
+/// state.
 #[sqlx::test(migrations = false)]
 async fn validate_migrations_fails_without_migrations(pool: PgPool) -> Result<()> {
     let db = Postgres { pool };
