@@ -3,158 +3,219 @@
 //! This generates a version string that:
 //! - Uses `git describe --always` to get the base version (tag or commit hash)
 //! - If the working tree is dirty, appends a content hash of the changed files
-//!
-//! The content hash is computed by:
-//! 1. Getting the list of changed files from `git diff --name-only`
-//! 2. Sorting them lexicographically
-//! 3. Computing blake3 hash of each file's content
-//! 4. Computing a final blake3 hash of all the individual hashes
 
+use std::hash::{DefaultHasher, Hasher as _};
 use std::path::Path;
 use std::process::Command;
+use std::str::FromStr;
 
-fn main() {
-    // Rerun if any git state changes
-    println!("cargo:rerun-if-changed=.git/HEAD");
-    println!("cargo:rerun-if-changed=.git/index");
-
-    let (version, dirty_files) = compute_version();
+fn main() -> Result<(), String> {
+    // We don't emit any `rerun-if-changed` directives because Cargo by default
+    // will scan all files in the package directory for changes[^1].
+    //
+    // This technically means that if you add a _new file_ to the package but
+    // you _don't change_ any existing files, the build script will not re-run
+    // (because Cargo checks whether previously built files have changed). In
+    // practice, this is almost certainly fine, because if the previous build
+    // succeeded, and you have not changed any file in the existing build, then
+    // adding a new file cannot possibly change the build because the new file
+    // cannot possibly have been imported because no existing files changed!
+    //
+    // The only way this can become a problem is if we start adding files that
+    // are added through `include_{str,bytes}!`, which I think Rust has
+    // special-case handling for[^2]. In either case, we can escape hatch
+    // through `cargo clean`.
+    //
+    // [^1]: https://doc.rust-lang.org/cargo/reference/build-scripts.html#rerun-if-changed
+    // [^2]: https://github.com/rust-lang/cargo/issues/1510
+    let version = compute_version()?;
     println!("cargo:rustc-env=HURRY_VERSION={version}");
 
-    // Emit rerun-if-changed for all dirty files so we rebuild when they change
-    if let Some(repo_root) = get_repo_root() {
-        for file in dirty_files {
-            let path = Path::new(&repo_root).join(&file);
-            println!("cargo:rerun-if-changed={}", path.display());
-        }
-    }
+    Ok(())
 }
 
 /// Returns (version_string, list_of_dirty_files)
-fn compute_version() -> (String, Vec<String>) {
-    // Get base version from git describe
-    let base_version = git_describe().unwrap_or_else(|| String::from("unknown"));
+fn compute_version() -> Result<String, String> {
+    // Get base version from git describe.
+    let base_version = git_describe()?;
 
-    // Check if tree is dirty
-    if !is_tree_dirty() {
-        return (base_version, Vec::new());
+    // Get list of changed files.
+    let changed_files = changed_files()?;
+
+    // If this list is empty, return the base version.
+    if changed_files.is_empty() {
+        return Ok(base_version);
     }
 
-    // Compute content hash of dirty files
-    let (dirty_hash, dirty_files) = match compute_dirty_hash() {
-        Some((hash, files)) => (hash, files),
-        None => return (format!("{base_version}-dirty"), Vec::new()),
+    // Otherwise, calculate the content hash of the changed files.
+    let content_hash = content_hash(changed_files)?;
+
+    // Truncate hash to 7 characters like git does for commit hashes.
+    let short_hash = &content_hash[..7.min(content_hash.len())];
+
+    Ok(format!("{base_version}-{short_hash}"))
+}
+
+fn content_hash(mut files: Vec<StatusEntry>) -> Result<String, String> {
+    // Sort lexicographically for stable ordering.
+    files.sort();
+    files.dedup();
+
+    // Get the repo root to resolve file paths.
+    let repo_root = repo_root()?;
+
+    // Compute hash of each file and collect them.
+    let mut hashes = Vec::new();
+    for file in files {
+        let path = Path::new(&repo_root).join(file.path);
+        let mut hasher = DefaultHasher::new();
+        print!("{}: ", path.display());
+        if let Ok(content) = std::fs::read(&path) {
+            hasher.write(path.as_os_str().as_encoded_bytes());
+            hasher.write(&content);
+            let hash = hasher.finish();
+            println!("{hash}");
+            hashes.push(hash);
+        } else {
+            // Skip files that can't be read (e.g. deleted files).
+            //
+            // TODO: Maybe match this by status?
+            println!("skipped");
+        }
+    }
+    hashes.sort();
+    hashes.dedup();
+
+    // Compute final hash by hashing all the individual hashes together.
+    let mut hasher = DefaultHasher::new();
+    for hash in hashes {
+        hasher.write_u64(hash);
+    }
+    let final_hash = hasher.finish();
+
+    Ok(format!("{:x}", final_hash))
+}
+
+fn run(prog: &str, argv: &[&str]) -> Result<String, String> {
+    let invocation = {
+        let mut args = Vec::new();
+        args.push(prog);
+        for arg in argv {
+            args.push(arg);
+        }
+        args.join(" ")
     };
 
-    // Truncate hash to 7 characters like git does for commit hashes
-    let short_hash = &dirty_hash[..7.min(dirty_hash.len())];
-    (format!("{base_version}-{short_hash}"), dirty_files)
-}
-
-fn git_describe() -> Option<String> {
-    let output = Command::new("git")
-        .args(["describe", "--always", "--tags"])
+    let output = Command::new(prog)
+        .args(argv)
         .output()
-        .ok()?;
-
+        .map_err(|e| format!("failed to execute `{invocation}`: {e}"))?;
     if !output.status.success() {
-        return None;
+        return Err(format!("`{invocation}` exited with non-zero status"));
     }
 
-    let version = String::from_utf8(output.stdout).ok()?;
-    Some(version.trim().to_string())
+    let output = String::from_utf8(output.stdout)
+        .map_err(|e| format!("could not parse output of `{invocation}` as UTF-8: {e}"))?;
+    Ok(output.trim_end().to_string())
 }
 
-fn is_tree_dirty() -> bool {
-    let output = Command::new("git").args(["status", "--porcelain"]).output();
+fn git_describe() -> Result<String, String> {
+    run("git", &["describe", "--always", "--tags", "--dirty=-dirty"])
+}
 
-    match output {
-        Ok(output) => !output.stdout.is_empty(),
-        Err(_) => false,
+fn repo_root() -> Result<String, String> {
+    run("git", &["rev-parse", "--show-toplevel"])
+}
+
+fn changed_files() -> Result<Vec<StatusEntry>, String> {
+    let output = run("git", &["status", "--porcelain"])?;
+
+    let mut files = Vec::new();
+    for line in output.lines() {
+        files.push(line.parse::<StatusEntry>()?);
+    }
+
+    Ok(files)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum GitFileStatus {
+    Unmodified,
+    Modified,
+    Added,
+    Deleted,
+    Renamed,
+    Copied,
+    Unmerged,
+    Untracked,
+    Ignored,
+}
+
+impl GitFileStatus {
+    fn parse(c: char) -> Option<Self> {
+        match c {
+            ' ' => Some(Self::Unmodified),
+            'M' => Some(Self::Modified),
+            'A' => Some(Self::Added),
+            'D' => Some(Self::Deleted),
+            'R' => Some(Self::Renamed),
+            'C' => Some(Self::Copied),
+            'U' => Some(Self::Unmerged),
+            '?' => Some(Self::Untracked),
+            '!' => Some(Self::Ignored),
+            _ => None,
+        }
     }
 }
 
-/// Returns (hash, list_of_dirty_files)
-fn compute_dirty_hash() -> Option<(String, Vec<String>)> {
-    // Get list of changed files (both staged and unstaged)
-    let output = Command::new("git")
-        .args(["diff", "--name-only", "HEAD"])
-        .output()
-        .ok()?;
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct StatusEntry {
+    index: GitFileStatus,
+    worktree: GitFileStatus,
+    path: String,
+    // This is used for renames and copies.
+    orig_path: Option<String>,
+}
 
-    if !output.status.success() {
-        return None;
-    }
+impl FromStr for StatusEntry {
+    type Err = String;
 
-    let diff_output = String::from_utf8(output.stdout).ok()?;
-    let mut changed_files = diff_output
-        .lines()
-        .filter(|line| !line.is_empty())
-        .map(String::from)
-        .collect::<Vec<_>>();
+    fn from_str(line: &str) -> Result<Self, Self::Err> {
+        if line.len() < 4 {
+            return Err("line too short".into());
+        }
 
-    // Also get untracked files
-    let untracked_output = Command::new("git")
-        .args(["ls-files", "--others", "--exclude-standard"])
-        .output()
-        .ok()?;
+        let mut chars = line.chars();
+        let index_char = chars.next().unwrap();
+        let worktree_char = chars.next().unwrap();
+        let space = chars.next().unwrap();
 
-    if untracked_output.status.success() {
-        if let Ok(untracked) = String::from_utf8(untracked_output.stdout) {
-            for line in untracked.lines() {
-                if !line.is_empty() {
-                    changed_files.push(String::from(line));
-                }
+        if space != ' ' {
+            return Err("expected space after status".into());
+        }
+
+        let index = GitFileStatus::parse(index_char)
+            .ok_or_else(|| format!("invalid index status: {}", index_char))?;
+        let worktree = GitFileStatus::parse(worktree_char)
+            .ok_or_else(|| format!("invalid worktree status: {}", worktree_char))?;
+
+        let rest: String = chars.collect();
+        let (path, orig_path) = if matches!(index, GitFileStatus::Renamed | GitFileStatus::Copied) {
+            // Format: "old_path -> new_path"
+            if let Some((old, new)) = rest.split_once(" -> ") {
+                (new.to_string(), Some(old.to_string()))
+            } else {
+                (rest, None)
             }
-        }
+        } else {
+            (rest, None)
+        };
+
+        Ok(StatusEntry {
+            index,
+            worktree,
+            path,
+            orig_path,
+        })
     }
-
-    if changed_files.is_empty() {
-        return None;
-    }
-
-    // Sort lexicographically for stable ordering
-    changed_files.sort();
-    changed_files.dedup();
-
-    // Get the repo root to resolve file paths
-    let repo_root = get_repo_root()?;
-
-    // Compute blake3 hash of each file and collect them
-    let mut file_hashes = Vec::new();
-    for file in &changed_files {
-        let path = Path::new(&repo_root).join(file);
-        if let Ok(content) = std::fs::read(&path) {
-            let hash = blake3::hash(&content);
-            file_hashes.push(hash);
-        }
-        // Skip files that can't be read (e.g., deleted files)
-    }
-
-    if file_hashes.is_empty() {
-        return None;
-    }
-
-    // Compute final hash by hashing all the individual hashes together
-    let mut hasher = blake3::Hasher::new();
-    for hash in &file_hashes {
-        hasher.update(hash.as_bytes());
-    }
-    let final_hash = hasher.finalize();
-
-    Some((final_hash.to_hex().to_string(), changed_files))
-}
-
-fn get_repo_root() -> Option<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let root = String::from_utf8(output.stdout).ok()?;
-    Some(root.trim().to_string())
 }
