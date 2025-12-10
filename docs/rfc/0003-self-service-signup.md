@@ -37,11 +37,11 @@ We use GitHub as an OAuth provider to authenticate users and obtain their email 
 
 We use a GitHub App rather than a traditional OAuth App:
 
-| Aspect | OAuth App | GitHub App |
-|--------|-----------|------------|
-| Token expiry | Never expires | 8 hours (+ refresh token) |
-| Permissions | Broad scopes | Fine-grained |
-| Rate limits | Fixed per user | Scales with installations |
+| Aspect       | OAuth App      | GitHub App                 |
+|--------------|----------------|----------------------------|
+| Token expiry | Never expires  | 8 hours (+ refresh token)  |
+| Permissions  | Broad scopes   | Fine-grained               |
+| Rate limits  | Fixed per user | Scales with installations  |
 
 GitHub Apps are the recommended approach for new integrations. The same OAuth web flow is used for authentication, but we get better security through token expiry.
 
@@ -670,10 +670,10 @@ Response:
 
 ### Authentication types
 
-| Type | Use case | Identifier |
-|------|----------|------------|
-| Session token | Web UI | `Bearer <session_token>` |
-| API key | CLI, CI | `Bearer <api_key>` |
+| Type          | Use case | Identifier               |
+|---------------|----------|--------------------------|
+| Session token | Web UI   | `Bearer <session_token>` |
+| API key       | CLI, CI  | `Bearer <api_key>`       |
 
 ### Session tokens vs API keys
 
@@ -689,26 +689,27 @@ This means:
 
 ### Permission levels
 
-| Action | member | admin |
-|--------|--------|-------|
-| View org members | Yes | Yes |
-| Create invitation | - | Yes |
-| Revoke invitation | - | Yes |
-| Update member role | - | Yes |
-| Remove member | - | Yes |
-| Leave org | Yes | Yes |
-| Create bot account | - | Yes |
-| Manage bot API keys | - | Yes |
+| Action              | member | admin |
+|---------------------|--------|-------|
+| View org members    | Yes    | Yes   |
+| Create invitation   | -      | Yes   |
+| Revoke invitation   | -      | Yes   |
+| Update member role  | -      | Yes   |
+| Remove member       | -      | Yes   |
+| Leave org           | Yes    | Yes   |
+| Create bot account  | -      | Yes   |
+| Manage bot API keys | -      | Yes   |
 
 Account-level actions (not org-scoped):
-| Action | Self |
-|--------|------|
-| View own personal API keys | Yes |
-| Create own personal API key | Yes |
-| Revoke own personal API key | Yes |
-| View own org API keys | Yes |
-| Create own org API key | Yes |
-| Revoke own org API key | Yes |
+
+| Action                      | Self |
+|-----------------------------|------|
+| View own personal API keys  | Yes  |
+| Create own personal API key | Yes  |
+| Revoke own personal API key | Yes  |
+| View own org API keys       | Yes  |
+| Create own org API key      | Yes  |
+| Revoke own org API key      | Yes  |
 
 ### Personal usage (no org)
 
@@ -757,9 +758,9 @@ Session invalidation:
 
 Invitation tokens are short, human-friendly codes designed to be easily shared (e.g., in Slack channel headers). Token length varies based on expiration to balance usability with security:
 
-| Expiration | Length | Entropy | Example |
-|------------|--------|---------|---------|
-| ≤30 days | 8 chars | ~47 bits | `hXkR4pN` |
+| Expiration        | Length   | Entropy  | Example        |
+|-------------------|----------|----------|----------------|
+| ≤30 days          | 8 chars  | ~47 bits | `hXkR4pN`      |
 | >30 days or never | 12 chars | ~71 bits | `hXkR4pNq2mYz` |
 
 Short-lived tokens can be shorter because brute-force attacks are time-limited. Never-expiring tokens need more entropy since attackers have unlimited time.
