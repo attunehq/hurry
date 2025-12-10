@@ -1,0 +1,19 @@
+version: 1
+
+rules:
+  - name: no-lhs-type-annotations
+    description: Use turbofish syntax instead of left-hand type annotations
+    message: "Stop. Use turbofish syntax or type inference instead of left-hand type annotations, then retry."
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "**/*.rs"
+        content:
+          - kind: Regex
+            pattern: "(?m)^\\s*let\\s+[a-zA-Z_][a-zA-Z0-9_]*\\s*:\\s*"
+      - hook: PreToolUse
+        tool: Edit
+        file: "**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: "(?m)^\\s*let\\s+[a-zA-Z_][a-zA-Z0-9_]*\\s*:\\s*"

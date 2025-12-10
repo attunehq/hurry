@@ -1,0 +1,36 @@
+version: 1
+
+rules:
+  - name: no-test-prefix
+    description: Don't prefix test functions with test_
+    message: Remove the test_ prefix from this function name, then retry.
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '(?m)^[ \t]*fn test_'
+      - hook: PreToolUse
+        tool: Edit
+        file: "**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '(?m)^[ \t]*fn test_'
+
+  - name: pretty-assertions-alias
+    description: Import pretty_assertions with alias to avoid shadowing
+    message: Use aliased imports like "assert_eq as pretty_assert_eq" to avoid shadowing, then retry.
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "**/*.rs"
+        content:
+          - kind: Regex
+            pattern: 'use pretty_assertions::\{[^}]*assert_eq[^}as]*\};'
+      - hook: PreToolUse
+        tool: Edit
+        file: "**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: 'use pretty_assertions::\{[^}]*assert_eq[^}as]*\};'

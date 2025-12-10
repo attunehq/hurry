@@ -86,3 +86,4 @@ sha2 = "0.10.9"
 testcontainers = { git = "https://github.com/testcontainers/testcontainers-rs.git", rev = "9aae21e7330f3ad22a7742c82dd5eea465928510" }
 rustc-stable-hash = "0.1.2"
 libc = "0.2.178"
+monostate = "1.0.2"
