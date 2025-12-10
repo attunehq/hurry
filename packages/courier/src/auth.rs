@@ -8,6 +8,43 @@ use serde::{Deserialize, Serialize};
 
 use crate::{api, db};
 
+/// Organization role for membership.
+///
+/// This enum maps to the `organization_role` table in the database.
+/// New roles should be added both here and in the database.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Display, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OrgRole {
+    /// Regular organization member with basic access.
+    Member,
+    /// Organization administrator with full permissions.
+    Admin,
+}
+
+impl OrgRole {
+    /// Returns the database role name for this role.
+    pub fn as_db_name(&self) -> &'static str {
+        match self {
+            OrgRole::Member => "member",
+            OrgRole::Admin => "admin",
+        }
+    }
+
+    /// Parse a role from its database name.
+    pub fn from_db_name(name: &str) -> Option<Self> {
+        match name {
+            "member" => Some(OrgRole::Member),
+            "admin" => Some(OrgRole::Admin),
+            _ => None,
+        }
+    }
+
+    /// Returns true if this role has admin privileges.
+    pub fn is_admin(&self) -> bool {
+        matches!(self, OrgRole::Admin)
+    }
+}
+
 /// An ID uniquely identifying an organization.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Display, Deserialize, Serialize)]
 pub struct OrgId(i64);
@@ -82,6 +119,37 @@ impl AsRef<RawToken> for RawToken {
 impl From<&RawToken> for RawToken {
     fn from(token: &RawToken) -> Self {
         token.clone()
+    }
+}
+
+/// A session token for web UI authentication.
+///
+/// Similar to [`RawToken`] but specifically for user sessions. Session tokens
+/// have higher entropy (256 bits vs 128 bits for API keys) and are used for
+/// web UI authentication via OAuth.
+///
+/// Like `RawToken`, this type prevents leaking the token in logs accidentally.
+/// The token serializes/deserializes to support returning it to the client.
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Display, Deserialize, Serialize)]
+#[debug("[redacted]")]
+#[display("[redacted]")]
+pub struct SessionToken(String);
+
+impl SessionToken {
+    /// Create a new instance from arbitrary text.
+    pub fn new(value: impl Into<String>) -> Self {
+        SessionToken(value.into())
+    }
+
+    /// View the interior value of the token.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<SessionToken> for SessionToken {
+    fn as_ref(&self) -> &SessionToken {
+        self
     }
 }
 
@@ -167,4 +235,22 @@ impl FromRequestParts<api::State> for AuthenticatedToken {
             )),
         }
     }
+}
+
+/// Session context for web UI authentication.
+///
+/// This represents an authenticated user session from the OAuth flow.
+/// Unlike [`AuthenticatedToken`] which is tied to a specific organization via
+/// API keys, session context identifies only the account. Organization context
+/// must be provided in the URL for session-based requests.
+///
+/// This type will be extractable from requests once the session validation
+/// database methods are implemented.
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
+pub struct SessionContext {
+    /// The account ID of the authenticated user.
+    pub account_id: AccountId,
+
+    /// The session token (kept for potential refresh/invalidation).
+    pub session_token: SessionToken,
 }

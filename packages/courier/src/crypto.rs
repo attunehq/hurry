@@ -1,6 +1,10 @@
 //! Cryptographic utilities for token hashing and verification.
 
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use rand::RngCore;
 use sha2::{Digest, Sha256};
+
+use crate::auth::{RawToken, SessionToken};
 
 /// A hashed API token.
 ///
@@ -51,5 +55,87 @@ impl TokenHash {
 impl AsRef<TokenHash> for TokenHash {
     fn as_ref(&self) -> &TokenHash {
         self
+    }
+}
+
+/// Generate a new API key token with 128 bits of entropy.
+///
+/// Returns a 32-character hex string (16 random bytes, hex-encoded).
+/// This matches the existing Courier API key format.
+pub fn generate_api_key() -> RawToken {
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    RawToken::new(hex::encode(bytes))
+}
+
+/// Generate a new session token with 256 bits of entropy.
+///
+/// Returns a 64-character hex string (32 random bytes, hex-encoded).
+/// Session tokens have higher entropy than API keys for additional security.
+pub fn generate_session_token() -> SessionToken {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    SessionToken::new(hex::encode(bytes))
+}
+
+/// Generate an OAuth state token with 128 bits of entropy.
+///
+/// Returns a 32-character hex string. Used to prevent CSRF attacks
+/// during the OAuth flow.
+pub fn generate_oauth_state() -> String {
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
+/// Generate an invitation token.
+///
+/// Token length varies based on whether the invitation is long-lived:
+/// - Short-lived (≤30 days): 8 characters (~47 bits entropy)
+/// - Long-lived (>30 days or never expires): 12 characters (~71 bits entropy)
+///
+/// Tokens use alphanumeric characters (a-zA-Z0-9) for easy sharing.
+pub fn generate_invitation_token(long_lived: bool) -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+    let length = if long_lived { 12 } else { 8 };
+    let mut rng = rand::thread_rng();
+
+    (0..length)
+        .map(|_| {
+            let idx = (rng.next_u32() as usize) % ALPHABET.len();
+            ALPHABET[idx] as char
+        })
+        .collect()
+}
+
+/// PKCE (Proof Key for Code Exchange) verifier and challenge.
+///
+/// Used in the OAuth flow to prevent authorization code interception attacks.
+#[derive(Clone, Debug)]
+pub struct PkceChallenge {
+    /// The verifier (stored server-side, used during token exchange).
+    pub verifier: String,
+    /// The challenge (sent to the authorization server).
+    pub challenge: String,
+}
+
+/// Generate a PKCE verifier and S256 challenge.
+///
+/// The verifier is a 43-character base64url-encoded random string (32 bytes).
+/// The challenge is the base64url-encoded SHA256 hash of the verifier.
+pub fn generate_pkce() -> PkceChallenge {
+    let mut verifier_bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut verifier_bytes);
+    let verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
+
+    let mut hasher = Sha256::new();
+    hasher.update(verifier.as_bytes());
+    let hash = hasher.finalize();
+    let challenge = URL_SAFE_NO_PAD.encode(hash);
+
+    PkceChallenge {
+        verifier,
+        challenge,
     }
 }
