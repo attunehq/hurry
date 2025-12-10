@@ -5,6 +5,7 @@
 
 mod api;
 mod crypto;
+mod db;
 mod helpers;
 
 pub use helpers::*;

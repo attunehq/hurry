@@ -1230,6 +1230,7 @@ dependencies = [
  "tap",
  "test-log",
  "test-strategy",
+ "time",
  "tokio",
  "tokio-util",
  "tower",

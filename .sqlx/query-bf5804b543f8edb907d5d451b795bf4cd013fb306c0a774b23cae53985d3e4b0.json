@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE organization_member\n            SET role_id = (SELECT id FROM organization_role WHERE name = $3)\n            WHERE organization_id = $1 AND account_id = $2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bf5804b543f8edb907d5d451b795bf4cd013fb306c0a774b23cae53985d3e4b0"
+}

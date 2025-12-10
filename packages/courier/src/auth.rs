@@ -68,9 +68,48 @@ impl AccountId {
         Self(id)
     }
 
-    /// Currently only used in tests. If used elsewhere, feel free to make this
-    /// generally available.
-    #[allow(dead_code)]
+    pub fn as_i64(&self) -> i64 {
+        self.0
+    }
+}
+
+/// An ID uniquely identifying an invitation.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Display, Deserialize, Serialize)]
+pub struct InvitationId(i64);
+
+impl InvitationId {
+    pub fn from_i64(id: i64) -> Self {
+        Self(id)
+    }
+
+    pub fn as_i64(&self) -> i64 {
+        self.0
+    }
+}
+
+/// An ID uniquely identifying a user session.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Display, Deserialize, Serialize)]
+pub struct SessionId(i64);
+
+impl SessionId {
+    pub fn from_i64(id: i64) -> Self {
+        Self(id)
+    }
+
+    pub fn as_i64(&self) -> i64 {
+        self.0
+    }
+}
+
+/// An ID uniquely identifying an API key.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Display, Deserialize, Serialize)]
+pub struct ApiKeyId(i64);
+
+impl ApiKeyId {
+    pub fn from_i64(id: i64) -> Self {
+        Self(id)
+    }
+
     pub fn as_i64(&self) -> i64 {
         self.0
     }
