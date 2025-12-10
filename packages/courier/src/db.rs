@@ -7,7 +7,7 @@
 //! serialize or deserialize these types, create public-facing types that do so
 //! and are able to convert back and forth with the internal types.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use clients::courier::v1::{
     Key, SavedUnit,
@@ -19,6 +19,7 @@ use color_eyre::{
 };
 use derive_more::Debug;
 use futures::StreamExt;
+use sqlx::migrate::Migrate;
 use sqlx::{PgPool, migrate::Migrator};
 use tracing::debug;
 
@@ -55,6 +56,121 @@ impl Postgres {
         if row.pong.is_none_or(|pong| pong != 1) {
             bail!("database ping failed; unexpected response: {row:?}");
         }
+        Ok(())
+    }
+
+    /// Validate that all migrations have been applied to the database.
+    ///
+    /// This checks that:
+    /// 1. All migrations in the codebase have been applied
+    /// 2. Applied migrations have matching checksums (no modified migrations)
+    /// 3. No migrations exist in the database that are missing from the
+    ///    codebase (unless `ignore_missing` is set in the MIGRATOR)
+    ///
+    /// This is intended for use at server startup to ensure the database schema
+    /// is up-to-date before serving traffic. It does NOT apply migrations;
+    /// use the separate `migrate` command for that.
+    #[tracing::instrument(name = "Postgres::validate_migrations")]
+    pub async fn validate_migrations(&self) -> Result<()> {
+        let mut conn = self.pool.acquire().await.context("acquire connection")?;
+
+        conn.ensure_migrations_table()
+            .await
+            .context("ensure migrations table")?;
+
+        // A dirty migration is one that failed partway through application.
+        if let Some(version) = conn.dirty_version().await.context("check dirty version")? {
+            bail!(
+                "Database has a dirty migration (version {version}). \
+                 A previous migration failed partway through. \
+                 Manually resolve the issue and re-run 'courier migrate'."
+            );
+        }
+
+        let applied = conn
+            .list_applied_migrations()
+            .await
+            .context("list applied migrations")?;
+        let applied_map = applied
+            .iter()
+            .map(|m| (m.version, m))
+            .collect::<HashMap<_, _>>();
+        let applied_versions = applied.iter().map(|m| m.version).collect::<HashSet<_>>();
+
+        // Expected migrations are the up-migrations defined in the codebase.
+        let expected = Self::MIGRATOR
+            .iter()
+            .filter(|m| m.migration_type.is_up_migration())
+            .collect::<Vec<_>>();
+        let expected_versions = expected.iter().map(|m| m.version).collect::<HashSet<_>>();
+
+        // Pending migrations are in the codebase but not yet applied to the database.
+        let mut pending = expected
+            .iter()
+            .filter(|m| !applied_versions.contains(&m.version))
+            .map(|m| m.version)
+            .collect::<Vec<_>>();
+        pending.sort();
+        if !pending.is_empty() {
+            let versions = pending
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "Database has pending migrations: [{versions}]. \
+                 Run 'courier migrate' first."
+            );
+        }
+
+        // Checksum mismatches occur when a migration file was modified after being
+        // applied.
+        let mismatched = expected
+            .iter()
+            .filter_map(|m| {
+                applied_map.get(&m.version).and_then(|applied| {
+                    if m.checksum != applied.checksum {
+                        Some(m.version)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        if !mismatched.is_empty() {
+            let versions = mismatched
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "Database has migrations with checksum mismatches: [{versions}]. \
+                 Migrations were modified after being applied. \
+                 This likely indicates a development error."
+            );
+        }
+
+        // Missing migrations are applied to the database but not present in the
+        // codebase.
+        if !Self::MIGRATOR.ignore_missing {
+            let mut missing = applied_versions
+                .difference(&expected_versions)
+                .copied()
+                .collect::<Vec<_>>();
+            missing.sort();
+            if !missing.is_empty() {
+                let versions = missing
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!(
+                    "Database has applied migrations missing from codebase: [{versions}]. \
+                     This may indicate you're running an older version of the code."
+                );
+            }
+        }
+
         Ok(())
     }
 }
