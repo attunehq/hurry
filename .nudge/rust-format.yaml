@@ -1,0 +1,23 @@
+version: 1
+
+rules:
+  - name: inline-format-args
+    description: Use inline arguments in format strings instead of positional args
+    message: |
+      Inline the variable into the format string: format!("{var}") instead of format!("{}", var), then retry.
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "**/*.rs"
+        content:
+          # Match any macro with format-string-like first argument: macro!("...{}...", var)
+          # Catches: format!("{}", var), custom_log!("{:?}", var), my_macro!("{} {}", a, b), etc.
+          # Does NOT match: format!("{var}"), expressions like format!("{}", x + 1)
+          - kind: Regex
+            pattern: '!\s*\(\s*"[^"]*\{(?::[^}]*)?\}[^"]*"\s*,\s*[a-z_][a-z0-9_]*\s*[,)]'
+      - hook: PreToolUse
+        tool: Edit
+        file: "**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '!\s*\(\s*"[^"]*\{(?::[^}]*)?\}[^"]*"\s*,\s*[a-z_][a-z0-9_]*\s*[,)]'
