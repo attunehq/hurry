@@ -70,6 +70,10 @@ fn content_hash(mut files: Vec<StatusEntry>) -> Result<String, String> {
         let path = Path::new(&repo_root).join(file.path);
         let mut hasher = DefaultHasher::new();
         print!("{}: ", path.display());
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "avoiding extra deps in build script"
+        )]
         if let Ok(content) = std::fs::read(&path) {
             hasher.write(path.as_os_str().as_encoded_bytes());
             hasher.write(&content);
@@ -97,14 +101,10 @@ fn content_hash(mut files: Vec<StatusEntry>) -> Result<String, String> {
 }
 
 fn run(prog: &str, argv: &[&str]) -> Result<String, String> {
-    let invocation = {
-        let mut args = Vec::new();
-        args.push(prog);
-        for arg in argv {
-            args.push(arg);
-        }
-        args.join(" ")
-    };
+    let invocation = std::iter::once(prog)
+        .chain(argv.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" ");
 
     let output = Command::new(prog)
         .args(argv)
