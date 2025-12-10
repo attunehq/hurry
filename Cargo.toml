@@ -85,4 +85,4 @@ testcontainers = { git = "https://github.com/testcontainers/testcontainers-rs.gi
 rustc-stable-hash = "0.1.2"
 base64 = "0.22.1"
 oauth2 = "5.0.0"
-time = "=0.3.41"
+time = { version = "=0.3.41", features = ["serde"] }

@@ -3,7 +3,7 @@
 RFC: `docs/rfc/0003-self-service-signup.md`
 Branch: `jssblck/self-service-signup`
 
-## Status: COMPLETE - Phase 4 (OAuth Flow Endpoints)
+## Status: COMPLETE - Phase 5 (Session & User Endpoints)
 
 ## Overview
 
@@ -140,12 +140,12 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 - [x] Wire oauth router in v1.rs
 - [ ] Integration tests with mocked GitHub API (deferred - OAuth tests require wiremock)
 
-### Phase 5: Session & User Endpoints
-- [ ] Create `api/v1/me.rs` module
-- [ ] `GET /api/v1/me` handler
-- [ ] `GET /api/v1/me/organizations` handler
-- [ ] Wire me router in v1.rs
-- [ ] Integration tests
+### Phase 5: Session & User Endpoints ✓
+- [x] Create `api/v1/me.rs` module
+- [x] `GET /api/v1/me` handler
+- [x] `GET /api/v1/me/organizations` handler
+- [x] Wire me router in v1.rs
+- [x] Integration tests (7 tests)
 
 ### Phase 6: Organization Management Endpoints
 - [ ] Create `api/v1/organizations.rs` module
@@ -206,7 +206,7 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 - [x] `packages/courier/src/oauth.rs` - GitHub OAuth client ✓
 - [ ] `packages/courier/src/rate_limit.rs` - Rate limiting config
 - [x] `packages/courier/src/api/v1/oauth.rs` - OAuth endpoints ✓
-- [ ] `packages/courier/src/api/v1/me.rs` - User endpoints
+- [x] `packages/courier/src/api/v1/me.rs` - User endpoints ✓
 - [ ] `packages/courier/src/api/v1/organizations.rs` - Org endpoints
 - [ ] `packages/courier/src/api/v1/invitations.rs` - Invitation endpoints
 - [x] `packages/courier/schema/migrations/0008_add_self_service_signup.up.sql` ✓
@@ -214,7 +214,7 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 - [ ] `packages/courier/schema/migrations/0009_remove_account_org_id.up.sql`
 - [ ] `packages/courier/schema/migrations/0009_remove_account_org_id.down.sql`
 - [ ] `packages/courier/tests/it/api/v1/oauth.rs` - OAuth tests
-- [ ] `packages/courier/tests/it/api/v1/me.rs` - Me endpoint tests
+- [x] `packages/courier/tests/it/api/v1/me.rs` - Me endpoint tests ✓
 - [ ] `packages/courier/tests/it/api/v1/organizations.rs` - Org tests
 - [ ] `packages/courier/tests/it/api/v1/invitations.rs` - Invitation tests
 - [x] `packages/courier/tests/it/crypto.rs` - Crypto unit tests ✓
@@ -247,8 +247,8 @@ cargo add --dev wiremock --package courier  # for mocking GitHub API
 
 ## Current Progress
 
-**Current Phase**: 4 - OAuth Flow Endpoints (COMPLETE)
-**Current Task**: Ready for Phase 5 (Session & User Endpoints)
+**Current Phase**: 5 - Session & User Endpoints (COMPLETE)
+**Current Task**: Ready for Phase 6 (Organization Management Endpoints)
 
 ## Context for Resume
 
@@ -294,6 +294,13 @@ If resuming after context reset:
 - api/v1.rs: Wired oauth router
 - main.rs: Construct GitHub client from config
 - tests/it/helpers.rs: Updated TestFixture to include None for GitHub
+
+**Phase 5 (Session & User Endpoints)** - 1 commit:
+- api/v1/me.rs: GET /me and GET /me/organizations handlers
+- api/v1.rs: Wired me router
+- tests/it/helpers.rs: Added session tokens and org memberships to TestAuth
+- Cargo.toml (workspace): Added serde feature to time crate
+- tests/it/api/v1/me.rs: 7 integration tests
 
 ## Data Flow Reference
 

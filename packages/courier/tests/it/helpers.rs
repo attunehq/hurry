@@ -18,10 +18,12 @@ use clients::{
 use color_eyre::{Result, eyre::Context};
 use courier::{
     api,
-    auth::{AccountId, OrgId, RawToken},
+    auth::{AccountId, OrgId, OrgRole, RawToken, SessionToken},
+    crypto::generate_session_token,
     db, oauth, storage,
 };
 use futures::{StreamExt, TryStreamExt, stream};
+use time::{Duration, OffsetDateTime};
 use sqlx::PgPool;
 use url::Url;
 
@@ -109,6 +111,7 @@ pub struct TestAuth {
     pub account_ids: HashMap<String, AccountId>,
     pub tokens: HashMap<String, RawToken>,
     pub revoked_tokens: HashMap<String, RawToken>,
+    pub session_tokens: HashMap<String, SessionToken>,
 }
 
 impl TestAuth {
@@ -165,6 +168,45 @@ impl TestAuth {
         self.revoked_tokens
             .get(Self::ACCT_CHARLIE)
             .expect("Charlie revoked token missing")
+    }
+
+    pub fn session_alice(&self) -> &SessionToken {
+        self.session_tokens
+            .get(Self::ACCT_ALICE)
+            .expect("Alice session missing")
+    }
+
+    pub fn session_bob(&self) -> &SessionToken {
+        self.session_tokens
+            .get(Self::ACCT_BOB)
+            .expect("Bob session missing")
+    }
+
+    pub fn session_charlie(&self) -> &SessionToken {
+        self.session_tokens
+            .get(Self::ACCT_CHARLIE)
+            .expect("Charlie session missing")
+    }
+
+    pub fn account_id_alice(&self) -> AccountId {
+        self.account_ids
+            .get(Self::ACCT_ALICE)
+            .copied()
+            .expect("Alice account missing")
+    }
+
+    pub fn account_id_bob(&self) -> AccountId {
+        self.account_ids
+            .get(Self::ACCT_BOB)
+            .copied()
+            .expect("Bob account missing")
+    }
+
+    pub fn account_id_charlie(&self) -> AccountId {
+        self.account_ids
+            .get(Self::ACCT_CHARLIE)
+            .copied()
+            .expect("Charlie account missing")
     }
 
     /// Seed the database with test authentication data.
@@ -230,6 +272,40 @@ impl TestAuth {
             .try_collect::<HashMap<_, _>>()
             .await?;
 
+        // Create session tokens for each account
+        let expires_at = OffsetDateTime::now_utc() + Duration::hours(24);
+        let session_tokens = stream::iter(&account_ids)
+            .then(|(account, &account_id)| async move {
+                let token = generate_session_token();
+                db.create_session(account_id, &token, expires_at)
+                    .await
+                    .with_context(|| format!("create session for {account}"))?;
+                Result::<_>::Ok((account.to_string(), token))
+            })
+            .try_collect::<HashMap<_, _>>()
+            .await?;
+
+        // Add organization memberships
+        // Alice and Bob are both admins of Acme Corp
+        // Charlie is admin of Widget Inc
+        let org_acme = *org_ids.get(Self::ORG_ACME).expect("Acme org missing");
+        let org_widget = *org_ids.get(Self::ORG_WIDGET).expect("Widget org missing");
+        let alice_id = *account_ids.get(Self::ACCT_ALICE).expect("Alice missing");
+        let bob_id = *account_ids.get(Self::ACCT_BOB).expect("Bob missing");
+        let charlie_id = *account_ids
+            .get(Self::ACCT_CHARLIE)
+            .expect("Charlie missing");
+
+        db.add_organization_member(org_acme, alice_id, OrgRole::Admin)
+            .await
+            .context("add Alice to Acme")?;
+        db.add_organization_member(org_acme, bob_id, OrgRole::Member)
+            .await
+            .context("add Bob to Acme")?;
+        db.add_organization_member(org_widget, charlie_id, OrgRole::Admin)
+            .await
+            .context("add Charlie to Widget")?;
+
         sqlx::query!("SELECT setval('organization_id_seq', (SELECT MAX(id) FROM organization))")
             .fetch_one(&db.pool)
             .await
@@ -245,6 +321,7 @@ impl TestAuth {
             account_ids,
             tokens,
             revoked_tokens,
+            session_tokens,
         })
     }
 }

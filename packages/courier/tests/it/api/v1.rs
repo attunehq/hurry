@@ -3,3 +3,4 @@
 mod cargo_cache;
 mod cas;
 mod integration;
+mod me;
