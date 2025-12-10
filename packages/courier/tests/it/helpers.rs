@@ -19,7 +19,7 @@ use color_eyre::{Result, eyre::Context};
 use courier::{
     api,
     auth::{AccountId, OrgId, RawToken},
-    db, storage,
+    db, oauth, storage,
 };
 use futures::{StreamExt, TryStreamExt, stream};
 use sqlx::PgPool;
@@ -60,7 +60,9 @@ impl TestFixture {
         let (storage, _temp) = storage::Disk::new_temp()
             .await
             .context("create temp storage")?;
-        let state = Aero::new().with(storage).with(db.clone());
+        // In tests, we don't configure GitHub OAuth (tests use API keys)
+        let github = None::<oauth::GitHub>;
+        let state = Aero::new().with(github).with(storage).with(db.clone());
         let router = api::router(state);
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

@@ -283,8 +283,9 @@ impl FromRequestParts<api::State> for AuthenticatedToken {
 /// API keys, session context identifies only the account. Organization context
 /// must be provided in the URL for session-based requests.
 ///
-/// This type will be extractable from requests once the session validation
-/// database methods are implemented.
+/// This type can be extracted from requests using Axum's extractor system.
+/// It validates the bearer token from the Authorization header against the
+/// user_session table before the handler is called.
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
 pub struct SessionContext {
     /// The account ID of the authenticated user.
@@ -292,4 +293,53 @@ pub struct SessionContext {
 
     /// The session token (kept for potential refresh/invalidation).
     pub session_token: SessionToken,
+}
+
+impl FromRequestParts<api::State> for SessionContext {
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &api::State,
+    ) -> Result<Self, Self::Rejection> {
+        let token = {
+            let Some(header) = parts.headers.get(AUTHORIZATION) else {
+                return Err((StatusCode::UNAUTHORIZED, "Authorization header required"));
+            };
+            let Ok(header) = header.to_str() else {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Authorization header must be UTF8 encoded",
+                ));
+            };
+
+            let header = match header.strip_prefix("Bearer") {
+                Some(header) => header.trim(),
+                None => header.trim(),
+            };
+            if header.is_empty() {
+                return Err((StatusCode::BAD_REQUEST, "Provided token must not be empty"));
+            }
+
+            SessionToken::new(header)
+        };
+
+        let Dep(db) = Dep::<db::Postgres>::from_request_parts(parts, state)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Check out database connection",
+                )
+            })?;
+
+        match db.validate_session(&token).await {
+            Ok(Some(session)) => Ok(session),
+            Ok(None) => Err((StatusCode::UNAUTHORIZED, "Invalid or expired session")),
+            Err(_) => Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Database error during authentication",
+            )),
+        }
+    }
 }

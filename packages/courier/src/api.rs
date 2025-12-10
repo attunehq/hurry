@@ -61,7 +61,11 @@ const MAX_BODY_SIZE: usize = 10 * 1024 * 1024 * 1024; // 10GB
 /// operations like bulk restore requests.
 const MAX_JSON_BODY_SIZE: usize = 100 * 1024 * 1024; // 100MB
 
-pub type State = Aero![crate::db::Postgres, crate::storage::Disk,];
+pub type State = Aero![
+    crate::db::Postgres,
+    crate::storage::Disk,
+    Option<crate::oauth::GitHub>,
+];
 
 pub fn router(state: State) -> Router {
     let middleware = ServiceBuilder::new()

@@ -3,7 +3,7 @@
 RFC: `docs/rfc/0003-self-service-signup.md`
 Branch: `jssblck/self-service-signup`
 
-## Status: COMPLETE - Phase 3 (Database Layer)
+## Status: COMPLETE - Phase 4 (OAuth Flow Endpoints)
 
 ## Overview
 
@@ -130,15 +130,15 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 - [x] `validate_session()` for session token validation (separate from api_key validate())
 - [x] Integration tests for all DB methods (55 new tests)
 
-### Phase 4: OAuth Flow Endpoints
-- [ ] Create `api/v1/oauth.rs` module
-- [ ] `GET /api/v1/oauth/github/start` handler
-- [ ] `GET /api/v1/oauth/github/callback` handler
-- [ ] `POST /api/v1/oauth/logout` handler
-- [ ] Implement `SessionContext` extractor (FromRequestParts)
-- [ ] Add `Option<GitHubClient>` to api::State
-- [ ] Wire oauth router in v1.rs
-- [ ] Integration tests with mocked GitHub API
+### Phase 4: OAuth Flow Endpoints ✓
+- [x] Create `api/v1/oauth.rs` module
+- [x] `GET /api/v1/oauth/github/start` handler
+- [x] `GET /api/v1/oauth/github/callback` handler
+- [x] `POST /api/v1/oauth/logout` handler
+- [x] Implement `SessionContext` extractor (FromRequestParts)
+- [x] Add `Option<GitHubClient>` to api::State
+- [x] Wire oauth router in v1.rs
+- [ ] Integration tests with mocked GitHub API (deferred - OAuth tests require wiremock)
 
 ### Phase 5: Session & User Endpoints
 - [ ] Create `api/v1/me.rs` module
@@ -205,7 +205,7 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 ### New Files
 - [x] `packages/courier/src/oauth.rs` - GitHub OAuth client ✓
 - [ ] `packages/courier/src/rate_limit.rs` - Rate limiting config
-- [ ] `packages/courier/src/api/v1/oauth.rs` - OAuth endpoints
+- [x] `packages/courier/src/api/v1/oauth.rs` - OAuth endpoints ✓
 - [ ] `packages/courier/src/api/v1/me.rs` - User endpoints
 - [ ] `packages/courier/src/api/v1/organizations.rs` - Org endpoints
 - [ ] `packages/courier/src/api/v1/invitations.rs` - Invitation endpoints
@@ -222,14 +222,14 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 ### Files Modified
 - [x] `packages/courier/Cargo.toml` - Added base64, oauth2, reqwest[json] ✓
 - [x] `packages/courier/src/lib.rs` - Exported oauth module ✓
-- [x] `packages/courier/src/main.rs` - Added GitHub OAuth config to ServeConfig ✓
-- [ ] `packages/courier/src/api.rs` - Update State type, add middleware
-- [ ] `packages/courier/src/api/v1.rs` - Register new routers
-- [x] `packages/courier/src/auth.rs` - Added SessionToken, OrgRole, SessionContext ✓
-- [ ] `packages/courier/src/db.rs` - Add ~30 new methods
+- [x] `packages/courier/src/main.rs` - Added GitHub OAuth config to ServeConfig, construct GitHub client ✓
+- [x] `packages/courier/src/api.rs` - Updated State type to include Option<GitHub> ✓
+- [x] `packages/courier/src/api/v1.rs` - Registered oauth router ✓
+- [x] `packages/courier/src/auth.rs` - Added SessionToken, OrgRole, SessionContext, FromRequestParts impl ✓
+- [x] `packages/courier/src/db.rs` - Added ~30 new methods ✓
 - [x] `packages/courier/src/crypto.rs` - Added token/PKCE generation ✓
 - [x] `packages/courier/schema/schema.sql` - Updated canonical schema ✓
-- [ ] `packages/courier/tests/it/helpers.rs` - Update TestAuth for sessions
+- [x] `packages/courier/tests/it/helpers.rs` - Updated TestFixture for Option<GitHub> in State ✓
 - [x] `packages/courier/tests/it/main.rs` - Registered crypto test module ✓
 
 ## Dependencies to Add
@@ -247,8 +247,8 @@ cargo add --dev wiremock --package courier  # for mocking GitHub API
 
 ## Current Progress
 
-**Current Phase**: 3 - Database Layer (COMPLETE)
-**Current Task**: Ready for Phase 4 (OAuth Flow Endpoints)
+**Current Phase**: 4 - OAuth Flow Endpoints (COMPLETE)
+**Current Task**: Ready for Phase 5 (Session & User Endpoints)
 
 ## Context for Resume
 
@@ -286,6 +286,14 @@ If resuming after context reset:
   - API Keys: create (with org_id), list_personal, list_org, revoke, get
 - Added `time` dependency for OffsetDateTime (matches sqlx's time feature)
 - 55 new integration tests across 8 test modules
+
+**Phase 4 (OAuth Flow Endpoints)** - 1 commit:
+- api/v1/oauth.rs: OAuth endpoint handlers (start, callback, logout)
+- auth.rs: SessionContext FromRequestParts extractor
+- api.rs: Added Option<GitHub> to State type
+- api/v1.rs: Wired oauth router
+- main.rs: Construct GitHub client from config
+- tests/it/helpers.rs: Updated TestFixture to include None for GitHub
 
 ## Data Flow Reference
 
