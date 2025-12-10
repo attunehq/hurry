@@ -38,7 +38,7 @@
 //! needing to know or care about the difference: it just stores and returns
 //! what Courier provides.
 
-use std::{cmp::Ordering, fmt::Display};
+use std::{cmp::Ordering, fmt::Display, str::FromStr};
 
 use bon::Builder;
 use color_eyre::eyre::{self, Context, bail, eyre};
@@ -559,28 +559,34 @@ impl Display for GLIBCVersion {
     }
 }
 
-impl TryFrom<&str> for GLIBCVersion {
-    type Error = eyre::Report;
+impl FromStr for GLIBCVersion {
+    type Err = eyre::Report;
 
     // For reference, see the full list of glibc versions[^1].
     //
     // [^1]: https://sourceware.org/glibc/wiki/Glibc%20Timeline
-    fn try_from(s: &str) -> Result<Self, Self::Error> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut parts = s.split('.');
         let major = parts
             .next()
-            .ok_or(eyre!("invalid glibc version"))?
+            .ok_or(eyre!("could not parse major version"))?
             .parse()?;
         let minor = parts
             .next()
-            .ok_or(eyre!("invalid glibc version"))?
+            .ok_or(eyre!("could not parse minor version"))?
             .parse()?;
         // Patch versions are optional, and default to zero for comparison
         // purposes.
-        let patch = parts.next().map(str::parse::<u32>).unwrap_or(Ok(0))?;
+        let patch = parts
+            .next()
+            .map(|s| {
+                s.parse::<u32>()
+                    .map_err(|e| eyre!("could not parse patch version: {e}"))
+            })
+            .unwrap_or(Ok(0))?;
         // Make sure there are no remaining parts.
         if parts.next().is_some() {
-            bail!("invalid glibc version");
+            bail!("expected end of string");
         }
         Ok(Self {
             major,
