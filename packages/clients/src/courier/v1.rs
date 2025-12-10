@@ -548,9 +548,9 @@ impl From<&BuildScriptExecutionUnitPlan> for BuildScriptExecutionUnitPlan {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct GLIBCVersion {
-    major: u32,
-    minor: u32,
-    patch: u32,
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
 }
 
 impl Display for GLIBCVersion {

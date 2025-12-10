@@ -25,6 +25,12 @@ use futures::{StreamExt, TryStreamExt, stream};
 use sqlx::PgPool;
 use url::Url;
 
+const GLIBC_VERSION: GLIBCVersion = GLIBCVersion {
+    major: 2,
+    minor: 41,
+    patch: 0,
+};
+
 /// Test fixture containing a spawned server and authentication context.
 pub struct TestFixture {
     /// Base URL of the server.
@@ -288,7 +294,7 @@ pub fn test_cargo_save_request(
     let request = CargoSaveUnitRequest::builder()
         .unit(unit)
         .resolved_target(String::from("x86_64-unknown-linux-gnu"))
-        .maybe_linux_glibc_version(None)
+        .maybe_linux_glibc_version(GLIBC_VERSION)
         .build();
     let save_request = CargoSaveRequest::new([request]);
     (save_request, key)
