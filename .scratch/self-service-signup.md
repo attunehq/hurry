@@ -3,7 +3,7 @@
 RFC: `docs/rfc/0003-self-service-signup.md`
 Branch: `jssblck/self-service-signup`
 
-## Status: COMPLETE - Phase 5 (Session & User Endpoints)
+## Status: COMPLETE - Phase 6 (Organization Management Endpoints)
 
 ## Overview
 
@@ -147,17 +147,16 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 - [x] Wire me router in v1.rs
 - [x] Integration tests (7 tests)
 
-### Phase 6: Organization Management Endpoints
-- [ ] Create `api/v1/organizations.rs` module
-- [ ] `POST /api/v1/organizations` handler (create org)
-- [ ] `GET /api/v1/organizations/{org_id}/members` handler
-- [ ] `PATCH /api/v1/organizations/{org_id}/members/{account_id}` handler
-- [ ] `DELETE /api/v1/organizations/{org_id}/members/{account_id}` handler
-- [ ] `POST /api/v1/organizations/{org_id}/leave` handler
-- [ ] Authorization helper: `require_org_admin()`
-- [ ] Authorization helper: `require_org_member()`
-- [ ] Wire organizations router in v1.rs
-- [ ] Integration tests
+### Phase 6: Organization Management Endpoints ✓
+- [x] Create `api/v1/organizations.rs` module
+- [x] `POST /api/v1/organizations` handler (create org)
+- [x] `GET /api/v1/organizations/{org_id}/members` handler
+- [x] `PATCH /api/v1/organizations/{org_id}/members/{account_id}` handler
+- [x] `DELETE /api/v1/organizations/{org_id}/members/{account_id}` handler
+- [x] `POST /api/v1/organizations/{org_id}/leave` handler
+- [x] Authorization checks inline (admin/member checks in each handler)
+- [x] Wire organizations router in v1.rs
+- [x] Integration tests (16 tests)
 
 ### Phase 7: Invitation Endpoints
 - [ ] Create `api/v1/invitations.rs` module
@@ -207,7 +206,7 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 - [ ] `packages/courier/src/rate_limit.rs` - Rate limiting config
 - [x] `packages/courier/src/api/v1/oauth.rs` - OAuth endpoints ✓
 - [x] `packages/courier/src/api/v1/me.rs` - User endpoints ✓
-- [ ] `packages/courier/src/api/v1/organizations.rs` - Org endpoints
+- [x] `packages/courier/src/api/v1/organizations.rs` - Org endpoints ✓
 - [ ] `packages/courier/src/api/v1/invitations.rs` - Invitation endpoints
 - [x] `packages/courier/schema/migrations/0008_add_self_service_signup.up.sql` ✓
 - [x] `packages/courier/schema/migrations/0008_add_self_service_signup.down.sql` ✓
@@ -215,7 +214,7 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 - [ ] `packages/courier/schema/migrations/0009_remove_account_org_id.down.sql`
 - [ ] `packages/courier/tests/it/api/v1/oauth.rs` - OAuth tests
 - [x] `packages/courier/tests/it/api/v1/me.rs` - Me endpoint tests ✓
-- [ ] `packages/courier/tests/it/api/v1/organizations.rs` - Org tests
+- [x] `packages/courier/tests/it/api/v1/organizations.rs` - Org tests ✓
 - [ ] `packages/courier/tests/it/api/v1/invitations.rs` - Invitation tests
 - [x] `packages/courier/tests/it/crypto.rs` - Crypto unit tests ✓
 
@@ -247,8 +246,8 @@ cargo add --dev wiremock --package courier  # for mocking GitHub API
 
 ## Current Progress
 
-**Current Phase**: 5 - Session & User Endpoints (COMPLETE)
-**Current Task**: Ready for Phase 6 (Organization Management Endpoints)
+**Current Phase**: 6 - Organization Management Endpoints (COMPLETE)
+**Current Task**: Ready for Phase 7 (Invitation Endpoints)
 
 ## Context for Resume
 
@@ -301,6 +300,11 @@ If resuming after context reset:
 - tests/it/helpers.rs: Added session tokens and org memberships to TestAuth
 - Cargo.toml (workspace): Added serde feature to time crate
 - tests/it/api/v1/me.rs: 7 integration tests
+
+**Phase 6 (Organization Management Endpoints)** - 1 commit:
+- api/v1/organizations.rs: 5 handlers (create, list_members, update_role, remove, leave)
+- api/v1.rs: Wired organizations router
+- tests/it/api/v1/organizations.rs: 16 integration tests
 
 ## Data Flow Reference
 
