@@ -2,92 +2,72 @@
 
 ## Overview
 
-This RFC describes self-service signup for Courier, enabling users and organizations to onboard without manual intervention. Users authenticate via a GitHub App using OAuth web flow, and Courier provisions accounts and organizations based on their GitHub identity and org membership.
+This RFC describes self-service signup for Courier, enabling users to onboard without manual intervention. Users authenticate via GitHub OAuth to establish their identity, and Courier provisions their account. Organization membership is managed entirely within Courier through an invitation system.
 
-The goal is to allow a user to go from "heard about Hurry" to "running builds with caching" in a single session, with organization membership automatically managed based on their GitHub org.
+The goal is to allow a user to go from "heard about Hurry" to "running builds with caching" in a single session.
 
 ## Design Principles
 
-### GitHub as the source of truth
+### GitHub for identity only
 
-GitHub organizations and their membership are the authoritative source for Courier's organization structure. When a user authenticates, we query GitHub for their org memberships and sync that state to Courier. When membership changes in GitHub, Courier reflects those changes.
+GitHub is used solely for authentication—we get the user's identity and email, nothing more. Courier does not query or sync GitHub organization membership. This keeps the integration simple and avoids tight coupling to GitHub's org model.
+
+### One account, multiple contexts
+
+A user has one Courier account linked to their GitHub identity. That account can:
+- Use Hurry without any organization (personal usage)
+- Be a member of one or more organizations
+- Be an admin of one or more organizations
+
+This mirrors how developers actually work—the same person might use Hurry personally, contribute to their company's org, and help maintain an open source project's org.
+
+### Invitation-based org membership
+
+Organizations are created and managed entirely within Courier. Org admins invite members via shareable links. This gives organizations full control over who has access without depending on external systems.
 
 ### Minimal friction
 
-The signup flow should require as few steps as possible. A user clicks "sign up", authenticates with GitHub, selects which org context they want, and they're done. No email verification, no separate password, no waiting for approval (unless the org has access restrictions).
+The signup flow requires as few steps as possible: click "sign up", authenticate with GitHub, done. Users can immediately use Hurry for personal builds. Joining an organization requires accepting an invitation link.
 
-Users can always set up their own personal GitHub account as well, they just obviously won't be able to share their cache with teammates. Personal accounts in GitHub are modeled as orgs inside Courier, where the user is the admin of that org. This allows Courier to not have to worry about the difference and supports personal users adding e.g. bot tokens to their accounts.
+## GitHub OAuth
 
-### Security by default
+We use GitHub as an OAuth provider to authenticate users and obtain their email address.
 
-API keys are hashed at rest and can only be read once (at creation time). GitHub user access tokens are stored encrypted and expire after 8 hours (with refresh tokens for renewal). Account access can be revoked instantly when org membership changes.
+### Why GitHub App over OAuth App
 
-## Why GitHub App over OAuth App
-
-We use a GitHub App with user access tokens rather than a traditional OAuth App:
+We use a GitHub App rather than a traditional OAuth App:
 
 | Aspect | OAuth App | GitHub App |
 |--------|-----------|------------|
-| Permissions | Broad scopes (`read:org`) | Fine-grained (`organization:members:read`) |
 | Token expiry | Never expires | 8 hours (+ refresh token) |
-| Webhooks | Manual per-org setup | Automatic if app installed on org |
-| Identity | Acts as authorizing user | Can act as app or user |
+| Permissions | Broad scopes | Fine-grained |
 | Rate limits | Fixed per user | Scales with installations |
 
-GitHub Apps are the recommended approach for new integrations. The same OAuth web flow is used for authentication, but we get better security (token expiry) and more granular permissions.
+GitHub Apps are the recommended approach for new integrations. The same OAuth web flow is used for authentication, but we get better security through token expiry.
 
 References:
 - [Differences between GitHub Apps and OAuth Apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/differences-between-github-apps-and-oauth-apps)
-- [About authentication with a GitHub App](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/about-authentication-with-a-github-app)
 - [Building a "Login with GitHub" button with a GitHub App](https://docs.github.com/en/apps/creating-github-apps/writing-code-for-a-github-app/building-a-login-with-github-button-with-a-github-app)
-
-## GitHub App Behavior
-
-During design, several behaviors were discovered that impact the architecture:
-
-### No organization selection during OAuth
-
-GitHub's OAuth flow does **not** prompt users to select which organization they're authenticating with. The flow authenticates the *user*, not an org membership. After OAuth completes, we receive a token scoped to the user, then must query GitHub's API to enumerate their org memberships.
-
-Impact: Courier must implement its own organization selection UI after OAuth callback. The flow becomes: OAuth -> callback -> show org picker -> complete registration.
-
-### Webhooks require per-org configuration
-
-GitHub organization webhooks for membership events (`member_added`, `member_removed`) require configuration at the organization level by an org owner. We cannot register these webhooks automatically just because a user from that org signed up.
-
-Impact: Webhook-based membership sync is opt-in and requires org owner action. Polling is the reliable baseline for all orgs.
-
-### No webhook for role changes
-
-GitHub provides webhooks for member added/removed, but **not** for role changes (member to admin, or vice versa). The `member_updated` event doesn't exist.
-
-Impact: Admin status must always be determined via polling, even for orgs with webhooks configured.
-
-### Personal accounts are not organizations
-
-GitHub users who aren't members of any organization still have a personal account, but this is not an "organization" in GitHub's API. A user's personal repositories are owned by their username, not an org.
-
-Impact: "Personal orgs" in Courier won't map to a GitHub org ID. We'll use a synthetic identifier based on the user's GitHub user ID.
 
 ### Required permissions
 
-GitHub App permissions are fine-grained. We request:
+We request minimal permissions:
 
-- Organization permissions:
-  - `members`: Read-only (to read org membership and roles)
 - Account permissions:
   - `email_addresses`: Read-only (to get user's email)
 
 > [!IMPORTANT]
-> We request only read permissions. Courier never modifies anything in GitHub.
+> We request no organization permissions. Courier never reads or modifies anything in GitHub beyond the user's basic profile.
 
-### PKCE required
+### PKCE
 
 GitHub requires PKCE (Proof Key for Code Exchange) for the OAuth web flow. We use the `S256` code challenge method.
 
 ## Authentication Flow
 
-### Initial signup
+### Signup / Sign-in
+
+The same flow handles both new and returning users:
 
 ```
 ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐
@@ -117,221 +97,196 @@ GitHub requires PKCE (Proof Key for Code Exchange) for the OAuth web flow. We us
      │               │               │<──────────────┤
      │               │               │               │
      │               │               │ Fetch user    │
-     │               │               │ + orgs        │
+     │               │               │ profile       │
      │               │               ├──────────────>│
      │               │               │<──────────────┤
      │               │               │               │
-     │               │<──────────────┤               │
-     │               │ Redirect with │               │
-     │               │ pending token │               │
-     │<──────────────┤               │               │
+     │               │               │ Create/update │
+     │               │               │ account       │
      │               │               │               │
-     │ Select org    │               │               │
-     ├──────────────>│               │               │
-     │               │ Complete      │               │
-     │               │ registration  │               │
-     │               ├──────────────>│               │
      │               │<──────────────┤               │
-     │<──────────────┤ API key       │               │
-     │               │               │               │
+     │<──────────────┤ Redirect with │               │
+     │               │ session       │               │
 ```
 
 ### Flow details
 
-1. OAuth initiation: User clicks signup, site redirects to `GET /api/v1/oauth/github/start?redirect_uri=...`
-2. GitHub redirect: Courier generates PKCE challenge, stores state, redirects to GitHub's OAuth authorize URL
+1. OAuth initiation: User clicks signup/login, site redirects to `GET /api/v1/oauth/github/start?redirect_uri=...`
+2. State storage: Courier generates PKCE challenge and state token, stores them, redirects to GitHub's OAuth authorize URL
 3. GitHub callback: User authorizes, GitHub redirects to `GET /api/v1/oauth/github/callback?code=...&state=...`
-4. Token exchange: Courier validates state, exchanges code for user access token + refresh token using PKCE verifier
-5. Identity fetch: Courier queries GitHub for user profile and org memberships with roles
-6. Pending session: Courier creates a pending OAuth session and redirects back to the site with a session token
-7. Org selection: Site displays org picker, user selects which org context to use (or "personal")
-8. Registration complete: Site calls `POST /api/v1/oauth/github/complete` with session token and selected org
-9. Account provisioning: Courier creates/updates organization and account, returns initial API key
+4. Token exchange: Courier validates state, exchanges code for access token using PKCE verifier
+5. Identity fetch: Courier queries GitHub for user profile and email
+6. Account provisioning: Courier creates account (if new) or updates existing account
+7. Session creation: Courier creates a session and redirects to the site with a session token
 
-User access tokens expire after 8 hours. Courier stores the refresh token (valid for 6 months) and automatically refreshes access tokens as needed for membership sync operations.
+### New vs returning users
 
-### Returning users
+New users get an account created with their GitHub identity linked. An initial API key is generated and returned.
 
-When an existing user signs in via OAuth:
-
-1. Match GitHub user ID to existing accounts
-2. Update org membership and admin status from fresh GitHub data
-3. If the user selects an org they already have an account in, sign them in
-4. If the user selects a new org, create a new account in that org
-5. No new API key is generated automatically (user can create one via API)
+Returning users are matched by GitHub user ID. Their email is updated if changed. No new API key is generated (user can create one via the API or dashboard).
 
 ## Database Schema
 
-### Schema changes to existing tables
+### Core tables
 
-Remove email uniqueness on `account`:
-
-```sql
--- Remove UNIQUE constraint from email
-ALTER TABLE account DROP CONSTRAINT account_email_key;
-```
-
-Email is no longer unique at any level. A single email can appear multiple times even within the same org—for example, a user might have both a personal account and a bot account with the same responsible email.
-
-Add disabled timestamp to `account`:
+Account table (modifications to existing):
 
 ```sql
+-- Add disabled timestamp
 ALTER TABLE account ADD COLUMN disabled_at TIMESTAMPTZ;
+
+-- Add name field for display
+ALTER TABLE account ADD COLUMN name TEXT;
 ```
 
-When set, the account is disabled and all API requests are rejected. API keys are not automatically revoked (preserved for re-enablement).
-
-### New tables
+When `disabled_at` is set, the account is disabled and all API requests are rejected. API keys are preserved for potential re-enablement.
 
 GitHub identity linking:
 
 ```sql
--- Links GitHub users to Courier accounts
+-- Links a GitHub user to their Courier account (1:1)
 CREATE TABLE github_identity (
   id BIGSERIAL PRIMARY KEY,
-  account_id BIGINT NOT NULL REFERENCES account(id),
-  github_user_id BIGINT NOT NULL,
-  github_username TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (account_id),
-  UNIQUE (github_user_id, account_id)
-);
-
-CREATE INDEX idx_github_identity_user ON github_identity(github_user_id);
-```
-
-> [!NOTE]
-> A GitHub user can have multiple Courier accounts (one per org), so `github_user_id` alone is not unique. The unique constraint is on `(github_user_id, account_id)` to prevent duplicate links.
-
-GitHub user access tokens:
-
-```sql
--- Stores GitHub user access tokens for API access
-CREATE TABLE github_user_token (
-  id BIGSERIAL PRIMARY KEY,
+  account_id BIGINT NOT NULL REFERENCES account(id) UNIQUE,
   github_user_id BIGINT NOT NULL UNIQUE,
-  access_token_encrypted BYTEA NOT NULL,
-  refresh_token_encrypted BYTEA NOT NULL,
-  access_token_expires_at TIMESTAMPTZ NOT NULL,
-  refresh_token_expires_at TIMESTAMPTZ NOT NULL,
+  github_username TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 
-Tokens are stored per GitHub user (not per account) since the same token works across all orgs. Both tokens are encrypted at rest using AES-256-GCM with a server-managed key.
+Each GitHub user maps to exactly one Courier account, and each account has at most one GitHub identity (bot accounts have none).
 
-Access tokens expire after 8 hours; refresh tokens expire after 6 months. When performing membership sync, Courier checks `access_token_expires_at` and refreshes if needed. If the refresh token is also expired, the user must re-authenticate via OAuth.
+The `account.email` field stores the user's current GitHub primary email and is updated on each OAuth authentication. It is not used for identity matching—`github_identity.github_user_id` is the stable identifier. This means users can change their GitHub email without losing access to their Courier account or organization memberships.
 
-Pending OAuth sessions:
+### Organization membership
+
+Role definitions:
+
+```sql
+-- Defines valid roles for organization membership
+CREATE TABLE organization_role (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed initial roles
+INSERT INTO organization_role (name, description) VALUES
+  ('member', 'Regular organization member'),
+  ('admin', 'Organization administrator with full permissions');
+```
+
+Using a table instead of a PostgreSQL enum makes adding new roles simpler—just an INSERT rather than dropping and recreating an enum type. The application represents these as a Rust enum for type safety.
+
+Organization member table:
+
+```sql
+-- Tracks which accounts belong to which organizations
+CREATE TABLE organization_member (
+  organization_id BIGINT NOT NULL REFERENCES organization(id),
+  account_id BIGINT NOT NULL REFERENCES account(id),
+  role_id BIGINT NOT NULL REFERENCES organization_role(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (organization_id, account_id)
+);
+
+CREATE INDEX idx_org_member_account ON organization_member(account_id);
+CREATE INDEX idx_org_member_role ON organization_member(role_id);
+```
+
+An account can be a member of multiple organizations. The `role_id` determines privileges within that org. The creator of an organization is automatically added with the `admin` role.
+
+### Invitation system
+
+Organization invitations:
+
+```sql
+-- Invitations for users to join organizations
+CREATE TABLE organization_invitation (
+  id BIGSERIAL PRIMARY KEY,
+  organization_id BIGINT NOT NULL REFERENCES organization(id),
+  token TEXT NOT NULL UNIQUE,
+  role_id BIGINT NOT NULL REFERENCES organization_role(id),
+  created_by BIGINT NOT NULL REFERENCES account(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  max_uses INT,                          -- NULL = unlimited
+  use_count INT NOT NULL DEFAULT 0,
+  revoked_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_invitation_org ON organization_invitation(organization_id);
+CREATE INDEX idx_invitation_expires ON organization_invitation(expires_at);
+```
+
+Invitations are link-based tokens that can be shared via any channel (Slack, email, etc.). Features:
+- Optional expiration (`expires_at`)
+- Optional use limit (`max_uses`)
+- Can be revoked by admin (`revoked_at`)
+- Track usage count for auditing
+
+Invitation redemption log:
+
+```sql
+-- Tracks who used which invitation
+CREATE TABLE invitation_redemption (
+  id BIGSERIAL PRIMARY KEY,
+  invitation_id BIGINT NOT NULL REFERENCES organization_invitation(id),
+  account_id BIGINT NOT NULL REFERENCES account(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (invitation_id, account_id)
+);
+```
+
+### OAuth state
+
+OAuth state storage (for PKCE flow):
 
 ```sql
 -- Temporary storage for OAuth flow state
-CREATE TABLE oauth_pending_session (
+CREATE TABLE oauth_state (
   id BIGSERIAL PRIMARY KEY,
-  session_token TEXT NOT NULL UNIQUE,
-  github_user_id BIGINT NOT NULL,
-  github_username TEXT NOT NULL,
-  email TEXT NOT NULL,
-  available_orgs JSONB NOT NULL,  -- [{id, name, role}, ...]
+  state_token TEXT NOT NULL UNIQUE,
   pkce_verifier TEXT NOT NULL,
   redirect_uri TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expires_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX idx_oauth_pending_expires ON oauth_pending_session(expires_at);
+CREATE INDEX idx_oauth_state_expires ON oauth_state(expires_at);
 ```
 
-Pending sessions expire after 10 minutes. A background job cleans up expired sessions.
+OAuth state records expire after 10 minutes. A background job cleans up expired records.
 
-Organization GitHub linking:
+### Sessions
+
+User sessions:
 
 ```sql
--- Links GitHub orgs to Courier organizations
-CREATE TABLE github_organization (
+-- Active user sessions
+CREATE TABLE user_session (
   id BIGSERIAL PRIMARY KEY,
-  organization_id BIGINT NOT NULL REFERENCES organization(id) UNIQUE,
-  github_org_id BIGINT,  -- NULL for personal orgs
-  github_org_name TEXT,  -- NULL for personal orgs
-  webhook_secret TEXT,   -- NULL if webhooks not configured
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (github_org_id)
-);
-```
-
-For personal orgs, `github_org_id` and `github_org_name` are NULL. The `organization.name` will be set to the user's GitHub username with a "(personal)" suffix.
-
-Organization administrators:
-
-```sql
--- Tracks which accounts are org admins
-CREATE TABLE organization_admin (
-  organization_id BIGINT NOT NULL REFERENCES organization(id),
   account_id BIGINT NOT NULL REFERENCES account(id),
+  session_token TEXT NOT NULL UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (organization_id, account_id)
+  expires_at TIMESTAMPTZ NOT NULL,
+  last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX idx_session_account ON user_session(account_id);
+CREATE INDEX idx_session_expires ON user_session(expires_at);
 ```
 
-### Membership sync state
+Sessions are used for web UI authentication. They're separate from API keys, which are used for CLI/CI authentication.
 
-```sql
--- Tracks when we last synced membership for each org
-CREATE TABLE github_sync_state (
-  id BIGSERIAL PRIMARY KEY,
-  organization_id BIGINT NOT NULL REFERENCES organization(id) UNIQUE,
-  last_sync_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  next_sync_at TIMESTAMPTZ NOT NULL,
-  sync_failures INT NOT NULL DEFAULT 0
-);
-```
+Session tokens are designed to be stored by the dashboard application in an `HttpOnly`, `Secure`, `SameSite=Lax` cookie. The dashboard forwards the session token to Courier on each API request. This keeps the dashboard stateless—all session state lives in Courier's database.
 
-## Membership Synchronization
-
-### Sync triggers
-
-Membership is synchronized:
-
-1. On OAuth: Every time a user completes OAuth, their membership and role are refreshed
-2. On webhook (if configured): `organization.member_added`, `organization.member_removed` events
-3. On poll: Background job polls orgs periodically
-
-### Polling strategy
-
-```
-Base interval: 1 hour
-Backoff on failure: 2^failures hours (max 24 hours)
-Reset on success: back to 1 hour
-```
-
-For each org during sync:
-
-1. Fetch all members via `GET /orgs/{org}/members?role=all`
-2. Fetch membership details for each to determine admin status
-3. Compare to current Courier state
-4. Disable accounts for removed members
-5. Update admin status for changed roles
-6. Log changes for audit
-
-> [!TIP]
-> We don't automatically re-enable accounts that were disabled. If a user is re-added to the org, they must re-authenticate via OAuth to re-enable their account. This prevents stale accounts from becoming active without user action.
-
-### Handling removed members
-
-When sync detects a user is no longer in the GitHub org:
-
-1. Set `account.disabled_at` to now
-2. Do not revoke API keys (they're already unusable with a disabled account)
-3. Log the event for audit
-
-When a disabled user re-authenticates:
-
-1. Verify they're back in the GitHub org
-2. Clear `account.disabled_at`
-3. Existing API keys become functional again
+Cookie attributes:
+- `HttpOnly`: Prevents JavaScript access, mitigating XSS attacks
+- `Secure`: Only sent over HTTPS
+- `SameSite=Lax`: Cookie is sent for same-site requests and top-level navigations (clicking links), but not for cross-origin POST requests or iframes. This prevents CSRF attacks while allowing users to click links to the dashboard from emails or other sites.
 
 ## API Endpoints
 
@@ -345,277 +300,538 @@ GET /api/v1/oauth/github/start
 Response: 302 redirect to GitHub
 ```
 
+The `redirect_uri` must be on an allowlisted domain. Courier validates this before redirecting.
+
 OAuth callback (called by GitHub):
 ```
 GET /api/v1/oauth/github/callback
   ?code=...
   &state=...
 
-Response: 302 redirect to redirect_uri with ?session=...
+Response: 302 redirect to redirect_uri with ?session=...&new_user=true|false
 ```
 
-Complete registration:
-```
-POST /api/v1/oauth/github/complete
-Content-Type: application/json
+The `new_user` parameter indicates whether this was a first-time signup, so the site can show appropriate onboarding.
 
-{
-  "session_token": "...",
-  "organization": {
-    "type": "github_org",
-    "github_org_id": 12345
-  }
-  // OR
-  "organization": {
-    "type": "personal"
-  }
-}
+### Session management
+
+Get current user:
+```
+GET /api/v1/me
+Authorization: Bearer <session_token>
 
 Response:
 {
   "account_id": 1,
-  "organization_id": 1,
-  "api_key": "hur_..."  // Only returned on first registration
-}
-```
-
-### User and org management
-
-List org members (any org member):
-```
-GET /api/v1/organizations/{org_id}/members
-Authorization: Bearer <api_key>
-
-Response:
-{
-  "members": [
+  "email": "user@example.com",
+  "name": "Alice",
+  "github_username": "alice",
+  "organizations": [
     {
-      "account_id": 1,
-      "email": "user@example.com",
-      "is_admin": true,
-      "disabled_at": null,
-      "created_at": "2025-01-01T00:00:00Z"
+      "organization_id": 1,
+      "name": "Acme Corp",
+      "role": "admin"
     }
   ]
 }
 ```
 
-Disable account (org admin only):
+Sign out:
 ```
-POST /api/v1/organizations/{org_id}/members/{account_id}/disable
-Authorization: Bearer <api_key>
+POST /api/v1/oauth/logout
+Authorization: Bearer <session_token>
 
 Response: 204 No Content
 ```
 
-Enable account (org admin only):
-```
-POST /api/v1/organizations/{org_id}/members/{account_id}/enable
-Authorization: Bearer <api_key>
+### Organization management
 
-Response: 204 No Content
+Create organization (any authenticated user):
 ```
+POST /api/v1/organizations
+Authorization: Bearer <session_token>
+Content-Type: application/json
 
-### API key management
-
-List API keys (self or org admin):
-```
-GET /api/v1/accounts/{account_id}/api-keys
-Authorization: Bearer <api_key>
+{
+  "name": "Acme Corp"
+}
 
 Response:
 {
-  "api_keys": [
+  "organization_id": 1,
+  "name": "Acme Corp"
+}
+```
+
+The creating user is automatically added as an admin.
+
+List user's organizations:
+```
+GET /api/v1/me/organizations
+Authorization: Bearer <session_token>
+
+Response:
+{
+  "organizations": [
     {
-      "id": 1,
-      "name": "CI Bot",
+      "organization_id": 1,
+      "name": "Acme Corp",
+      "role": "admin"
+    }
+  ]
+}
+```
+
+### Invitation management
+
+Create invitation (org admin only):
+```
+POST /api/v1/organizations/{org_id}/invitations
+Authorization: Bearer <session_token>
+Content-Type: application/json
+
+{
+  "role": "member",           // or "admin"
+  "expires_in_hours": 168,    // optional, default 7 days
+  "max_uses": 10              // optional, default unlimited
+}
+
+Response:
+{
+  "invitation_id": 1,
+  "token": "hXkR4pN",
+  "url": "https://hurry.build/invite/hXkR4pN",
+  "expires_at": "2025-01-08T00:00:00Z",
+  "max_uses": 10
+}
+```
+
+List invitations (org admin only):
+```
+GET /api/v1/organizations/{org_id}/invitations
+Authorization: Bearer <session_token>
+
+Response:
+{
+  "invitations": [
+    {
+      "invitation_id": 1,
+      "role": "member",
+      "created_by": 1,
       "created_at": "2025-01-01T00:00:00Z",
-      "accessed_at": "2025-01-15T00:00:00Z",
+      "expires_at": "2025-01-08T00:00:00Z",
+      "max_uses": 10,
+      "use_count": 3,
       "revoked_at": null
     }
   ]
 }
 ```
 
-> [!NOTE]
-> The actual key content is never returned. It's hashed at rest and can only be read once at creation time.
-
-Create API key (self or org admin):
+Revoke invitation (org admin only):
 ```
-POST /api/v1/accounts/{account_id}/api-keys
-Authorization: Bearer <api_key>
+DELETE /api/v1/organizations/{org_id}/invitations/{invitation_id}
+Authorization: Bearer <session_token>
+
+Response: 204 No Content
+```
+
+Accept invitation (any authenticated user):
+```
+POST /api/v1/invitations/{token}/accept
+Authorization: Bearer <session_token>
+
+Response:
+{
+  "organization_id": 1,
+  "name": "Acme Corp",
+  "role": "member"
+}
+```
+
+Returns 400 if invitation is expired, revoked, or at max uses. Returns 409 if user is already a member.
+
+Get invitation info (public, for preview):
+```
+GET /api/v1/invitations/{token}
+
+Response:
+{
+  "organization_name": "Acme Corp",
+  "role": "member",
+  "expires_at": "2025-01-08T00:00:00Z",
+  "valid": true
+}
+```
+
+This endpoint is public so the site can show invitation details before the user authenticates.
+
+### Member management
+
+List org members (any org member):
+```
+GET /api/v1/organizations/{org_id}/members
+Authorization: Bearer <session_token>
+
+Response:
+{
+  "members": [
+    {
+      "account_id": 1,
+      "email": "alice@example.com",
+      "name": "Alice",
+      "role": "admin",
+      "created_at": "2025-01-01T00:00:00Z"
+    }
+  ]
+}
+```
+
+Update member role (org admin only):
+```
+PATCH /api/v1/organizations/{org_id}/members/{account_id}
+Authorization: Bearer <session_token>
 Content-Type: application/json
 
 {
-  "name": "CI Bot"
+  "role": "admin"
+}
+
+Response: 204 No Content
+```
+
+Remove member (org admin only, cannot remove self if last admin):
+```
+DELETE /api/v1/organizations/{org_id}/members/{account_id}
+Authorization: Bearer <session_token>
+
+Response: 204 No Content
+```
+
+Leave organization (self):
+```
+POST /api/v1/organizations/{org_id}/leave
+Authorization: Bearer <session_token>
+
+Response: 204 No Content
+```
+
+Returns 400 if user is the last admin (must transfer admin first or delete org).
+
+### API key management
+
+API keys are scoped to either:
+- A specific organization (for org-related operations)
+- Personal usage only (no org context)
+
+This matches the existing Courier design where an API key identifies both an account and an org context. It also prevents accidentally interacting with the wrong organization.
+
+#### Personal API keys
+
+List personal API keys:
+```
+GET /api/v1/me/api-keys
+Authorization: Bearer <session_token>
+
+Response:
+{
+  "api_keys": [
+    {
+      "id": 1,
+      "name": "Personal laptop",
+      "created_at": "2025-01-01T00:00:00Z",
+      "last_used_at": "2025-01-15T00:00:00Z"
+    }
+  ]
+}
+```
+
+Create personal API key:
+```
+POST /api/v1/me/api-keys
+Authorization: Bearer <session_token>
+Content-Type: application/json
+
+{
+  "name": "Personal laptop"
 }
 
 Response:
 {
   "id": 2,
-  "name": "CI Bot",
-  "api_key": "hur_..."  // Only time this is returned
+  "name": "Personal laptop",
+  "api_key": "a1b2c3d4..."  // Only time this is returned (32 hex chars)
 }
 ```
 
-Revoke API key (self or org admin):
+Revoke personal API key:
 ```
-DELETE /api/v1/accounts/{account_id}/api-keys/{key_id}
-Authorization: Bearer <api_key>
+DELETE /api/v1/me/api-keys/{key_id}
+Authorization: Bearer <session_token>
+
+Response: 204 No Content
+```
+
+#### Organization-scoped API keys
+
+List org API keys (for current user):
+```
+GET /api/v1/organizations/{org_id}/api-keys
+Authorization: Bearer <session_token>
+
+Response:
+{
+  "api_keys": [
+    {
+      "id": 3,
+      "name": "Work laptop",
+      "created_at": "2025-01-01T00:00:00Z",
+      "last_used_at": "2025-01-15T00:00:00Z"
+    }
+  ]
+}
+```
+
+Create org-scoped API key:
+```
+POST /api/v1/organizations/{org_id}/api-keys
+Authorization: Bearer <session_token>
+Content-Type: application/json
+
+{
+  "name": "Work laptop"
+}
+
+Response:
+{
+  "id": 3,
+  "name": "Work laptop",
+  "api_key": "a1b2c3d4..."
+}
+```
+
+Revoke org-scoped API key:
+```
+DELETE /api/v1/organizations/{org_id}/api-keys/{key_id}
+Authorization: Bearer <session_token>
 
 Response: 204 No Content
 ```
 
 ### Bot accounts
 
+Bot accounts are organization-scoped accounts without GitHub identity, for CI systems and automation.
+
 Create bot account (org admin only):
 ```
-POST /api/v1/organizations/{org_id}/accounts
-Authorization: Bearer <api_key>
+POST /api/v1/organizations/{org_id}/bots
+Authorization: Bearer <session_token>
 Content-Type: application/json
 
 {
-  "email": "responsible-human@example.com",
-  "name": "CI Bot"
+  "name": "CI Bot",
+  "responsible_email": "alice@example.com"
 }
 
 Response:
 {
   "account_id": 5,
-  "api_key": "hur_..."
+  "name": "CI Bot",
+  "api_key": "a1b2c3d4..."
 }
 ```
 
 Bot accounts:
 - Are not linked to a GitHub identity
-- Cannot authenticate via OAuth
-- Have the same capabilities as regular accounts
-- The email is for the responsible human, not the bot itself
-- Multiple bot accounts can share the same responsible email
+- Cannot authenticate via OAuth or have sessions
+- Belong to exactly one organization
+- The `responsible_email` is for contact purposes, not authentication
+- Have their own API keys (managed by org admins)
 
-## Authorization Model
-
-### Permission levels
-
-| Action | Any member | Self | Org admin |
-|--------|------------|------|-----------|
-| List org members | Yes | - | - |
-| View own API keys | - | Yes | - |
-| View other's API keys | - | - | Yes |
-| Create own API key | - | Yes | - |
-| Create other's API key | - | - | Yes |
-| Revoke own API key | - | Yes | - |
-| Revoke other's API key | - | - | Yes |
-| Disable account | - | - | Yes |
-| Enable account | - | - | Yes |
-| Create bot account | - | - | Yes |
-
-### Admin determination
-
-A user is an org admin in Courier if:
-
-1. Their GitHub role in that org is `admin` (owner), OR
-2. They're the creator of a personal org
-
-Admin status is refreshed:
-- Every OAuth authentication
-- Every membership sync (poll or webhook)
-
-## Webhook Integration (Optional)
-
-Organizations can optionally configure webhooks for real-time membership updates. There are two paths:
-
-### Path A: Manual webhook configuration
-
-For orgs that don't want to install the GitHub App:
-
-1. Org admin visits Courier's org settings
-2. Courier displays webhook URL and secret
-3. Admin configures webhook in GitHub org settings
-4. Courier validates webhook with ping event
-
-### Path B: GitHub App installation (future)
-
-If an org installs the Hurry GitHub App on their org (not just users authenticating), webhooks are configured automatically. This is noted in Future Work.
-
-### Webhook endpoint
-
+List bot accounts (org admin only):
 ```
-POST /api/v1/webhooks/github/organization
-X-Hub-Signature-256: sha256=...
-Content-Type: application/json
+GET /api/v1/organizations/{org_id}/bots
+Authorization: Bearer <session_token>
 
+Response:
 {
-  "action": "member_removed",
-  "membership": {
-    "user": { "id": 123, "login": "octocat" }
-  },
-  "organization": { "id": 456, "login": "acme" }
+  "bots": [
+    {
+      "account_id": 5,
+      "name": "CI Bot",
+      "responsible_email": "alice@example.com",
+      "created_at": "2025-01-01T00:00:00Z"
+    }
+  ]
 }
 ```
 
-### Supported events
+## Authorization Model
 
-- `organization.member_added`: Enable account if previously disabled, or note for next OAuth
-- `organization.member_removed`: Disable account immediately
-- `organization.member_invited`: No action (wait for accepted)
+### Authentication types
 
-> [!IMPORTANT]
-> Webhooks do not trigger for role changes. Admin status is only updated via polling or OAuth.
+| Type | Use case | Identifier |
+|------|----------|------------|
+| Session token | Web UI | `Bearer <session_token>` |
+| API key | CLI, CI | `Bearer <api_key>` |
+
+### Session tokens vs API keys
+
+The key semantic difference between these token types:
+
+- **API keys** encode both an account AND an organization context (or personal context). When you use an API key, the org is implicit—no need to specify it in the request. This is ideal for CLI/CI where you configure the key once and all operations use that org.
+
+- **Session tokens** identify only the account. Endpoints that operate on org-scoped resources must include the `org_id` in the URL. This is necessary for the web UI where users switch between orgs.
+
+This means:
+- `GET /api/v1/cache/cargo/restore` with an API key → uses the org encoded in the key
+- `GET /api/v1/organizations/{org_id}/members` with a session token → org specified in URL
+
+### Permission levels
+
+| Action | member | admin |
+|--------|--------|-------|
+| View org members | Yes | Yes |
+| Create invitation | - | Yes |
+| Revoke invitation | - | Yes |
+| Update member role | - | Yes |
+| Remove member | - | Yes |
+| Leave org | Yes | Yes |
+| Create bot account | - | Yes |
+| Manage bot API keys | - | Yes |
+
+Account-level actions (not org-scoped):
+| Action | Self |
+|--------|------|
+| View own personal API keys | Yes |
+| Create own personal API key | Yes |
+| Revoke own personal API key | Yes |
+| View own org API keys | Yes |
+| Create own org API key | Yes |
+| Revoke own org API key | Yes |
+
+### Personal usage (no org)
+
+Users who aren't members of any organization can still:
+- Authenticate and maintain a session
+- Create and manage personal API keys
+- Use Hurry for personal builds (cache stored under their account)
+
+Personal API keys have no org context—they can only be used for personal cache operations, not org-scoped data.
 
 ## Security Considerations
 
-### Token storage
+### OAuth state
 
-GitHub user access tokens and refresh tokens are encrypted at rest using AES-256-GCM with a server-managed key. The key is loaded from environment configuration and never stored in the database. Access tokens automatically expire after 8 hours, limiting exposure if encrypted tokens are compromised.
-
-### API key generation
-
-API keys are generated using a CSPRNG with the format `hur_{base62(32 bytes)}`. The key is returned exactly once at creation time, then only a SHA-256 hash is stored. Since keys are system-generated with 256 bits of entropy, slow password hashing (like Argon2) is unnecessary—brute-forcing is already computationally infeasible.
+OAuth state tokens are generated using a CSPRNG, stored server-side, and expire after 10 minutes. The state parameter prevents CSRF attacks during the OAuth flow.
 
 ### PKCE
 
-All OAuth flows use PKCE with the S256 challenge method. The verifier is stored in the pending session and validated during token exchange.
+All OAuth flows use PKCE with the S256 challenge method. The verifier is stored server-side and never exposed to the client.
+
+### Redirect URI validation
+
+The `redirect_uri` parameter is validated against an allowlist of permitted domains before initiating OAuth. Open redirects are not possible.
+
+### API key generation
+
+API keys use the existing Courier format: 16 random bytes, hex-encoded, resulting in a 32-character string with 128 bits of entropy. The key is returned exactly once at creation time, then only a SHA-256 hash is stored. With 128 bits of entropy, brute-forcing is computationally infeasible.
+
+This maintains compatibility with the existing `db::Postgres::create_token` implementation.
+
+### Session tokens
+
+Session tokens are generated using a CSPRNG with 256 bits of entropy.
+
+Session expiration:
+- Tokens expire 24 hours after creation
+- Each successful authentication extends expiration to 24 hours from that moment (sliding window)
+- Active users who use the dashboard at least once per day stay logged in
+- Inactive users must re-authenticate via OAuth after 24 hours
+
+Session invalidation:
+- Sessions are deleted when the associated account is disabled (`account.disabled_at` set)
+- Sessions can be explicitly revoked via the logout endpoint
+
+### Invitation tokens
+
+Invitation tokens are short, human-friendly codes designed to be easily shared (e.g., in Slack channel headers). Token length varies based on expiration to balance usability with security:
+
+| Expiration | Length | Entropy | Example |
+|------------|--------|---------|---------|
+| ≤30 days | 8 chars | ~47 bits | `hXkR4pN` |
+| >30 days or never | 12 chars | ~71 bits | `hXkR4pNq2mYz` |
+
+Short-lived tokens can be shorter because brute-force attacks are time-limited. Never-expiring tokens need more entropy since attackers have unlimited time.
+
+Tokens can also be:
+- Use-limited (max redemptions)
+- Revoked by admins
 
 ### Rate limiting
 
-OAuth endpoints are rate limited per IP:
-- `/oauth/github/start`: 10/minute
-- `/oauth/github/callback`: 20/minute
-- `/oauth/github/complete`: 10/minute
+Rate limiting protects against brute-force attacks and abuse. Authenticated endpoints are rate limited by account/session. Unauthenticated endpoints (OAuth start, invitation preview) rely on upstream rate limiting or are low-risk.
+
+Key endpoints with rate limits:
+- `/invitations/{token}/accept`: 10/minute per session (protects against brute-forcing invitation tokens)
+- `/me/api-keys` (POST): 10/minute per session (prevents API key spam)
+
+The OAuth flow is naturally rate-limited by GitHub's own rate limits on the token exchange endpoint.
 
 ### Audit logging
 
-All authorization-related actions are logged:
-- OAuth authentication (success/failure)
-- Account enable/disable
-- API key create/revoke
-- Admin status changes
-- Membership sync results
+Authorization-related actions are recorded in an audit log table:
+
+```sql
+CREATE TABLE audit_log (
+  id BIGSERIAL PRIMARY KEY,
+  account_id BIGINT REFERENCES account(id),      -- NULL for failed auth attempts
+  organization_id BIGINT REFERENCES organization(id),  -- NULL for account-level events
+  action TEXT NOT NULL,
+  details JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_audit_log_account ON audit_log(account_id);
+CREATE INDEX idx_audit_log_org ON audit_log(organization_id);
+CREATE INDEX idx_audit_log_created ON audit_log(created_at);
+```
+
+Logged actions include:
+- `oauth.success`, `oauth.failure`: OAuth authentication attempts
+- `account.created`: New account creation
+- `organization.created`: Organization creation
+- `invitation.created`, `invitation.accepted`, `invitation.revoked`: Invitation lifecycle
+- `member.added`, `member.removed`, `member.role_changed`: Membership changes
+- `api_key.created`, `api_key.revoked`: API key management
+- `session.created`, `session.revoked`: Session lifecycle
+
+The `details` field contains event-specific context (e.g., old/new role for role changes, invitation ID for accepts).
 
 ## Out of Scope
 
 The following are explicitly out of scope for this RFC:
 
-- Web interface: The signup site and management dashboard are separate
-- Email notifications: No emails are sent by Courier
-- SSO/SAML: Only GitHub App authentication is supported
+- Web interface: The signup site and management dashboard are separate projects
+- Email delivery: Invitations are link-based; email/Slack delivery is future work
+- SSO/SAML: Only GitHub OAuth is supported initially
 - Multiple identity providers: GitHub only for now
 - Organization billing: No payment integration
-- Invitations: Users self-service via GitHub org membership
+- GitHub org sync: Organizations are managed entirely within Courier
 
 ## Migration
 
 For existing deployments with manually-created orgs and accounts:
 
-1. Existing accounts without `github_identity` continue to work
-2. Existing orgs without `github_organization` are treated as "legacy" orgs
-3. Legacy orgs cannot use OAuth signup (accounts must be created manually)
-4. A migration tool can link existing accounts to GitHub identities if desired
+1. Existing accounts without `github_identity` continue to work with API keys
+2. Existing orgs without any `organization_member` records are treated as legacy
+3. Legacy accounts can be linked to GitHub identities by signing in via OAuth
+4. A migration tool can bulk-link accounts by email address if desired
 
 ## Future Work
 
-- Team-based access: Scope access based on GitHub team membership, not just org
-- GitHub App installation: Allow orgs to install the app for automatic webhooks (vs manual webhook setup)
-- Multiple identity providers: GitLab, Bitbucket
-- Organization federation: Link multiple GitHub orgs to one Courier org
+- Email/Slack notifications: Send invitation links directly instead of requiring manual sharing
+- GitHub org sync: Optional feature to sync membership from GitHub orgs
+- Multiple identity providers: GitLab, Bitbucket, Google
+- Organization settings: Configure invitation defaults, require approval, etc.
+- Team-based permissions: Sub-org groupings with different access levels
