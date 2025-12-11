@@ -44,10 +44,15 @@ pub async fn handle(
     Dep(cas): Dep<Disk>,
     Path(key): Path<Key>,
 ) -> CasCheckResponse {
+    let org_id = match auth.require_org() {
+        Ok(id) => id,
+        Err((status, msg)) => return CasCheckResponse::Forbidden(status, msg),
+    };
+
     // Check if org has access to this CAS key
     // Return NotFound (not Forbidden) to avoid leaking information about blob
     // existence
-    match db.check_cas_access(auth.org_id, &key).await {
+    match db.check_cas_access(org_id, &key).await {
         Ok(true) => {}
         Ok(false) => {
             info!("cas.check.no_access");
@@ -80,6 +85,7 @@ pub async fn handle(
 pub enum CasCheckResponse {
     Found,
     NotFound,
+    Forbidden(StatusCode, &'static str),
     Error(Report),
 }
 
@@ -88,6 +94,7 @@ impl IntoResponse for CasCheckResponse {
         match self {
             CasCheckResponse::Found => StatusCode::OK.into_response(),
             CasCheckResponse::NotFound => StatusCode::NOT_FOUND.into_response(),
+            CasCheckResponse::Forbidden(status, msg) => (status, msg).into_response(),
             CasCheckResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }

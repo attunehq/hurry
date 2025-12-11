@@ -67,6 +67,11 @@ pub async fn handle(
     headers: HeaderMap,
     body: Body,
 ) -> CasWriteResponse {
+    let org_id = match auth.require_org() {
+        Ok(id) => id,
+        Err((status, msg)) => return CasWriteResponse::Forbidden(status, msg),
+    };
+
     // Check if the key already exists before consuming the body
     // If it exists, we still need to consume the entire body; if we return early
     // instead then clients see a "connection reset by peer" error.
@@ -85,7 +90,7 @@ pub async fn handle(
 
         // Grant access even though it already exists (idempotent, in case org didn't
         // have access)
-        match db.grant_cas_access(auth.org_id, &key).await {
+        match db.grant_cas_access(org_id, &key).await {
             Ok(granted) => {
                 info!(?granted, "cas.write.exists");
                 return CasWriteResponse::Created;
@@ -111,7 +116,7 @@ pub async fn handle(
     match result {
         Ok(()) => {
             // Grant org access to the CAS key after successful write
-            match db.grant_cas_access(auth.org_id, &key).await {
+            match db.grant_cas_access(org_id, &key).await {
                 Ok(granted) => {
                     info!(?granted, "cas.write.success");
                     CasWriteResponse::Created
@@ -152,6 +157,7 @@ async fn handle_plain(cas: Disk, key: Key, body: Body) -> Result<()> {
 #[derive(Debug)]
 pub enum CasWriteResponse {
     Created,
+    Forbidden(StatusCode, &'static str),
     Error(Report),
 }
 
@@ -159,6 +165,7 @@ impl IntoResponse for CasWriteResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             CasWriteResponse::Created => StatusCode::CREATED.into_response(),
+            CasWriteResponse::Forbidden(status, msg) => (status, msg).into_response(),
             CasWriteResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }

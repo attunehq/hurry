@@ -286,7 +286,7 @@ impl TestAuth {
             .await?;
 
         // Add organization memberships
-        // Alice and Bob are both admins of Acme Corp
+        // Alice and Bob are both members of Acme Corp (Alice is admin)
         // Charlie is admin of Widget Inc
         let org_acme = *org_ids.get(Self::ORG_ACME).expect("Acme org missing");
         let org_widget = *org_ids.get(Self::ORG_WIDGET).expect("Widget org missing");
@@ -305,6 +305,27 @@ impl TestAuth {
         db.add_organization_member(org_widget, charlie_id, OrgRole::Admin)
             .await
             .context("add Charlie to Widget")?;
+
+        // Update existing API key tokens to be org-scoped
+        // Alice and Bob get Acme tokens, Charlie gets Widget tokens
+        sqlx::query!(
+            "UPDATE api_key SET organization_id = $1 WHERE account_id IN ($2, $3)",
+            org_acme.as_i64(),
+            alice_id.as_i64(),
+            bob_id.as_i64(),
+        )
+        .execute(&db.pool)
+        .await
+        .context("set org_id for Alice and Bob tokens")?;
+
+        sqlx::query!(
+            "UPDATE api_key SET organization_id = $1 WHERE account_id = $2",
+            org_widget.as_i64(),
+            charlie_id.as_i64(),
+        )
+        .execute(&db.pool)
+        .await
+        .context("set org_id for Charlie tokens")?;
 
         sqlx::query!("SELECT setval('organization_id_seq', (SELECT MAX(id) FROM organization))")
             .fetch_one(&db.pool)

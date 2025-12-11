@@ -73,7 +73,7 @@ impl Postgres {
     #[tracing::instrument(name = "Postgres::save_cargo_cache")]
     pub async fn cargo_cache_save(
         &self,
-        auth: &AuthenticatedToken,
+        org_id: OrgId,
         request: CargoSaveRequest,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
@@ -86,7 +86,7 @@ impl Postgres {
                 "insert into cargo_saved_unit (organization_id, cache_key, data)
                 values ($1, $2, $3)
                 on conflict do nothing",
-                auth.org_id.as_i64(),
+                org_id.as_i64(),
                 item.key.stable_hash(),
                 data,
             )
@@ -101,7 +101,7 @@ impl Postgres {
     #[tracing::instrument(name = "Postgres::cargo_cache_restore")]
     pub async fn cargo_cache_restore(
         &self,
-        auth: &AuthenticatedToken,
+        org_id: OrgId,
         request: CargoRestoreRequest,
     ) -> Result<HashMap<SavedUnitCacheKey, SavedUnit>> {
         // When we store `SavedUnitCacheKey` in the database we store it by its stable
@@ -119,7 +119,7 @@ impl Postgres {
             from cargo_saved_unit
             where organization_id = $1
             and cache_key = any($2)",
-            auth.org_id.as_i64(),
+            org_id.as_i64(),
             &request_hashes.keys().cloned().collect::<Vec<_>>(),
         )
         .fetch(&self.pool);
@@ -147,15 +147,14 @@ impl Postgres {
     async fn token_lookup(
         &self,
         token: impl AsRef<RawToken>,
-    ) -> Result<Option<(AccountId, OrgId)>> {
+    ) -> Result<Option<(AccountId, Option<OrgId>)>> {
         let hash = TokenHash::new(token.as_ref().expose());
         let row = sqlx::query!(
             r#"
             SELECT
-                account.id as account_id,
-                account.organization_id
+                api_key.account_id,
+                api_key.organization_id
             FROM api_key
-            JOIN account ON api_key.account_id = account.id
             WHERE api_key.hash = $1 AND api_key.revoked_at IS NULL
             "#,
             hash.as_bytes(),
@@ -167,7 +166,7 @@ impl Postgres {
         Ok(row.map(|r| {
             (
                 AccountId::from_i64(r.account_id),
-                OrgId::from_i64(r.organization_id),
+                r.organization_id.map(OrgId::from_i64),
             )
         }))
     }
@@ -352,12 +351,12 @@ impl Postgres {
     }
 
     #[tracing::instrument(name = "Postgres::cargo_cache_reset")]
-    pub async fn cargo_cache_reset(&self, auth: &AuthenticatedToken) -> Result<()> {
+    pub async fn cargo_cache_reset(&self, org_id: OrgId) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query!(
             "delete from cargo_saved_unit where organization_id = $1",
-            auth.org_id.as_i64()
+            org_id.as_i64()
         )
         .execute(tx.as_mut())
         .await
@@ -365,7 +364,7 @@ impl Postgres {
 
         sqlx::query!(
             "delete from cas_access where organization_id = $1",
-            auth.org_id.as_i64()
+            org_id.as_i64()
         )
         .execute(tx.as_mut())
         .await
@@ -1715,4 +1714,53 @@ impl Postgres {
             revoked_at: r.revoked_at,
         }))
     }
+
+    /// List all API keys for an organization (from all members).
+    ///
+    /// Includes account email for display purposes.
+    #[tracing::instrument(name = "Postgres::list_all_org_api_keys")]
+    pub async fn list_all_org_api_keys(&self, org_id: OrgId) -> Result<Vec<OrgApiKey>> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT
+                api_key.id,
+                api_key.account_id,
+                api_key.name,
+                api_key.created_at,
+                api_key.accessed_at,
+                account.email as account_email
+            FROM api_key
+            JOIN account ON api_key.account_id = account.id
+            WHERE api_key.organization_id = $1 AND api_key.revoked_at IS NULL
+            ORDER BY api_key.created_at DESC
+            "#,
+            org_id.as_i64(),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list all org api keys")?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| OrgApiKey {
+                id: ApiKeyId::from_i64(r.id),
+                account_id: AccountId::from_i64(r.account_id),
+                name: r.name,
+                account_email: r.account_email,
+                created_at: r.created_at,
+                accessed_at: r.accessed_at,
+            })
+            .collect())
+    }
+}
+
+/// An API key with account email (for org listing).
+#[derive(Debug)]
+pub struct OrgApiKey {
+    pub id: ApiKeyId,
+    pub account_id: AccountId,
+    pub name: String,
+    pub account_email: String,
+    pub created_at: OffsetDateTime,
+    pub accessed_at: OffsetDateTime,
 }

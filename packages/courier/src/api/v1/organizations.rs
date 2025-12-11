@@ -17,7 +17,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     api::State,
-    auth::{AccountId, OrgId, OrgRole, SessionContext},
+    auth::{AccountId, ApiKeyId, OrgId, OrgRole, SessionContext},
     db::Postgres,
 };
 
@@ -28,6 +28,9 @@ pub fn router() -> Router<State> {
         .route("/{org_id}/members/{account_id}", patch(update_member_role))
         .route("/{org_id}/members/{account_id}", delete(remove_member))
         .route("/{org_id}/leave", post(leave_organization))
+        .route("/{org_id}/api-keys", get(list_org_api_keys))
+        .route("/{org_id}/api-keys", post(create_org_api_key))
+        .route("/{org_id}/api-keys/{key_id}", delete(delete_org_api_key))
 }
 
 // =============================================================================
@@ -664,6 +667,361 @@ impl IntoResponse for LeaveOrgResponse {
             )
                 .into_response(),
             LeaveOrgResponse::Error(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Organization API Keys
+// =============================================================================
+
+/// Response for GET /organizations/{org_id}/api-keys endpoint.
+#[derive(Debug, Serialize)]
+pub struct OrgApiKeyListResponse {
+    pub api_keys: Vec<OrgApiKeyEntry>,
+}
+
+/// A single organization API key entry.
+#[derive(Debug, Serialize)]
+pub struct OrgApiKeyEntry {
+    pub id: i64,
+    pub name: String,
+    pub account_id: i64,
+    pub account_email: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub accessed_at: OffsetDateTime,
+}
+
+/// List API keys for an organization.
+///
+/// Only members of the organization can view API keys.
+/// All members can see all org-scoped keys (for transparency).
+///
+/// ## Endpoint
+/// ```
+/// GET /api/v1/organizations/{org_id}/api-keys
+/// Authorization: Bearer <session_token>
+/// ```
+///
+/// ## Responses
+/// - 200: List of API keys
+/// - 401: Not authenticated
+/// - 403: Not a member of the organization
+#[tracing::instrument(skip(db, session))]
+pub async fn list_org_api_keys(
+    Dep(db): Dep<Postgres>,
+    session: SessionContext,
+    Path(org_id): Path<i64>,
+) -> ListOrgApiKeysResponse {
+    let org_id = OrgId::from_i64(org_id);
+
+    // Check if user is a member
+    match db.get_member_role(org_id, session.account_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            warn!(
+                account_id = %session.account_id,
+                org_id = %org_id,
+                "organizations.api_keys.list.not_member"
+            );
+            return ListOrgApiKeysResponse::Forbidden;
+        }
+        Err(err) => {
+            error!(?err, "organizations.api_keys.list.role_check_error");
+            return ListOrgApiKeysResponse::Error(err.to_string());
+        }
+    }
+
+    // List all org API keys (from all members)
+    // We need to join with account to get emails
+    match db.list_all_org_api_keys(org_id).await {
+        Ok(keys) => {
+            info!(
+                org_id = %org_id,
+                count = keys.len(),
+                "organizations.api_keys.list.success"
+            );
+            let api_keys = keys
+                .into_iter()
+                .map(|key| OrgApiKeyEntry {
+                    id: key.id.as_i64(),
+                    name: key.name,
+                    account_id: key.account_id.as_i64(),
+                    account_email: key.account_email,
+                    created_at: key.created_at,
+                    accessed_at: key.accessed_at,
+                })
+                .collect();
+            ListOrgApiKeysResponse::Success(OrgApiKeyListResponse { api_keys })
+        }
+        Err(err) => {
+            error!(?err, "organizations.api_keys.list.error");
+            ListOrgApiKeysResponse::Error(err.to_string())
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ListOrgApiKeysResponse {
+    Success(OrgApiKeyListResponse),
+    Forbidden,
+    Error(String),
+}
+
+impl IntoResponse for ListOrgApiKeysResponse {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            ListOrgApiKeysResponse::Success(list) => (StatusCode::OK, Json(list)).into_response(),
+            ListOrgApiKeysResponse::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "You must be a member of this organization to view API keys",
+            )
+                .into_response(),
+            ListOrgApiKeysResponse::Error(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            }
+        }
+    }
+}
+
+/// Request body for creating an organization API key.
+#[derive(Debug, Deserialize)]
+pub struct CreateOrgApiKeyRequest {
+    pub name: String,
+}
+
+/// Response for creating an organization API key.
+#[derive(Debug, Serialize)]
+pub struct CreateOrgApiKeyResponse {
+    pub id: i64,
+    pub name: String,
+    pub token: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+/// Create a new organization API key.
+///
+/// Only members can create org-scoped API keys. The key is tied to both
+/// the creator's account and the organization.
+///
+/// ## Endpoint
+/// ```
+/// POST /api/v1/organizations/{org_id}/api-keys
+/// Authorization: Bearer <session_token>
+/// Content-Type: application/json
+///
+/// {"name": "CI/CD Key"}
+/// ```
+///
+/// ## Responses
+/// - 201: API key created (includes token)
+/// - 400: Invalid request (empty name)
+/// - 401: Not authenticated
+/// - 403: Not a member of the organization
+#[tracing::instrument(skip(db, session))]
+pub async fn create_org_api_key(
+    Dep(db): Dep<Postgres>,
+    session: SessionContext,
+    Path(org_id): Path<i64>,
+    Json(request): Json<CreateOrgApiKeyRequest>,
+) -> CreateOrgApiKeyApiResponse {
+    let org_id = OrgId::from_i64(org_id);
+
+    // Check if user is a member
+    match db.get_member_role(org_id, session.account_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            warn!(
+                account_id = %session.account_id,
+                org_id = %org_id,
+                "organizations.api_keys.create.not_member"
+            );
+            return CreateOrgApiKeyApiResponse::Forbidden;
+        }
+        Err(err) => {
+            error!(?err, "organizations.api_keys.create.role_check_error");
+            return CreateOrgApiKeyApiResponse::Error(err.to_string());
+        }
+    }
+
+    let name = request.name.trim();
+    if name.is_empty() {
+        return CreateOrgApiKeyApiResponse::BadRequest("API key name cannot be empty");
+    }
+
+    match db
+        .create_api_key(session.account_id, name, Some(org_id))
+        .await
+    {
+        Ok((key_id, token)) => {
+            info!(
+                account_id = %session.account_id,
+                org_id = %org_id,
+                key_id = %key_id,
+                "organizations.api_keys.create.success"
+            );
+            // Fetch the key to get created_at
+            match db.get_api_key(key_id).await {
+                Ok(Some(key)) => CreateOrgApiKeyApiResponse::Created(CreateOrgApiKeyResponse {
+                    id: key.id.as_i64(),
+                    name: key.name,
+                    token: token.expose().to_string(),
+                    created_at: key.created_at,
+                }),
+                Ok(None) => {
+                    error!(key_id = %key_id, "organizations.api_keys.create.not_found_after_create");
+                    CreateOrgApiKeyApiResponse::Error(String::from("Key not found after creation"))
+                }
+                Err(err) => {
+                    error!(?err, "organizations.api_keys.create.fetch_error");
+                    CreateOrgApiKeyApiResponse::Error(err.to_string())
+                }
+            }
+        }
+        Err(err) => {
+            error!(?err, "organizations.api_keys.create.error");
+            CreateOrgApiKeyApiResponse::Error(err.to_string())
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum CreateOrgApiKeyApiResponse {
+    Created(CreateOrgApiKeyResponse),
+    BadRequest(&'static str),
+    Forbidden,
+    Error(String),
+}
+
+impl IntoResponse for CreateOrgApiKeyApiResponse {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            CreateOrgApiKeyApiResponse::Created(key) => {
+                (StatusCode::CREATED, Json(key)).into_response()
+            }
+            CreateOrgApiKeyApiResponse::BadRequest(msg) => {
+                (StatusCode::BAD_REQUEST, msg).into_response()
+            }
+            CreateOrgApiKeyApiResponse::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "You must be a member of this organization to create API keys",
+            )
+                .into_response(),
+            CreateOrgApiKeyApiResponse::Error(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            }
+        }
+    }
+}
+
+/// Delete an organization API key.
+///
+/// Members can delete their own org API keys. Admins can delete any org API key.
+///
+/// ## Endpoint
+/// ```
+/// DELETE /api/v1/organizations/{org_id}/api-keys/{key_id}
+/// Authorization: Bearer <session_token>
+/// ```
+///
+/// ## Responses
+/// - 204: API key deleted
+/// - 401: Not authenticated
+/// - 403: Not authorized to delete this key
+/// - 404: API key not found
+#[tracing::instrument(skip(db, session))]
+pub async fn delete_org_api_key(
+    Dep(db): Dep<Postgres>,
+    session: SessionContext,
+    Path((org_id, key_id)): Path<(i64, i64)>,
+) -> DeleteOrgApiKeyResponse {
+    let org_id = OrgId::from_i64(org_id);
+    let key_id = ApiKeyId::from_i64(key_id);
+
+    // Check user's role in the org
+    let user_role = match db.get_member_role(org_id, session.account_id).await {
+        Ok(Some(role)) => role,
+        Ok(None) => {
+            warn!(
+                account_id = %session.account_id,
+                org_id = %org_id,
+                "organizations.api_keys.delete.not_member"
+            );
+            return DeleteOrgApiKeyResponse::Forbidden;
+        }
+        Err(err) => {
+            error!(?err, "organizations.api_keys.delete.role_check_error");
+            return DeleteOrgApiKeyResponse::Error(err.to_string());
+        }
+    };
+
+    // Check key exists and belongs to this org
+    let key = match db.get_api_key(key_id).await {
+        Ok(Some(key)) => key,
+        Ok(None) => return DeleteOrgApiKeyResponse::NotFound,
+        Err(err) => {
+            error!(?err, "organizations.api_keys.delete.fetch_error");
+            return DeleteOrgApiKeyResponse::Error(err.to_string());
+        }
+    };
+
+    // Verify key belongs to this org
+    if key.organization_id != Some(org_id) {
+        return DeleteOrgApiKeyResponse::NotFound;
+    }
+
+    // Check already revoked
+    if key.revoked_at.is_some() {
+        return DeleteOrgApiKeyResponse::NotFound;
+    }
+
+    // Authorization: owner can delete their own key, admins can delete any key
+    if key.account_id != session.account_id && !user_role.is_admin() {
+        return DeleteOrgApiKeyResponse::Forbidden;
+    }
+
+    match db.revoke_api_key(key_id).await {
+        Ok(true) => {
+            info!(
+                account_id = %session.account_id,
+                org_id = %org_id,
+                key_id = %key_id,
+                "organizations.api_keys.delete.success"
+            );
+            DeleteOrgApiKeyResponse::Deleted
+        }
+        Ok(false) => DeleteOrgApiKeyResponse::NotFound,
+        Err(err) => {
+            error!(?err, "organizations.api_keys.delete.error");
+            DeleteOrgApiKeyResponse::Error(err.to_string())
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum DeleteOrgApiKeyResponse {
+    Deleted,
+    NotFound,
+    Forbidden,
+    Error(String),
+}
+
+impl IntoResponse for DeleteOrgApiKeyResponse {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            DeleteOrgApiKeyResponse::Deleted => StatusCode::NO_CONTENT.into_response(),
+            DeleteOrgApiKeyResponse::NotFound => StatusCode::NOT_FOUND.into_response(),
+            DeleteOrgApiKeyResponse::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "Only admins or the key owner can delete API keys",
+            )
+                .into_response(),
+            DeleteOrgApiKeyResponse::Error(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
             }
         }
