@@ -19,9 +19,15 @@ use crate::{
     api::State,
     auth::{AccountId, ApiKeyId, OrgId, OrgRole, SessionContext},
     db::Postgres,
+    rate_limit,
 };
 
 pub fn router() -> Router<State> {
+    // Rate-limited routes (sensitive operations)
+    let rate_limited = Router::new()
+        .route("/{org_id}/api-keys", post(create_org_api_key))
+        .layer(rate_limit::sensitive());
+
     Router::new()
         .route("/", post(create_organization))
         .route("/{org_id}/members", get(list_members))
@@ -29,8 +35,8 @@ pub fn router() -> Router<State> {
         .route("/{org_id}/members/{account_id}", delete(remove_member))
         .route("/{org_id}/leave", post(leave_organization))
         .route("/{org_id}/api-keys", get(list_org_api_keys))
-        .route("/{org_id}/api-keys", post(create_org_api_key))
         .route("/{org_id}/api-keys/{key_id}", delete(delete_org_api_key))
+        .merge(rate_limited)
 }
 
 // =============================================================================
@@ -859,6 +865,20 @@ pub async fn create_org_api_key(
         .await
     {
         Ok((key_id, token)) => {
+            // Log audit event
+            let _ = db
+                .log_audit_event(
+                    Some(session.account_id),
+                    Some(org_id),
+                    "api_key.created",
+                    Some(serde_json::json!({
+                        "key_id": key_id.as_i64(),
+                        "name": name,
+                        "type": "organization",
+                    })),
+                )
+                .await;
+
             info!(
                 account_id = %session.account_id,
                 org_id = %org_id,
@@ -987,6 +1007,20 @@ pub async fn delete_org_api_key(
 
     match db.revoke_api_key(key_id).await {
         Ok(true) => {
+            // Log audit event
+            let _ = db
+                .log_audit_event(
+                    Some(session.account_id),
+                    Some(org_id),
+                    "api_key.revoked",
+                    Some(serde_json::json!({
+                        "key_id": key_id.as_i64(),
+                        "key_owner_account_id": key.account_id.as_i64(),
+                        "type": "organization",
+                    })),
+                )
+                .await;
+
             info!(
                 account_id = %session.account_id,
                 org_id = %org_id,

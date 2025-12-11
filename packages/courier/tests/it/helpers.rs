@@ -77,9 +77,13 @@ impl TestFixture {
         // end of the world (it's shut down when the process ends) but isn't
         // ideal.
         tokio::task::spawn(async move {
-            axum::serve(listener, router)
-                .await
-                .expect("test server failed");
+            // Use into_make_service_with_connect_info to enable rate limiting (needs peer IP)
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .expect("test server failed");
         });
 
         let client_alice = Client::new(base_url.clone(), auth.token_alice().expose().into())?;

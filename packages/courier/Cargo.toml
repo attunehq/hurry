@@ -39,6 +39,8 @@ base64 = { workspace = true }
 oauth2 = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 time = { workspace = true }
+tower_governor = { workspace = true }
+governor = { workspace = true }
 
 [dev-dependencies]
 axum-test = { workspace = true, features = ["all"] }

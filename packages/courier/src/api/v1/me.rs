@@ -19,15 +19,21 @@ use crate::{
     api::State,
     auth::{ApiKeyId, OrgRole, SessionContext},
     db::Postgres,
+    rate_limit,
 };
 
 pub fn router() -> Router<State> {
+    // Rate-limited routes (sensitive operations)
+    let rate_limited = Router::new()
+        .route("/api-keys", post(create_api_key))
+        .layer(rate_limit::sensitive());
+
     Router::new()
         .route("/", get(get_me))
         .route("/organizations", get(list_organizations))
         .route("/api-keys", get(list_api_keys))
-        .route("/api-keys", post(create_api_key))
         .route("/api-keys/{key_id}", delete(delete_api_key))
+        .merge(rate_limited)
 }
 
 /// Response for GET /me endpoint.
@@ -304,6 +310,20 @@ pub async fn create_api_key(
 
     match db.create_api_key(session.account_id, name, None).await {
         Ok((key_id, token)) => {
+            // Log audit event
+            let _ = db
+                .log_audit_event(
+                    Some(session.account_id),
+                    None,
+                    "api_key.created",
+                    Some(serde_json::json!({
+                        "key_id": key_id.as_i64(),
+                        "name": name,
+                        "type": "personal",
+                    })),
+                )
+                .await;
+
             info!(
                 account_id = %session.account_id,
                 key_id = %key_id,
@@ -403,6 +423,19 @@ pub async fn delete_api_key(
 
     match db.revoke_api_key(key_id).await {
         Ok(true) => {
+            // Log audit event
+            let _ = db
+                .log_audit_event(
+                    Some(session.account_id),
+                    None,
+                    "api_key.revoked",
+                    Some(serde_json::json!({
+                        "key_id": key_id.as_i64(),
+                        "type": "personal",
+                    })),
+                )
+                .await;
+
             info!(
                 account_id = %session.account_id,
                 key_id = %key_id,

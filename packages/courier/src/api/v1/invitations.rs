@@ -20,6 +20,7 @@ use crate::{
     auth::{InvitationId, OrgId, OrgRole, SessionContext},
     crypto::generate_invitation_token,
     db::{AcceptInvitationResult, Postgres},
+    rate_limit,
 };
 
 /// Default invitation expiration: 7 days.
@@ -29,6 +30,11 @@ const DEFAULT_EXPIRATION_DAYS: i64 = 7;
 const LONG_LIVED_THRESHOLD_DAYS: i64 = 30;
 
 pub fn router() -> Router<State> {
+    // Rate-limited routes (sensitive operations)
+    let rate_limited = Router::new()
+        .route("/invitations/{token}/accept", post(accept_invitation))
+        .layer(rate_limit::sensitive());
+
     Router::new()
         // Organization-scoped endpoints (require admin)
         .route("/organizations/{org_id}/invitations", post(create_invitation))
@@ -39,7 +45,8 @@ pub fn router() -> Router<State> {
         )
         // Public endpoints
         .route("/invitations/{token}", get(get_invitation_preview))
-        .route("/invitations/{token}/accept", post(accept_invitation))
+        // Merge rate-limited routes
+        .merge(rate_limited)
 }
 
 // =============================================================================
