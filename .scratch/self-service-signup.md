@@ -3,7 +3,7 @@
 RFC: `docs/rfc/0003-self-service-signup.md`
 Branch: `jssblck/self-service-signup`
 
-## Status: COMPLETE - Phase 6 (Organization Management Endpoints)
+## Status: COMPLETE - Phase 7 (Invitation Endpoints)
 
 ## Overview
 
@@ -158,15 +158,15 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 - [x] Wire organizations router in v1.rs
 - [x] Integration tests (16 tests)
 
-### Phase 7: Invitation Endpoints
-- [ ] Create `api/v1/invitations.rs` module
-- [ ] `POST /api/v1/organizations/{org_id}/invitations` handler
-- [ ] `GET /api/v1/organizations/{org_id}/invitations` handler
-- [ ] `DELETE /api/v1/organizations/{org_id}/invitations/{id}` handler
-- [ ] `GET /api/v1/invitations/{token}` handler (public)
-- [ ] `POST /api/v1/invitations/{token}/accept` handler
-- [ ] Wire invitations router in v1.rs
-- [ ] Integration tests
+### Phase 7: Invitation Endpoints ✓
+- [x] Create `api/v1/invitations.rs` module
+- [x] `POST /api/v1/organizations/{org_id}/invitations` handler
+- [x] `GET /api/v1/organizations/{org_id}/invitations` handler
+- [x] `DELETE /api/v1/organizations/{org_id}/invitations/{id}` handler
+- [x] `GET /api/v1/invitations/{token}` handler (public preview)
+- [x] `POST /api/v1/invitations/{token}/accept` handler
+- [x] Wire invitations router in v1.rs
+- [x] Integration tests (14 tests)
 
 ### Phase 8: API Key Management Endpoints
 - [ ] Update `AuthenticatedToken` to have `org_id: Option<OrgId>`
@@ -207,7 +207,7 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 - [x] `packages/courier/src/api/v1/oauth.rs` - OAuth endpoints ✓
 - [x] `packages/courier/src/api/v1/me.rs` - User endpoints ✓
 - [x] `packages/courier/src/api/v1/organizations.rs` - Org endpoints ✓
-- [ ] `packages/courier/src/api/v1/invitations.rs` - Invitation endpoints
+- [x] `packages/courier/src/api/v1/invitations.rs` - Invitation endpoints ✓
 - [x] `packages/courier/schema/migrations/0008_add_self_service_signup.up.sql` ✓
 - [x] `packages/courier/schema/migrations/0008_add_self_service_signup.down.sql` ✓
 - [ ] `packages/courier/schema/migrations/0009_remove_account_org_id.up.sql`
@@ -215,7 +215,7 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 - [ ] `packages/courier/tests/it/api/v1/oauth.rs` - OAuth tests
 - [x] `packages/courier/tests/it/api/v1/me.rs` - Me endpoint tests ✓
 - [x] `packages/courier/tests/it/api/v1/organizations.rs` - Org tests ✓
-- [ ] `packages/courier/tests/it/api/v1/invitations.rs` - Invitation tests
+- [x] `packages/courier/tests/it/api/v1/invitations.rs` - Invitation tests ✓
 - [x] `packages/courier/tests/it/crypto.rs` - Crypto unit tests ✓
 
 ### Files Modified
@@ -246,8 +246,8 @@ cargo add --dev wiremock --package courier  # for mocking GitHub API
 
 ## Current Progress
 
-**Current Phase**: 6 - Organization Management Endpoints (COMPLETE)
-**Current Task**: Ready for Phase 7 (Invitation Endpoints)
+**Current Phase**: 7 - Invitation Endpoints (COMPLETE)
+**Current Task**: Ready for Phase 8 (API Key Management Endpoints)
 
 ## Context for Resume
 
@@ -305,6 +305,12 @@ If resuming after context reset:
 - api/v1/organizations.rs: 5 handlers (create, list_members, update_role, remove, leave)
 - api/v1.rs: Wired organizations router
 - tests/it/api/v1/organizations.rs: 16 integration tests
+
+**Phase 7 (Invitation Endpoints)** - 1 commit:
+- api/v1/invitations.rs: 5 handlers (create, list, revoke, preview, accept)
+- api/v1.rs: Merged invitations router
+- tests/it/api/v1/invitations.rs: 14 integration tests
+- Updated sqlx-data.json with new schema queries
 
 ## Data Flow Reference
 
