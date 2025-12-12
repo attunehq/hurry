@@ -251,7 +251,7 @@ impl Postgres {
                     // target either do or do not have glibc version info.
                     continue;
                 };
-                let saved_glibc = GlibcVersion::try_from(saved_glibc_string.as_str())?;
+                let saved_glibc = saved_glibc_string.as_str().parse::<GlibcVersion>()?;
                 if *host_glibc < saved_glibc {
                     // Skip units with incompatible glibc versions.
                     continue;
