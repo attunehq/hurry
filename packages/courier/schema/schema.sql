@@ -14,9 +14,11 @@ CREATE TABLE organization (
 -- Each distinct actor in the application is an "account"; this could be humans
 -- or it could be bots. In the case of bots, the "email" field is for where the
 -- person/team owning the bot can be reached.
+--
+-- Note: Organization membership is tracked via the organization_member table.
+-- Accounts can belong to multiple organizations.
 CREATE TABLE account (
   id BIGSERIAL PRIMARY KEY,
-  organization_id BIGINT NOT NULL REFERENCES organization(id),
   email TEXT NOT NULL UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   disabled_at TIMESTAMPTZ,

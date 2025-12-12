@@ -14,7 +14,7 @@ async fn create_and_get_invitation(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let creator_id = db
-        .create_account(org_id, "creator@test.com", None)
+        .create_account("creator@test.com", None)
         .await
         .unwrap();
 
@@ -51,7 +51,7 @@ async fn get_invitation_preview(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Organization").await.unwrap();
     let creator_id = db
-        .create_account(org_id, "creator@test.com", None)
+        .create_account("creator@test.com", None)
         .await
         .unwrap();
 
@@ -75,7 +75,7 @@ async fn get_expired_invitation_preview(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let creator_id = db
-        .create_account(org_id, "creator@test.com", None)
+        .create_account("creator@test.com", None)
         .await
         .unwrap();
 
@@ -104,11 +104,11 @@ async fn accept_invitation_success(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let creator_id = db
-        .create_account(org_id, "creator@test.com", None)
+        .create_account("creator@test.com", None)
         .await
         .unwrap();
     let joiner_id = db
-        .create_account(org_id, "joiner@test.com", None)
+        .create_account("joiner@test.com", None)
         .await
         .unwrap();
 
@@ -157,7 +157,7 @@ async fn accept_invitation_not_found(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -175,11 +175,11 @@ async fn accept_invitation_expired(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let creator_id = db
-        .create_account(org_id, "creator@test.com", None)
+        .create_account("creator@test.com", None)
         .await
         .unwrap();
     let joiner_id = db
-        .create_account(org_id, "joiner@test.com", None)
+        .create_account("joiner@test.com", None)
         .await
         .unwrap();
 
@@ -208,11 +208,11 @@ async fn accept_invitation_revoked(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let creator_id = db
-        .create_account(org_id, "creator@test.com", None)
+        .create_account("creator@test.com", None)
         .await
         .unwrap();
     let joiner_id = db
-        .create_account(org_id, "joiner@test.com", None)
+        .create_account("joiner@test.com", None)
         .await
         .unwrap();
 
@@ -245,15 +245,15 @@ async fn accept_invitation_max_uses_reached(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let creator_id = db
-        .create_account(org_id, "creator@test.com", None)
+        .create_account("creator@test.com", None)
         .await
         .unwrap();
     let joiner1_id = db
-        .create_account(org_id, "joiner1@test.com", None)
+        .create_account("joiner1@test.com", None)
         .await
         .unwrap();
     let joiner2_id = db
-        .create_account(org_id, "joiner2@test.com", None)
+        .create_account("joiner2@test.com", None)
         .await
         .unwrap();
 
@@ -286,11 +286,11 @@ async fn accept_invitation_already_member(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let creator_id = db
-        .create_account(org_id, "creator@test.com", None)
+        .create_account("creator@test.com", None)
         .await
         .unwrap();
     let joiner_id = db
-        .create_account(org_id, "joiner@test.com", None)
+        .create_account("joiner@test.com", None)
         .await
         .unwrap();
 
@@ -317,7 +317,7 @@ async fn revoke_invitation(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let creator_id = db
-        .create_account(org_id, "creator@test.com", None)
+        .create_account("creator@test.com", None)
         .await
         .unwrap();
 
@@ -354,7 +354,7 @@ async fn list_invitations(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let creator_id = db
-        .create_account(org_id, "creator@test.com", None)
+        .create_account("creator@test.com", None)
         .await
         .unwrap();
 

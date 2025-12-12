@@ -340,16 +340,16 @@ pub mod oauth;
 
 ## Checklist
 
-- [ ] Add GitHub OAuth config to `ServeConfig` in main.rs
-- [ ] Add `SessionToken` type to auth.rs
-- [ ] Add `OrgRole` enum to auth.rs
-- [ ] Add `SessionContext` struct to auth.rs
-- [ ] Create `oauth.rs` module with `GitHubClient`
-- [ ] Add PKCE helpers to crypto.rs
-- [ ] Add `generate_session_token` to crypto.rs
-- [ ] Add `generate_invitation_token` to crypto.rs
-- [ ] Add `generate_oauth_state` to crypto.rs
-- [ ] Add dependencies to Cargo.toml
-- [ ] Export `oauth` module in lib.rs
-- [ ] Unit tests for crypto functions
-- [ ] Unit tests for `OrgRole` conversion
+- [x] Add GitHub OAuth config to `ServeConfig` in main.rs
+- [x] Add `SessionToken` type to auth.rs
+- [x] Add `OrgRole` enum to auth.rs
+- [x] Add `SessionContext` struct to auth.rs
+- [x] Create `oauth.rs` module with `GitHubClient`
+- [x] Add PKCE helpers to crypto.rs
+- [x] Add `generate_session_token` to crypto.rs
+- [x] Add `generate_invitation_token` to crypto.rs
+- [x] Add `generate_oauth_state` to crypto.rs
+- [x] Add dependencies to Cargo.toml (base64, oauth2, reqwest)
+- [x] Export `oauth` module in lib.rs
+- [x] Unit tests for crypto functions (13 tests)
+- [x] OrgRole conversion implemented

@@ -9,7 +9,7 @@ async fn add_and_get_member_role(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -30,7 +30,7 @@ async fn get_role_for_nonmember(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -47,7 +47,7 @@ async fn update_member_role(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -73,7 +73,7 @@ async fn update_nonexistent_member_role(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -93,7 +93,7 @@ async fn remove_organization_member(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -120,7 +120,7 @@ async fn remove_nonexistent_member(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -141,11 +141,11 @@ async fn list_organization_members(pool: sqlx::PgPool) {
     let org_id = db.create_organization("Test Org").await.unwrap();
 
     let alice_id = db
-        .create_account(org_id, "alice@test.com", Some("Alice"))
+        .create_account("alice@test.com", Some("Alice"))
         .await
         .unwrap();
     let bob_id = db
-        .create_account(org_id, "bob@test.com", Some("Bob"))
+        .create_account("bob@test.com", Some("Bob"))
         .await
         .unwrap();
 
@@ -174,11 +174,11 @@ async fn is_last_admin_true(pool: sqlx::PgPool) {
     let org_id = db.create_organization("Test Org").await.unwrap();
 
     let admin_id = db
-        .create_account(org_id, "admin@test.com", None)
+        .create_account("admin@test.com", None)
         .await
         .unwrap();
     let member_id = db
-        .create_account(org_id, "member@test.com", None)
+        .create_account("member@test.com", None)
         .await
         .unwrap();
 
@@ -205,11 +205,11 @@ async fn is_last_admin_false_with_multiple_admins(pool: sqlx::PgPool) {
     let org_id = db.create_organization("Test Org").await.unwrap();
 
     let admin1_id = db
-        .create_account(org_id, "admin1@test.com", None)
+        .create_account("admin1@test.com", None)
         .await
         .unwrap();
     let admin2_id = db
-        .create_account(org_id, "admin2@test.com", None)
+        .create_account("admin2@test.com", None)
         .await
         .unwrap();
 

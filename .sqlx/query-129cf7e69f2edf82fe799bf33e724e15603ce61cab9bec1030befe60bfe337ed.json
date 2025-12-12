@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            INSERT INTO account (organization_id, email, name)\n            VALUES ($1, $2, $3)\n            RETURNING id\n            ",
+  "query": "\n            INSERT INTO account (email, name)\n            VALUES ($1, $2)\n            RETURNING id\n            ",
   "describe": {
     "columns": [
       {
@@ -11,7 +11,6 @@
     ],
     "parameters": {
       "Left": [
-        "Int8",
         "Text",
         "Text"
       ]
@@ -20,5 +19,5 @@
       false
     ]
   },
-  "hash": "8b7486ee9da05e21cdd0020098b38c0c0a0ad238a83e80d4b791f4a50f1036ae"
+  "hash": "129cf7e69f2edf82fe799bf33e724e15603ce61cab9bec1030befe60bfe337ed"
 }

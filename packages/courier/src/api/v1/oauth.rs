@@ -285,27 +285,10 @@ pub async fn callback(
             (account.id, false)
         }
         Ok(None) => {
-            // New user - create account
-            // For new OAuth users, we need to create an organization for them to use
-            // This follows the pattern where accounts have an organization_id (legacy
-            // model) TODO: After migration 0009, new users won't need a default
-            // org
-            let org_id = match db
-                .create_organization(&format!("{}'s Org", github_user.login))
-                .await
-            {
-                Ok(org_id) => org_id,
-                Err(err) => {
-                    error!(?err, "oauth.callback.create_org_error");
-                    return CallbackResponse::Error(format!(
-                        "Failed to create organization: {}",
-                        err
-                    ));
-                }
-            };
-
+            // New user - create account and default organization
+            // Create the account first (accounts can exist without orgs now)
             let account_id = match db
-                .create_account(org_id, email, github_user.name.as_deref())
+                .create_account(email, github_user.name.as_deref())
                 .await
             {
                 Ok(id) => id,
@@ -323,6 +306,21 @@ pub async fn callback(
                 error!(?err, "oauth.callback.link_identity_error");
                 return CallbackResponse::Error(format!("Failed to link GitHub identity: {}", err));
             }
+
+            // Create a default organization for the user
+            let org_id = match db
+                .create_organization(&format!("{}'s Org", github_user.login))
+                .await
+            {
+                Ok(org_id) => org_id,
+                Err(err) => {
+                    error!(?err, "oauth.callback.create_org_error");
+                    return CallbackResponse::Error(format!(
+                        "Failed to create organization: {}",
+                        err
+                    ));
+                }
+            };
 
             // Add user as admin of their org
             if let Err(err) = db

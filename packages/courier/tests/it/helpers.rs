@@ -234,10 +234,10 @@ impl TestAuth {
 
         let account_ids = sqlx::query!(
             r#"
-            INSERT INTO account (organization_id, email, created_at) VALUES
-                (2, $1, now()),
-                (2, $2, now()),
-                (3, $3, now())
+            INSERT INTO account (email, created_at) VALUES
+                ($1, now()),
+                ($2, now()),
+                ($3, now())
             RETURNING id, email
             "#,
             Self::ACCT_ALICE,

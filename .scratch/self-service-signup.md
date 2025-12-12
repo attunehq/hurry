@@ -3,7 +3,7 @@
 RFC: `docs/rfc/0003-self-service-signup.md`
 Branch: `jssblck/self-service-signup`
 
-## Status: COMPLETE - Phase 7 (Invitation Endpoints)
+## Status: COMPLETE - Phase 10 (Account Model Migration)
 
 ## Overview
 
@@ -168,31 +168,37 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 - [x] Wire invitations router in v1.rs
 - [x] Integration tests (14 tests)
 
-### Phase 8: API Key Management Endpoints
-- [ ] Update `AuthenticatedToken` to have `org_id: Option<OrgId>`
-- [ ] Add `require_org()` method to AuthenticatedToken
-- [ ] `GET /api/v1/me/api-keys` handler
-- [ ] `POST /api/v1/me/api-keys` handler
-- [ ] `DELETE /api/v1/me/api-keys/{key_id}` handler
-- [ ] `GET /api/v1/organizations/{org_id}/api-keys` handler
-- [ ] `POST /api/v1/organizations/{org_id}/api-keys` handler
-- [ ] `DELETE /api/v1/organizations/{org_id}/api-keys/{key_id}` handler
-- [ ] Update existing cache/CAS handlers to use `require_org()`
-- [ ] Integration tests
+### Phase 8: API Key Management Endpoints ✓
+- [x] Update `AuthenticatedToken` to have `org_id: Option<OrgId>`
+- [x] Add `require_org()` method to AuthenticatedToken
+- [x] `GET /api/v1/me/api-keys` handler
+- [x] `POST /api/v1/me/api-keys` handler
+- [x] `DELETE /api/v1/me/api-keys/{key_id}` handler
+- [x] `GET /api/v1/organizations/{org_id}/api-keys` handler
+- [x] `POST /api/v1/organizations/{org_id}/api-keys` handler
+- [x] `DELETE /api/v1/organizations/{org_id}/api-keys/{key_id}` handler
+- [x] Update existing cache/CAS handlers to use `require_org()`
+- [x] Integration tests (18 tests in api_keys.rs)
 
-### Phase 9: Rate Limiting & Audit Logging
-- [ ] Create `rate_limit.rs` module
-- [ ] Configure rate limiter (10 req/min per account)
-- [ ] Apply to `/invitations/{token}/accept`
-- [ ] Apply to `/me/api-keys` POST
-- [ ] Add audit logging calls to all state-changing handlers
-- [ ] Integration tests for rate limits
+### Phase 9: Rate Limiting & Audit Logging ✓
+- [x] Create `rate_limit.rs` module
+- [x] Configure rate limiter (sensitive, standard, permissive tiers)
+- [x] Apply to `/invitations/{token}/accept`
+- [x] Apply to `/me/api-keys` POST
+- [x] Apply to `/organizations/{org_id}/api-keys` POST
+- [x] Add audit logging calls to all state-changing handlers
+- [x] Integration tests (rate limiting tested implicitly)
 
-### Phase 10: Account Model Migration
-- [ ] Create migration 0009 up (populate organization_member, api_key.org_id, drop column)
-- [ ] Create migration 0009 down (re-add column, repopulate)
-- [ ] Update test fixtures for new model
-- [ ] Verify all tests pass
+### Phase 10: Account Model Migration ✓
+- [x] Create migration 0009 up (populate organization_member, api_key.org_id, drop column)
+- [x] Create migration 0009 down (re-add column, repopulate)
+- [x] Update test fixtures for new model (auth.sql updated)
+- [x] Update db.rs Account struct (removed org_id field)
+- [x] Update create_account signature (removed org_id parameter)
+- [x] Update OAuth callback flow for new account model
+- [x] Update all test files for new create_account signature
+- [x] Run make sqlx-prepare
+- [x] Verify all 186 tests pass
 
 ### Phase 11: Bot Account Endpoints (Optional)
 - [ ] `POST /api/v1/organizations/{org_id}/bots` handler
@@ -203,15 +209,15 @@ We're using a **horizontal layer** approach - building complete layers (schema �
 
 ### New Files
 - [x] `packages/courier/src/oauth.rs` - GitHub OAuth client ✓
-- [ ] `packages/courier/src/rate_limit.rs` - Rate limiting config
+- [x] `packages/courier/src/rate_limit.rs` - Rate limiting config ✓
 - [x] `packages/courier/src/api/v1/oauth.rs` - OAuth endpoints ✓
 - [x] `packages/courier/src/api/v1/me.rs` - User endpoints ✓
 - [x] `packages/courier/src/api/v1/organizations.rs` - Org endpoints ✓
 - [x] `packages/courier/src/api/v1/invitations.rs` - Invitation endpoints ✓
 - [x] `packages/courier/schema/migrations/0008_add_self_service_signup.up.sql` ✓
 - [x] `packages/courier/schema/migrations/0008_add_self_service_signup.down.sql` ✓
-- [ ] `packages/courier/schema/migrations/0009_remove_account_org_id.up.sql`
-- [ ] `packages/courier/schema/migrations/0009_remove_account_org_id.down.sql`
+- [x] `packages/courier/schema/migrations/0009_remove_account_org_id.up.sql` ✓
+- [x] `packages/courier/schema/migrations/0009_remove_account_org_id.down.sql` ✓
 - [ ] `packages/courier/tests/it/api/v1/oauth.rs` - OAuth tests
 - [x] `packages/courier/tests/it/api/v1/me.rs` - Me endpoint tests ✓
 - [x] `packages/courier/tests/it/api/v1/organizations.rs` - Org tests ✓
@@ -246,8 +252,8 @@ cargo add --dev wiremock --package courier  # for mocking GitHub API
 
 ## Current Progress
 
-**Current Phase**: 7 - Invitation Endpoints (COMPLETE)
-**Current Task**: Ready for Phase 8 (API Key Management Endpoints)
+**Current Phase**: 10 - Account Model Migration (COMPLETE)
+**Current Task**: Ready for Phase 11 (Bot Account Endpoints - Optional) or PR preparation
 
 ## Context for Resume
 
@@ -311,6 +317,26 @@ If resuming after context reset:
 - api/v1.rs: Merged invitations router
 - tests/it/api/v1/invitations.rs: 14 integration tests
 - Updated sqlx-data.json with new schema queries
+
+**Phase 8 (API Key Management Endpoints)** - 1 commit:
+- auth.rs: AuthenticatedToken.org_id: Option<OrgId>, require_org() method
+- api/v1/me.rs: Added GET/POST/DELETE /me/api-keys handlers
+- api/v1/organizations.rs: Added GET/POST/DELETE /organizations/{org_id}/api-keys handlers
+- tests/it/api/v1/api_keys.rs: 18 integration tests
+
+**Phase 9 (Rate Limiting & Audit Logging)** - 1 commit:
+- rate_limit.rs: sensitive(), standard(), permissive() rate limit layers
+- Applied to invitation accept, API key creation endpoints
+- Audit logging calls in all state-changing handlers (invitations, API keys, etc.)
+
+**Phase 10 (Account Model Migration)** - 1 commit:
+- Migration 0009: Remove account.organization_id column
+- schema.sql: Updated to reflect final schema
+- fixtures/auth.sql: Updated for new model (organization_member table)
+- db.rs: Account struct without org_id, create_account without org_id parameter
+- oauth.rs: Updated callback to create account then add membership
+- Updated all test files (10+ files) for new create_account signature
+- All 186 tests pass
 
 ## Data Flow Reference
 

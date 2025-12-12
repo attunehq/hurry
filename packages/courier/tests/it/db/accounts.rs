@@ -1,18 +1,15 @@
 //! Tests for account database operations.
 
-use courier::{auth::OrgId, db::Postgres};
+use courier::db::Postgres;
 use pretty_assertions::assert_eq as pretty_assert_eq;
 
 #[sqlx::test(migrator = "Postgres::MIGRATOR")]
 async fn create_and_get_account(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    // Create an organization first
-    let org_id = db.create_organization("Test Org").await.unwrap();
-
     // Create an account
     let account_id = db
-        .create_account(org_id, "test@example.com", Some("Test User"))
+        .create_account("test@example.com", Some("Test User"))
         .await
         .unwrap();
 
@@ -20,7 +17,6 @@ async fn create_and_get_account(pool: sqlx::PgPool) {
     let account = db.get_account(account_id).await.unwrap().unwrap();
 
     pretty_assert_eq!(account.id, account_id);
-    pretty_assert_eq!(account.org_id, org_id);
     pretty_assert_eq!(account.email, "test@example.com");
     pretty_assert_eq!(account.name.as_deref(), Some("Test User"));
     assert!(account.disabled_at.is_none());
@@ -30,11 +26,7 @@ async fn create_and_get_account(pool: sqlx::PgPool) {
 async fn create_account_without_name(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
-    let account_id = db
-        .create_account(org_id, "noname@test.com", None)
-        .await
-        .unwrap();
+    let account_id = db.create_account("noname@test.com", None).await.unwrap();
 
     let account = db.get_account(account_id).await.unwrap().unwrap();
 
@@ -57,11 +49,7 @@ async fn get_nonexistent_account(pool: sqlx::PgPool) {
 async fn update_account_email(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
-    let account_id = db
-        .create_account(org_id, "old@test.com", None)
-        .await
-        .unwrap();
+    let account_id = db.create_account("old@test.com", None).await.unwrap();
 
     db.update_account_email(account_id, "new@test.com")
         .await
@@ -75,11 +63,7 @@ async fn update_account_email(pool: sqlx::PgPool) {
 async fn update_account_name(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
-    let account_id = db
-        .create_account(org_id, "test@test.com", None)
-        .await
-        .unwrap();
+    let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     // Set name
     db.update_account_name(account_id, Some("New Name"))
@@ -98,11 +82,7 @@ async fn update_account_name(pool: sqlx::PgPool) {
 async fn disable_and_enable_account(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
-    let account_id = db
-        .create_account(org_id, "test@test.com", None)
-        .await
-        .unwrap();
+    let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     // Disable account
     db.disable_account(account_id).await.unwrap();

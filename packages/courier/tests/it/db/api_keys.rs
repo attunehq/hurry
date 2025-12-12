@@ -9,7 +9,7 @@ async fn create_personal_api_key(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -38,7 +38,7 @@ async fn create_org_scoped_api_key(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -59,7 +59,7 @@ async fn list_personal_api_keys(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -89,7 +89,7 @@ async fn list_org_api_keys(pool: sqlx::PgPool) {
     let org1_id = db.create_organization("Org 1").await.unwrap();
     let org2_id = db.create_organization("Org 2").await.unwrap();
     let account_id = db
-        .create_account(org1_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -117,7 +117,7 @@ async fn revoke_api_key(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 

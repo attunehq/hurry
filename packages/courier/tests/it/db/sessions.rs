@@ -8,9 +8,8 @@ use time::{Duration, OffsetDateTime};
 async fn create_and_validate_session(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -32,9 +31,8 @@ async fn create_and_validate_session(pool: sqlx::PgPool) {
 async fn validate_expired_session(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -55,9 +53,8 @@ async fn validate_expired_session(pool: sqlx::PgPool) {
 async fn validate_disabled_account_session(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -92,9 +89,8 @@ async fn validate_invalid_session(pool: sqlx::PgPool) {
 async fn revoke_session(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -129,9 +125,8 @@ async fn revoke_nonexistent_session(pool: sqlx::PgPool) {
 async fn revoke_all_sessions(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -162,9 +157,8 @@ async fn revoke_all_sessions(pool: sqlx::PgPool) {
 async fn extend_session(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -190,9 +184,8 @@ async fn extend_session(pool: sqlx::PgPool) {
 async fn cleanup_expired_sessions(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 

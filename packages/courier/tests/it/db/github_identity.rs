@@ -9,7 +9,7 @@ async fn link_and_get_github_identity(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -32,7 +32,7 @@ async fn get_account_by_github_id(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", Some("Test User"))
+        .create_account("test@test.com", Some("Test User"))
         .await
         .unwrap();
 
@@ -62,7 +62,7 @@ async fn get_nonexistent_github_identity(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 
@@ -78,7 +78,7 @@ async fn update_github_username(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
-        .create_account(org_id, "test@test.com", None)
+        .create_account("test@test.com", None)
         .await
         .unwrap();
 

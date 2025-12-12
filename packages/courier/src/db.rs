@@ -380,10 +380,13 @@ impl Postgres {
 // =============================================================================
 
 /// An account record from the database.
+///
+/// Note: Organization membership is tracked via the `organization_member` table,
+/// not directly on the account. Use `list_organizations_for_account` to get
+/// an account's organizations.
 #[derive(Clone, Debug)]
 pub struct Account {
     pub id: AccountId,
-    pub org_id: OrgId,
     pub email: String,
     pub name: Option<String>,
     pub disabled_at: Option<OffsetDateTime>,
@@ -393,23 +396,16 @@ pub struct Account {
 impl Postgres {
     /// Create a new account.
     ///
-    /// Note: This creates an account with the legacy `organization_id` field.
-    /// For new accounts that use the organization_member model, consider using
-    /// `create_account_with_membership` instead.
+    /// Note: This only creates the account record. Use `add_organization_member`
+    /// to associate the account with an organization.
     #[tracing::instrument(name = "Postgres::create_account")]
-    pub async fn create_account(
-        &self,
-        org_id: OrgId,
-        email: &str,
-        name: Option<&str>,
-    ) -> Result<AccountId> {
+    pub async fn create_account(&self, email: &str, name: Option<&str>) -> Result<AccountId> {
         let row = sqlx::query!(
             r#"
-            INSERT INTO account (organization_id, email, name)
-            VALUES ($1, $2, $3)
+            INSERT INTO account (email, name)
+            VALUES ($1, $2)
             RETURNING id
             "#,
-            org_id.as_i64(),
             email,
             name,
         )
@@ -425,7 +421,7 @@ impl Postgres {
     pub async fn get_account(&self, account_id: AccountId) -> Result<Option<Account>> {
         let row = sqlx::query!(
             r#"
-            SELECT id, organization_id, email, name, disabled_at, created_at
+            SELECT id, email, name, disabled_at, created_at
             FROM account
             WHERE id = $1
             "#,
@@ -437,7 +433,6 @@ impl Postgres {
 
         Ok(row.map(|r| Account {
             id: AccountId::from_i64(r.id),
-            org_id: OrgId::from_i64(r.organization_id),
             email: r.email,
             name: r.name,
             disabled_at: r.disabled_at,
@@ -450,7 +445,7 @@ impl Postgres {
     pub async fn get_account_by_github_id(&self, github_user_id: i64) -> Result<Option<Account>> {
         let row = sqlx::query!(
             r#"
-            SELECT a.id, a.organization_id, a.email, a.name, a.disabled_at, a.created_at
+            SELECT a.id, a.email, a.name, a.disabled_at, a.created_at
             FROM account a
             JOIN github_identity gi ON a.id = gi.account_id
             WHERE gi.github_user_id = $1
@@ -463,7 +458,6 @@ impl Postgres {
 
         Ok(row.map(|r| Account {
             id: AccountId::from_i64(r.id),
-            org_id: OrgId::from_i64(r.organization_id),
             email: r.email,
             name: r.name,
             disabled_at: r.disabled_at,

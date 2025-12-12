@@ -217,14 +217,17 @@ WHERE account.id = om.account_id;
 
 ## Checklist
 
-- [ ] Write `0008_add_self_service_signup.up.sql`
-- [ ] Write `0008_add_self_service_signup.down.sql`
-- [ ] Update `schema/schema.sql` to include all new tables
-- [ ] Run migrations locally: `cargo run -p courier -- migrate --database-url $COURIER_DATABASE_URL`
-- [ ] Run `make sqlx-prepare`
-- [ ] Verify tests still pass: `cargo nextest run -p courier`
-
-Note: Migration 0009 will be written later, after Phase 7 (API Key Management) is complete.
+- [x] Write `0008_add_self_service_signup.up.sql`
+- [x] Write `0008_add_self_service_signup.down.sql`
+- [x] Update `schema/schema.sql` to include all new tables
+- [x] Run migrations locally
+- [x] Run `make sqlx-prepare`
+- [x] Verify tests still pass
+- [x] Write `0009_remove_account_org_id.up.sql`
+- [x] Write `0009_remove_account_org_id.down.sql`
+- [x] Update `schema/schema.sql` to remove account.organization_id
+- [x] Update auth fixtures for new model
+- [x] All 186 tests pass
 
 ## Testing the Migration
 

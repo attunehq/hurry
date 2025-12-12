@@ -35,11 +35,8 @@ async fn list_organizations_for_account(pool: sqlx::PgPool) {
     let org1_id = db.create_organization("Org 1").await.unwrap();
     let org2_id = db.create_organization("Org 2").await.unwrap();
 
-    // Create account (with legacy org_id, but we'll use membership table)
-    let account_id = db
-        .create_account(org1_id, "test@test.com", None)
-        .await
-        .unwrap();
+    // Create account
+    let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     // Add memberships
     db.add_organization_member(org1_id, account_id, OrgRole::Admin)
@@ -65,11 +62,7 @@ async fn list_organizations_for_account(pool: sqlx::PgPool) {
 async fn list_organizations_for_account_with_no_memberships(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
-    let account_id = db
-        .create_account(org_id, "test@test.com", None)
-        .await
-        .unwrap();
+    let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     // Don't add any memberships
 

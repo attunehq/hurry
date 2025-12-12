@@ -403,19 +403,23 @@ Note: Session validation is separate via `validate_session()`. The auth extracto
 
 ## Checklist
 
-- [ ] Add `Account` struct and related types
-- [ ] Implement account CRUD operations
-- [ ] Implement GitHub identity operations
-- [ ] Implement session operations
-- [ ] Implement OAuth state operations
-- [ ] Implement organization operations
-- [ ] Implement membership operations
-- [ ] Implement invitation operations
-- [ ] Implement audit log operation
-- [ ] Update API key operations for org scope
-- [ ] Add audit action constants
-- [ ] Integration tests for account operations
-- [ ] Integration tests for session operations
-- [ ] Integration tests for organization operations
-- [ ] Integration tests for membership operations
-- [ ] Integration tests for invitation operations
+- [x] Add `Account` struct and related types
+- [x] Implement account CRUD operations
+- [x] Implement GitHub identity operations
+- [x] Implement session operations
+- [x] Implement OAuth state operations
+- [x] Implement organization operations
+- [x] Implement membership operations
+- [x] Implement invitation operations
+- [x] Implement audit log operation
+- [x] Update API key operations for org scope
+- [x] Add audit action constants
+- [x] Integration tests for account operations (6 tests)
+- [x] Integration tests for session operations (8 tests)
+- [x] Integration tests for organization operations (4 tests)
+- [x] Integration tests for membership operations (8 tests)
+- [x] Integration tests for invitation operations (10 tests)
+- [x] Integration tests for GitHub identity operations (5 tests)
+- [x] Integration tests for OAuth state operations (4 tests)
+- [x] Integration tests for API key operations (6 tests)
+- [x] Account model migration complete (org_id removed)
