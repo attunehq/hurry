@@ -293,54 +293,30 @@ pub async fn callback(
             (account.id, false)
         }
         Ok(None) => {
-            // New user - create account and default organization
-            // Create the account first (accounts can exist without orgs now)
-            let account_id = match db.create_account(email, github_user.name.as_deref()).await {
-                Ok(id) => id,
+            // New user - create account, GitHub identity, and default organization atomically
+            let org_name = format!("{}'s Org", github_user.login);
+            let signup_result = match db
+                .signup_with_github(
+                    email,
+                    github_user.name.as_deref(),
+                    github_user.id,
+                    &github_user.login,
+                    &org_name,
+                )
+                .await
+            {
+                Ok(result) => result,
                 Err(err) => {
-                    error!(?err, "oauth.callback.create_account_error");
-                    return CallbackResponse::Error(format!("Failed to create account: {}", err));
+                    error!(?err, "oauth.callback.signup_error");
+                    return CallbackResponse::Error(format!("Failed to create account: {err}"));
                 }
             };
-
-            // Link GitHub identity
-            if let Err(err) = db
-                .link_github_identity(account_id, github_user.id, &github_user.login)
-                .await
-            {
-                error!(?err, "oauth.callback.link_identity_error");
-                return CallbackResponse::Error(format!("Failed to link GitHub identity: {}", err));
-            }
-
-            // Create a default organization for the user
-            let org_id = match db
-                .create_organization(&format!("{}'s Org", github_user.login))
-                .await
-            {
-                Ok(org_id) => org_id,
-                Err(err) => {
-                    error!(?err, "oauth.callback.create_org_error");
-                    return CallbackResponse::Error(format!(
-                        "Failed to create organization: {}",
-                        err
-                    ));
-                }
-            };
-
-            // Add user as admin of their org
-            if let Err(err) = db
-                .add_organization_member(org_id, account_id, crate::auth::OrgRole::Admin)
-                .await
-            {
-                error!(?err, "oauth.callback.add_member_error");
-                // Non-fatal, continue
-            }
 
             // Log account creation
             let _ = db
                 .log_audit_event(
-                    Some(account_id),
-                    Some(org_id),
+                    Some(signup_result.account_id),
+                    Some(signup_result.org_id),
                     "account.created",
                     Some(serde_json::json!({
                         "github_user_id": github_user.id,
@@ -350,11 +326,11 @@ pub async fn callback(
                 .await;
 
             info!(
-                account_id = %account_id,
+                account_id = %signup_result.account_id,
                 github_user_id = github_user.id,
                 "oauth.callback.new_user"
             );
-            (account_id, true)
+            (signup_result.account_id, true)
         }
         Err(err) => {
             error!(?err, "oauth.callback.lookup_error");

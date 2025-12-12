@@ -379,12 +379,14 @@ impl Postgres {
     /// Grant an organization access to a CAS key.
     ///
     /// This is idempotent: if the organization already has access, this is a
-    /// no-op.
+    /// no-op. The operation atomically upserts the CAS key and grants access.
     ///
     /// Returns `true` if access was newly granted, `false` if the org already
     /// had access.
     #[tracing::instrument(name = "Postgres::grant_cas_access")]
     pub async fn grant_cas_access(&self, org_id: OrgId, key: &Key) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+
         // First, ensure the CAS key exists
         let key_id = sqlx::query!(
             r#"
@@ -395,7 +397,7 @@ impl Postgres {
             "#,
             key.as_bytes(),
         )
-        .fetch_one(&self.pool)
+        .fetch_one(tx.as_mut())
         .await
         .context("upsert cas key")?
         .id;
@@ -410,9 +412,11 @@ impl Postgres {
             org_id.as_i64(),
             key_id,
         )
-        .execute(&self.pool)
+        .execute(tx.as_mut())
         .await
         .context("grant org access to cas key")?;
+
+        tx.commit().await?;
 
         // If rows_affected is 1, we inserted a new row (newly granted access)
         // If rows_affected is 0, the row already existed (org already had access)
@@ -520,7 +524,100 @@ pub struct Account {
     pub created_at: OffsetDateTime,
 }
 
+/// Result of a new user signup via GitHub OAuth.
+#[derive(Clone, Debug)]
+pub struct SignupResult {
+    /// The account ID of the new user.
+    pub account_id: AccountId,
+    /// The ID of the default organization created for the user.
+    pub org_id: OrgId,
+}
+
 impl Postgres {
+    /// Create a new account with GitHub identity and default organization.
+    ///
+    /// This is the transactional signup flow for new users via GitHub OAuth.
+    /// It atomically:
+    /// 1. Creates the account
+    /// 2. Links the GitHub identity
+    /// 3. Creates a default organization
+    /// 4. Adds the user as admin of the organization
+    ///
+    /// If any step fails, the entire operation is rolled back.
+    #[tracing::instrument(name = "Postgres::signup_with_github")]
+    pub async fn signup_with_github(
+        &self,
+        email: &str,
+        name: Option<&str>,
+        github_user_id: i64,
+        github_username: &str,
+        org_name: &str,
+    ) -> Result<SignupResult> {
+        let mut tx = self.pool.begin().await?;
+
+        // Create the account
+        let account_row = sqlx::query!(
+            r#"
+            INSERT INTO account (email, name)
+            VALUES ($1, $2)
+            RETURNING id
+            "#,
+            email,
+            name,
+        )
+        .fetch_one(tx.as_mut())
+        .await
+        .context("create account")?;
+
+        let account_id = AccountId::from_i64(account_row.id);
+
+        // Link GitHub identity
+        sqlx::query!(
+            r#"
+            INSERT INTO github_identity (account_id, github_user_id, github_username)
+            VALUES ($1, $2, $3)
+            "#,
+            account_id.as_i64(),
+            github_user_id,
+            github_username,
+        )
+        .execute(tx.as_mut())
+        .await
+        .context("link github identity")?;
+
+        // Create the default organization
+        let org_row = sqlx::query!(
+            r#"
+            INSERT INTO organization (name)
+            VALUES ($1)
+            RETURNING id
+            "#,
+            org_name,
+        )
+        .fetch_one(tx.as_mut())
+        .await
+        .context("create organization")?;
+
+        let org_id = OrgId::from_i64(org_row.id);
+
+        // Add user as admin of the organization
+        sqlx::query!(
+            r#"
+            INSERT INTO organization_member (organization_id, account_id, role_id)
+            VALUES ($1, $2, (SELECT id FROM organization_role WHERE name = 'admin'))
+            "#,
+            org_id.as_i64(),
+            account_id.as_i64(),
+        )
+        .execute(tx.as_mut())
+        .await
+        .context("add user as org admin")?;
+
+        tx.commit().await?;
+
+        Ok(SignupResult { account_id, org_id })
+    }
+
     /// Create a new account.
     ///
     /// Note: This only creates the account record. Use
@@ -1187,7 +1284,61 @@ pub struct OrganizationWithRole {
 }
 
 impl Postgres {
-    /// Create a new organization.
+    /// Create a new organization with the creator as admin.
+    ///
+    /// This atomically creates the organization and adds the creator as an
+    /// admin member. If either step fails, the entire operation is rolled back.
+    ///
+    /// This is the preferred method for creating organizations in production
+    /// code, as it ensures the organization always has at least one admin.
+    #[tracing::instrument(name = "Postgres::create_organization_with_admin")]
+    pub async fn create_organization_with_admin(
+        &self,
+        name: &str,
+        creator_account_id: AccountId,
+    ) -> Result<OrgId> {
+        let mut tx = self.pool.begin().await?;
+
+        // Create the organization
+        let row = sqlx::query!(
+            r#"
+            INSERT INTO organization (name)
+            VALUES ($1)
+            RETURNING id
+            "#,
+            name,
+        )
+        .fetch_one(tx.as_mut())
+        .await
+        .context("create organization")?;
+
+        let org_id = OrgId::from_i64(row.id);
+
+        // Add creator as admin
+        sqlx::query!(
+            r#"
+            INSERT INTO organization_member (organization_id, account_id, role_id)
+            VALUES ($1, $2, (SELECT id FROM organization_role WHERE name = 'admin'))
+            "#,
+            org_id.as_i64(),
+            creator_account_id.as_i64(),
+        )
+        .execute(tx.as_mut())
+        .await
+        .context("add creator as org admin")?;
+
+        tx.commit().await?;
+
+        Ok(org_id)
+    }
+
+    /// Create a new organization without any members.
+    ///
+    /// **Warning**: This creates an organization with no admin. In production,
+    /// prefer `create_organization_with_admin` which atomically adds the
+    /// creator as an admin.
+    ///
+    /// This method is primarily intended for testing.
     #[tracing::instrument(name = "Postgres::create_organization")]
     pub async fn create_organization(&self, name: &str) -> Result<OrgId> {
         let row = sqlx::query!(

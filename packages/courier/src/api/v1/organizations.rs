@@ -83,23 +83,17 @@ pub async fn create_organization(
         return CreateOrgResponse::BadRequest(String::from("Organization name cannot be empty"));
     }
 
-    // Create the organization
-    let org_id = match db.create_organization(&request.name).await {
+    // Create the organization and add the creator as admin (atomically)
+    let org_id = match db
+        .create_organization_with_admin(&request.name, session.account_id)
+        .await
+    {
         Ok(id) => id,
         Err(err) => {
             error!(?err, "organizations.create.error");
             return CreateOrgResponse::Error(err.to_string());
         }
     };
-
-    // Add the creator as admin
-    if let Err(err) = db
-        .add_organization_member(org_id, session.account_id, OrgRole::Admin)
-        .await
-    {
-        error!(?err, "organizations.create.add_member_error");
-        return CreateOrgResponse::Error(err.to_string());
-    }
 
     // Log audit event
     let _ = db
