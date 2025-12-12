@@ -293,7 +293,8 @@ pub async fn callback(
             (account.id, false)
         }
         Ok(None) => {
-            // New user - create account, GitHub identity, and default organization atomically
+            // New user - create account, GitHub identity, and default organization
+            // atomically
             let org_name = format!("{}'s Org", github_user.login);
             let signup_result = match db
                 .signup_with_github(
