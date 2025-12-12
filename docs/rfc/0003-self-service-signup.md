@@ -122,7 +122,7 @@ The same flow handles both new and returning users:
 
 ### New vs returning users
 
-New users get an account created with their GitHub identity linked. A personal organization is created for personal use. No API key is generated automatically—users create keys via the dashboard or API when needed.
+New users get an account created with their GitHub identity linked. A personal organization is created for personal use (it is a normal organization; it just starts as the only org the user belongs to). By default, it is named after the user. No API key is generated automatically—users create keys via the dashboard or API when needed.
 
 Returning users are matched by GitHub user ID. Their email is updated if changed.
 
@@ -269,9 +269,12 @@ After a successful OAuth callback, Courier issues a short-lived, single-use exch
 -- Short-lived, single-use auth codes issued after OAuth callback.
 CREATE TABLE oauth_exchange_code (
   id BIGSERIAL PRIMARY KEY,
-  code TEXT NOT NULL UNIQUE,
+  -- Store only a hash of the exchange code (like API keys/sessions), so DB
+  -- leaks don't allow redeeming live auth codes.
+  code_hash BYTEA NOT NULL UNIQUE,
   account_id BIGINT NOT NULL REFERENCES account(id),
   redirect_uri TEXT NOT NULL,
+  -- Stored server-side; never trusted from the client.
   new_user BOOLEAN NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expires_at TIMESTAMPTZ NOT NULL,
@@ -350,7 +353,7 @@ Response:
 }
 ```
 
-Auth codes are short-lived and single-use.
+Auth codes are high-entropy, short-lived, and single-use. A second attempt to redeem the same auth code fails.
 
 ### Session management
 
@@ -769,13 +772,33 @@ All OAuth flows use PKCE with the S256 challenge method. The verifier is stored 
 
 ### OAuth exchange codes
 
-OAuth exchange codes (`auth_code`) are generated using a CSPRNG, expire quickly, and can be redeemed only once. They exist to avoid returning long-lived credentials (session tokens) in URLs.
+OAuth exchange codes (`auth_code`) are generated using a CSPRNG (192 bits) and encoded as base64url without padding. They expire quickly (60 seconds) and can be redeemed only once. They exist to avoid returning long-lived credentials (session tokens) in URLs.
+
+Implementation notes:
+- Only a SHA-256 hash of the auth code is stored server-side (`code_hash`). The client sends the plaintext auth code for redemption.
+- Redemption is atomic: validate not expired, validate not redeemed, then set `redeemed_at` and issue a session token.
+- The `new_user` signal is stored server-side with the auth code and never trusted from the client.
 
 This reduces the blast radius of accidental disclosure: even if an `auth_code` is captured via logs or browser history, it will typically be expired or already redeemed by the time an attacker can use it.
 
 ### Redirect URI validation
 
-The `redirect_uri` parameter is validated against an allowlist of permitted domains before initiating OAuth. Open redirects are not possible.
+The `redirect_uri` parameter is validated against an allowlist of permitted redirect URIs before initiating OAuth.
+
+Validation rules:
+- The `redirect_uri` must exactly match one of the configured allowlist entries.
+- This list is configured per environment (e.g., strict production callback URL(s), and broader localhost URLs in development).
+
+Exact matching prevents attackers from supplying arbitrary paths on an allowlisted origin (which could otherwise include open-redirect endpoints or paths that leak query parameters).
+
+### Logging and redaction
+
+Courier must not log secrets or credentials, including:
+- OAuth callback query parameters (`code`, `state`)
+- OAuth exchange codes (`auth_code`)
+- Session tokens
+- API keys
+- `Authorization` headers
 
 ### API key generation
 
@@ -814,12 +837,14 @@ Tokens can also be:
 
 ### Rate limiting
 
-Rate limiting protects against brute-force attacks and abuse. Authenticated endpoints are rate limited by account/session. Unauthenticated endpoints (OAuth start, auth code exchange, invitation preview) rely on upstream rate limiting, strong randomness, short TTLs, or are low-risk.
+Rate limiting protects against brute-force attacks and abuse. Authenticated endpoints are rate limited by account/session. Unauthenticated endpoints (OAuth start, auth code exchange, invitation preview) rely on strong randomness, short TTLs, and service-protection limits.
 
 Key endpoints with rate limits:
 - `/api/v1/invitations/{token}/accept`: 10/minute per session (protects against brute-forcing invitation tokens)
 - `/api/v1/me/api-keys` (POST): 10/minute per session (prevents API key spam)
-- `/api/v1/oauth/exchange` (POST): 60/minute per IP (protects against auth code guessing/replay)
+- `/api/v1/oauth/exchange` (POST): rate limited without IP (auth codes are high-entropy and single-use):
+  - Bucketed by the first 12 characters of `auth_code` (protects against rapid replay/hammering on the same code)
+  - Optionally capped by a high-ceiling global limiter (protects DB/CPU from volumetric abuse)
 
 The OAuth flow is naturally rate-limited by GitHub's own rate limits on the token exchange endpoint.
 
