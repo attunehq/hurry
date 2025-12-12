@@ -547,19 +547,19 @@ impl From<&BuildScriptExecutionUnitPlan> for BuildScriptExecutionUnitPlan {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct GLIBCVersion {
+pub struct GlibcVersion {
     pub major: u32,
     pub minor: u32,
     pub patch: u32,
 }
 
-impl Display for GLIBCVersion {
+impl Display for GlibcVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
     }
 }
 
-impl FromStr for GLIBCVersion {
+impl FromStr for GlibcVersion {
     type Err = eyre::Report;
 
     // For reference, see the full list of glibc versions[^1].
@@ -596,7 +596,7 @@ impl FromStr for GLIBCVersion {
     }
 }
 
-impl Ord for GLIBCVersion {
+impl Ord for GlibcVersion {
     fn cmp(&self, other: &Self) -> Ordering {
         self.major
             .cmp(&other.major)
@@ -605,7 +605,7 @@ impl Ord for GLIBCVersion {
     }
 }
 
-impl PartialOrd for GLIBCVersion {
+impl PartialOrd for GlibcVersion {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }

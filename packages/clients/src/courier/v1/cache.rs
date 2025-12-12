@@ -6,7 +6,7 @@ use bon::Builder;
 use derive_more::From;
 use serde::{Deserialize, Serialize};
 
-use crate::courier::v1::{GLIBCVersion, SavedUnit, SavedUnitHash};
+use crate::courier::v1::{GlibcVersion, SavedUnit, SavedUnitHash};
 
 /// A single `SavedUnit` and its associated cache key in a save request.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Builder)]
@@ -16,7 +16,7 @@ pub struct CargoSaveUnitRequest {
     #[builder(into)]
     pub unit: SavedUnit,
     pub resolved_target: String,
-    pub linux_glibc_version: Option<GLIBCVersion>,
+    pub linux_glibc_version: Option<GlibcVersion>,
 }
 
 /// Request to save cargo cache metadata.
@@ -59,14 +59,14 @@ impl From<&CargoSaveRequest> for CargoSaveRequest {
 #[non_exhaustive]
 pub struct CargoRestoreRequest {
     pub units: HashSet<SavedUnitHash>,
-    pub host_glibc_version: Option<GLIBCVersion>,
+    pub host_glibc_version: Option<GlibcVersion>,
 }
 
 impl CargoRestoreRequest {
     /// Create a new instance from the provided hashes.
     pub fn new(
         units: impl IntoIterator<Item = impl Into<SavedUnitHash>>,
-        host_glibc_version: Option<GLIBCVersion>,
+        host_glibc_version: Option<GlibcVersion>,
     ) -> Self {
         let units = units.into_iter().map(Into::into).collect::<HashSet<_>>();
         Self {

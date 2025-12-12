@@ -1,10 +1,10 @@
 use std::ffi::CStr;
 
-use clients::courier::v1::GLIBCVersion;
+use clients::courier::v1::GlibcVersion;
 use color_eyre::{Result, eyre::Context as _};
 use tap::Pipe as _;
 
-pub fn host_glibc_version() -> Result<Option<GLIBCVersion>> {
+pub fn host_glibc_version() -> Result<Option<GlibcVersion>> {
     if cfg!(target_env = "gnu") {
         // TODO: Does this actually get the specific libc that rustc will
         // compile user code against? Maybe we have to run a special command to
@@ -25,7 +25,7 @@ pub fn host_glibc_version() -> Result<Option<GLIBCVersion>> {
         version_str
             .to_str()
             .context("parsing glibc version as UTF-8")?
-            .parse::<GLIBCVersion>()
+            .parse::<GlibcVersion>()
             .context("parsing glibc version")?
             .pipe(Some)
     } else {

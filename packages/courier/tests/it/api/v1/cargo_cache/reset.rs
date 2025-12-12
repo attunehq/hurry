@@ -1,7 +1,7 @@
 //! Cargo cache reset endpoint tests.
 
 use clients::courier::v1::{
-    GLIBCVersion,
+    GlibcVersion,
     cache::{CargoRestoreRequest, CargoSaveRequest, CargoSaveUnitRequest},
 };
 use color_eyre::Result;
@@ -9,7 +9,7 @@ use sqlx::PgPool;
 
 use crate::helpers::{TestFixture, test_saved_unit};
 
-const GLIBC_VERSION: GLIBCVersion = GLIBCVersion {
+const GLIBC_VERSION: GlibcVersion = GlibcVersion {
     major: 2,
     minor: 41,
     patch: 0,
