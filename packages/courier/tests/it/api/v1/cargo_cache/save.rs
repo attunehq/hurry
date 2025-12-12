@@ -1,7 +1,7 @@
 //! Cargo cache save endpoint tests.
 
 use clients::courier::v1::{
-    SavedUnitHash,
+    GlibcVersion, SavedUnitHash,
     cache::{CargoRestoreRequest, CargoSaveRequest, CargoSaveUnitRequest},
 };
 use color_eyre::Result;
@@ -11,7 +11,7 @@ use tap::Pipe;
 
 use crate::helpers::{TestFixture, test_saved_unit};
 
-const GLIBC_VERSION: GLIBCVersion = GLIBCVersion {
+const GLIBC_VERSION: GlibcVersion = GlibcVersion {
     major: 2,
     minor: 41,
     patch: 0,
@@ -25,13 +25,13 @@ async fn basic_save_flow(pool: PgPool) -> Result<()> {
     let request = CargoSaveUnitRequest::builder()
         .unit(unit.clone())
         .resolved_target(String::from("x86_64-unknown-linux-gnu"))
-        .maybe_linux_glibc_version(GLIBC_VERSION)
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
     let save_request = CargoSaveRequest::new([request]);
 
     fixture.client_alice.cargo_cache_save(save_request).await?;
 
-    let restore_request = CargoRestoreRequest::new([key.clone()], GLIBC_VERSION);
+    let restore_request = CargoRestoreRequest::new([key.clone()], Some(GLIBC_VERSION));
     let response = fixture
         .client_alice
         .cargo_cache_restore(restore_request)
@@ -55,7 +55,7 @@ async fn idempotent_saves(pool: PgPool) -> Result<()> {
     let request = CargoSaveUnitRequest::builder()
         .unit(unit.clone())
         .resolved_target(String::from("x86_64-unknown-linux-gnu"))
-        .maybe_linux_glibc_version(GLIBC_VERSION)
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
     let save_request = CargoSaveRequest::new([request.clone()]);
 
@@ -65,7 +65,7 @@ async fn idempotent_saves(pool: PgPool) -> Result<()> {
         .await?;
     fixture.client_alice.cargo_cache_save(save_request).await?;
 
-    let restore_request = CargoRestoreRequest::new([key.clone()], GLIBC_VERSION);
+    let restore_request = CargoRestoreRequest::new([key.clone()], Some(GLIBC_VERSION));
     let response = fixture
         .client_alice
         .cargo_cache_restore(restore_request)
@@ -100,7 +100,7 @@ async fn save_multiple_packages(pool: PgPool) -> Result<()> {
             CargoSaveUnitRequest::builder()
                 .unit(unit)
                 .resolved_target(String::from("x86_64-unknown-linux-gnu"))
-                .maybe_linux_glibc_version(GLIBC_VERSION)
+                .maybe_linux_glibc_version(Some(GLIBC_VERSION))
                 .build()
         })
         .collect::<Vec<_>>();
@@ -113,7 +113,7 @@ async fn save_multiple_packages(pool: PgPool) -> Result<()> {
         .map(|(hash, _)| SavedUnitHash::from(*hash))
         .collect::<Vec<_>>();
 
-    let restore_request = CargoRestoreRequest::new(keys.clone(), GLIBC_VERSION);
+    let restore_request = CargoRestoreRequest::new(keys.clone(), Some(GLIBC_VERSION));
     let response = fixture
         .client_alice
         .cargo_cache_restore(restore_request)
@@ -149,7 +149,7 @@ async fn save_same_package_different_hashes(pool: PgPool) -> Result<()> {
             CargoSaveUnitRequest::builder()
                 .unit(unit)
                 .resolved_target(String::from("x86_64-unknown-linux-gnu"))
-                .maybe_linux_glibc_version(GLIBC_VERSION)
+                .maybe_linux_glibc_version(Some(GLIBC_VERSION))
                 .build()
         })
         .collect::<Vec<_>>();
@@ -162,7 +162,7 @@ async fn save_same_package_different_hashes(pool: PgPool) -> Result<()> {
         .map(|(hash, _)| SavedUnitHash::from(*hash))
         .collect::<Vec<_>>();
 
-    let restore_request = CargoRestoreRequest::new(keys.clone(), GLIBC_VERSION);
+    let restore_request = CargoRestoreRequest::new(keys.clone(), Some(GLIBC_VERSION));
     let response = fixture
         .client_alice
         .cargo_cache_restore(restore_request)
@@ -199,7 +199,7 @@ async fn concurrent_saves_different_packages(pool: PgPool) -> Result<()> {
             let request = CargoSaveUnitRequest::builder()
                 .unit(unit)
                 .resolved_target(String::from("x86_64-unknown-linux-gnu"))
-                .maybe_linux_glibc_version(GLIBC_VERSION)
+                .maybe_linux_glibc_version(Some(GLIBC_VERSION))
                 .build();
             let save_request = CargoSaveRequest::new([request]);
             fixture.client_alice.cargo_cache_save(save_request)
@@ -213,7 +213,7 @@ async fn concurrent_saves_different_packages(pool: PgPool) -> Result<()> {
         .map(|(hash, _)| SavedUnitHash::from(hash.as_str()))
         .collect::<Vec<_>>();
 
-    let restore_request = CargoRestoreRequest::new(keys.clone(), GLIBC_VERSION);
+    let restore_request = CargoRestoreRequest::new(keys.clone(), Some(GLIBC_VERSION));
     let response = fixture
         .client_alice
         .cargo_cache_restore(restore_request)
@@ -238,7 +238,7 @@ async fn save_missing_auth_returns_401(pool: PgPool) -> Result<()> {
     let request = CargoSaveUnitRequest::builder()
         .unit(unit)
         .resolved_target(String::from("x86_64-unknown-linux-gnu"))
-        .maybe_linux_glibc_version(GLIBC_VERSION)
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
     let save_request = CargoSaveRequest::new([request]);
 
@@ -256,7 +256,7 @@ async fn save_invalid_token_returns_401(pool: PgPool) -> Result<()> {
     let request = CargoSaveUnitRequest::builder()
         .unit(unit)
         .resolved_target(String::from("x86_64-unknown-linux-gnu"))
-        .maybe_linux_glibc_version(GLIBC_VERSION)
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
     let save_request = CargoSaveRequest::new([request]);
 
@@ -274,7 +274,7 @@ async fn save_revoked_token_returns_401(pool: PgPool) -> Result<()> {
     let request = CargoSaveUnitRequest::builder()
         .unit(unit)
         .resolved_target(String::from("x86_64-unknown-linux-gnu"))
-        .maybe_linux_glibc_version(GLIBC_VERSION)
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
     let save_request = CargoSaveRequest::new([request]);
 

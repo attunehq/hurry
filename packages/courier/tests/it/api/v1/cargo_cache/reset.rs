@@ -23,7 +23,7 @@ async fn resets_cache(pool: PgPool) -> Result<()> {
     let request = CargoSaveUnitRequest::builder()
         .unit(unit)
         .resolved_target(String::from("x86_64-unknown-linux-gnu"))
-        .maybe_linux_glibc_version(GLIBC_VERSION)
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
     let save_request = CargoSaveRequest::new([request]);
 
@@ -56,7 +56,7 @@ async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
     let request_alice = CargoSaveUnitRequest::builder()
         .unit(unit_alice)
         .resolved_target(String::from("x86_64-unknown-linux-gnu"))
-        .maybe_linux_glibc_version(GLIBC_VERSION)
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
     let save_request_alice = CargoSaveRequest::new([request_alice]);
 
@@ -65,7 +65,7 @@ async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
     let request_charlie = CargoSaveUnitRequest::builder()
         .unit(unit_charlie)
         .resolved_target(String::from("x86_64-unknown-linux-gnu"))
-        .maybe_linux_glibc_version(GLIBC_VERSION)
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
     let save_request_charlie = CargoSaveRequest::new([request_charlie]);
 
@@ -80,14 +80,14 @@ async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
 
     fixture.client_alice.cache_reset().await?;
 
-    let restore_alice = CargoRestoreRequest::new([key_alice], GLIBC_VERSION);
+    let restore_alice = CargoRestoreRequest::new([key_alice], Some(GLIBC_VERSION));
     let response_alice = fixture
         .client_alice
         .cargo_cache_restore(restore_alice)
         .await?;
     assert!(response_alice.is_empty(), "org A's cache should be deleted");
 
-    let restore_charlie = CargoRestoreRequest::new([key_charlie], GLIBC_VERSION);
+    let restore_charlie = CargoRestoreRequest::new([key_charlie], Some(GLIBC_VERSION));
     let response_charlie = fixture
         .client_charlie
         .cargo_cache_restore(restore_charlie)

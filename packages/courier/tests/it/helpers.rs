@@ -10,8 +10,8 @@ use async_tempfile::TempDir;
 use clients::{
     Token,
     courier::v1::{
-        Client, Fingerprint, Key, LibraryCrateUnitPlan, LibraryFiles, SavedUnit, SavedUnitHash,
-        UnitPlanInfo,
+        Client, Fingerprint, GlibcVersion, Key, LibraryCrateUnitPlan, LibraryFiles, SavedUnit,
+        SavedUnitHash, UnitPlanInfo,
         cache::{CargoSaveRequest, CargoSaveUnitRequest},
     },
 };
@@ -25,7 +25,7 @@ use futures::{StreamExt, TryStreamExt, stream};
 use sqlx::PgPool;
 use url::Url;
 
-const GLIBC_VERSION: GLIBCVersion = GLIBCVersion {
+const GLIBC_VERSION: GlibcVersion = GlibcVersion {
     major: 2,
     minor: 41,
     patch: 0,
@@ -294,7 +294,7 @@ pub fn test_cargo_save_request(
     let request = CargoSaveUnitRequest::builder()
         .unit(unit)
         .resolved_target(String::from("x86_64-unknown-linux-gnu"))
-        .maybe_linux_glibc_version(GLIBC_VERSION)
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
     let save_request = CargoSaveRequest::new([request]);
     (save_request, key)
