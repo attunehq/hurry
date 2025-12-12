@@ -35,8 +35,7 @@ filetime = { workspace = true }
 flume = { workspace = true }
 fslock = { workspace = true }
 futures = { workspace = true }
-git-version = { workspace = true }
-hex.workspace = true
+hex = { workspace = true }
 home = { workspace = true }
 homedir = { workspace = true }
 humansize = { workspace = true }
