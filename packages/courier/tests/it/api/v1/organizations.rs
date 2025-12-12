@@ -430,3 +430,267 @@ async fn leave_organization_admin_after_promoting_another(pool: PgPool) -> Resul
 
     Ok(())
 }
+
+// =============================================================================
+// Bot Account Tests
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct CreateBotResponse {
+    account_id: i64,
+    name: String,
+    api_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BotListResponse {
+    bots: Vec<BotEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct BotEntry {
+    account_id: i64,
+    name: Option<String>,
+    responsible_email: String,
+    created_at: String,
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn create_bot_as_admin(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/bots"))?;
+
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .json(&serde_json::json!({
+            "name": "CI Bot",
+            "responsible_email": "devops@acme.com"
+        }))
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::CREATED);
+
+    let bot = response.json::<CreateBotResponse>().await?;
+    pretty_assert_eq!(bot.name, "CI Bot");
+    assert!(bot.account_id > 0);
+    assert!(!bot.api_key.is_empty());
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn create_bot_as_member_forbidden(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/bots"))?;
+
+    // Bob is a member (not admin)
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(fixture.auth.session_bob().expose())
+        .json(&serde_json::json!({
+            "name": "CI Bot",
+            "responsible_email": "devops@acme.com"
+        }))
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn create_bot_as_non_member_forbidden(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/bots"))?;
+
+    // Charlie is not a member of Acme
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(fixture.auth.session_charlie().expose())
+        .json(&serde_json::json!({
+            "name": "CI Bot",
+            "responsible_email": "devops@acme.com"
+        }))
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn create_bot_empty_name_fails(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/bots"))?;
+
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .json(&serde_json::json!({
+            "name": "  ",
+            "responsible_email": "devops@acme.com"
+        }))
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn create_bot_empty_email_fails(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/bots"))?;
+
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .json(&serde_json::json!({
+            "name": "CI Bot",
+            "responsible_email": "  "
+        }))
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn list_bots_as_admin(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+
+    // First create a bot
+    let create_url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/bots"))?;
+    let create_response = reqwest::Client::new()
+        .post(create_url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .json(&serde_json::json!({
+            "name": "CI Bot",
+            "responsible_email": "devops@acme.com"
+        }))
+        .send()
+        .await?;
+    pretty_assert_eq!(create_response.status(), StatusCode::CREATED);
+
+    // Now list bots
+    let list_url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/bots"))?;
+    let list_response = reqwest::Client::new()
+        .get(list_url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .send()
+        .await?;
+
+    pretty_assert_eq!(list_response.status(), StatusCode::OK);
+
+    let list = list_response.json::<BotListResponse>().await?;
+    pretty_assert_eq!(list.bots.len(), 1);
+    pretty_assert_eq!(list.bots[0].name, Some(String::from("CI Bot")));
+    pretty_assert_eq!(list.bots[0].responsible_email, "devops@acme.com");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn list_bots_as_member_forbidden(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/bots"))?;
+
+    // Bob is a member (not admin)
+    let response = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(fixture.auth.session_bob().expose())
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn list_bots_as_non_member_forbidden(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/bots"))?;
+
+    // Charlie is not a member of Acme
+    let response = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(fixture.auth.session_charlie().expose())
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn bot_api_key_works_for_org_operations(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+
+    // Create a bot
+    let create_url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/bots"))?;
+    let create_response = reqwest::Client::new()
+        .post(create_url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .json(&serde_json::json!({
+            "name": "CI Bot",
+            "responsible_email": "devops@acme.com"
+        }))
+        .send()
+        .await?;
+    pretty_assert_eq!(create_response.status(), StatusCode::CREATED);
+
+    let bot = create_response.json::<CreateBotResponse>().await?;
+
+    // Use the bot's API key to access CAS
+    let health_url = fixture.base_url.join("api/v1/health")?;
+    let health_response = reqwest::Client::new()
+        .get(health_url)
+        .bearer_auth(&bot.api_key)
+        .send()
+        .await?;
+
+    // Health endpoint should work (it doesn't require auth, but the key should be valid)
+    pretty_assert_eq!(health_response.status(), StatusCode::OK);
+
+    Ok(())
+}

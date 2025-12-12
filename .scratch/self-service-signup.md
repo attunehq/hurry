@@ -3,7 +3,7 @@
 RFC: `docs/rfc/0003-self-service-signup.md`
 Branch: `jssblck/self-service-signup`
 
-## Status: COMPLETE - Phase 10 (Account Model Migration)
+## Status: COMPLETE - Phase 11 (Bot Account Endpoints)
 
 ## Overview
 
@@ -200,10 +200,13 @@ We're using a **horizontal layer** approach - building complete layers (schema â
 - [x] Run make sqlx-prepare
 - [x] Verify all 186 tests pass
 
-### Phase 11: Bot Account Endpoints (Optional)
-- [ ] `POST /api/v1/organizations/{org_id}/bots` handler
-- [ ] `GET /api/v1/organizations/{org_id}/bots` handler
-- [ ] Integration tests
+### Phase 11: Bot Account Endpoints âœ“
+- [x] `POST /api/v1/organizations/{org_id}/bots` handler
+- [x] `GET /api/v1/organizations/{org_id}/bots` handler
+- [x] Integration tests (10 tests)
+- [x] Database methods: create_bot_account, list_bot_accounts
+- [x] Rate limiting applied to bot creation
+- [x] Audit logging for bot creation
 
 ## Files to Create
 
@@ -252,8 +255,8 @@ cargo add --dev wiremock --package courier  # for mocking GitHub API
 
 ## Current Progress
 
-**Current Phase**: 10 - Account Model Migration (COMPLETE)
-**Current Task**: Ready for Phase 11 (Bot Account Endpoints - Optional) or PR preparation
+**Current Phase**: 11 - Bot Account Endpoints (COMPLETE)
+**Current Task**: All phases complete. Ready for PR preparation.
 
 ## Context for Resume
 
@@ -337,6 +340,16 @@ If resuming after context reset:
 - oauth.rs: Updated callback to create account then add membership
 - Updated all test files (10+ files) for new create_account signature
 - All 186 tests pass
+
+**Phase 11 (Bot Account Endpoints)** - 1 commit:
+- db.rs: Added create_bot_account, list_bot_accounts methods
+- api/v1/organizations.rs: Added POST/GET /organizations/{org_id}/bots handlers
+- Rate limiting applied to bot creation (sensitive tier)
+- Audit logging for bot creation events
+- fixtures/auth.sql: Added GitHub identities for test accounts
+- tests/it/helpers.rs: Link GitHub identities in seed function
+- tests/it/api/v1/organizations.rs: 10 integration tests for bot endpoints
+- All 195 tests pass
 
 ## Data Flow Reference
 

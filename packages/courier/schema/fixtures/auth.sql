@@ -37,7 +37,15 @@ INSERT INTO api_key (id, account_id, name, hash, organization_id, created_at, ac
   (4, 1, 'alice-revoked', decode('209e0f7fe399a496966090284536e81018df959c1a3fafef0c819c2a08d571f0', 'hex'), 2, '2024-01-01 00:00:00+00', '2024-01-01 00:00:00+00', '2024-01-15 00:00:00+00')
 ON CONFLICT (id) DO NOTHING;
 
+-- GitHub identities (so these accounts are recognized as human, not bot accounts)
+INSERT INTO github_identity (id, account_id, github_user_id, github_username, created_at, updated_at) VALUES
+  (1, 1, 1001, 'alice-github', '2024-01-01 00:00:00+00', '2024-01-01 00:00:00+00'),
+  (2, 2, 1002, 'bob-github', '2024-01-01 00:00:00+00', '2024-01-01 00:00:00+00'),
+  (3, 3, 1003, 'charlie-github', '2024-01-02 00:00:00+00', '2024-01-02 00:00:00+00')
+ON CONFLICT (id) DO NOTHING;
+
 -- Reset sequences to avoid conflicts
 SELECT setval('organization_id_seq', (SELECT MAX(id) FROM organization));
 SELECT setval('account_id_seq', (SELECT MAX(id) FROM account));
 SELECT setval('api_key_id_seq', (SELECT MAX(id) FROM api_key));
+SELECT setval('github_identity_id_seq', (SELECT MAX(id) FROM github_identity));

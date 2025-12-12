@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT a.id, a.name, a.email, a.created_at\n            FROM account a\n            JOIN organization_member om ON a.id = om.account_id\n            WHERE om.organization_id = $1\n              AND NOT EXISTS (\n                  SELECT 1 FROM github_identity gi WHERE gi.account_id = a.id\n              )\n            ORDER BY a.created_at DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "0f622b91f3d442c35129751fc287c946b546ce76fd996586e04c22638f4166bf"
+}

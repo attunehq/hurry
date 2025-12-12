@@ -26,6 +26,7 @@ pub fn router() -> Router<State> {
     // Rate-limited routes (sensitive operations)
     let rate_limited = Router::new()
         .route("/{org_id}/api-keys", post(create_org_api_key))
+        .route("/{org_id}/bots", post(create_bot))
         .layer(rate_limit::sensitive());
 
     Router::new()
@@ -36,6 +37,7 @@ pub fn router() -> Router<State> {
         .route("/{org_id}/leave", post(leave_organization))
         .route("/{org_id}/api-keys", get(list_org_api_keys))
         .route("/{org_id}/api-keys/{key_id}", delete(delete_org_api_key))
+        .route("/{org_id}/bots", get(list_bots))
         .merge(rate_limited)
 }
 
@@ -1056,6 +1058,269 @@ impl IntoResponse for DeleteOrgApiKeyResponse {
             )
                 .into_response(),
             DeleteOrgApiKeyResponse::Error(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Bot Account Endpoints
+// =============================================================================
+
+/// Request body for creating a bot account.
+#[derive(Debug, Deserialize)]
+pub struct CreateBotRequest {
+    /// Name of the bot (e.g., "CI Bot").
+    pub name: String,
+    /// Email of the person/team responsible for this bot.
+    pub responsible_email: String,
+}
+
+/// Response for creating a bot account.
+#[derive(Debug, Serialize)]
+pub struct CreateBotResponse {
+    pub account_id: i64,
+    pub name: String,
+    /// The API key token - only returned once at creation.
+    pub api_key: String,
+}
+
+/// Create a bot account for an organization.
+///
+/// Bot accounts are organization-scoped accounts without GitHub identity,
+/// for CI systems and automation. Only admins can create bot accounts.
+///
+/// ## Endpoint
+/// ```
+/// POST /api/v1/organizations/{org_id}/bots
+/// Authorization: Bearer <session_token>
+/// Content-Type: application/json
+///
+/// {
+///   "name": "CI Bot",
+///   "responsible_email": "alice@example.com"
+/// }
+/// ```
+///
+/// ## Responses
+/// - 201: Bot account created (includes API key)
+/// - 400: Invalid request
+/// - 401: Not authenticated
+/// - 403: Not an admin of the organization
+#[tracing::instrument(skip(db, session))]
+pub async fn create_bot(
+    Dep(db): Dep<Postgres>,
+    session: SessionContext,
+    Path(org_id): Path<i64>,
+    Json(request): Json<CreateBotRequest>,
+) -> CreateBotApiResponse {
+    let org_id = OrgId::from_i64(org_id);
+
+    // Check if user is an admin
+    match db.get_member_role(org_id, session.account_id).await {
+        Ok(Some(role)) if role.is_admin() => {}
+        Ok(Some(_)) => {
+            warn!(
+                account_id = %session.account_id,
+                org_id = %org_id,
+                "organizations.bots.create.not_admin"
+            );
+            return CreateBotApiResponse::Forbidden;
+        }
+        Ok(None) => {
+            warn!(
+                account_id = %session.account_id,
+                org_id = %org_id,
+                "organizations.bots.create.not_member"
+            );
+            return CreateBotApiResponse::Forbidden;
+        }
+        Err(err) => {
+            error!(?err, "organizations.bots.create.role_check_error");
+            return CreateBotApiResponse::Error(err.to_string());
+        }
+    }
+
+    // Validate request
+    let name = request.name.trim();
+    if name.is_empty() {
+        return CreateBotApiResponse::BadRequest("Bot name cannot be empty");
+    }
+
+    let email = request.responsible_email.trim();
+    if email.is_empty() {
+        return CreateBotApiResponse::BadRequest("Responsible email cannot be empty");
+    }
+
+    // Create the bot account
+    match db.create_bot_account(org_id, name, email).await {
+        Ok((account_id, token)) => {
+            // Log audit event
+            let _ = db
+                .log_audit_event(
+                    Some(session.account_id),
+                    Some(org_id),
+                    "bot.created",
+                    Some(serde_json::json!({
+                        "bot_account_id": account_id.as_i64(),
+                        "name": name,
+                        "responsible_email": email,
+                    })),
+                )
+                .await;
+
+            info!(
+                account_id = %session.account_id,
+                org_id = %org_id,
+                bot_account_id = %account_id,
+                "organizations.bots.create.success"
+            );
+
+            CreateBotApiResponse::Created(CreateBotResponse {
+                account_id: account_id.as_i64(),
+                name: name.to_string(),
+                api_key: token.expose().to_string(),
+            })
+        }
+        Err(err) => {
+            error!(?err, "organizations.bots.create.error");
+            CreateBotApiResponse::Error(err.to_string())
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum CreateBotApiResponse {
+    Created(CreateBotResponse),
+    BadRequest(&'static str),
+    Forbidden,
+    Error(String),
+}
+
+impl IntoResponse for CreateBotApiResponse {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            CreateBotApiResponse::Created(bot) => (StatusCode::CREATED, Json(bot)).into_response(),
+            CreateBotApiResponse::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+            CreateBotApiResponse::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "Only admins can create bot accounts",
+            )
+                .into_response(),
+            CreateBotApiResponse::Error(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            }
+        }
+    }
+}
+
+/// Response for listing bot accounts.
+#[derive(Debug, Serialize)]
+pub struct BotListResponse {
+    pub bots: Vec<BotEntry>,
+}
+
+/// A single bot account entry.
+#[derive(Debug, Serialize)]
+pub struct BotEntry {
+    pub account_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub responsible_email: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+/// List bot accounts for an organization.
+///
+/// Only admins can view bot accounts.
+///
+/// ## Endpoint
+/// ```
+/// GET /api/v1/organizations/{org_id}/bots
+/// Authorization: Bearer <session_token>
+/// ```
+///
+/// ## Responses
+/// - 200: List of bot accounts
+/// - 401: Not authenticated
+/// - 403: Not an admin of the organization
+#[tracing::instrument(skip(db, session))]
+pub async fn list_bots(
+    Dep(db): Dep<Postgres>,
+    session: SessionContext,
+    Path(org_id): Path<i64>,
+) -> ListBotsResponse {
+    let org_id = OrgId::from_i64(org_id);
+
+    // Check if user is an admin
+    match db.get_member_role(org_id, session.account_id).await {
+        Ok(Some(role)) if role.is_admin() => {}
+        Ok(Some(_)) => {
+            warn!(
+                account_id = %session.account_id,
+                org_id = %org_id,
+                "organizations.bots.list.not_admin"
+            );
+            return ListBotsResponse::Forbidden;
+        }
+        Ok(None) => {
+            warn!(
+                account_id = %session.account_id,
+                org_id = %org_id,
+                "organizations.bots.list.not_member"
+            );
+            return ListBotsResponse::Forbidden;
+        }
+        Err(err) => {
+            error!(?err, "organizations.bots.list.role_check_error");
+            return ListBotsResponse::Error(err.to_string());
+        }
+    }
+
+    match db.list_bot_accounts(org_id).await {
+        Ok(bots) => {
+            info!(
+                org_id = %org_id,
+                count = bots.len(),
+                "organizations.bots.list.success"
+            );
+            let entries = bots
+                .into_iter()
+                .map(|bot| BotEntry {
+                    account_id: bot.id.as_i64(),
+                    name: bot.name,
+                    responsible_email: bot.email,
+                    created_at: bot.created_at,
+                })
+                .collect();
+            ListBotsResponse::Success(BotListResponse { bots: entries })
+        }
+        Err(err) => {
+            error!(?err, "organizations.bots.list.error");
+            ListBotsResponse::Error(err.to_string())
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ListBotsResponse {
+    Success(BotListResponse),
+    Forbidden,
+    Error(String),
+}
+
+impl IntoResponse for ListBotsResponse {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            ListBotsResponse::Success(list) => (StatusCode::OK, Json(list)).into_response(),
+            ListBotsResponse::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "Only admins can view bot accounts",
+            )
+                .into_response(),
+            ListBotsResponse::Error(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
             }
         }

@@ -310,6 +310,17 @@ impl TestAuth {
             .await
             .context("add Charlie to Widget")?;
 
+        // Link GitHub identities so these accounts are recognized as human (not bot) accounts
+        db.link_github_identity(alice_id, 1001, "alice-github")
+            .await
+            .context("link Alice GitHub")?;
+        db.link_github_identity(bob_id, 1002, "bob-github")
+            .await
+            .context("link Bob GitHub")?;
+        db.link_github_identity(charlie_id, 1003, "charlie-github")
+            .await
+            .context("link Charlie GitHub")?;
+
         // Update existing API key tokens to be org-scoped
         // Alice and Bob get Acme tokens, Charlie gets Widget tokens
         sqlx::query!(
