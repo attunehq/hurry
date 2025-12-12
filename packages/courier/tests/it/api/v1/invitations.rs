@@ -5,6 +5,7 @@ use pretty_assertions::assert_eq as pretty_assert_eq;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::helpers::TestFixture;
 
@@ -57,6 +58,8 @@ struct CreateInvitationRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     expires_in_days: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_uses: Option<i32>,
@@ -74,12 +77,15 @@ async fn create_invitation_success(pool: PgPool) -> Result<()> {
         .base_url
         .join(&format!("api/v1/organizations/{org_id}/invitations"))?;
 
+    let expires_at = (OffsetDateTime::now_utc() + Duration::days(7)).format(&Rfc3339)?;
+
     let response = reqwest::Client::new()
         .post(url)
         .bearer_auth(fixture.auth.session_alice().expose())
         .json(&CreateInvitationRequest {
             role: Some(String::from("member")),
-            expires_in_days: Some(7),
+            expires_at: Some(expires_at),
+            expires_in_days: None,
             max_uses: Some(5),
         })
         .send()
@@ -91,6 +97,31 @@ async fn create_invitation_success(pool: PgPool) -> Result<()> {
     pretty_assert_eq!(inv.role, "member");
     pretty_assert_eq!(inv.max_uses, Some(5));
     assert!(!inv.token.is_empty());
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn create_invitation_legacy_expires_in_days(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/invitations"))?;
+
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .json(&CreateInvitationRequest {
+            role: Some(String::from("member")),
+            expires_at: None,
+            expires_in_days: Some(7),
+            max_uses: Some(5),
+        })
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::CREATED);
 
     Ok(())
 }
@@ -322,6 +353,7 @@ async fn get_invitation_preview_success(pool: PgPool) -> Result<()> {
         .bearer_auth(fixture.auth.session_alice().expose())
         .json(&CreateInvitationRequest {
             role: Some(String::from("admin")),
+            expires_at: None,
             expires_in_days: None,
             max_uses: None,
         })

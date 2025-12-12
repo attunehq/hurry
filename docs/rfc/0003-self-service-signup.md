@@ -388,7 +388,7 @@ Content-Type: application/json
 
 {
   "role": "member",           // or "admin"
-  "expires_in_hours": 168,    // optional, default 7 days
+  "expires_at": "2025-01-08T00:00:00Z", // optional, default now + 7 days
   "max_uses": 10              // optional, default unlimited
 }
 

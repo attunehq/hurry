@@ -61,19 +61,22 @@ pub struct CreateInvitationRequest {
     /// Role to grant (defaults to "member").
     #[serde(default = "default_role")]
     pub role: OrgRole,
+    /// Absolute expiration timestamp.
+    ///
+    /// If omitted, defaults to 7 days from now.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub expires_at: Option<OffsetDateTime>,
     /// Expiration in days from now (defaults to 7, max 365).
-    #[serde(default = "default_expiration_days")]
-    pub expires_in_days: i64,
+    ///
+    /// Deprecated in favor of `expires_at`.
+    #[serde(default)]
+    pub expires_in_days: Option<i64>,
     /// Maximum number of uses (None = unlimited).
     pub max_uses: Option<i32>,
 }
 
 fn default_role() -> OrgRole {
     OrgRole::Member
-}
-
-fn default_expiration_days() -> i64 {
-    DEFAULT_EXPIRATION_DAYS
 }
 
 /// Create a new invitation for an organization.
@@ -86,7 +89,7 @@ fn default_expiration_days() -> i64 {
 /// Authorization: Bearer <session_token>
 /// Content-Type: application/json
 ///
-/// { "role": "member", "expires_in_days": 7, "max_uses": 10 }
+/// { "role": "member", "expires_at": "2025-01-08T00:00:00Z", "max_uses": 10 }
 /// ```
 ///
 /// ## Responses
@@ -129,8 +132,33 @@ pub async fn create_invitation(
     }
 
     // Validate expiration
-    let expires_in_days = request.expires_in_days.clamp(1, 365);
-    let expires_at = OffsetDateTime::now_utc() + Duration::days(expires_in_days);
+    let now = OffsetDateTime::now_utc();
+    if request.expires_at.is_some() && request.expires_in_days.is_some() {
+        return CreateInvitationResponse::BadRequest(String::from(
+            "Provide either expires_at or expires_in_days, not both",
+        ));
+    }
+
+    let expires_at = match (request.expires_at, request.expires_in_days) {
+        (Some(expires_at), None) => expires_at,
+        (None, Some(expires_in_days)) => {
+            let expires_in_days = expires_in_days.clamp(1, 365);
+            now + Duration::days(expires_in_days)
+        }
+        (None, None) => now + Duration::days(DEFAULT_EXPIRATION_DAYS),
+        (Some(_), Some(_)) => unreachable!("guarded above"),
+    };
+
+    if expires_at <= now {
+        return CreateInvitationResponse::BadRequest(String::from(
+            "expires_at must be in the future",
+        ));
+    }
+    if expires_at > now + Duration::days(365) {
+        return CreateInvitationResponse::BadRequest(String::from(
+            "expires_at cannot be more than 365 days in the future",
+        ));
+    }
 
     // Validate max_uses
     if let Some(max) = request.max_uses
@@ -140,7 +168,7 @@ pub async fn create_invitation(
     }
 
     // Generate token (longer for long-lived invitations)
-    let long_lived = expires_in_days > LONG_LIVED_THRESHOLD_DAYS;
+    let long_lived = (expires_at - now) > Duration::days(LONG_LIVED_THRESHOLD_DAYS);
     let token = generate_invitation_token(long_lived);
 
     // Create invitation
@@ -171,7 +199,7 @@ pub async fn create_invitation(
             Some(serde_json::json!({
                 "invitation_id": invitation_id.as_i64(),
                 "role": request.role,
-                "expires_in_days": expires_in_days,
+                "expires_at": expires_at,
                 "max_uses": request.max_uses,
             })),
         )
