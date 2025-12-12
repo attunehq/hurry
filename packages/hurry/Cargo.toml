@@ -6,13 +6,6 @@ edition = "2024"
 [features]
 default = []
 
-[[bench]]
-name = "cargo_copy_target"
-harness = false
-[[bench]]
-name = "walkdir"
-harness = false
-
 [dependencies]
 async-walkdir = { workspace = true }
 axum = { workspace = true, features = ["macros"] }
@@ -22,7 +15,7 @@ cargo_metadata = { workspace = true }
 clap = { workspace = true, features = ["cargo", "derive", "string"] }
 clients = { workspace = true, features = ["client"] }
 color-eyre = { workspace = true }
-colored = {workspace = true }
+colored = { workspace = true }
 console = { workspace = true }
 const-str = { workspace = true, features = ["std", "all"] }
 dashmap = { workspace = true, features = ["serde"] }
@@ -40,7 +33,7 @@ home = { workspace = true }
 homedir = { workspace = true }
 humansize = { workspace = true }
 indicatif = { workspace = true }
-inquire = {workspace = true }
+inquire = { workspace = true }
 is_executable = { workspace = true }
 itertools = { workspace = true }
 jiff = { workspace = true }
@@ -80,3 +73,10 @@ simple_test_case.workspace = true
 test-log = { workspace = true, features = ["trace"] }
 workspace_root = { workspace = true }
 xshell = { workspace = true }
+
+[[bench]]
+name = "cargo_copy_target"
+harness = false
+[[bench]]
+name = "walkdir"
+harness = false
