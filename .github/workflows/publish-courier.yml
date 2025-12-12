@@ -6,6 +6,9 @@
 name: Publish Courier
 
 on:
+    # Path filtering only applies to branches, not tags.
+    # - Main branch: triggers only when courier/clients/docker paths change
+    # - Version tags: always trigger (paths filter is ignored)
     push:
         branches: [main]
         paths:
