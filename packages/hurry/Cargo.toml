@@ -37,14 +37,14 @@ inquire = { workspace = true }
 is_executable = { workspace = true }
 itertools = { workspace = true }
 jiff = { workspace = true }
-jwalk.workspace = true
+jwalk = { workspace = true }
 lazy-regex = { workspace = true, features = ["regex", "std"] }
 libc = { workspace = true }
 num_cpus = { workspace = true }
 parse-display = { workspace = true }
 paste = { workspace = true }
 rayon = { workspace = true }
-reqwest.workspace = true
+reqwest = { workspace = true }
 rustc-stable-hash = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc", "std"] }
 serde_json = { workspace = true }
@@ -65,11 +65,11 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 walkdir = { workspace = true }
 
 [dev-dependencies]
-async-walkdir.workspace = true
+async-walkdir = { workspace = true }
 divan = { workspace = true }
 jwalk = { workspace = true }
 pretty_assertions = { workspace = true }
-simple_test_case.workspace = true
+simple_test_case = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
 workspace_root = { workspace = true }
 xshell = { workspace = true }

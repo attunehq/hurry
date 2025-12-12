@@ -7,7 +7,7 @@ edition = "2024"
 aerosol = { workspace = true, features = ["async", "axum", "axum-extra", "tracing"] }
 async-compression = { workspace = true, features = ["tokio", "zstd"] }
 async-tar = { workspace = true }
-async-tempfile.workspace = true
+async-tempfile = { workspace = true }
 axum = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
@@ -19,7 +19,7 @@ hex = { workspace = true }
 piper = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
-serde_json.workspace = true
+serde_json = { workspace = true }
 sha2 = { workspace = true }
 sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate", "bigdecimal", "time"] }
 tap = { workspace = true }
@@ -43,9 +43,9 @@ futures = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }
-reqwest.workspace = true
-serde_json.workspace = true
-simple_test_case.workspace = true
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+simple_test_case = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
 test-strategy = { workspace = true }
 tokio-util = { workspace = true, features = ["compat", "io"] }
