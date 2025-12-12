@@ -23,8 +23,8 @@ use courier::{
     db, oauth, storage,
 };
 use futures::{StreamExt, TryStreamExt, stream};
-use time::{Duration, OffsetDateTime};
 use sqlx::PgPool;
+use time::{Duration, OffsetDateTime};
 use url::Url;
 
 /// Test fixture containing a spawned server and authentication context.
@@ -77,7 +77,8 @@ impl TestFixture {
         // end of the world (it's shut down when the process ends) but isn't
         // ideal.
         tokio::task::spawn(async move {
-            // Use into_make_service_with_connect_info to enable rate limiting (needs peer IP)
+            // Use into_make_service_with_connect_info to enable rate limiting (needs peer
+            // IP)
             axum::serve(
                 listener,
                 router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -310,7 +311,8 @@ impl TestAuth {
             .await
             .context("add Charlie to Widget")?;
 
-        // Link GitHub identities so these accounts are recognized as human (not bot) accounts
+        // Link GitHub identities so these accounts are recognized as human (not bot)
+        // accounts
         db.link_github_identity(alice_id, 1001, "alice-github")
             .await
             .context("link Alice GitHub")?;

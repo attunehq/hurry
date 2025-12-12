@@ -8,10 +8,7 @@ async fn create_personal_api_key(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let account_id = db
-        .create_account("test@test.com", None)
-        .await
-        .unwrap();
+    let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     // Create personal key (no org_id)
     let (key_id, token) = db
@@ -37,10 +34,7 @@ async fn create_org_scoped_api_key(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let account_id = db
-        .create_account("test@test.com", None)
-        .await
-        .unwrap();
+    let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     // Create org-scoped key
     let (key_id, _token) = db
@@ -58,10 +52,7 @@ async fn list_personal_api_keys(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let account_id = db
-        .create_account("test@test.com", None)
-        .await
-        .unwrap();
+    let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     // Create personal keys
     db.create_api_key(account_id, "Personal 1", None)
@@ -88,10 +79,7 @@ async fn list_org_api_keys(pool: sqlx::PgPool) {
 
     let org1_id = db.create_organization("Org 1").await.unwrap();
     let org2_id = db.create_organization("Org 2").await.unwrap();
-    let account_id = db
-        .create_account("test@test.com", None)
-        .await
-        .unwrap();
+    let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     // Create keys for different orgs
     db.create_api_key(account_id, "Org1 Key 1", Some(org1_id))
@@ -116,10 +104,7 @@ async fn revoke_api_key(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let account_id = db
-        .create_account("test@test.com", None)
-        .await
-        .unwrap();
+    let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     let (key_id, _token) = db
         .create_api_key(account_id, "Test Key", None)

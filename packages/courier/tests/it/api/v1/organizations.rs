@@ -689,7 +689,8 @@ async fn bot_api_key_works_for_org_operations(pool: PgPool) -> Result<()> {
         .send()
         .await?;
 
-    // Health endpoint should work (it doesn't require auth, but the key should be valid)
+    // Health endpoint should work (it doesn't require auth, but the key should be
+    // valid)
     pretty_assert_eq!(health_response.status(), StatusCode::OK);
 
     Ok(())

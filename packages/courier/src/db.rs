@@ -71,11 +71,7 @@ impl AsRef<PgPool> for Postgres {
 
 impl Postgres {
     #[tracing::instrument(name = "Postgres::save_cargo_cache")]
-    pub async fn cargo_cache_save(
-        &self,
-        org_id: OrgId,
-        request: CargoSaveRequest,
-    ) -> Result<()> {
+    pub async fn cargo_cache_save(&self, org_id: OrgId, request: CargoSaveRequest) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         // TODO: bulk insert
@@ -381,9 +377,9 @@ impl Postgres {
 
 /// An account record from the database.
 ///
-/// Note: Organization membership is tracked via the `organization_member` table,
-/// not directly on the account. Use `list_organizations_for_account` to get
-/// an account's organizations.
+/// Note: Organization membership is tracked via the `organization_member`
+/// table, not directly on the account. Use `list_organizations_for_account` to
+/// get an account's organizations.
 #[derive(Clone, Debug)]
 pub struct Account {
     pub id: AccountId,
@@ -396,8 +392,9 @@ pub struct Account {
 impl Postgres {
     /// Create a new account.
     ///
-    /// Note: This only creates the account record. Use `add_organization_member`
-    /// to associate the account with an organization.
+    /// Note: This only creates the account record. Use
+    /// `add_organization_member` to associate the account with an
+    /// organization.
     #[tracing::instrument(name = "Postgres::create_account")]
     pub async fn create_account(&self, email: &str, name: Option<&str>) -> Result<AccountId> {
         let row = sqlx::query!(
@@ -664,7 +661,6 @@ impl Postgres {
         expires_at: OffsetDateTime,
     ) -> Result<SessionId> {
         let hash = TokenHash::new(token.expose());
-        let hash_hex = hex::encode(hash.as_bytes());
         let row = sqlx::query!(
             r#"
             INSERT INTO user_session (account_id, session_token, expires_at)
@@ -672,7 +668,7 @@ impl Postgres {
             RETURNING id
             "#,
             account_id.as_i64(),
-            hash_hex,
+            hash.as_bytes(),
             expires_at,
         )
         .fetch_one(&self.pool)
@@ -685,12 +681,11 @@ impl Postgres {
     /// Validate a session token and return the session context.
     ///
     /// Returns `None` if the token is invalid, expired, or the account is
-    /// disabled. Updates the `last_accessed_at` timestamp on successful
-    /// validation.
+    /// disabled. On successful validation, extends the session expiration
+    /// (sliding window) and updates `last_accessed_at`.
     #[tracing::instrument(name = "Postgres::validate_session", skip(token))]
     pub async fn validate_session(&self, token: &SessionToken) -> Result<Option<SessionContext>> {
         let hash = TokenHash::new(token.expose());
-        let hash_hex = hex::encode(hash.as_bytes());
         let row = sqlx::query!(
             r#"
             SELECT us.id, us.account_id
@@ -700,7 +695,7 @@ impl Postgres {
               AND us.expires_at > NOW()
               AND a.disabled_at IS NULL
             "#,
-            hash_hex,
+            hash.as_bytes(),
         )
         .fetch_optional(&self.pool)
         .await
@@ -710,18 +705,20 @@ impl Postgres {
             return Ok(None);
         };
 
-        // Update last_accessed_at
+        // Update last_accessed_at and extend expiration (sliding window: 24 hours from
+        // now)
         sqlx::query!(
             r#"
             UPDATE user_session
-            SET last_accessed_at = NOW()
+            SET last_accessed_at = NOW(),
+                expires_at = NOW() + INTERVAL '24 hours'
             WHERE id = $1
             "#,
             row.id,
         )
         .execute(&self.pool)
         .await
-        .context("update session last_accessed_at")?;
+        .context("update session last_accessed_at and expires_at")?;
 
         Ok(Some(SessionContext {
             account_id: AccountId::from_i64(row.account_id),
@@ -733,13 +730,12 @@ impl Postgres {
     #[tracing::instrument(name = "Postgres::revoke_session", skip(token))]
     pub async fn revoke_session(&self, token: &SessionToken) -> Result<bool> {
         let hash = TokenHash::new(token.expose());
-        let hash_hex = hex::encode(hash.as_bytes());
         let result = sqlx::query!(
             r#"
             DELETE FROM user_session
             WHERE session_token = $1
             "#,
-            hash_hex,
+            hash.as_bytes(),
         )
         .execute(&self.pool)
         .await
@@ -773,14 +769,13 @@ impl Postgres {
         new_expires_at: OffsetDateTime,
     ) -> Result<bool> {
         let hash = TokenHash::new(token.expose());
-        let hash_hex = hex::encode(hash.as_bytes());
         let result = sqlx::query!(
             r#"
             UPDATE user_session
             SET expires_at = $2, last_accessed_at = NOW()
             WHERE session_token = $1
             "#,
-            hash_hex,
+            hash.as_bytes(),
             new_expires_at,
         )
         .execute(&self.pool)

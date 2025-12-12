@@ -14,6 +14,7 @@ struct MeResponse {
     id: i64,
     email: String,
     name: Option<String>,
+    github_username: Option<String>,
     created_at: String,
 }
 

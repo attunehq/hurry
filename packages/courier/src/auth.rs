@@ -215,7 +215,8 @@ pub struct AuthenticatedToken {
 impl AuthenticatedToken {
     /// Require that this token is scoped to an organization.
     ///
-    /// Returns the org_id if present, or FORBIDDEN status if this is a personal token.
+    /// Returns the org_id if present, or FORBIDDEN status if this is a personal
+    /// token.
     pub fn require_org(&self) -> Result<OrgId, (StatusCode, &'static str)> {
         self.org_id.ok_or((
             StatusCode::FORBIDDEN,

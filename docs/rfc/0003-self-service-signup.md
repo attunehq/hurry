@@ -121,9 +121,9 @@ The same flow handles both new and returning users:
 
 ### New vs returning users
 
-New users get an account created with their GitHub identity linked. An initial API key is generated and returned.
+New users get an account created with their GitHub identity linked. A default organization is created for personal use. No API key is generated automatically—users create keys via the dashboard or API when needed.
 
-Returning users are matched by GitHub user ID. Their email is updated if changed. No new API key is generated (user can create one via the API or dashboard).
+Returning users are matched by GitHub user ID. Their email is updated if changed.
 
 ## Database Schema
 
@@ -322,19 +322,15 @@ Authorization: Bearer <session_token>
 
 Response:
 {
-  "account_id": 1,
+  "id": 1,
   "email": "user@example.com",
   "name": "Alice",
   "github_username": "alice",
-  "organizations": [
-    {
-      "organization_id": 1,
-      "name": "Acme Corp",
-      "role": "admin"
-    }
-  ]
+  "created_at": "2025-01-01T00:00:00Z"
 }
 ```
+
+Organization memberships are fetched separately via `GET /api/v1/me/organizations`.
 
 Sign out:
 ```

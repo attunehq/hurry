@@ -348,7 +348,10 @@ pub async fn update_member_role(
     }
 
     // Update the role
-    match db.update_member_role(org_id, target_account_id, request.role).await {
+    match db
+        .update_member_role(org_id, target_account_id, request.role)
+        .await
+    {
         Ok(true) => {
             // Log audit event
             let _ = db
@@ -393,11 +396,9 @@ impl IntoResponse for UpdateRoleResponse {
         match self {
             UpdateRoleResponse::Success => StatusCode::NO_CONTENT.into_response(),
             UpdateRoleResponse::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
-            UpdateRoleResponse::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "Only admins can update member roles",
-            )
-                .into_response(),
+            UpdateRoleResponse::Forbidden => {
+                (StatusCode::FORBIDDEN, "Only admins can update member roles").into_response()
+            }
             UpdateRoleResponse::NotFound => {
                 (StatusCode::NOT_FOUND, "Member not found").into_response()
             }
@@ -502,7 +503,10 @@ pub async fn remove_member(
     }
 
     // Remove the member
-    match db.remove_organization_member(org_id, target_account_id).await {
+    match db
+        .remove_organization_member(org_id, target_account_id)
+        .await
+    {
         Ok(true) => {
             // Log audit event
             let _ = db
@@ -545,11 +549,9 @@ impl IntoResponse for RemoveMemberResponse {
         match self {
             RemoveMemberResponse::Success => StatusCode::NO_CONTENT.into_response(),
             RemoveMemberResponse::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
-            RemoveMemberResponse::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "Only admins can remove members",
-            )
-                .into_response(),
+            RemoveMemberResponse::Forbidden => {
+                (StatusCode::FORBIDDEN, "Only admins can remove members").into_response()
+            }
             RemoveMemberResponse::NotFound => {
                 (StatusCode::NOT_FOUND, "Member not found").into_response()
             }
@@ -943,7 +945,8 @@ impl IntoResponse for CreateOrgApiKeyApiResponse {
 
 /// Delete an organization API key.
 ///
-/// Members can delete their own org API keys. Admins can delete any org API key.
+/// Members can delete their own org API keys. Admins can delete any org API
+/// key.
 ///
 /// ## Endpoint
 /// ```
@@ -1203,11 +1206,9 @@ impl IntoResponse for CreateBotApiResponse {
         match self {
             CreateBotApiResponse::Created(bot) => (StatusCode::CREATED, Json(bot)).into_response(),
             CreateBotApiResponse::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
-            CreateBotApiResponse::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "Only admins can create bot accounts",
-            )
-                .into_response(),
+            CreateBotApiResponse::Forbidden => {
+                (StatusCode::FORBIDDEN, "Only admins can create bot accounts").into_response()
+            }
             CreateBotApiResponse::Error(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
             }
@@ -1315,11 +1316,9 @@ impl IntoResponse for ListBotsResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             ListBotsResponse::Success(list) => (StatusCode::OK, Json(list)).into_response(),
-            ListBotsResponse::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "Only admins can view bot accounts",
-            )
-                .into_response(),
+            ListBotsResponse::Forbidden => {
+                (StatusCode::FORBIDDEN, "Only admins can view bot accounts").into_response()
+            }
             ListBotsResponse::Error(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
             }

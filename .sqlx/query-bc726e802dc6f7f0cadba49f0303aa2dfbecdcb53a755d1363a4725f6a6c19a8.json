@@ -12,7 +12,7 @@
     "parameters": {
       "Left": [
         "Int8",
-        "Text",
+        "Bytea",
         "Timestamptz"
       ]
     },

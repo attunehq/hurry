@@ -368,9 +368,10 @@ async fn delete_org_api_key_owner_can_delete(pool: PgPool) -> Result<()> {
     let key = create_response.json::<CreateApiKeyResponse>().await?;
 
     // Bob deletes his own key
-    let delete_url = fixture
-        .base_url
-        .join(&format!("api/v1/organizations/{org_id}/api-keys/{}", key.id))?;
+    let delete_url = fixture.base_url.join(&format!(
+        "api/v1/organizations/{org_id}/api-keys/{}",
+        key.id
+    ))?;
     let delete_response = reqwest::Client::new()
         .delete(delete_url)
         .bearer_auth(fixture.auth.session_bob().expose())
@@ -403,9 +404,10 @@ async fn delete_org_api_key_admin_can_delete_any(pool: PgPool) -> Result<()> {
     let key = create_response.json::<CreateApiKeyResponse>().await?;
 
     // Alice (admin) deletes Bob's key
-    let delete_url = fixture
-        .base_url
-        .join(&format!("api/v1/organizations/{org_id}/api-keys/{}", key.id))?;
+    let delete_url = fixture.base_url.join(&format!(
+        "api/v1/organizations/{org_id}/api-keys/{}",
+        key.id
+    ))?;
     let delete_response = reqwest::Client::new()
         .delete(delete_url)
         .bearer_auth(fixture.auth.session_alice().expose())
@@ -438,9 +440,10 @@ async fn delete_org_api_key_member_cannot_delete_others(pool: PgPool) -> Result<
     let key = create_response.json::<CreateApiKeyResponse>().await?;
 
     // Bob (member, not admin) tries to delete Alice's key
-    let delete_url = fixture
-        .base_url
-        .join(&format!("api/v1/organizations/{org_id}/api-keys/{}", key.id))?;
+    let delete_url = fixture.base_url.join(&format!(
+        "api/v1/organizations/{org_id}/api-keys/{}",
+        key.id
+    ))?;
     let delete_response = reqwest::Client::new()
         .delete(delete_url)
         .bearer_auth(fixture.auth.session_bob().expose())
@@ -474,9 +477,10 @@ async fn delete_org_api_key_wrong_org_not_found(pool: PgPool) -> Result<()> {
     let key = create_response.json::<CreateApiKeyResponse>().await?;
 
     // Charlie tries to delete it via Widget org (should 404, not reveal it exists)
-    let delete_url = fixture
-        .base_url
-        .join(&format!("api/v1/organizations/{org_widget}/api-keys/{}", key.id))?;
+    let delete_url = fixture.base_url.join(&format!(
+        "api/v1/organizations/{org_widget}/api-keys/{}",
+        key.id
+    ))?;
     let delete_response = reqwest::Client::new()
         .delete(delete_url)
         .bearer_auth(fixture.auth.session_charlie().expose())

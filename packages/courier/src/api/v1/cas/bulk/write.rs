@@ -119,12 +119,7 @@ async fn handle_compressed(
 }
 
 #[tracing::instrument(skip(body))]
-async fn handle_plain(
-    db: Postgres,
-    cas: Disk,
-    org_id: OrgId,
-    body: Body,
-) -> BulkWriteResponse {
+async fn handle_plain(db: Postgres, cas: Disk, org_id: OrgId, body: Body) -> BulkWriteResponse {
     info!("cas.bulk.write.uncompressed");
     process_archive(db, cas, org_id, body, false).await
 }

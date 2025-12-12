@@ -13,10 +13,7 @@ async fn create_and_get_invitation(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let creator_id = db
-        .create_account("creator@test.com", None)
-        .await
-        .unwrap();
+    let creator_id = db.create_account("creator@test.com", None).await.unwrap();
 
     let token = crypto::generate_invitation_token(false);
     let expires_at = OffsetDateTime::now_utc() + Duration::days(7);
@@ -50,10 +47,7 @@ async fn get_invitation_preview(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Organization").await.unwrap();
-    let creator_id = db
-        .create_account("creator@test.com", None)
-        .await
-        .unwrap();
+    let creator_id = db.create_account("creator@test.com", None).await.unwrap();
 
     let token = crypto::generate_invitation_token(false);
     let expires_at = OffsetDateTime::now_utc() + Duration::days(7);
@@ -74,10 +68,7 @@ async fn get_expired_invitation_preview(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let creator_id = db
-        .create_account("creator@test.com", None)
-        .await
-        .unwrap();
+    let creator_id = db.create_account("creator@test.com", None).await.unwrap();
 
     let token = crypto::generate_invitation_token(false);
     let expires_at = OffsetDateTime::now_utc() - Duration::hours(1); // Expired
@@ -103,14 +94,8 @@ async fn accept_invitation_success(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let creator_id = db
-        .create_account("creator@test.com", None)
-        .await
-        .unwrap();
-    let joiner_id = db
-        .create_account("joiner@test.com", None)
-        .await
-        .unwrap();
+    let creator_id = db.create_account("creator@test.com", None).await.unwrap();
+    let joiner_id = db.create_account("joiner@test.com", None).await.unwrap();
 
     let token = crypto::generate_invitation_token(false);
     let expires_at = OffsetDateTime::now_utc() + Duration::days(7);
@@ -156,10 +141,7 @@ async fn accept_invitation_not_found(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let account_id = db
-        .create_account("test@test.com", None)
-        .await
-        .unwrap();
+    let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     let result = db
         .accept_invitation("nonexistent_token", account_id)
@@ -174,14 +156,8 @@ async fn accept_invitation_expired(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let creator_id = db
-        .create_account("creator@test.com", None)
-        .await
-        .unwrap();
-    let joiner_id = db
-        .create_account("joiner@test.com", None)
-        .await
-        .unwrap();
+    let creator_id = db.create_account("creator@test.com", None).await.unwrap();
+    let joiner_id = db.create_account("joiner@test.com", None).await.unwrap();
 
     let token = crypto::generate_invitation_token(false);
     let expires_at = OffsetDateTime::now_utc() - Duration::hours(1); // Expired
@@ -207,14 +183,8 @@ async fn accept_invitation_revoked(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let creator_id = db
-        .create_account("creator@test.com", None)
-        .await
-        .unwrap();
-    let joiner_id = db
-        .create_account("joiner@test.com", None)
-        .await
-        .unwrap();
+    let creator_id = db.create_account("creator@test.com", None).await.unwrap();
+    let joiner_id = db.create_account("joiner@test.com", None).await.unwrap();
 
     let token = crypto::generate_invitation_token(false);
     let expires_at = OffsetDateTime::now_utc() + Duration::days(7);
@@ -244,18 +214,9 @@ async fn accept_invitation_max_uses_reached(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let creator_id = db
-        .create_account("creator@test.com", None)
-        .await
-        .unwrap();
-    let joiner1_id = db
-        .create_account("joiner1@test.com", None)
-        .await
-        .unwrap();
-    let joiner2_id = db
-        .create_account("joiner2@test.com", None)
-        .await
-        .unwrap();
+    let creator_id = db.create_account("creator@test.com", None).await.unwrap();
+    let joiner1_id = db.create_account("joiner1@test.com", None).await.unwrap();
+    let joiner2_id = db.create_account("joiner2@test.com", None).await.unwrap();
 
     let token = crypto::generate_invitation_token(false);
     let expires_at = OffsetDateTime::now_utc() + Duration::days(7);
@@ -285,14 +246,8 @@ async fn accept_invitation_already_member(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let creator_id = db
-        .create_account("creator@test.com", None)
-        .await
-        .unwrap();
-    let joiner_id = db
-        .create_account("joiner@test.com", None)
-        .await
-        .unwrap();
+    let creator_id = db.create_account("creator@test.com", None).await.unwrap();
+    let joiner_id = db.create_account("joiner@test.com", None).await.unwrap();
 
     // Add as member first
     db.add_organization_member(org_id, joiner_id, OrgRole::Member)
@@ -316,10 +271,7 @@ async fn revoke_invitation(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let creator_id = db
-        .create_account("creator@test.com", None)
-        .await
-        .unwrap();
+    let creator_id = db.create_account("creator@test.com", None).await.unwrap();
 
     let token = crypto::generate_invitation_token(false);
     let expires_at = OffsetDateTime::now_utc() + Duration::days(7);
@@ -353,10 +305,7 @@ async fn list_invitations(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
     let org_id = db.create_organization("Test Org").await.unwrap();
-    let creator_id = db
-        .create_account("creator@test.com", None)
-        .await
-        .unwrap();
+    let creator_id = db.create_account("creator@test.com", None).await.unwrap();
 
     let expires_at = OffsetDateTime::now_utc() + Duration::days(7);
 

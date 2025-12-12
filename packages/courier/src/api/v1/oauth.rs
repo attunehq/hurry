@@ -287,10 +287,7 @@ pub async fn callback(
         Ok(None) => {
             // New user - create account and default organization
             // Create the account first (accounts can exist without orgs now)
-            let account_id = match db
-                .create_account(email, github_user.name.as_deref())
-                .await
-            {
+            let account_id = match db.create_account(email, github_user.name.as_deref()).await {
                 Ok(id) => id,
                 Err(err) => {
                     error!(?err, "oauth.callback.create_account_error");

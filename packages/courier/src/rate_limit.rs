@@ -6,9 +6,7 @@
 use std::sync::Arc;
 
 use tower_governor::{
-    GovernorLayer,
-    governor::GovernorConfigBuilder,
-    key_extractor::SmartIpKeyExtractor,
+    GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
 };
 
 /// Create a rate limiter layer for sensitive endpoints.
@@ -30,7 +28,11 @@ use tower_governor::{
 ///     .route("/sensitive", post(handler))
 ///     .layer(sensitive_rate_limit())
 /// ```
-pub fn sensitive() -> GovernorLayer<SmartIpKeyExtractor, governor::middleware::NoOpMiddleware<governor::clock::QuantaInstant>, axum::body::Body> {
+pub fn sensitive() -> GovernorLayer<
+    SmartIpKeyExtractor,
+    governor::middleware::NoOpMiddleware<governor::clock::QuantaInstant>,
+    axum::body::Body,
+> {
     let config = GovernorConfigBuilder::default()
         .per_second(6) // ~10 per minute: replenish 1 every 6 seconds
         .burst_size(10) // Allow burst up to 10
@@ -41,7 +43,8 @@ pub fn sensitive() -> GovernorLayer<SmartIpKeyExtractor, governor::middleware::N
     GovernorLayer::new(Arc::new(config))
 }
 
-/// Create a rate limiter layer for less sensitive but still protected endpoints.
+/// Create a rate limiter layer for less sensitive but still protected
+/// endpoints.
 ///
 /// This configuration is used for endpoints that need some protection but
 /// can tolerate more traffic.
@@ -49,7 +52,11 @@ pub fn sensitive() -> GovernorLayer<SmartIpKeyExtractor, governor::middleware::N
 /// **Configuration:**
 /// - 60 requests per minute per IP address (1/second)
 /// - Uses SmartIpKeyExtractor
-pub fn standard() -> GovernorLayer<SmartIpKeyExtractor, governor::middleware::NoOpMiddleware<governor::clock::QuantaInstant>, axum::body::Body> {
+pub fn standard() -> GovernorLayer<
+    SmartIpKeyExtractor,
+    governor::middleware::NoOpMiddleware<governor::clock::QuantaInstant>,
+    axum::body::Body,
+> {
     let config = GovernorConfigBuilder::default()
         .per_second(1) // 60 per minute: replenish 1 every second
         .burst_size(10) // Allow small bursts
@@ -65,7 +72,11 @@ pub fn standard() -> GovernorLayer<SmartIpKeyExtractor, governor::middleware::No
 /// **Configuration:**
 /// - 600 requests per minute per IP address (10/second)
 /// - Uses SmartIpKeyExtractor
-pub fn permissive() -> GovernorLayer<SmartIpKeyExtractor, governor::middleware::NoOpMiddleware<governor::clock::QuantaInstant>, axum::body::Body> {
+pub fn permissive() -> GovernorLayer<
+    SmartIpKeyExtractor,
+    governor::middleware::NoOpMiddleware<governor::clock::QuantaInstant>,
+    axum::body::Body,
+> {
     let config = GovernorConfigBuilder::default()
         .per_millisecond(100) // 10 per second = 600 per minute
         .burst_size(20) // Allow larger bursts

@@ -43,6 +43,8 @@ pub struct MeResponse {
     pub email: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_username: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
@@ -63,25 +65,36 @@ pub struct MeResponse {
 /// - 404: Account not found (shouldn't happen for valid sessions)
 #[tracing::instrument(skip(db, session))]
 pub async fn get_me(Dep(db): Dep<Postgres>, session: SessionContext) -> GetMeResponse {
-    match db.get_account(session.account_id).await {
-        Ok(Some(account)) => {
-            info!(account_id = %session.account_id, "me.get.success");
-            GetMeResponse::Success(MeResponse {
-                id: account.id.as_i64(),
-                email: account.email,
-                name: account.name,
-                created_at: account.created_at,
-            })
-        }
+    let account = match db.get_account(session.account_id).await {
+        Ok(Some(account)) => account,
         Ok(None) => {
             error!(account_id = %session.account_id, "me.get.not_found");
-            GetMeResponse::NotFound
+            return GetMeResponse::NotFound;
         }
         Err(err) => {
             error!(?err, "me.get.error");
-            GetMeResponse::Error(err.to_string())
+            return GetMeResponse::Error(err.to_string());
         }
-    }
+    };
+
+    // Fetch GitHub username if linked
+    let github_username = match db.get_github_identity(session.account_id).await {
+        Ok(Some(identity)) => Some(identity.github_username),
+        Ok(None) => None,
+        Err(err) => {
+            error!(?err, "me.get.github_identity_error");
+            return GetMeResponse::Error(err.to_string());
+        }
+    };
+
+    info!(account_id = %session.account_id, "me.get.success");
+    GetMeResponse::Success(MeResponse {
+        id: account.id.as_i64(),
+        email: account.email,
+        name: account.name,
+        github_username,
+        created_at: account.created_at,
+    })
 }
 
 #[derive(Debug)]
@@ -174,7 +187,9 @@ pub enum ListOrganizationsResponse {
 impl IntoResponse for ListOrganizationsResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
-            ListOrganizationsResponse::Success(list) => (StatusCode::OK, Json(list)).into_response(),
+            ListOrganizationsResponse::Success(list) => {
+                (StatusCode::OK, Json(list)).into_response()
+            }
             ListOrganizationsResponse::Error(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
             }
@@ -205,7 +220,8 @@ pub struct ApiKeyEntry {
 
 /// List the current user's personal API keys.
 ///
-/// Returns all personal (non-organization-scoped) API keys for the authenticated user.
+/// Returns all personal (non-organization-scoped) API keys for the
+/// authenticated user.
 ///
 /// ## Endpoint
 /// ```
@@ -217,10 +233,7 @@ pub struct ApiKeyEntry {
 /// - 200: List of API keys
 /// - 401: Not authenticated
 #[tracing::instrument(skip(db, session))]
-pub async fn list_api_keys(
-    Dep(db): Dep<Postgres>,
-    session: SessionContext,
-) -> ListApiKeysResponse {
+pub async fn list_api_keys(Dep(db): Dep<Postgres>, session: SessionContext) -> ListApiKeysResponse {
     match db.list_personal_api_keys(session.account_id).await {
         Ok(keys) => {
             info!(
@@ -281,8 +294,9 @@ pub struct CreateApiKeyResponse {
 
 /// Create a new personal API key.
 ///
-/// Creates a personal (non-organization-scoped) API key for the authenticated user.
-/// The token is only returned once in the response; it cannot be retrieved later.
+/// Creates a personal (non-organization-scoped) API key for the authenticated
+/// user. The token is only returned once in the response; it cannot be
+/// retrieved later.
 ///
 /// ## Endpoint
 /// ```

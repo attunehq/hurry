@@ -163,7 +163,7 @@ CREATE INDEX idx_oauth_state_expires ON oauth_state(expires_at);
 CREATE TABLE user_session (
   id BIGSERIAL PRIMARY KEY,
   account_id BIGINT NOT NULL REFERENCES account(id),
-  session_token TEXT NOT NULL UNIQUE,
+  session_token BYTEA NOT NULL UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expires_at TIMESTAMPTZ NOT NULL,
   last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

@@ -37,7 +37,10 @@ pub fn router() -> Router<State> {
 
     Router::new()
         // Organization-scoped endpoints (require admin)
-        .route("/organizations/{org_id}/invitations", post(create_invitation))
+        .route(
+            "/organizations/{org_id}/invitations",
+            post(create_invitation),
+        )
         .route("/organizations/{org_id}/invitations", get(list_invitations))
         .route(
             "/organizations/{org_id}/invitations/{invitation_id}",
@@ -130,12 +133,10 @@ pub async fn create_invitation(
     let expires_at = OffsetDateTime::now_utc() + Duration::days(expires_in_days);
 
     // Validate max_uses
-    if let Some(max) = request.max_uses {
-        if max < 1 {
-            return CreateInvitationResponse::BadRequest(String::from(
-                "max_uses must be at least 1",
-            ));
-        }
+    if let Some(max) = request.max_uses
+        && max < 1
+    {
+        return CreateInvitationResponse::BadRequest(String::from("max_uses must be at least 1"));
     }
 
     // Generate token (longer for long-lived invitations)
@@ -218,11 +219,9 @@ impl IntoResponse for CreateInvitationResponse {
             CreateInvitationResponse::BadRequest(msg) => {
                 (StatusCode::BAD_REQUEST, msg).into_response()
             }
-            CreateInvitationResponse::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "Only admins can create invitations",
-            )
-                .into_response(),
+            CreateInvitationResponse::Forbidden => {
+                (StatusCode::FORBIDDEN, "Only admins can create invitations").into_response()
+            }
             CreateInvitationResponse::Error(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
             }
@@ -340,11 +339,9 @@ impl IntoResponse for ListInvitationsResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             ListInvitationsResponse::Success(list) => (StatusCode::OK, Json(list)).into_response(),
-            ListInvitationsResponse::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "Only admins can view invitations",
-            )
-                .into_response(),
+            ListInvitationsResponse::Forbidden => {
+                (StatusCode::FORBIDDEN, "Only admins can view invitations").into_response()
+            }
             ListInvitationsResponse::Error(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
             }
@@ -446,14 +443,14 @@ impl IntoResponse for RevokeInvitationResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             RevokeInvitationResponse::Success => StatusCode::NO_CONTENT.into_response(),
-            RevokeInvitationResponse::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "Only admins can revoke invitations",
+            RevokeInvitationResponse::Forbidden => {
+                (StatusCode::FORBIDDEN, "Only admins can revoke invitations").into_response()
+            }
+            RevokeInvitationResponse::NotFound => (
+                StatusCode::NOT_FOUND,
+                "Invitation not found or already revoked",
             )
                 .into_response(),
-            RevokeInvitationResponse::NotFound => {
-                (StatusCode::NOT_FOUND, "Invitation not found or already revoked").into_response()
-            }
             RevokeInvitationResponse::Error(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
             }
