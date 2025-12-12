@@ -1,0 +1,17 @@
+version: 1
+
+rules:
+  - name: block-main-push
+    description: Block git push on main branch
+    message: "`git push` is not allowed on `main`. Create a feature branch first."
+    on:
+      - hook: PreToolUse
+        tool: Bash
+        command:
+          - kind: Regex
+            pattern: "git\\s+push"
+        project_state:
+          - kind: Git
+            branch:
+              - kind: Regex
+                pattern: "^main$"
