@@ -1,9 +1,13 @@
 -- Add self-service signup tables for GitHub OAuth authentication
 -- See RFC docs/rfc/0003-self-service-signup.md for details
 
--- Add disabled timestamp and display name to account
+-- Modify account table: remove organization_id, add disabled_at and name
+ALTER TABLE account DROP COLUMN organization_id;
 ALTER TABLE account ADD COLUMN disabled_at TIMESTAMPTZ;
 ALTER TABLE account ADD COLUMN name TEXT;
+
+-- Update account comment
+COMMENT ON TABLE account IS 'Each distinct actor in the application is an "account"; this could be humans or it could be bots. In the case of bots, the "email" field is for where the person/team owning the bot can be reached. Note: Organization membership is tracked via the organization_member table. Accounts can belong to multiple organizations.';
 
 -- Add organization_id to api_key for org-scoped keys (NULL = personal)
 ALTER TABLE api_key ADD COLUMN organization_id BIGINT REFERENCES organization(id);
@@ -51,8 +55,8 @@ CREATE TABLE organization_invitation (
   role_id BIGINT NOT NULL REFERENCES organization_role(id),
   created_by BIGINT NOT NULL REFERENCES account(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  expires_at TIMESTAMPTZ NOT NULL,
-  max_uses INT,
+  expires_at TIMESTAMPTZ,                -- NULL = never expires
+  max_uses INT,                          -- NULL = unlimited
   use_count INT NOT NULL DEFAULT 0,
   revoked_at TIMESTAMPTZ
 );
@@ -81,11 +85,29 @@ CREATE TABLE oauth_state (
 
 CREATE INDEX idx_oauth_state_expires ON oauth_state(expires_at);
 
+-- Short-lived, single-use auth codes issued after OAuth callback.
+-- These avoid returning session tokens directly in URLs.
+CREATE TABLE oauth_exchange_code (
+  id BIGSERIAL PRIMARY KEY,
+  -- Store only a hash of the exchange code (like API keys/sessions), so DB
+  -- leaks don't allow redeeming live auth codes.
+  code_hash BYTEA NOT NULL UNIQUE,
+  account_id BIGINT NOT NULL REFERENCES account(id),
+  redirect_uri TEXT NOT NULL,
+  -- Stored server-side; never trusted from the client.
+  new_user BOOLEAN NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  redeemed_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_oauth_exchange_code_expires ON oauth_exchange_code(expires_at);
+
 -- Active user sessions (for web UI authentication)
 CREATE TABLE user_session (
   id BIGSERIAL PRIMARY KEY,
   account_id BIGINT NOT NULL REFERENCES account(id),
-  session_token TEXT NOT NULL UNIQUE,
+  session_token BYTEA NOT NULL UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expires_at TIMESTAMPTZ NOT NULL,
   last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

@@ -12,6 +12,10 @@ DROP INDEX idx_session_expires;
 DROP INDEX idx_session_account;
 DROP TABLE user_session;
 
+-- Drop OAuth exchange codes
+DROP INDEX idx_oauth_exchange_code_expires;
+DROP TABLE oauth_exchange_code;
+
 -- Drop OAuth state
 DROP INDEX idx_oauth_state_expires;
 DROP TABLE oauth_state;
@@ -35,3 +39,6 @@ DROP TABLE github_identity;
 ALTER TABLE api_key DROP COLUMN organization_id;
 ALTER TABLE account DROP COLUMN name;
 ALTER TABLE account DROP COLUMN disabled_at;
+
+-- Restore organization_id column to account (required, will need data migration)
+ALTER TABLE account ADD COLUMN organization_id BIGINT NOT NULL REFERENCES organization(id);
