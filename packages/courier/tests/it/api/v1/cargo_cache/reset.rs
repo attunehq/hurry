@@ -1,20 +1,30 @@
 //! Cargo cache reset endpoint tests.
 
-use clients::courier::v1::cache::{
-    CargoRestoreRequest, CargoSaveRequest, CargoSaveUnitRequest, SavedUnitCacheKey,
+use clients::courier::v1::{
+    GlibcVersion,
+    cache::{CargoRestoreRequest, CargoSaveRequest, CargoSaveUnitRequest},
 };
 use color_eyre::Result;
 use sqlx::PgPool;
 
 use crate::helpers::{TestFixture, test_saved_unit};
 
+const GLIBC_VERSION: GlibcVersion = GlibcVersion {
+    major: 2,
+    minor: 41,
+    patch: 0,
+};
+
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn resets_cache(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
 
     let unit = test_saved_unit("hash-reset");
-    let key = SavedUnitCacheKey::builder().unit_hash("hash-reset").build();
-    let request = CargoSaveUnitRequest::builder().key(&key).unit(unit).build();
+    let request = CargoSaveUnitRequest::builder()
+        .unit(unit)
+        .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
+        .build();
     let save_request = CargoSaveRequest::new([request]);
 
     fixture.client_alice.cargo_cache_save(save_request).await?;
@@ -42,20 +52,20 @@ async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
 
     let unit_alice = test_saved_unit("hash-alice");
-    let key_alice = SavedUnitCacheKey::builder().unit_hash("hash-alice").build();
+    let key_alice = unit_alice.unit_hash().clone();
     let request_alice = CargoSaveUnitRequest::builder()
-        .key(&key_alice)
         .unit(unit_alice)
+        .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
     let save_request_alice = CargoSaveRequest::new([request_alice]);
 
     let unit_charlie = test_saved_unit("hash-charlie");
-    let key_charlie = SavedUnitCacheKey::builder()
-        .unit_hash("hash-charlie")
-        .build();
+    let key_charlie = unit_charlie.unit_hash().clone();
     let request_charlie = CargoSaveUnitRequest::builder()
-        .key(&key_charlie)
         .unit(unit_charlie)
+        .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
     let save_request_charlie = CargoSaveRequest::new([request_charlie]);
 
@@ -70,14 +80,14 @@ async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
 
     fixture.client_alice.cache_reset().await?;
 
-    let restore_alice = CargoRestoreRequest::new([key_alice]);
+    let restore_alice = CargoRestoreRequest::new([key_alice], Some(GLIBC_VERSION));
     let response_alice = fixture
         .client_alice
         .cargo_cache_restore(restore_alice)
         .await?;
     assert!(response_alice.is_empty(), "org A's cache should be deleted");
 
-    let restore_charlie = CargoRestoreRequest::new([key_charlie]);
+    let restore_charlie = CargoRestoreRequest::new([key_charlie], Some(GLIBC_VERSION));
     let response_charlie = fixture
         .client_charlie
         .cargo_cache_restore(restore_charlie)

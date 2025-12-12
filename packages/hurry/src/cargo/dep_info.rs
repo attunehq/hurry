@@ -148,7 +148,6 @@ impl DepInfoLine {
     // [^2]: https://doc.rust-lang.org/nightly/nightly-rustc/src/cargo/core/compiler/fingerprint/dep_info.rs.html#419-435
     // [^3]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/struct.RustcDepInfo.html
     // [^4]: https://doc.rust-lang.org/nightly/nightly-rustc/cargo/core/compiler/fingerprint/dep_info/fn.parse_rustc_dep_info.html
-    #[instrument(name = "DepInfoLine::parse")]
     pub async fn parse(ws: &Workspace, target: &RustcTarget, line: &str) -> Result<Self> {
         Ok(if line.is_empty() {
             Self::Space

@@ -1,7 +1,8 @@
 //! Cargo cache restore endpoint tests.
 
-use clients::courier::v1::cache::{
-    CargoRestoreRequest, CargoSaveRequest, CargoSaveUnitRequest, SavedUnitCacheKey,
+use clients::courier::v1::{
+    GlibcVersion, SavedUnitHash,
+    cache::{CargoRestoreRequest, CargoSaveRequest, CargoSaveUnitRequest},
 };
 use color_eyre::Result;
 use pretty_assertions::assert_eq as pretty_assert_eq;
@@ -9,20 +10,27 @@ use sqlx::PgPool;
 
 use crate::helpers::{TestFixture, test_saved_unit};
 
+const GLIBC_VERSION: GlibcVersion = GlibcVersion {
+    major: 2,
+    minor: 41,
+    patch: 0,
+};
+
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn restore_after_save(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
     let unit = test_saved_unit("serde-v1");
-    let key = SavedUnitCacheKey::builder().unit_hash("serde-v1").build();
+    let key = unit.unit_hash().clone();
     let request = CargoSaveUnitRequest::builder()
-        .key(&key)
         .unit(unit.clone())
+        .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
 
     let save_request = CargoSaveRequest::new([request]);
     fixture.client_alice.cargo_cache_save(save_request).await?;
 
-    let restore_request = CargoRestoreRequest::new([key.clone()]);
+    let restore_request = CargoRestoreRequest::new([key.clone()], Some(GLIBC_VERSION));
     let response = fixture
         .client_alice
         .cargo_cache_restore(restore_request)
@@ -41,10 +49,8 @@ async fn restore_after_save(pool: PgPool) -> Result<()> {
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn restore_nonexistent_cache(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
-    let key = SavedUnitCacheKey::builder()
-        .unit_hash("nonexistent")
-        .build();
-    let restore_request = CargoRestoreRequest::new([key]);
+    let key = SavedUnitHash::from("nonexistent");
+    let restore_request = CargoRestoreRequest::new([key], Some(GLIBC_VERSION));
 
     let response = fixture
         .client_alice
@@ -71,10 +77,12 @@ async fn restore_multiple_units(pool: PgPool) -> Result<()> {
     let requests = units
         .iter()
         .map(|(hash, unit)| {
-            let key = SavedUnitCacheKey::builder().unit_hash(*hash).build();
+            let unit = unit.clone();
+            assert_eq!(unit.unit_hash().as_str(), *hash);
             CargoSaveUnitRequest::builder()
-                .key(&key)
-                .unit(unit.clone())
+                .unit(unit)
+                .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+                .maybe_linux_glibc_version(Some(GLIBC_VERSION))
                 .build()
         })
         .collect::<Vec<_>>();
@@ -84,10 +92,10 @@ async fn restore_multiple_units(pool: PgPool) -> Result<()> {
 
     let keys = units
         .iter()
-        .map(|(hash, _)| SavedUnitCacheKey::builder().unit_hash(*hash).build())
+        .map(|(hash, _)| SavedUnitHash::from(*hash))
         .collect::<Vec<_>>();
 
-    let restore_request = CargoRestoreRequest::new(keys.clone());
+    let restore_request = CargoRestoreRequest::new(keys.clone(), Some(GLIBC_VERSION));
     let response = fixture
         .client_alice
         .cargo_cache_restore(restore_request)
@@ -110,21 +118,21 @@ async fn restore_partial_miss(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
 
     let unit = test_saved_unit("hash-exists");
-    let key_exists = SavedUnitCacheKey::builder()
-        .unit_hash("hash-exists")
-        .build();
+    let key_exists = unit.unit_hash().clone();
     let request = CargoSaveUnitRequest::builder()
-        .key(&key_exists)
         .unit(unit.clone())
+        .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
 
     let save_request = CargoSaveRequest::new([request]);
     fixture.client_alice.cargo_cache_save(save_request).await?;
 
-    let key_missing = SavedUnitCacheKey::builder()
-        .unit_hash("hash-missing")
-        .build();
-    let restore_request = CargoRestoreRequest::new([key_exists.clone(), key_missing.clone()]);
+    let key_missing = SavedUnitHash::from("hash-missing");
+    let restore_request = CargoRestoreRequest::new(
+        [key_exists.clone(), key_missing.clone()],
+        Some(GLIBC_VERSION),
+    );
     let response = fixture
         .client_alice
         .cargo_cache_restore(restore_request)
@@ -150,12 +158,11 @@ async fn concurrent_restores_same_cache(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
 
     let unit = test_saved_unit("concurrent-v1");
-    let key = SavedUnitCacheKey::builder()
-        .unit_hash("concurrent-v1")
-        .build();
+    let key = unit.unit_hash().clone();
     let request = CargoSaveUnitRequest::builder()
-        .key(&key)
         .unit(unit.clone())
+        .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
 
     let save_request = CargoSaveRequest::new([request]);
@@ -163,7 +170,7 @@ async fn concurrent_restores_same_cache(pool: PgPool) -> Result<()> {
 
     let restores = (0..10)
         .map(|_| {
-            let restore_request = CargoRestoreRequest::new([key.clone()]);
+            let restore_request = CargoRestoreRequest::new([key.clone()], Some(GLIBC_VERSION));
             fixture.client_alice.cargo_cache_restore(restore_request)
         })
         .collect::<Vec<_>>();
@@ -186,13 +193,17 @@ async fn org_cannot_restore_other_orgs_cache(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
 
     let unit = test_saved_unit("hash-org-a");
-    let key = SavedUnitCacheKey::builder().unit_hash("hash-org-a").build();
-    let request = CargoSaveUnitRequest::builder().key(&key).unit(unit).build();
+    let key = unit.unit_hash().clone();
+    let request = CargoSaveUnitRequest::builder()
+        .unit(unit)
+        .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
+        .build();
 
     let save_request = CargoSaveRequest::new([request]);
     fixture.client_alice.cargo_cache_save(save_request).await?;
 
-    let restore_request = CargoRestoreRequest::new([key]);
+    let restore_request = CargoRestoreRequest::new([key], Some(GLIBC_VERSION));
     let response = fixture
         .client_charlie
         .cargo_cache_restore(restore_request)
@@ -208,10 +219,8 @@ async fn org_cannot_restore_other_orgs_cache(pool: PgPool) -> Result<()> {
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn restore_missing_auth_returns_401(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
-    let key = SavedUnitCacheKey::builder()
-        .unit_hash("hash-noauth")
-        .build();
-    let restore_request = CargoRestoreRequest::new([key]);
+    let key = SavedUnitHash::from("hash-noauth");
+    let restore_request = CargoRestoreRequest::new([key], Some(GLIBC_VERSION));
 
     let client_no_auth = fixture.client_with_token("")?;
     let result = client_no_auth.cargo_cache_restore(restore_request).await;
@@ -223,11 +232,9 @@ async fn restore_missing_auth_returns_401(pool: PgPool) -> Result<()> {
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn restore_invalid_token_returns_401(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
-    let key = SavedUnitCacheKey::builder()
-        .unit_hash("hash-invalidtoken")
-        .build();
+    let key = SavedUnitHash::from("hash-invalidtoken");
 
-    let restore_request = CargoRestoreRequest::new([key]);
+    let restore_request = CargoRestoreRequest::new([key], Some(GLIBC_VERSION));
     let client = fixture.client_with_token("invalid-token-that-does-not-exist")?;
     let result = client.cargo_cache_restore(restore_request).await;
     assert!(result.is_err(), "restore with invalid token should fail");
@@ -238,11 +245,9 @@ async fn restore_invalid_token_returns_401(pool: PgPool) -> Result<()> {
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn restore_revoked_token_returns_401(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
-    let key = SavedUnitCacheKey::builder()
-        .unit_hash("hash-revokedtoken")
-        .build();
+    let key = SavedUnitHash::from("hash-revokedtoken");
 
-    let restore_request = CargoRestoreRequest::new([key]);
+    let restore_request = CargoRestoreRequest::new([key], Some(GLIBC_VERSION));
     let client = fixture.client_with_token(fixture.auth.token_alice_revoked().expose())?;
     let result = client.cargo_cache_restore(restore_request).await;
     assert!(result.is_err(), "restore with revoked token should fail");

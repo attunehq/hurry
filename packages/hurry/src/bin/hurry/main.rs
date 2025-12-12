@@ -4,7 +4,6 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use color_eyre::{Result, eyre::Context};
-use git_version::git_version;
 use tracing::instrument;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -16,16 +15,16 @@ use tracing_subscriber::util::SubscriberInitExt;
 mod cmd;
 mod log;
 
-// Version is sourced directly from the git tag at build time.
-// In development, this will show the commit hash; in releases, it will show the
-// tag (e.g., "v0.3.0").
+// Version is sourced from build.rs which computes:
+// - Base version from `git describe --always --tags`
+// - If working tree is dirty, appends a content hash of changed files
 // Falls back to "unknown" when git metadata is unavailable (e.g., in Docker
 // builds).
 #[derive(Clone, Debug, Parser)]
 #[command(
     name = "hurry",
     about = "Really, really fast builds",
-    version = git_version!(fallback = "unknown"),
+    version = env!("HURRY_VERSION"),
 )]
 struct TopLevelFlags {
     #[command(subcommand)]

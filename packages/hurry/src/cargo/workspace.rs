@@ -132,11 +132,11 @@ impl Workspace {
                             .header("Stderr:")
                     });
             }
-            String::from_utf8(output.stdout)
-                .context("parse rustc output as UTF-8")?
-                .trim()
+            let output = String::from_utf8(output.stdout)?;
+            let output = output.trim();
+            output
                 .try_into()
-                .context("parse host tuple")?
+                .unwrap_or(RustcTargetPlatform::Unsupported(output.to_string()))
         };
 
         let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
@@ -613,15 +613,26 @@ impl Workspace {
 #[derive(Debug, Display, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct UnitHash(String);
 
+impl From<UnitHash> for String {
+    fn from(value: UnitHash) -> Self {
+        value.0
+    }
+}
+impl From<&UnitHash> for String {
+    fn from(value: &UnitHash) -> Self {
+        value.0.clone()
+    }
+}
+
 impl From<String> for UnitHash {
     fn from(value: String) -> Self {
         Self(value)
     }
 }
 
-impl From<UnitHash> for String {
-    fn from(value: UnitHash) -> Self {
-        value.0
+impl From<&UnitHash> for UnitHash {
+    fn from(value: &UnitHash) -> Self {
+        value.clone()
     }
 }
 

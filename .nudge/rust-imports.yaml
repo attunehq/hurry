@@ -1,19 +1,25 @@
 version: 1
 
 rules:
-  - name: no-indented-imports
-    description: Imports must be at file level, not inside functions
+  - name: no-use-inside-functions
+    description: Imports must be at file level, not inside functions or closures
     message: Move this import to the top of the file, then retry.
     on:
       - hook: PreToolUse
         tool: Write
         file: "**/*.rs"
         content:
-          - kind: Regex
-            pattern: '(?m)^[ \t]+use '
+          # Match use declarations inside function/closure bodies
+          - kind: SyntaxTree
+            language: rust
+            query: |
+              (block (use_declaration) @use)
       - hook: PreToolUse
         tool: Edit
         file: "**/*.rs"
         new_content:
-          - kind: Regex
-            pattern: '(?m)^[ \t]+use '
+          # Match use declarations inside function/closure bodies
+          - kind: SyntaxTree
+            language: rust
+            query: |
+              (block (use_declaration) @use)

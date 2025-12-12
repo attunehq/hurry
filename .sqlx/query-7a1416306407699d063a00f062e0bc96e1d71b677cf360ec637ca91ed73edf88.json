@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT setval('account_id_seq', (SELECT MAX(id) FROM account))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "setval",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7a1416306407699d063a00f062e0bc96e1d71b677cf360ec637ca91ed73edf88"
+}

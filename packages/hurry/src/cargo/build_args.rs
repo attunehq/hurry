@@ -723,7 +723,7 @@ mod tests {
         let parsed = CargoBuildArguments::from_iter(args.to_vec());
         pretty_assert_eq!(
             parsed.target(),
-            RustcTarget::Specified(RustcTargetPlatform::X86_64LinuxGNU)
+            RustcTarget::Specified(RustcTargetPlatform::X86_64LinuxGnu)
         );
     }
 
