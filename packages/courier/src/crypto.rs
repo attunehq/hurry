@@ -4,7 +4,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
-use crate::auth::{RawToken, SessionToken};
+use crate::auth::{AuthCode, RawToken, SessionToken};
 
 /// A hashed API token.
 ///
@@ -138,4 +138,18 @@ pub fn generate_pkce() -> PkceChallenge {
         verifier,
         challenge,
     }
+}
+
+/// Generate an OAuth exchange code with 192 bits of entropy.
+///
+/// Returns a base64url-encoded string (24 random bytes, no padding).
+/// Exchange codes are short-lived (60 seconds) and single-use.
+///
+/// This is used in the two-step OAuth flow: the callback returns an auth_code
+/// in the URL, which the dashboard backend exchanges server-to-server for a
+/// session token.
+pub fn generate_auth_code() -> AuthCode {
+    let mut bytes = [0u8; 24]; // 192 bits
+    rand::thread_rng().fill_bytes(&mut bytes);
+    AuthCode::new(URL_SAFE_NO_PAD.encode(bytes))
 }

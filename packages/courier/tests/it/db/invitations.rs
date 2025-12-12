@@ -24,7 +24,7 @@ async fn create_and_get_invitation(pool: sqlx::PgPool) {
             &token,
             OrgRole::Member,
             creator_id,
-            expires_at,
+            Some(expires_at),
             Some(10),
         )
         .await
@@ -52,9 +52,16 @@ async fn get_invitation_preview(pool: sqlx::PgPool) {
     let token = crypto::generate_invitation_token(false);
     let expires_at = OffsetDateTime::now_utc() + Duration::days(7);
 
-    db.create_invitation(org_id, &token, OrgRole::Admin, creator_id, expires_at, None)
-        .await
-        .unwrap();
+    db.create_invitation(
+        org_id,
+        &token,
+        OrgRole::Admin,
+        creator_id,
+        Some(expires_at),
+        None,
+    )
+    .await
+    .unwrap();
 
     let preview = db.get_invitation_preview(&token).await.unwrap().unwrap();
 
@@ -78,7 +85,7 @@ async fn get_expired_invitation_preview(pool: sqlx::PgPool) {
         &token,
         OrgRole::Member,
         creator_id,
-        expires_at,
+        Some(expires_at),
         None,
     )
     .await
@@ -105,7 +112,7 @@ async fn accept_invitation_success(pool: sqlx::PgPool) {
         &token,
         OrgRole::Member,
         creator_id,
-        expires_at,
+        Some(expires_at),
         Some(10),
     )
     .await
@@ -167,7 +174,7 @@ async fn accept_invitation_expired(pool: sqlx::PgPool) {
         &token,
         OrgRole::Member,
         creator_id,
-        expires_at,
+        Some(expires_at),
         None,
     )
     .await
@@ -195,7 +202,7 @@ async fn accept_invitation_revoked(pool: sqlx::PgPool) {
             &token,
             OrgRole::Member,
             creator_id,
-            expires_at,
+            Some(expires_at),
             None,
         )
         .await
@@ -226,7 +233,7 @@ async fn accept_invitation_max_uses_reached(pool: sqlx::PgPool) {
         &token,
         OrgRole::Member,
         creator_id,
-        expires_at,
+        Some(expires_at),
         Some(1),
     )
     .await
@@ -257,9 +264,16 @@ async fn accept_invitation_already_member(pool: sqlx::PgPool) {
     let token = crypto::generate_invitation_token(false);
     let expires_at = OffsetDateTime::now_utc() + Duration::days(7);
 
-    db.create_invitation(org_id, &token, OrgRole::Admin, creator_id, expires_at, None)
-        .await
-        .unwrap();
+    db.create_invitation(
+        org_id,
+        &token,
+        OrgRole::Admin,
+        creator_id,
+        Some(expires_at),
+        None,
+    )
+    .await
+    .unwrap();
 
     let result = db.accept_invitation(&token, joiner_id).await.unwrap();
 
@@ -282,7 +296,7 @@ async fn revoke_invitation(pool: sqlx::PgPool) {
             &token,
             OrgRole::Member,
             creator_id,
-            expires_at,
+            Some(expires_at),
             None,
         )
         .await
@@ -314,7 +328,7 @@ async fn list_invitations(pool: sqlx::PgPool) {
         &crypto::generate_invitation_token(false),
         OrgRole::Member,
         creator_id,
-        expires_at,
+        Some(expires_at),
         None,
     )
     .await
@@ -325,7 +339,7 @@ async fn list_invitations(pool: sqlx::PgPool) {
         &crypto::generate_invitation_token(false),
         OrgRole::Admin,
         creator_id,
-        expires_at,
+        Some(expires_at),
         Some(5),
     )
     .await

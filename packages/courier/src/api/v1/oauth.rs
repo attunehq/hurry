@@ -5,22 +5,22 @@
 
 use aerosol::axum::Dep;
 use axum::{
-    Router,
+    Json, Router,
     extract::Query,
     http::StatusCode,
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
 use oauth2::PkceCodeVerifier;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 use tracing::{error, info, warn};
 
 use crate::{
     api::State,
-    auth::SessionContext,
-    crypto::generate_session_token,
-    db::Postgres,
+    auth::{AuthCode, SessionContext},
+    crypto::{generate_auth_code, generate_session_token},
+    db::{Postgres, RedeemExchangeCodeError},
     oauth::{self, GitHub},
 };
 
@@ -30,10 +30,14 @@ const SESSION_DURATION: Duration = Duration::hours(24);
 /// OAuth state expiration: 10 minutes.
 const OAUTH_STATE_DURATION: Duration = Duration::minutes(10);
 
+/// OAuth exchange code expiration: 60 seconds.
+const EXCHANGE_CODE_DURATION: Duration = Duration::seconds(60);
+
 pub fn router() -> Router<State> {
     Router::new()
         .route("/github/start", get(start))
         .route("/github/callback", get(callback))
+        .route("/exchange", post(exchange))
         .route("/logout", post(logout))
 }
 
@@ -140,8 +144,12 @@ pub struct CallbackParams {
 ///
 /// Validates the state token, exchanges the authorization code for an access
 /// token, fetches the user profile from GitHub, creates or updates the account,
-/// creates a session, and redirects to the original redirect URI with the
-/// session token.
+/// creates a short-lived exchange code, and redirects to the original redirect
+/// URI with the auth_code.
+///
+/// The dashboard backend should then call POST /api/v1/oauth/exchange with the
+/// auth_code to obtain a session token. This two-step flow avoids returning
+/// session tokens in URLs where they might be logged or leaked.
 ///
 /// ## Endpoint
 /// ```
@@ -150,7 +158,7 @@ pub struct CallbackParams {
 ///
 /// ## Responses
 /// - 302: Redirect to original redirect_uri with
-///   `?session=...&new_user=true|false`
+///   `?auth_code=...&new_user=true|false`
 /// - 400: Invalid state or code
 /// - 503: OAuth not configured
 #[tracing::instrument(skip(db, github, params), fields(state = %params.state))]
@@ -354,16 +362,22 @@ pub async fn callback(
         }
     };
 
-    // Create session
-    let session_token = generate_session_token();
-    let expires_at = OffsetDateTime::now_utc() + SESSION_DURATION;
+    // Create exchange code (short-lived, single-use)
+    let auth_code = generate_auth_code();
+    let expires_at = OffsetDateTime::now_utc() + EXCHANGE_CODE_DURATION;
 
     if let Err(err) = db
-        .create_session(account_id, &session_token, expires_at)
+        .create_exchange_code(
+            &auth_code,
+            account_id,
+            oauth_state.redirect_uri.as_str(),
+            new_user,
+            expires_at,
+        )
         .await
     {
-        error!(?err, "oauth.callback.create_session_error");
-        return CallbackResponse::Error(format!("Failed to create session: {}", err));
+        error!(?err, "oauth.callback.create_exchange_code_error");
+        return CallbackResponse::Error(format!("Failed to create exchange code: {err}"));
     }
 
     // Log successful OAuth
@@ -380,24 +394,22 @@ pub async fn callback(
         )
         .await;
 
-    // Log session creation
-    let _ = db
-        .log_audit_event(Some(account_id), None, "session.created", None)
-        .await;
-
-    // Clean up expired OAuth states lazily (don't block on it)
+    // Clean up expired OAuth states and exchange codes lazily (don't block on it)
     let db_cleanup = db.clone();
     tokio::spawn(async move {
         if let Err(err) = db_cleanup.cleanup_expired_oauth_state().await {
-            error!(?err, "oauth.cleanup.error");
+            error!(?err, "oauth.cleanup.state_error");
+        }
+        if let Err(err) = db_cleanup.cleanup_expired_exchange_codes().await {
+            error!(?err, "oauth.cleanup.exchange_code_error");
         }
     });
 
-    // Redirect to original redirect URI with session token
+    // Redirect to original redirect URI with auth_code
     let mut final_redirect = redirect_uri;
     final_redirect
         .query_pairs_mut()
-        .append_pair("session", session_token.expose())
+        .append_pair("auth_code", auth_code.expose())
         .append_pair("new_user", if new_user { "true" } else { "false" });
 
     info!("oauth.callback.success");
@@ -497,6 +509,135 @@ impl IntoResponse for LogoutResponse {
         match self {
             LogoutResponse::Success => StatusCode::NO_CONTENT.into_response(),
             LogoutResponse::Error(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+        }
+    }
+}
+
+// =============================================================================
+// Exchange Auth Code for Session
+// =============================================================================
+
+/// Request body for the exchange endpoint.
+#[derive(Debug, Deserialize)]
+pub struct ExchangeRequest {
+    /// The auth code received from the OAuth callback.
+    auth_code: String,
+}
+
+/// Response body for the exchange endpoint.
+#[derive(Debug, Serialize)]
+pub struct ExchangeResponseBody {
+    /// The session token to use for subsequent requests.
+    session_token: String,
+}
+
+/// Exchange an auth code for a session token.
+///
+/// This is the second step of the OAuth flow. After the callback returns an
+/// auth_code in the URL, the dashboard backend calls this endpoint to exchange
+/// it for a session token.
+///
+/// Auth codes are:
+/// - High entropy (192 bits)
+/// - Short-lived (60 seconds)
+/// - Single-use (cannot be redeemed twice)
+///
+/// ## Endpoint
+/// ```
+/// POST /api/v1/oauth/exchange
+/// Content-Type: application/json
+///
+/// { "auth_code": "..." }
+/// ```
+///
+/// ## Responses
+/// - 200: Session token returned
+/// - 400: Auth code expired, already redeemed, or not found
+#[tracing::instrument(skip(db, request))]
+pub async fn exchange(
+    Dep(db): Dep<Postgres>,
+    Json(request): Json<ExchangeRequest>,
+) -> ExchangeResponse {
+    let auth_code = AuthCode::new(&request.auth_code);
+
+    match db.redeem_exchange_code(&auth_code).await {
+        Ok(Ok(redemption)) => {
+            // Create session
+            let session_token = generate_session_token();
+            let expires_at = OffsetDateTime::now_utc() + SESSION_DURATION;
+
+            if let Err(err) = db
+                .create_session(redemption.account_id, &session_token, expires_at)
+                .await
+            {
+                error!(?err, "oauth.exchange.create_session_error");
+                return ExchangeResponse::Error(format!("Failed to create session: {err}"));
+            }
+
+            // Log session creation
+            let _ = db
+                .log_audit_event(Some(redemption.account_id), None, "session.created", None)
+                .await;
+
+            info!(
+                account_id = %redemption.account_id,
+                new_user = redemption.new_user,
+                "oauth.exchange.success"
+            );
+            ExchangeResponse::Success(ExchangeResponseBody {
+                session_token: session_token.expose().to_string(),
+            })
+        }
+        Ok(Err(RedeemExchangeCodeError::NotFound)) => {
+            warn!("oauth.exchange.not_found");
+            ExchangeResponse::NotFound
+        }
+        Ok(Err(RedeemExchangeCodeError::Expired)) => {
+            warn!("oauth.exchange.expired");
+            ExchangeResponse::Expired
+        }
+        Ok(Err(RedeemExchangeCodeError::AlreadyRedeemed)) => {
+            warn!("oauth.exchange.already_redeemed");
+            ExchangeResponse::AlreadyRedeemed
+        }
+        Err(err) => {
+            error!(?err, "oauth.exchange.error");
+            ExchangeResponse::Error(err.to_string())
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ExchangeResponse {
+    Success(ExchangeResponseBody),
+    NotFound,
+    Expired,
+    AlreadyRedeemed,
+    Error(String),
+}
+
+impl IntoResponse for ExchangeResponse {
+    fn into_response(self) -> Response {
+        match self {
+            ExchangeResponse::Success(body) => (StatusCode::OK, Json(body)).into_response(),
+            ExchangeResponse::NotFound => (
+                StatusCode::BAD_REQUEST,
+                "Invalid auth code. Please try signing in again.",
+            )
+                .into_response(),
+            ExchangeResponse::Expired => (
+                StatusCode::BAD_REQUEST,
+                "Auth code has expired. Please try signing in again.",
+            )
+                .into_response(),
+            ExchangeResponse::AlreadyRedeemed => (
+                StatusCode::BAD_REQUEST,
+                "Auth code has already been used. Please try signing in again.",
+            )
+                .into_response(),
+            ExchangeResponse::Error(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            }
         }
     }
 }

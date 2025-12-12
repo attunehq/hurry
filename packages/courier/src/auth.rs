@@ -192,6 +192,42 @@ impl AsRef<SessionToken> for SessionToken {
     }
 }
 
+/// An OAuth exchange code for the two-step authentication flow.
+///
+/// After a successful OAuth callback, Courier issues a short-lived, single-use
+/// exchange code instead of returning a session token directly. The dashboard
+/// backend then exchanges this code for a session token server-to-server.
+///
+/// Exchange codes are:
+/// - High entropy (192 bits)
+/// - Short-lived (60 seconds)
+/// - Single-use (can only be redeemed once)
+///
+/// This avoids returning session tokens in URLs where they might be logged or
+/// leaked.
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Display, Deserialize, Serialize)]
+#[debug("[redacted]")]
+#[display("[redacted]")]
+pub struct AuthCode(String);
+
+impl AuthCode {
+    /// Create a new instance from arbitrary text.
+    pub fn new(value: impl Into<String>) -> Self {
+        AuthCode(value.into())
+    }
+
+    /// View the interior value of the code.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<AuthCode> for AuthCode {
+    fn as_ref(&self) -> &AuthCode {
+        self
+    }
+}
+
 /// An authenticated token, which has been validated against the database.
 ///
 /// This type can be extracted directly from a request using Axum's extractor

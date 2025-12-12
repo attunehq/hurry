@@ -1024,6 +1024,150 @@ impl Postgres {
 }
 
 // =============================================================================
+// OAuth Exchange Code Operations
+// =============================================================================
+
+use crate::auth::AuthCode;
+
+/// Result of redeeming an OAuth exchange code.
+#[derive(Clone, Debug)]
+pub struct ExchangeCodeRedemption {
+    /// The account ID associated with the exchange code.
+    pub account_id: AccountId,
+    /// Whether this was a new user signup.
+    pub new_user: bool,
+}
+
+/// Error when redeeming an OAuth exchange code.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RedeemExchangeCodeError {
+    /// The exchange code was not found.
+    NotFound,
+    /// The exchange code has expired.
+    Expired,
+    /// The exchange code was already redeemed.
+    AlreadyRedeemed,
+}
+
+impl Postgres {
+    /// Create an OAuth exchange code.
+    ///
+    /// Exchange codes are short-lived (60 seconds), single-use tokens that
+    /// the dashboard backend exchanges for a session token server-to-server.
+    /// Only a SHA-256 hash of the code is stored.
+    #[tracing::instrument(name = "Postgres::create_exchange_code", skip(code))]
+    pub async fn create_exchange_code(
+        &self,
+        code: &AuthCode,
+        account_id: AccountId,
+        redirect_uri: &str,
+        new_user: bool,
+        expires_at: OffsetDateTime,
+    ) -> Result<()> {
+        let hash = TokenHash::new(code.expose());
+        sqlx::query!(
+            r#"
+            INSERT INTO oauth_exchange_code (code_hash, account_id, redirect_uri, new_user, expires_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+            hash.as_bytes(),
+            account_id.as_i64(),
+            redirect_uri,
+            new_user,
+            expires_at,
+        )
+        .execute(&self.pool)
+        .await
+        .context("create exchange code")?;
+
+        Ok(())
+    }
+
+    /// Redeem an OAuth exchange code (atomically validates and marks as
+    /// redeemed).
+    ///
+    /// Returns the account info if successful, or an error describing why
+    /// redemption failed.
+    #[tracing::instrument(name = "Postgres::redeem_exchange_code", skip(code))]
+    pub async fn redeem_exchange_code(
+        &self,
+        code: &AuthCode,
+    ) -> Result<std::result::Result<ExchangeCodeRedemption, RedeemExchangeCodeError>> {
+        let hash = TokenHash::new(code.expose());
+
+        // Use a transaction to ensure atomicity
+        let mut tx = self.pool.begin().await?;
+
+        // Find the exchange code
+        let row = sqlx::query!(
+            r#"
+            SELECT id, account_id, new_user, expires_at, redeemed_at
+            FROM oauth_exchange_code
+            WHERE code_hash = $1
+            FOR UPDATE
+            "#,
+            hash.as_bytes(),
+        )
+        .fetch_optional(tx.as_mut())
+        .await
+        .context("fetch exchange code")?;
+
+        let Some(row) = row else {
+            return Ok(Err(RedeemExchangeCodeError::NotFound));
+        };
+
+        // Check if already redeemed
+        if row.redeemed_at.is_some() {
+            return Ok(Err(RedeemExchangeCodeError::AlreadyRedeemed));
+        }
+
+        // Check if expired
+        let now = OffsetDateTime::now_utc();
+        if row.expires_at <= now {
+            return Ok(Err(RedeemExchangeCodeError::Expired));
+        }
+
+        // Mark as redeemed
+        sqlx::query!(
+            r#"
+            UPDATE oauth_exchange_code
+            SET redeemed_at = NOW()
+            WHERE id = $1
+            "#,
+            row.id,
+        )
+        .execute(tx.as_mut())
+        .await
+        .context("mark exchange code as redeemed")?;
+
+        tx.commit().await?;
+
+        Ok(Ok(ExchangeCodeRedemption {
+            account_id: AccountId::from_i64(row.account_id),
+            new_user: row.new_user,
+        }))
+    }
+
+    /// Clean up expired exchange codes.
+    ///
+    /// Returns the number of codes deleted.
+    #[tracing::instrument(name = "Postgres::cleanup_expired_exchange_codes")]
+    pub async fn cleanup_expired_exchange_codes(&self) -> Result<u64> {
+        let result = sqlx::query!(
+            r#"
+            DELETE FROM oauth_exchange_code
+            WHERE expires_at < NOW()
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .context("cleanup expired exchange codes")?;
+
+        Ok(result.rows_affected())
+    }
+}
+
+// =============================================================================
 // Organization Operations
 // =============================================================================
 
@@ -1317,7 +1461,8 @@ pub struct Invitation {
     pub role: OrgRole,
     pub created_by: AccountId,
     pub created_at: OffsetDateTime,
-    pub expires_at: OffsetDateTime,
+    /// Expiration timestamp. None means the invitation never expires.
+    pub expires_at: Option<OffsetDateTime>,
     pub max_uses: Option<i32>,
     pub use_count: i32,
     pub revoked_at: Option<OffsetDateTime>,
@@ -1328,7 +1473,8 @@ pub struct Invitation {
 pub struct InvitationPreview {
     pub organization_name: String,
     pub role: OrgRole,
-    pub expires_at: OffsetDateTime,
+    /// Expiration timestamp. None means the invitation never expires.
+    pub expires_at: Option<OffsetDateTime>,
     pub valid: bool,
 }
 
@@ -1337,6 +1483,8 @@ impl Postgres {
     ///
     /// The token should be generated using
     /// `crypto::generate_invitation_token()`.
+    ///
+    /// If `expires_at` is None, the invitation never expires.
     #[tracing::instrument(name = "Postgres::create_invitation", skip(token))]
     pub async fn create_invitation(
         &self,
@@ -1344,7 +1492,7 @@ impl Postgres {
         token: &str,
         role: OrgRole,
         created_by: AccountId,
-        expires_at: OffsetDateTime,
+        expires_at: Option<OffsetDateTime>,
         max_uses: Option<i32>,
     ) -> Result<InvitationId> {
         let row = sqlx::query!(
@@ -1429,8 +1577,10 @@ impl Postgres {
                 let role = OrgRole::from_db_name(&r.role_name)
                     .ok_or_else(|| eyre!("unknown role: {}", r.role_name))?;
                 let now = OffsetDateTime::now_utc();
+                // Valid if: not revoked, not expired (or never expires), and not at max uses
+                let not_expired = r.expires_at.is_none_or(|exp| exp > now);
                 let valid = r.revoked_at.is_none()
-                    && r.expires_at > now
+                    && not_expired
                     && r.max_uses.is_none_or(|max| r.use_count < max);
                 Ok(Some(InvitationPreview {
                     organization_name: r.org_name,
@@ -1480,7 +1630,8 @@ impl Postgres {
         if inv.revoked_at.is_some() {
             return Ok(AcceptInvitationResult::Revoked);
         }
-        if inv.expires_at <= now {
+        // Check expiration: None means never expires
+        if inv.expires_at.is_some_and(|exp| exp <= now) {
             return Ok(AcceptInvitationResult::Expired);
         }
         if inv.max_uses.is_some_and(|max| inv.use_count >= max) {

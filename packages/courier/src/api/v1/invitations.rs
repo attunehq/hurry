@@ -23,10 +23,8 @@ use crate::{
     rate_limit,
 };
 
-/// Default invitation expiration: 7 days.
-const DEFAULT_EXPIRATION_DAYS: i64 = 7;
-
 /// Long-lived invitation threshold: 30 days.
+/// Invitations with expiration >30 days (or never) use longer tokens.
 const LONG_LIVED_THRESHOLD_DAYS: i64 = 30;
 
 pub fn router() -> Router<State> {
@@ -61,16 +59,9 @@ pub struct CreateInvitationRequest {
     /// Role to grant (defaults to "member").
     #[serde(default = "default_role")]
     pub role: OrgRole,
-    /// Absolute expiration timestamp.
-    ///
-    /// If omitted, defaults to 7 days from now.
+    /// Expiration timestamp. If omitted or null, the invitation never expires.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
-    /// Expiration in days from now (defaults to 7, max 365).
-    ///
-    /// Deprecated in favor of `expires_at`.
-    #[serde(default)]
-    pub expires_in_days: Option<i64>,
     /// Maximum number of uses (None = unlimited).
     pub max_uses: Option<i32>,
 }
@@ -131,32 +122,13 @@ pub async fn create_invitation(
         }
     }
 
-    // Validate expiration
+    // Validate expiration timestamp if provided
     let now = OffsetDateTime::now_utc();
-    if request.expires_at.is_some() && request.expires_in_days.is_some() {
-        return CreateInvitationResponse::BadRequest(String::from(
-            "Provide either expires_at or expires_in_days, not both",
-        ));
-    }
-
-    let expires_at = match (request.expires_at, request.expires_in_days) {
-        (Some(expires_at), None) => expires_at,
-        (None, Some(expires_in_days)) => {
-            let expires_in_days = expires_in_days.clamp(1, 365);
-            now + Duration::days(expires_in_days)
-        }
-        (None, None) => now + Duration::days(DEFAULT_EXPIRATION_DAYS),
-        (Some(_), Some(_)) => unreachable!("guarded above"),
-    };
-
-    if expires_at <= now {
+    if let Some(exp) = request.expires_at
+        && exp <= now
+    {
         return CreateInvitationResponse::BadRequest(String::from(
             "expires_at must be in the future",
-        ));
-    }
-    if expires_at > now + Duration::days(365) {
-        return CreateInvitationResponse::BadRequest(String::from(
-            "expires_at cannot be more than 365 days in the future",
         ));
     }
 
@@ -167,8 +139,11 @@ pub async fn create_invitation(
         return CreateInvitationResponse::BadRequest(String::from("max_uses must be at least 1"));
     }
 
-    // Generate token (longer for long-lived invitations)
-    let long_lived = (expires_at - now) > Duration::days(LONG_LIVED_THRESHOLD_DAYS);
+    // Generate token (longer for long-lived or never-expiring invitations)
+    let long_lived = request
+        .expires_at
+        .map(|exp| (exp - now) > Duration::days(LONG_LIVED_THRESHOLD_DAYS))
+        .unwrap_or(true); // Never-expiring invitations use long tokens
     let token = generate_invitation_token(long_lived);
 
     // Create invitation
@@ -178,7 +153,7 @@ pub async fn create_invitation(
             &token,
             request.role,
             session.account_id,
-            expires_at,
+            request.expires_at,
             request.max_uses,
         )
         .await
@@ -199,7 +174,7 @@ pub async fn create_invitation(
             Some(serde_json::json!({
                 "invitation_id": invitation_id.as_i64(),
                 "role": request.role,
-                "expires_at": expires_at,
+                "expires_at": request.expires_at,
                 "max_uses": request.max_uses,
             })),
         )
@@ -215,7 +190,7 @@ pub async fn create_invitation(
         id: invitation_id.as_i64(),
         token,
         role: request.role,
-        expires_at,
+        expires_at: request.expires_at,
         max_uses: request.max_uses,
     })
 }
@@ -225,8 +200,9 @@ pub struct CreateInvitationResponseBody {
     pub id: i64,
     pub token: String,
     pub role: OrgRole,
-    #[serde(with = "time::serde::rfc3339")]
-    pub expires_at: OffsetDateTime,
+    /// Expiration timestamp. Null means the invitation never expires.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub expires_at: Option<OffsetDateTime>,
     pub max_uses: Option<i32>,
 }
 
@@ -272,8 +248,9 @@ pub struct InvitationEntry {
     pub role: OrgRole,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
-    pub expires_at: OffsetDateTime,
+    /// Expiration timestamp. Null means the invitation never expires.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub expires_at: Option<OffsetDateTime>,
     pub max_uses: Option<i32>,
     pub use_count: i32,
     pub revoked: bool,
@@ -494,8 +471,9 @@ impl IntoResponse for RevokeInvitationResponse {
 pub struct InvitationPreviewResponse {
     pub organization_name: String,
     pub role: OrgRole,
-    #[serde(with = "time::serde::rfc3339")]
-    pub expires_at: OffsetDateTime,
+    /// Expiration timestamp. Null means the invitation never expires.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub expires_at: Option<OffsetDateTime>,
     pub valid: bool,
 }
 

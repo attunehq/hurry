@@ -15,7 +15,7 @@ struct CreateInvitationResponse {
     id: i64,
     token: String,
     role: String,
-    expires_at: String,
+    expires_at: Option<String>,
     max_uses: Option<i32>,
 }
 
@@ -30,7 +30,7 @@ struct InvitationEntry {
     id: i64,
     role: String,
     created_at: String,
-    expires_at: String,
+    expires_at: Option<String>,
     max_uses: Option<i32>,
     use_count: i32,
     revoked: bool,
@@ -41,7 +41,7 @@ struct InvitationEntry {
 struct InvitationPreviewResponse {
     organization_name: String,
     role: String,
-    expires_at: String,
+    expires_at: Option<String>,
     valid: bool,
 }
 
@@ -59,8 +59,6 @@ struct CreateInvitationRequest {
     role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    expires_in_days: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_uses: Option<i32>,
 }
@@ -85,7 +83,6 @@ async fn create_invitation_success(pool: PgPool) -> Result<()> {
         .json(&CreateInvitationRequest {
             role: Some(String::from("member")),
             expires_at: Some(expires_at),
-            expires_in_days: None,
             max_uses: Some(5),
         })
         .send()
@@ -102,31 +99,6 @@ async fn create_invitation_success(pool: PgPool) -> Result<()> {
 }
 
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
-async fn create_invitation_legacy_expires_in_days(pool: PgPool) -> Result<()> {
-    let fixture = TestFixture::spawn(pool).await?;
-    let org_id = fixture.auth.org_acme().as_i64();
-    let url = fixture
-        .base_url
-        .join(&format!("api/v1/organizations/{org_id}/invitations"))?;
-
-    let response = reqwest::Client::new()
-        .post(url)
-        .bearer_auth(fixture.auth.session_alice().expose())
-        .json(&CreateInvitationRequest {
-            role: Some(String::from("member")),
-            expires_at: None,
-            expires_in_days: Some(7),
-            max_uses: Some(5),
-        })
-        .send()
-        .await?;
-
-    pretty_assert_eq!(response.status(), StatusCode::CREATED);
-
-    Ok(())
-}
-
-#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn create_invitation_default_values(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
     let org_id = fixture.auth.org_acme().as_i64();
@@ -134,7 +106,7 @@ async fn create_invitation_default_values(pool: PgPool) -> Result<()> {
         .base_url
         .join(&format!("api/v1/organizations/{org_id}/invitations"))?;
 
-    // Send empty request - should use defaults
+    // Send empty request - should use defaults (never expires)
     let response = reqwest::Client::new()
         .post(url)
         .bearer_auth(fixture.auth.session_alice().expose())
@@ -146,6 +118,7 @@ async fn create_invitation_default_values(pool: PgPool) -> Result<()> {
 
     let inv = response.json::<CreateInvitationResponse>().await?;
     pretty_assert_eq!(inv.role, "member");
+    pretty_assert_eq!(inv.expires_at, None); // Never expires by default
     pretty_assert_eq!(inv.max_uses, None); // Unlimited by default
 
     Ok(())
@@ -354,7 +327,6 @@ async fn get_invitation_preview_success(pool: PgPool) -> Result<()> {
         .json(&CreateInvitationRequest {
             role: Some(String::from("admin")),
             expires_at: None,
-            expires_in_days: None,
             max_uses: None,
         })
         .send()
