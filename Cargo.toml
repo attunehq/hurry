@@ -92,3 +92,6 @@ oauth2 = "5.0.0"
 time = { version = "=0.3.41", features = ["serde"] }
 tower_governor = "0.8.0"
 governor = "0.10.2"
+
+[workspace.lints.clippy]
+redundant_pattern_matching = "allow"

@@ -60,3 +60,6 @@ url = { workspace = true }
 
 [build-dependencies]
 dotenvy = { workspace = true }
+
+[lints]
+workspace = true

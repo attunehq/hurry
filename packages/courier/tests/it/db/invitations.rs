@@ -140,7 +140,7 @@ async fn accept_invitation_success(pool: sqlx::PgPool) {
 async fn accept_invitation_not_found(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
+    let _org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     let result = db

@@ -13,7 +13,7 @@ async fn create_and_validate_session(pool: sqlx::PgPool) {
     let token = crypto::generate_session_token();
     let expires_at = OffsetDateTime::now_utc() + Duration::hours(24);
 
-    let session_id = db
+    let _session_id = db
         .create_session(account_id, &token, expires_at)
         .await
         .unwrap();

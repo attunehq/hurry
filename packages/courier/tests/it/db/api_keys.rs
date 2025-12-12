@@ -7,7 +7,7 @@ use pretty_assertions::assert_eq as pretty_assert_eq;
 async fn create_personal_api_key(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
+    let _org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     // Create personal key (no org_id)
@@ -103,7 +103,7 @@ async fn list_org_api_keys(pool: sqlx::PgPool) {
 async fn revoke_api_key(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
+    let _org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     let (key_id, _token) = db

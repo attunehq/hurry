@@ -33,7 +33,11 @@ use std::time::{Duration, Instant};
 
 use aerosol::Aero;
 use axum::{
-    Router, extract::DefaultBodyLimit, extract::Request, http::HeaderValue, middleware::Next,
+    Router,
+    extract::DefaultBodyLimit,
+    extract::Request,
+    http::{HeaderValue, StatusCode},
+    middleware::Next,
     response::Response,
 };
 use tower::ServiceBuilder;
@@ -72,7 +76,10 @@ pub fn router(state: State) -> Router {
         .layer(RequestDecompressionLayer::new())
         .layer(CompressionLayer::new())
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
-        .layer(TimeoutLayer::new(REQUEST_TIMEOUT));
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            REQUEST_TIMEOUT,
+        ));
 
     Router::new()
         .nest("/api/v1", v1::router())

@@ -80,3 +80,6 @@ simple_test_case.workspace = true
 test-log = { workspace = true, features = ["trace"] }
 workspace_root = { workspace = true }
 xshell = { workspace = true }
+
+[lints]
+workspace = true

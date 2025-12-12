@@ -43,3 +43,6 @@ client = [
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+
+[lints]
+workspace = true

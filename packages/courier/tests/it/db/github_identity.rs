@@ -7,7 +7,7 @@ use pretty_assertions::assert_eq as pretty_assert_eq;
 async fn link_and_get_github_identity(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
+    let _org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     // Link GitHub identity
@@ -27,7 +27,7 @@ async fn link_and_get_github_identity(pool: sqlx::PgPool) {
 async fn get_account_by_github_id(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
+    let _org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db
         .create_account("test@test.com", Some("Test User"))
         .await
@@ -57,7 +57,7 @@ async fn get_account_by_nonexistent_github_id(pool: sqlx::PgPool) {
 async fn get_nonexistent_github_identity(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
+    let _org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     // Account exists but has no GitHub identity
@@ -70,7 +70,7 @@ async fn get_nonexistent_github_identity(pool: sqlx::PgPool) {
 async fn update_github_username(pool: sqlx::PgPool) {
     let db = Postgres { pool };
 
-    let org_id = db.create_organization("Test Org").await.unwrap();
+    let _org_id = db.create_organization("Test Org").await.unwrap();
     let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     db.link_github_identity(account_id, 12345, "oldname")
