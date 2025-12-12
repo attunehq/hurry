@@ -1,7 +1,8 @@
 //! Cargo cache save endpoint tests.
 
-use clients::courier::v1::cache::{
-    CargoRestoreRequest, CargoSaveRequest, CargoSaveUnitRequest, SavedUnitCacheKey,
+use clients::courier::v1::{
+    GlibcVersion, SavedUnitHash,
+    cache::{CargoRestoreRequest, CargoSaveRequest, CargoSaveUnitRequest},
 };
 use color_eyre::Result;
 use pretty_assertions::assert_eq as pretty_assert_eq;
@@ -10,20 +11,27 @@ use tap::Pipe;
 
 use crate::helpers::{TestFixture, test_saved_unit};
 
+const GLIBC_VERSION: GlibcVersion = GlibcVersion {
+    major: 2,
+    minor: 41,
+    patch: 0,
+};
+
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn basic_save_flow(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
     let unit = test_saved_unit("hash-basic");
-    let key = SavedUnitCacheKey::builder().unit_hash("hash-basic").build();
+    let key = unit.unit_hash().clone();
     let request = CargoSaveUnitRequest::builder()
-        .key(&key)
         .unit(unit.clone())
+        .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
     let save_request = CargoSaveRequest::new([request]);
 
     fixture.client_alice.cargo_cache_save(save_request).await?;
 
-    let restore_request = CargoRestoreRequest::new([key.clone()]);
+    let restore_request = CargoRestoreRequest::new([key.clone()], Some(GLIBC_VERSION));
     let response = fixture
         .client_alice
         .cargo_cache_restore(restore_request)
@@ -43,12 +51,11 @@ async fn basic_save_flow(pool: PgPool) -> Result<()> {
 async fn idempotent_saves(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
     let unit = test_saved_unit("hash-idempotent");
-    let key = SavedUnitCacheKey::builder()
-        .unit_hash("hash-idempotent")
-        .build();
+    let key = unit.unit_hash().clone();
     let request = CargoSaveUnitRequest::builder()
-        .key(&key)
         .unit(unit.clone())
+        .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
     let save_request = CargoSaveRequest::new([request.clone()]);
 
@@ -58,7 +65,7 @@ async fn idempotent_saves(pool: PgPool) -> Result<()> {
         .await?;
     fixture.client_alice.cargo_cache_save(save_request).await?;
 
-    let restore_request = CargoRestoreRequest::new([key.clone()]);
+    let restore_request = CargoRestoreRequest::new([key.clone()], Some(GLIBC_VERSION));
     let response = fixture
         .client_alice
         .cargo_cache_restore(restore_request)
@@ -87,10 +94,13 @@ async fn save_multiple_packages(pool: PgPool) -> Result<()> {
     let requests = units
         .iter()
         .map(|(hash, unit)| {
-            let key = SavedUnitCacheKey::builder().unit_hash(*hash).build();
+            let unit = unit.clone();
+            // Ensure the unit hash matches the test hash
+            assert_eq!(unit.unit_hash().as_str(), *hash);
             CargoSaveUnitRequest::builder()
-                .key(&key)
-                .unit(unit.clone())
+                .unit(unit)
+                .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+                .maybe_linux_glibc_version(Some(GLIBC_VERSION))
                 .build()
         })
         .collect::<Vec<_>>();
@@ -100,10 +110,10 @@ async fn save_multiple_packages(pool: PgPool) -> Result<()> {
 
     let keys = units
         .iter()
-        .map(|(hash, _)| SavedUnitCacheKey::builder().unit_hash(*hash).build())
+        .map(|(hash, _)| SavedUnitHash::from(*hash))
         .collect::<Vec<_>>();
 
-    let restore_request = CargoRestoreRequest::new(keys.clone());
+    let restore_request = CargoRestoreRequest::new(keys.clone(), Some(GLIBC_VERSION));
     let response = fixture
         .client_alice
         .cargo_cache_restore(restore_request)
@@ -134,10 +144,12 @@ async fn save_same_package_different_hashes(pool: PgPool) -> Result<()> {
     let requests = units
         .iter()
         .map(|(hash, unit)| {
-            let key = SavedUnitCacheKey::builder().unit_hash(*hash).build();
+            let unit = unit.clone();
+            assert_eq!(unit.unit_hash().as_str(), *hash);
             CargoSaveUnitRequest::builder()
-                .key(&key)
-                .unit(unit.clone())
+                .unit(unit)
+                .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+                .maybe_linux_glibc_version(Some(GLIBC_VERSION))
                 .build()
         })
         .collect::<Vec<_>>();
@@ -147,10 +159,10 @@ async fn save_same_package_different_hashes(pool: PgPool) -> Result<()> {
 
     let keys = units
         .iter()
-        .map(|(hash, _)| SavedUnitCacheKey::builder().unit_hash(*hash).build())
+        .map(|(hash, _)| SavedUnitHash::from(*hash))
         .collect::<Vec<_>>();
 
-    let restore_request = CargoRestoreRequest::new(keys.clone());
+    let restore_request = CargoRestoreRequest::new(keys.clone(), Some(GLIBC_VERSION));
     let response = fixture
         .client_alice
         .cargo_cache_restore(restore_request)
@@ -182,10 +194,12 @@ async fn concurrent_saves_different_packages(pool: PgPool) -> Result<()> {
     units
         .iter()
         .map(|(hash, unit)| {
-            let key = SavedUnitCacheKey::builder().unit_hash(hash).build();
+            let unit = unit.clone();
+            assert_eq!(unit.unit_hash().as_str(), hash);
             let request = CargoSaveUnitRequest::builder()
-                .key(&key)
-                .unit(unit.clone())
+                .unit(unit)
+                .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+                .maybe_linux_glibc_version(Some(GLIBC_VERSION))
                 .build();
             let save_request = CargoSaveRequest::new([request]);
             fixture.client_alice.cargo_cache_save(save_request)
@@ -196,10 +210,10 @@ async fn concurrent_saves_different_packages(pool: PgPool) -> Result<()> {
 
     let keys = units
         .iter()
-        .map(|(hash, _)| SavedUnitCacheKey::builder().unit_hash(hash).build())
+        .map(|(hash, _)| SavedUnitHash::from(hash.as_str()))
         .collect::<Vec<_>>();
 
-    let restore_request = CargoRestoreRequest::new(keys.clone());
+    let restore_request = CargoRestoreRequest::new(keys.clone(), Some(GLIBC_VERSION));
     let response = fixture
         .client_alice
         .cargo_cache_restore(restore_request)
@@ -221,11 +235,11 @@ async fn concurrent_saves_different_packages(pool: PgPool) -> Result<()> {
 async fn save_missing_auth_returns_401(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
     let unit = test_saved_unit("hash-noauth");
-    let key = SavedUnitCacheKey::builder()
-        .unit_hash("hash-noauth")
+    let request = CargoSaveUnitRequest::builder()
+        .unit(unit)
+        .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
-
-    let request = CargoSaveUnitRequest::builder().key(&key).unit(unit).build();
     let save_request = CargoSaveRequest::new([request]);
 
     let client_no_auth = fixture.client_with_token("")?;
@@ -239,11 +253,11 @@ async fn save_missing_auth_returns_401(pool: PgPool) -> Result<()> {
 async fn save_invalid_token_returns_401(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
     let unit = test_saved_unit("hash-invalidtoken");
-    let key = SavedUnitCacheKey::builder()
-        .unit_hash("hash-invalidtoken")
+    let request = CargoSaveUnitRequest::builder()
+        .unit(unit)
+        .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
-
-    let request = CargoSaveUnitRequest::builder().key(&key).unit(unit).build();
     let save_request = CargoSaveRequest::new([request]);
 
     let client = fixture.client_with_token("invalid-token-that-does-not-exist")?;
@@ -257,11 +271,11 @@ async fn save_invalid_token_returns_401(pool: PgPool) -> Result<()> {
 async fn save_revoked_token_returns_401(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
     let unit = test_saved_unit("hash-revokedtoken");
-    let key = SavedUnitCacheKey::builder()
-        .unit_hash("hash-revokedtoken")
+    let request = CargoSaveUnitRequest::builder()
+        .unit(unit)
+        .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
         .build();
-
-    let request = CargoSaveUnitRequest::builder().key(&key).unit(unit).build();
     let save_request = CargoSaveRequest::new([request]);
 
     let client = fixture.client_with_token(fixture.auth.token_alice_revoked().expose())?;

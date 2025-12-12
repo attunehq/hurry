@@ -10,12 +10,12 @@
 use std::collections::{HashMap, HashSet};
 
 use clients::courier::v1::{
-    Key, SavedUnit,
-    cache::{CargoRestoreRequest, CargoSaveRequest, SavedUnitCacheKey},
+    GlibcVersion, Key, SavedUnit, SavedUnitHash,
+    cache::{CargoRestoreRequest, CargoSaveRequest},
 };
 use color_eyre::{
     Result,
-    eyre::{Context, bail, eyre},
+    eyre::{Context, bail},
 };
 use derive_more::Debug;
 use futures::StreamExt;
@@ -195,11 +195,13 @@ impl Postgres {
             let data = serde_json::to_value(&item.unit)
                 .with_context(|| format!("serialize data to json: {:?}", item.unit))?;
             sqlx::query!(
-                "insert into cargo_saved_unit (organization_id, cache_key, data)
-                values ($1, $2, $3)
-                on conflict do nothing",
+                r#"INSERT INTO cargo_saved_unit (organization_id, unit_hash, unit_resolved_target, linux_glibc_version, data)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT DO NOTHING"#,
                 auth.org_id.as_i64(),
-                item.key.stable_hash(),
+                item.unit.unit_hash().as_str(),
+                item.resolved_target,
+                item.linux_glibc_version.map(|v| v.to_string()),
                 data,
             )
             .execute(tx.as_mut())
@@ -215,38 +217,51 @@ impl Postgres {
         &self,
         auth: &AuthenticatedToken,
         request: CargoRestoreRequest,
-    ) -> Result<HashMap<SavedUnitCacheKey, SavedUnit>> {
-        // When we store `SavedUnitCacheKey` in the database we store it by its stable
-        // hash, so there's no way to get the original value back out using just the
-        // query. Instead we build a map of "hashes to original values" and use that to
-        // fetch the originals back out.
-        let mut request_hashes = request
-            .into_iter()
-            .map(|item| (item.stable_hash(), item))
-            .collect::<HashMap<_, _>>();
-
-        // Postgres however does need us to pass in a vec of owned strings.
+    ) -> Result<HashMap<SavedUnitHash, SavedUnit>> {
         let mut rows = sqlx::query!(
-            "select cache_key, data
-            from cargo_saved_unit
-            where organization_id = $1
-            and cache_key = any($2)",
+            r#"SELECT unit_hash, linux_glibc_version, data
+            FROM cargo_saved_unit
+            WHERE organization_id = $1
+            AND unit_hash = ANY($2)"#,
             auth.org_id.as_i64(),
-            &request_hashes.keys().cloned().collect::<Vec<_>>(),
+            &request
+                .units
+                .iter()
+                .cloned()
+                .map(|h| h.to_string())
+                .collect::<Vec<_>>(),
         )
         .fetch(&self.pool);
 
-        let mut artifacts = HashMap::with_capacity(request_hashes.len());
+        let mut artifacts = HashMap::with_capacity(request.units.len());
         while let Some(row) = rows.next().await {
             let row = row.context("read rows")?;
 
-            // We remove as we go because we expect at most one match per key, and this
-            // allows us to avoid a clone.
-            let key = request_hashes
-                .remove(&row.cache_key)
-                .ok_or_else(|| eyre!("matched key not in the request: {}", row.cache_key))?;
+            let key = row.unit_hash.into();
             let unit = serde_json::from_value::<SavedUnit>(row.data)
-                .with_context(|| format!("deserialize value for cache key: {}", row.cache_key))?;
+                .with_context(|| format!("deserialize value for cache key: {}", key))?;
+
+            // Check for glibc version compatibility for units that compile
+            // against glibc.
+            if let Some(ref host_glibc) = request.host_glibc_version {
+                let Some(saved_glibc_string) = row.linux_glibc_version else {
+                    // Skip units without glibc version info. Note that this
+                    // should never happen, since all units with a matching unit
+                    // hash will all be on the same target, and all units of a
+                    // target either do or do not have glibc version info.
+                    continue;
+                };
+                let saved_glibc = saved_glibc_string.as_str().parse::<GlibcVersion>()?;
+                if *host_glibc < saved_glibc {
+                    // Skip units with incompatible glibc versions.
+                    continue;
+                }
+            } else if let Some(_) = row.linux_glibc_version {
+                // Skip units that have glibc version info when host doesn't
+                // have glibc version info (i.e., non-linux targets). This is
+                // another thing that should never happen.
+                continue;
+            }
 
             artifacts.insert(key, unit);
         }

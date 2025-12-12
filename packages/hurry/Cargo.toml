@@ -14,61 +14,62 @@ name = "walkdir"
 harness = false
 
 [dependencies]
-clients = { workspace = true, features = ["client"] }
+async-walkdir = { workspace = true }
+axum = { workspace = true, features = ["macros"] }
 blake3 = { workspace = true }
 bon = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { workspace = true, features = ["cargo", "derive", "string"] }
+clients = { workspace = true, features = ["client"] }
 color-eyre = { workspace = true }
+colored = {workspace = true }
+console = { workspace = true }
+const-str = { workspace = true, features = ["std", "all"] }
+dashmap = { workspace = true, features = ["serde"] }
 derive_more = { workspace = true, features = ["full"] }
+directories = { workspace = true }
+duplicate = { workspace = true }
 enum-assoc = { workspace = true }
+extfn = { workspace = true }
 filetime = { workspace = true }
+flume = { workspace = true }
 fslock = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+home = { workspace = true }
 homedir = { workspace = true }
+humansize = { workspace = true }
+indicatif = { workspace = true }
+inquire = {workspace = true }
+is_executable = { workspace = true }
 itertools = { workspace = true }
+jiff = { workspace = true }
+jwalk.workspace = true
+lazy-regex = { workspace = true, features = ["regex", "std"] }
+libc = { workspace = true }
+num_cpus = { workspace = true }
+parse-display = { workspace = true }
+paste = { workspace = true }
+rayon = { workspace = true }
+reqwest.workspace = true
+rustc-stable-hash = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc", "std"] }
 serde_json = { workspace = true }
+signal-hook = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 subenum = { workspace = true }
+sysinfo = { workspace = true }
 tap = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tower-http = { workspace = true, features = ["trace"] }
 tracing = { workspace = true }
 tracing-error = { workspace = true }
 tracing-flame = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-tokio = { workspace = true, features = ["full"] }
-extfn = { workspace = true }
-async-walkdir = { workspace = true }
-walkdir = { workspace = true }
-rayon = { workspace = true }
-inquire = {workspace = true }
-colored = {workspace = true }
-futures = { workspace = true }
-tempfile = { workspace = true }
-home = { workspace = true }
-jiff = { workspace = true }
-const-str = { workspace = true, features = ["std", "all"] }
-duplicate = { workspace = true }
-paste = { workspace = true }
-parse-display = { workspace = true }
-lazy-regex = { workspace = true, features = ["regex", "std"] }
 url = { workspace = true }
-flume = { workspace = true }
-num_cpus = { workspace = true }
-jwalk.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
-indicatif = { workspace = true }
-humansize = { workspace = true }
-dashmap = { workspace = true, features = ["serde"] }
-console = { workspace = true }
-sysinfo = { workspace = true }
-axum = { workspace = true, features = ["macros"] }
-tower-http = { workspace = true, features = ["trace"] }
-signal-hook = { workspace = true }
-reqwest.workspace = true
-is_executable = { workspace = true }
-directories = { workspace = true }
-hex.workspace = true
-rustc-stable-hash = { workspace = true }
+walkdir = { workspace = true }
 
 [dev-dependencies]
 async-walkdir.workspace = true
@@ -77,5 +78,5 @@ jwalk = { workspace = true }
 pretty_assertions = { workspace = true }
 simple_test_case.workspace = true
 test-log = { workspace = true, features = ["trace"] }
-xshell = { workspace = true }
 workspace_root = { workspace = true }
+xshell = { workspace = true }

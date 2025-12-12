@@ -10,9 +10,9 @@ use async_tempfile::TempDir;
 use clients::{
     Token,
     courier::v1::{
-        Client, Fingerprint, Key, LibraryCrateUnitPlan, LibraryFiles, SavedUnit, SavedUnitHash,
-        UnitPlanInfo,
-        cache::{CargoSaveRequest, CargoSaveUnitRequest, SavedUnitCacheKey},
+        Client, Fingerprint, GlibcVersion, Key, LibraryCrateUnitPlan, LibraryFiles, SavedUnit,
+        SavedUnitHash, UnitPlanInfo,
+        cache::{CargoSaveRequest, CargoSaveUnitRequest},
     },
 };
 use color_eyre::{Result, eyre::Context};
@@ -24,6 +24,12 @@ use courier::{
 use futures::{StreamExt, TryStreamExt, stream};
 use sqlx::PgPool;
 use url::Url;
+
+const GLIBC_VERSION: GlibcVersion = GlibcVersion {
+    major: 2,
+    minor: 41,
+    patch: 0,
+};
 
 /// Test fixture containing a spawned server and authentication context.
 pub struct TestFixture {
@@ -281,11 +287,15 @@ pub fn test_saved_unit(unit_hash: impl Into<SavedUnitHash>) -> SavedUnit {
 /// Create a cargo save request from a unit with the given unit hash.
 pub fn test_cargo_save_request(
     unit_hash: impl Into<SavedUnitHash>,
-) -> (CargoSaveRequest, SavedUnitCacheKey) {
+) -> (CargoSaveRequest, SavedUnitHash) {
     let unit_hash = unit_hash.into();
     let unit = test_saved_unit(&unit_hash);
-    let key = SavedUnitCacheKey::builder().unit_hash(&unit_hash).build();
-    let request = CargoSaveUnitRequest::builder().key(&key).unit(unit).build();
+    let key = unit.unit_hash().clone();
+    let request = CargoSaveUnitRequest::builder()
+        .unit(unit)
+        .resolved_target(String::from("x86_64-unknown-linux-gnu"))
+        .maybe_linux_glibc_version(Some(GLIBC_VERSION))
+        .build();
     let save_request = CargoSaveRequest::new([request]);
     (save_request, key)
 }

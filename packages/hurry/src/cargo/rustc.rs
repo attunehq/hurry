@@ -93,37 +93,40 @@ pub enum RustcTargetPlatform {
     #[assoc(try_from_str = "aarch64-pc-windows-msvc")]
     #[assoc(supported = true)]
     #[assoc(uses_glibc = false)]
-    Arm64WindowsMSVC,
+    Arm64WindowsMsvc,
     #[assoc(as_str = "aarch64-unknown-linux-gnu")]
     #[assoc(try_from_str = "aarch64-unknown-linux-gnu")]
     #[assoc(supported = true)]
     #[assoc(uses_glibc = true)]
-    Arm64LinuxGNU,
+    // TODO: Here and in the other GNU variants, should we store the
+    // GLIBCVersion within the sum variant? That feels the most correct, and
+    // avoids carrying around an `Option` around with us everywhere.
+    Arm64LinuxGnu,
     #[assoc(as_str = "i686-pc-windows-msvc")]
     #[assoc(try_from_str = "i686-pc-windows-msvc")]
     #[assoc(supported = true)]
     #[assoc(uses_glibc = false)]
-    I686WindowsMSVC,
+    I686WindowsMsvc,
     #[assoc(as_str = "i686-unknown-linux-gnu")]
     #[assoc(try_from_str = "i686-unknown-linux-gnu")]
     #[assoc(supported = true)]
     #[assoc(uses_glibc = true)]
-    I686LinuxGNU,
+    I686LinuxGnu,
     #[assoc(as_str = "x86_64-pc-windows-gnu")]
     #[assoc(try_from_str = "x86_64-pc-windows-gnu")]
     #[assoc(supported = true)]
     #[assoc(uses_glibc = false)]
-    X86_64WindowsGNU,
+    X86_64WindowsGnu,
     #[assoc(as_str = "x86_64-pc-windows-msvc")]
     #[assoc(try_from_str = "x86_64-pc-windows-msvc")]
     #[assoc(supported = true)]
     #[assoc(uses_glibc = false)]
-    X86_64WindowsMSVC,
+    X86_64WindowsMsvc,
     #[assoc(as_str = "x86_64-unknown-linux-gnu")]
     #[assoc(try_from_str = "x86_64-unknown-linux-gnu")]
     #[assoc(supported = true)]
     #[assoc(uses_glibc = true)]
-    X86_64LinuxGNU,
+    X86_64LinuxGnu,
 
     // This is a catch-all for all other unrecognized target triple strings.
     // This variant mainly exists so that unsupported target triples do not

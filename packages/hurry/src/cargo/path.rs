@@ -48,7 +48,6 @@ pub enum QualifiedPath {
 }
 
 impl QualifiedPath {
-    #[instrument(name = "QualifiedPath::parse_string")]
     pub async fn parse_string(ws: &Workspace, target: &RustcTarget, path: &str) -> Result<Self> {
         Self::parse(ws, target, &GenericPath::try_from(path)?).await
     }
