@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT unit_hash, linux_glibc_version, data\n            FROM cargo_saved_unit\n            WHERE organization_id = $1\n            AND unit_hash = ANY($2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "unit_hash",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "linux_glibc_version",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "data",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "a72fc836f5a66717977a0a4c2d5c1a811e0a9528a338cf1a624e1bf98ab28e5c"
+}

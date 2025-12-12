@@ -14,7 +14,7 @@ use color_eyre::{
 use derive_more::{Debug, Display};
 use futures::{AsyncWriteExt, Stream, StreamExt, TryStreamExt};
 use reqwest::{Response, StatusCode};
-use tap::{Conv, Pipe};
+use tap::Pipe;
 use tokio::io::{AsyncRead, BufReader};
 use tokio_util::{
     compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt},
@@ -26,11 +26,8 @@ use url::Url;
 use crate::{
     ContentType, NETWORK_BUFFER_SIZE, Token,
     courier::v1::{
-        Key, SavedUnit,
-        cache::{
-            CargoRestoreRequest, CargoRestoreResponse, CargoRestoreResponseTransport,
-            CargoSaveRequest, SavedUnitCacheKey,
-        },
+        Key,
+        cache::{CargoRestoreRequest, CargoRestoreResponse, CargoSaveRequest},
         cas::{CasBulkReadRequest, CasBulkWriteResponse},
     },
 };
@@ -140,14 +137,11 @@ impl Client {
 
         match response.status() {
             StatusCode::OK => response
-                .json::<CargoRestoreResponseTransport>()
+                .json::<CargoRestoreResponse>()
                 .await
                 .context("parse JSON response")?
-                .conv::<CargoRestoreResponse>()
                 .pipe(Ok),
-            StatusCode::NOT_FOUND => {
-                Ok(CargoRestoreResponse::new::<_, SavedUnitCacheKey, SavedUnit>(vec![]))
-            }
+            StatusCode::NOT_FOUND => Ok(CargoRestoreResponse::default()),
             status => {
                 let url = response.url().to_string();
                 let request_id = request_id(&response);

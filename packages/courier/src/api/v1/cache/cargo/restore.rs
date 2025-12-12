@@ -1,8 +1,7 @@
 use aerosol::axum::Dep;
 use axum::{Json, http::StatusCode, response::IntoResponse};
-use clients::courier::v1::cache::{CargoRestoreRequest, CargoRestoreResponseTransport};
+use clients::courier::v1::cache::{CargoRestoreRequest, CargoRestoreResponse};
 use color_eyre::eyre::Report;
-use tap::Pipe;
 use tracing::{error, info};
 
 use crate::{auth::AuthenticatedToken, db::Postgres};
@@ -25,10 +24,7 @@ pub async fn handle(
         }
         Ok(artifacts) => {
             info!("cache.restore.hit");
-            artifacts
-                .into_iter()
-                .collect::<CargoRestoreResponseTransport>()
-                .pipe(CacheRestoreResponse::Ok)
+            CacheRestoreResponse::Ok(CargoRestoreResponse::new(artifacts))
         }
         Err(err) => {
             error!(error = ?err, "cache.restore.error");
@@ -39,7 +35,7 @@ pub async fn handle(
 
 #[derive(Debug)]
 pub enum CacheRestoreResponse {
-    Ok(CargoRestoreResponseTransport),
+    Ok(CargoRestoreResponse),
     NotFound,
     Forbidden(StatusCode, &'static str),
     Error(Report),

@@ -102,6 +102,13 @@ async fn serve(config: ServeConfig) -> Result<()> {
         .await
         .context("connect to database")?;
 
+    // Validate all migrations have been applied before starting the server.
+    // This ensures we don't serve traffic until the separate migration job has
+    // completed.
+    db.validate_migrations()
+        .await
+        .context("validate database migrations")?;
+
     // Construct GitHub OAuth client if configured
     let github = match (config.github_client_id, config.github_client_secret) {
         (Some(client_id), Some(client_secret)) => {

@@ -1,17 +1,17 @@
 use color_eyre::Result;
 use futures::stream;
 use serde::{Deserialize, Serialize};
-use tracing::{instrument, trace};
+use tracing::{error, instrument, trace};
 
 use crate::{
-    cargo::{Restored, UnitPlan, Workspace},
+    cargo::{Restored, RustcTarget, UnitPlan, Workspace, host_glibc_version},
     cas::CourierCas,
 };
 use clients::{
     Courier,
     courier::v1::{
         self as courier, Key,
-        cache::{CargoSaveRequest, CargoSaveUnitRequest, SavedUnitCacheKey},
+        cache::{CargoSaveRequest, CargoSaveUnitRequest},
     },
 };
 
@@ -41,15 +41,11 @@ pub async fn save_units(
         uploaded_bytes: 0,
     };
 
-    // TODO: Batch units together up to around 10MB in file size for optimal
+    // TODO: This algorithm currently uploads units one at a time. Instead, we
+    // should batch units together up to around 10MB in file size for optimal
     // upload speed. One way we could do this is have units present their
     // CAS-able contents, batch those contents up, and then issue save requests
     // for batches of units as their CAS contents are finished uploading.
-
-    // This algorithm currently uploads units one at a time, and only skips uploads
-    // at the unit level (not at the file level).
-    //
-    // TODO: Skip uploads at the file object level.
     let mut save_requests = Vec::new();
     for unit in units {
         if skip.units.contains(&unit.info().unit_hash) {
@@ -58,6 +54,50 @@ pub async fn save_units(
             on_progress(&progress);
             continue;
         }
+
+        // For units compiled against glibc, we need to know the glibc version
+        // so we don't later restore the unit on a host machine that does not
+        // have the needed glibc symbols.
+        let unit_arch = match &unit.info().target_arch {
+            RustcTarget::Specified(target_arch) => &target_arch.clone(),
+            RustcTarget::ImplicitHost => &ws.host_arch,
+        };
+        let glibc_version = if unit_arch.uses_glibc() {
+            if unit_arch != &ws.host_arch {
+                // TODO: How do we determine the glibc version of a
+                // cross-compiled unit? Maybe for `cross`, we can add
+                // first-class support where we inspect the inside of the
+                // container for its libc version? What about in general for
+                // other cross-compilers? How do we know which libc the compiler
+                // will link against?
+                //
+                // See also:
+                // - https://stackoverflow.com/questions/61423973/how-to-find-which-libc-so-will-rustc-target-target-link-against
+                // - https://github.com/rust-lang/rust/issues/71564
+                // - https://users.rust-lang.org/t/clarifications-on-rusts-relationship-to-libc/56767/2
+                //
+                // Maybe we can directly ask the native compilers? `cc
+                // --print-file-name=libc.so.6` and `aarch64-linux-gnu-gcc
+                // --print-file-name=libc.so.6`? And from then we can open the
+                // ELF and look at the verdef section? But how do we know which
+                // linker Cargo will use for any particular build, and what flag
+                // that linker accepts to query the libc file?
+                error!("backing up cross-compiled units is not yet supported");
+                progress.total_units -= 1;
+                on_progress(&progress);
+                continue;
+            }
+            // TODO: This isn't _technically_ correct. You could, in theory,
+            // configure Cargo or your linker to link against against a version
+            // of glibc different from your standard glibc. I'm not completely
+            // sure how we would query that out of Cargo, rustc, or the linker,
+            // (maybe `cc --print-filename=libc.so.6` when we can infer that the
+            // linker is `cc`, or emulating `LD_LIBRARY_PATH` when it's `ld`?),
+            // so for now such a configuration is unsupported.
+            host_glibc_version()?
+        } else {
+            None
+        };
 
         // Upload unit to CAS and cache.
         match unit {
@@ -109,11 +149,6 @@ pub async fn save_units(
                 // Prepare save request.
                 let fingerprint = serde_json::to_string(&files.fingerprint)?;
                 let save_request = CargoSaveUnitRequest::builder()
-                    .key(
-                        SavedUnitCacheKey::builder()
-                            .unit_hash(plan.info.clone().unit_hash)
-                            .build(),
-                    )
                     .unit(courier::SavedUnit::LibraryCrate(
                         courier::LibraryFiles::builder()
                             .output_files(output_files)
@@ -123,6 +158,8 @@ pub async fn save_units(
                             .build(),
                         plan.try_into()?,
                     ))
+                    .resolved_target(unit_arch.as_str().to_string())
+                    .maybe_linux_glibc_version(glibc_version)
                     .build();
 
                 save_requests.push(save_request);
@@ -164,11 +201,6 @@ pub async fn save_units(
                 // Prepare save request.
                 let fingerprint = serde_json::to_string(&files.fingerprint)?;
                 let save_request = CargoSaveUnitRequest::builder()
-                    .key(
-                        SavedUnitCacheKey::builder()
-                            .unit_hash(plan.info.clone().unit_hash)
-                            .build(),
-                    )
                     .unit(courier::SavedUnit::BuildScriptCompilation(
                         courier::BuildScriptCompiledFiles::builder()
                             .compiled_program(compiled_program)
@@ -178,6 +210,8 @@ pub async fn save_units(
                             .build(),
                         plan.try_into()?,
                     ))
+                    .resolved_target(unit_arch.as_str().to_string())
+                    .maybe_linux_glibc_version(glibc_version)
                     .build();
 
                 save_requests.push(save_request);
@@ -230,11 +264,6 @@ pub async fn save_units(
                 // Prepare save request.
                 let fingerprint = serde_json::to_string(&files.fingerprint)?;
                 let save_request = CargoSaveUnitRequest::builder()
-                    .key(
-                        SavedUnitCacheKey::builder()
-                            .unit_hash(plan.info.clone().unit_hash)
-                            .build(),
-                    )
                     .unit(courier::SavedUnit::BuildScriptExecution(
                         courier::BuildScriptOutputFiles::builder()
                             .out_dir_files(out_dir_files)
@@ -244,6 +273,8 @@ pub async fn save_units(
                             .build(),
                         plan.try_into()?,
                     ))
+                    .resolved_target(unit_arch.as_str().to_string())
+                    .maybe_linux_glibc_version(glibc_version)
                     .build();
 
                 save_requests.push(save_request);
