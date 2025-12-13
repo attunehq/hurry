@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Update a member's role in an organization.
+set -euo pipefail
+
+source "$(dirname "$0")/_common"
+
+check_deps
+check_url
+
+if [ $# -ne 3 ]; then
+  echo "Usage: $0 <org-id> <account-id> <role>" >&2
+  echo "Update a member's role in an organization (admin only)" >&2
+  echo "" >&2
+  echo "Arguments:" >&2
+  echo "  org-id      Organization ID" >&2
+  echo "  account-id  Account ID of the member to update" >&2
+  echo "  role        New role: 'admin' or 'member'" >&2
+  exit 1
+fi
+
+ORG_ID="$1"
+ACCOUNT_ID="$2"
+ROLE="$3"
+
+if ! [[ "$ORG_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Organization ID must be a number" >&2
+  exit 1
+fi
+
+if ! [[ "$ACCOUNT_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Account ID must be a number" >&2
+  exit 1
+fi
+
+if [[ "$ROLE" != "admin" && "$ROLE" != "member" ]]; then
+  echo "Error: Role must be 'admin' or 'member'" >&2
+  exit 1
+fi
+
+BODY=$(jq -nc --arg role "$ROLE" '{role: $role}')
+response=$(api_patch "/api/v1/organizations/${ORG_ID}/members/${ACCOUNT_ID}" "$BODY")
+status_code=$(echo "$response" | tail -n1)
+
+if [[ "$status_code" == "204" ]]; then
+  echo "Member role updated to '$ROLE' successfully."
+else
+  body=$(echo "$response" | sed '$d')
+  echo "Error: HTTP $status_code" >&2
+  echo "$body" >&2
+  exit 1
+fi

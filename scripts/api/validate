@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# Validation script for self-service signup functionality
+# Exercises all new endpoints with fake OAuth users
+set -euo pipefail
+
+COURIER_URL="${COURIER_URL:-http://localhost:3000}"
+export COURIER_URL
+
+# Enable debug output to show curl commands
+export COURIER_DEBUG=1
+
+# Use unique usernames based on timestamp to avoid conflicts with existing data
+TIMESTAMP=$(date +%s)
+ALICE_USER="alice-${TIMESTAMP}"
+BOB_USER="bob-${TIMESTAMP}"
+CAROL_USER="carol-${TIMESTAMP}"
+
+echo "=== Self-Service Signup Validation ==="
+echo "COURIER_URL: $COURIER_URL"
+echo ""
+
+# --- User 1: Alice (org admin) ---
+echo "1. Creating user '${ALICE_USER}' with fake GitHub OAuth..."
+ALICE_TOKEN=$(./scripts/api/login "${ALICE_USER}@example.com" "$ALICE_USER" "Alice Smith")
+export COURIER_TOKEN="$ALICE_TOKEN"
+echo "   Token: ${ALICE_TOKEN:0:16}..."
+
+echo ""
+echo "2. Getting Alice's profile..."
+./scripts/api/me
+
+echo ""
+echo "3. Listing Alice's organizations..."
+ORG_RESPONSE=$(./scripts/api/org-list)
+echo "$ORG_RESPONSE" | jq .
+ORG_ID=$(echo "$ORG_RESPONSE" | jq -r '.organizations[0].id')
+echo "   Org ID: $ORG_ID"
+
+echo ""
+echo "4. Listing org members (should just be Alice as admin)..."
+./scripts/api/org-members "$ORG_ID"
+
+echo ""
+echo "5. Creating an API key for CI..."
+./scripts/api/key-create "$ORG_ID" "ci-key"
+
+echo ""
+echo "6. Listing API keys..."
+./scripts/api/key-list "$ORG_ID"
+
+echo ""
+echo "7. Creating an invitation for Bob..."
+INVITE_RESPONSE=$(./scripts/api/invite-create "$ORG_ID" member 5)
+echo "$INVITE_RESPONSE" | jq .
+INVITE_TOKEN=$(echo "$INVITE_RESPONSE" | jq -r '.token')
+echo "   Invite token: $INVITE_TOKEN"
+
+echo ""
+echo "8. Listing invitations..."
+./scripts/api/invite-list "$ORG_ID"
+
+echo ""
+echo "9. Previewing invitation (public, no auth)..."
+unset COURIER_TOKEN
+./scripts/api/invite-preview "$INVITE_TOKEN"
+
+# --- User 2: Bob (joins via invitation) ---
+echo ""
+echo "10. Creating user '${BOB_USER}' with fake GitHub OAuth..."
+BOB_TOKEN=$(./scripts/api/login "${BOB_USER}@example.com" "$BOB_USER" "Bob Jones")
+export COURIER_TOKEN="$BOB_TOKEN"
+echo "    Token: ${BOB_TOKEN:0:16}..."
+
+echo ""
+echo "11. Bob accepts the invitation..."
+./scripts/api/invite-accept "$INVITE_TOKEN"
+
+echo ""
+echo "12. Bob's organizations (should now include Alice's org)..."
+./scripts/api/org-list
+
+echo ""
+echo "13. Listing org members (should have Alice and Bob)..."
+./scripts/api/org-members "$ORG_ID"
+
+# --- Back to Alice for admin operations ---
+echo ""
+echo "14. Switching back to Alice..."
+export COURIER_TOKEN="$ALICE_TOKEN"
+
+echo ""
+echo "15. Creating a bot account for CI..."
+./scripts/api/bot-create "$ORG_ID" "CI Bot" "ops-${TIMESTAMP}@example.com"
+
+echo ""
+echo "16. Listing bot accounts..."
+./scripts/api/bot-list "$ORG_ID"
+
+echo ""
+echo "17. Creating a second organization..."
+./scripts/api/org-create "Alice's Second Org"
+
+echo ""
+echo "18. Alice's organizations (should have 2 now)..."
+./scripts/api/org-list
+
+# --- Admin operations: role changes ---
+echo ""
+echo "19. Alice promotes Bob to admin..."
+export COURIER_TOKEN="$ALICE_TOKEN"
+BOB_ACCOUNT_ID=$(./scripts/api/org-members "$ORG_ID" | jq -r '.members[] | select(.name == "Bob Jones") | .account_id')
+./scripts/api/member-role "$ORG_ID" "$BOB_ACCOUNT_ID" admin
+
+echo ""
+echo "20. Listing org members (Bob should now be admin)..."
+./scripts/api/org-members "$ORG_ID"
+
+echo ""
+echo "21. Alice demotes Bob back to member..."
+./scripts/api/member-role "$ORG_ID" "$BOB_ACCOUNT_ID" member
+
+# --- Bob leaves org voluntarily ---
+echo ""
+echo "22. Bob voluntarily leaves Alice's organization..."
+export COURIER_TOKEN="$BOB_TOKEN"
+./scripts/api/org-leave "$ORG_ID"
+
+echo ""
+echo "23. Bob's organizations (should only have his default org)..."
+./scripts/api/org-list
+
+echo ""
+echo "24. Re-inviting Bob for later tests..."
+export COURIER_TOKEN="$ALICE_TOKEN"
+REINVITE_RESPONSE=$(./scripts/api/invite-create "$ORG_ID" member)
+echo "$REINVITE_RESPONSE" | jq .
+REINVITE_TOKEN=$(echo "$REINVITE_RESPONSE" | jq -r '.token')
+
+echo ""
+echo "25. Bob accepts the re-invitation..."
+export COURIER_TOKEN="$BOB_TOKEN"
+./scripts/api/invite-accept "$REINVITE_TOKEN"
+
+echo ""
+echo "26. Bob's organizations (should include Alice's org again)..."
+./scripts/api/org-list
+
+# Get Bob's account ID again (it's the same, just confirming membership)
+export COURIER_TOKEN="$ALICE_TOKEN"
+BOB_ACCOUNT_ID=$(./scripts/api/org-members "$ORG_ID" | jq -r '.members[] | select(.name == "Bob Jones") | .account_id')
+
+# --- Revocation tests ---
+echo ""
+echo "27. Creating a third invitation (to be revoked)..."
+REVOKE_INVITE_RESPONSE=$(./scripts/api/invite-create "$ORG_ID" member)
+echo "$REVOKE_INVITE_RESPONSE" | jq .
+REVOKE_INVITE_ID=$(echo "$REVOKE_INVITE_RESPONSE" | jq -r '.id')
+REVOKE_INVITE_TOKEN=$(echo "$REVOKE_INVITE_RESPONSE" | jq -r '.token')
+echo "   Invite ID: $REVOKE_INVITE_ID, Token: $REVOKE_INVITE_TOKEN"
+
+echo ""
+echo "28. Revoking the invitation..."
+./scripts/api/invite-revoke "$ORG_ID" "$REVOKE_INVITE_ID"
+
+echo ""
+echo "29. Creating user '${CAROL_USER}' to test revoked invite..."
+CAROL_TOKEN=$(./scripts/api/login "${CAROL_USER}@example.com" "$CAROL_USER" "Carol White")
+export COURIER_TOKEN="$CAROL_TOKEN"
+echo "    Token: ${CAROL_TOKEN:0:16}..."
+
+echo ""
+echo "30. Carol tries to accept the revoked invitation (should fail)..."
+if ./scripts/api/invite-accept "$REVOKE_INVITE_TOKEN" 2>&1; then
+  echo "ERROR: Should have failed to accept revoked invitation!" >&2
+  exit 1
+else
+  echo "   (Expected failure - invitation was revoked)"
+fi
+
+# --- API key revocation ---
+echo ""
+echo "31. Switching back to Alice to revoke the API key..."
+export COURIER_TOKEN="$ALICE_TOKEN"
+KEY_ID=$(./scripts/api/key-list "$ORG_ID" | jq -r '.api_keys[0].id')
+echo "   Revoking key ID: $KEY_ID"
+./scripts/api/key-revoke "$ORG_ID" "$KEY_ID"
+
+echo ""
+echo "32. Listing API keys (ci-key revoked, bot key still exists)..."
+./scripts/api/key-list "$ORG_ID"
+
+# --- Member removal ---
+echo ""
+echo "33. Alice removes Bob from the organization..."
+./scripts/api/member-remove "$ORG_ID" "$BOB_ACCOUNT_ID"
+
+echo ""
+echo "34. Listing org members (Alice and CI Bot remain)..."
+./scripts/api/org-members "$ORG_ID"
+
+echo ""
+echo "35. Bob's organizations (should only have his default org)..."
+export COURIER_TOKEN="$BOB_TOKEN"
+./scripts/api/org-list
+
+# --- Logout ---
+echo ""
+echo "36. Alice logs out..."
+export COURIER_TOKEN="$ALICE_TOKEN"
+./scripts/api/logout
+
+echo ""
+echo "=== All 36 tests passed! ==="

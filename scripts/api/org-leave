@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Leave an organization.
+set -euo pipefail
+
+source "$(dirname "$0")/_common"
+
+check_deps
+check_url
+
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <org-id>" >&2
+  echo "Leave an organization (you cannot be the last admin)" >&2
+  exit 1
+fi
+
+ORG_ID="$1"
+
+if ! [[ "$ORG_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Organization ID must be a number" >&2
+  exit 1
+fi
+
+response=$(api_post "/api/v1/organizations/${ORG_ID}/leave")
+status_code=$(echo "$response" | tail -n1)
+
+if [[ "$status_code" == "204" ]]; then
+  echo "Left organization successfully."
+else
+  body=$(echo "$response" | sed '$d')
+  echo "Error: HTTP $status_code" >&2
+  echo "$body" >&2
+  exit 1
+fi

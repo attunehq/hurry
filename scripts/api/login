@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Create a fake GitHub user and session for development.
+# This bypasses the normal GitHub OAuth flow.
+set -euo pipefail
+
+if [ -z "${COURIER_DATABASE_URL:-}" ]; then
+  echo "Error: COURIER_DATABASE_URL environment variable is not set" >&2
+  exit 1
+fi
+
+if [ $# -lt 1 ]; then
+  echo "Usage: $0 <email> [github-username] [name]" >&2
+  echo "Create a fake GitHub user and login session for development" >&2
+  echo "" >&2
+  echo "Arguments:" >&2
+  echo "  email            User's email address" >&2
+  echo "  github-username  GitHub username (defaults to email prefix)" >&2
+  echo "  name             Display name (optional)" >&2
+  echo "" >&2
+  echo "Outputs the session token to stdout." >&2
+  echo "Use with: export COURIER_TOKEN=\$(./scripts/api/login ...)" >&2
+  exit 1
+fi
+
+EMAIL="$1"
+GITHUB_USERNAME="${2:-${EMAIL%%@*}}"
+NAME="${3:-}"
+
+# Generate a fake GitHub user ID from the username hash (consistent for same username)
+# Use first 9 hex digits to stay within int4 range
+GITHUB_USER_ID=$(echo -n "$GITHUB_USERNAME" | sha256sum | head -c 9 | xargs -I{} printf "%d" 0x{} 2>/dev/null || echo "12345678")
+
+# Check if account with this GitHub ID already exists
+EXISTING_ACCOUNT=$(psql "$COURIER_DATABASE_URL" -t -A -c "SELECT a.id FROM account a JOIN github_identity g ON a.id = g.account_id WHERE g.github_user_id = $GITHUB_USER_ID;" 2>/dev/null || echo "")
+
+if [ -n "$EXISTING_ACCOUNT" ]; then
+  ACCOUNT_ID="$EXISTING_ACCOUNT"
+  echo "Found existing account ID: $ACCOUNT_ID" >&2
+else
+  # Create the account, GitHub identity, and default org in a single transaction
+  ORG_NAME="${GITHUB_USERNAME}'s Org"
+
+  # Do everything in one psql call to maintain transaction
+  ACCOUNT_ID=$(psql "$COURIER_DATABASE_URL" -t -A \
+    -v email="$EMAIL" \
+    -v name="$NAME" \
+    -v github_user_id="$GITHUB_USER_ID" \
+    -v github_username="$GITHUB_USERNAME" \
+    -v org_name="$ORG_NAME" \
+    <<'EOSQL'
+WITH new_account AS (
+  INSERT INTO account (email, name)
+  VALUES (:'email', NULLIF(:'name', ''))
+  RETURNING id
+),
+new_github AS (
+  INSERT INTO github_identity (account_id, github_user_id, github_username)
+  SELECT id, :github_user_id, :'github_username' FROM new_account
+),
+new_org AS (
+  INSERT INTO organization (name)
+  VALUES (:'org_name')
+  RETURNING id
+),
+new_member AS (
+  INSERT INTO organization_member (organization_id, account_id, role_id)
+  SELECT new_org.id, new_account.id, organization_role.id
+  FROM new_org, new_account, organization_role
+  WHERE organization_role.name = 'admin'
+)
+SELECT id FROM new_account;
+EOSQL
+)
+
+  if [ -z "$ACCOUNT_ID" ]; then
+    echo "Error: Failed to create account" >&2
+    exit 1
+  fi
+
+  echo "Created new account ID: $ACCOUNT_ID" >&2
+  echo "  Email: $EMAIL" >&2
+  echo "  GitHub: $GITHUB_USERNAME (fake ID: $GITHUB_USER_ID)" >&2
+  [ -n "$NAME" ] && echo "  Name: $NAME" >&2
+fi
+
+# Generate a session token (64 hex chars = 32 bytes)
+SESSION_TOKEN=$(openssl rand -hex 32)
+
+# Hash the token using SHA-256 for storage
+SESSION_HASH=$(echo -n "$SESSION_TOKEN" | openssl dgst -sha256 -binary | xxd -p -c 256)
+
+# Create session (expires in 24 hours)
+if ! psql "$COURIER_DATABASE_URL" -q -c "INSERT INTO user_session (account_id, session_token, expires_at) VALUES ($ACCOUNT_ID, '\\x$SESSION_HASH', NOW() + INTERVAL '24 hours');" 2>&1 >&2; then
+  echo "Error: Failed to create session" >&2
+  exit 1
+fi
+
+# Output token to stdout
+echo "$SESSION_TOKEN"

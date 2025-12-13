@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Get the current user's profile.
+set -euo pipefail
+
+source "$(dirname "$0")/_common"
+
+check_deps
+check_url
+
+response=$(api_get "/api/v1/me")
+handle_response "$response"

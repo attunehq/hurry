@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Revoke an API key.
+set -euo pipefail
+
+source "$(dirname "$0")/_common"
+
+check_deps
+check_url
+
+if [ $# -ne 2 ]; then
+  echo "Usage: $0 <org-id> <key-id>" >&2
+  echo "Revoke (delete) an API key" >&2
+  exit 1
+fi
+
+ORG_ID="$1"
+KEY_ID="$2"
+
+if ! [[ "$ORG_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Organization ID must be a number" >&2
+  exit 1
+fi
+
+if ! [[ "$KEY_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Key ID must be a number" >&2
+  exit 1
+fi
+
+response=$(api_delete "/api/v1/organizations/${ORG_ID}/api-keys/${KEY_ID}")
+status_code=$(echo "$response" | tail -n1)
+
+if [[ "$status_code" == "204" ]]; then
+  echo "API key revoked successfully."
+else
+  body=$(echo "$response" | sed '$d')
+  echo "Error: HTTP $status_code" >&2
+  echo "$body" >&2
+  exit 1
+fi

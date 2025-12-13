@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Accept an invitation to join an organization.
+set -euo pipefail
+
+source "$(dirname "$0")/_common"
+
+check_deps
+check_url
+
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <token>" >&2
+  echo "Accept an invitation using the invitation token" >&2
+  exit 1
+fi
+
+TOKEN="$1"
+
+response=$(api_post "/api/v1/invitations/${TOKEN}/accept")
+handle_response "$response"

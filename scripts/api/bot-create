@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Create a bot account for an organization.
+set -euo pipefail
+
+source "$(dirname "$0")/_common"
+
+check_deps
+check_url
+
+if [ $# -ne 3 ]; then
+  echo "Usage: $0 <org-id> <name> <responsible-email>" >&2
+  echo "Create a bot account for CI/automation (admin only)" >&2
+  echo "" >&2
+  echo "Arguments:" >&2
+  echo "  org-id            Organization ID" >&2
+  echo "  name              Bot name (e.g., 'CI Bot')" >&2
+  echo "  responsible-email Email of person/team responsible for this bot" >&2
+  echo "" >&2
+  echo "Returns an API key that can be used for authentication." >&2
+  exit 1
+fi
+
+ORG_ID="$1"
+NAME="$2"
+EMAIL="$3"
+
+if ! [[ "$ORG_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Organization ID must be a number" >&2
+  exit 1
+fi
+
+BODY=$(jq -n --arg name "$NAME" --arg email "$EMAIL" '{name: $name, responsible_email: $email}')
+
+response=$(api_post "/api/v1/organizations/${ORG_ID}/bots" "$BODY")
+if handle_response "$response"; then
+  echo ""
+  echo "IMPORTANT: Save the 'api_key' value above. It will not be shown again!"
+fi
