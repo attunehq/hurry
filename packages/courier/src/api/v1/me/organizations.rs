@@ -7,7 +7,10 @@ use tap::Pipe;
 use time::OffsetDateTime;
 use tracing::{error, info};
 
-use crate::{auth::{OrgRole, SessionContext}, db::Postgres};
+use crate::{
+    auth::{OrgRole, SessionContext},
+    db::Postgres,
+};
 
 #[derive(Debug, Serialize)]
 pub struct OrganizationListResponse {

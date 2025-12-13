@@ -32,7 +32,10 @@ pub fn router() -> Router<State> {
         )
         .route("/{org_id}/leave", post(leave::handle))
         .route("/{org_id}/api-keys", get(api_keys::list::handle))
-        .route("/{org_id}/api-keys/{key_id}", delete(api_keys::delete::handle))
+        .route(
+            "/{org_id}/api-keys/{key_id}",
+            delete(api_keys::delete::handle),
+        )
         .route("/{org_id}/bots", get(bots::list::handle))
         .merge(invitations::organization_router())
         .merge(sensitive)

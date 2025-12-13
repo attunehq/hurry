@@ -62,9 +62,7 @@ impl IntoResponse for Response {
     fn into_response(self) -> axum::response::Response {
         match self {
             Response::Success(preview) => (StatusCode::OK, Json(preview)).into_response(),
-            Response::NotFound => {
-                (StatusCode::NOT_FOUND, "Invitation not found").into_response()
-            }
+            Response::NotFound => (StatusCode::NOT_FOUND, "Invitation not found").into_response(),
             Response::Error(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
         }
     }

@@ -109,9 +109,7 @@ impl IntoResponse for Response {
                 "This invitation has reached its maximum number of uses",
             )
                 .into_response(),
-            Response::NotFound => {
-                (StatusCode::NOT_FOUND, "Invitation not found").into_response()
-            }
+            Response::NotFound => (StatusCode::NOT_FOUND, "Invitation not found").into_response(),
             Response::Conflict => (
                 StatusCode::CONFLICT,
                 "You are already a member of this organization",
