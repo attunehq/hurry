@@ -18,7 +18,7 @@ CREATE TABLE organization (
 -- Accounts can belong to multiple organizations.
 CREATE TABLE account (
   id BIGSERIAL PRIMARY KEY,
-  email TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   disabled_at TIMESTAMPTZ,
   name TEXT

@@ -5,6 +5,10 @@
 ALTER TABLE account ADD COLUMN disabled_at TIMESTAMPTZ;
 ALTER TABLE account ADD COLUMN name TEXT;
 
+-- Remove unique constraint on email to allow bot accounts to share emails
+-- (bot accounts use the owner's contact email, which may duplicate human accounts)
+ALTER TABLE account DROP CONSTRAINT account_email_key;
+
 -- Update account comment
 COMMENT ON TABLE account IS 'Each distinct actor in the application is an "account"; this could be humans or it could be bots. In the case of bots, the "email" field is for where the person/team owning the bot can be reached. Note: Organization membership is tracked via the organization_member table. Accounts can belong to multiple organizations.';
 

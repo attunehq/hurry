@@ -48,6 +48,9 @@ ALTER TABLE api_key DROP COLUMN organization_id;
 ALTER TABLE account DROP COLUMN name;
 ALTER TABLE account DROP COLUMN disabled_at;
 
+-- Restore unique constraint on email
+ALTER TABLE account ADD CONSTRAINT account_email_key UNIQUE (email);
+
 -- Drop organization membership
 DROP INDEX idx_org_member_role;
 DROP INDEX idx_org_member_account;
