@@ -4,6 +4,7 @@ use axum::{
     http::{StatusCode, header::AUTHORIZATION, request::Parts},
 };
 use derive_more::{Debug, Display};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::{api, db};
@@ -23,7 +24,7 @@ pub enum OrgRole {
 }
 
 impl OrgRole {
-    /// Returns the database role name for this role.
+    /// Database role name.
     pub fn as_db_name(&self) -> &'static str {
         match self {
             OrgRole::Member => "member",
@@ -40,7 +41,7 @@ impl OrgRole {
         }
     }
 
-    /// Returns true if this role has admin privileges.
+    /// Check for admin privileges.
     pub fn is_admin(&self) -> bool {
         matches!(self, OrgRole::Admin)
     }
@@ -142,6 +143,13 @@ impl RawToken {
     pub fn expose(&self) -> &str {
         &self.0
     }
+
+    /// Generate a new raw token.
+    pub fn generate() -> Self {
+        let mut bytes = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        RawToken::new(hex::encode(bytes))
+    }
 }
 
 impl From<AuthenticatedToken> for RawToken {
@@ -185,6 +193,13 @@ impl SessionToken {
     pub fn expose(&self) -> &str {
         &self.0
     }
+
+    /// Generate a new session token.
+    pub fn generate() -> Self {
+        let mut bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        SessionToken::new(hex::encode(bytes))
+    }
 }
 
 impl AsRef<SessionToken> for SessionToken {
@@ -220,6 +235,13 @@ impl AuthCode {
     /// View the interior value of the code.
     pub fn expose(&self) -> &str {
         &self.0
+    }
+
+    /// Generate a new auth code.
+    pub fn generate() -> Self {
+        let mut bytes = [0u8; 24];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        AuthCode::new(hex::encode(bytes))
     }
 }
 

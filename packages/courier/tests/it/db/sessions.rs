@@ -1,6 +1,6 @@
 //! Tests for session database operations.
 
-use courier::{auth::SessionToken, crypto, db::Postgres};
+use courier::{auth::SessionToken, db::Postgres};
 use pretty_assertions::assert_eq as pretty_assert_eq;
 use time::{Duration, OffsetDateTime};
 
@@ -10,7 +10,7 @@ async fn create_and_validate_session(pool: sqlx::PgPool) {
 
     let account_id = db.create_account("test@test.com", None).await.unwrap();
 
-    let token = crypto::generate_session_token();
+    let token = SessionToken::generate();
     let expires_at = OffsetDateTime::now_utc() + Duration::hours(24);
 
     let _session_id = db
@@ -30,7 +30,7 @@ async fn validate_expired_session(pool: sqlx::PgPool) {
 
     let account_id = db.create_account("test@test.com", None).await.unwrap();
 
-    let token = crypto::generate_session_token();
+    let token = SessionToken::generate();
     let expires_at = OffsetDateTime::now_utc() - Duration::hours(1); // Already expired
 
     db.create_session(account_id, &token, expires_at)
@@ -49,7 +49,7 @@ async fn validate_disabled_account_session(pool: sqlx::PgPool) {
 
     let account_id = db.create_account("test@test.com", None).await.unwrap();
 
-    let token = crypto::generate_session_token();
+    let token = SessionToken::generate();
     let expires_at = OffsetDateTime::now_utc() + Duration::hours(24);
 
     db.create_session(account_id, &token, expires_at)
@@ -82,7 +82,7 @@ async fn revoke_session(pool: sqlx::PgPool) {
 
     let account_id = db.create_account("test@test.com", None).await.unwrap();
 
-    let token = crypto::generate_session_token();
+    let token = SessionToken::generate();
     let expires_at = OffsetDateTime::now_utc() + Duration::hours(24);
 
     db.create_session(account_id, &token, expires_at)
@@ -118,8 +118,8 @@ async fn revoke_all_sessions(pool: sqlx::PgPool) {
     let expires_at = OffsetDateTime::now_utc() + Duration::hours(24);
 
     // Create multiple sessions
-    let token1 = crypto::generate_session_token();
-    let token2 = crypto::generate_session_token();
+    let token1 = SessionToken::generate();
+    let token2 = SessionToken::generate();
 
     db.create_session(account_id, &token1, expires_at)
         .await
@@ -144,7 +144,7 @@ async fn extend_session(pool: sqlx::PgPool) {
 
     let account_id = db.create_account("test@test.com", None).await.unwrap();
 
-    let token = crypto::generate_session_token();
+    let token = SessionToken::generate();
     let initial_expires = OffsetDateTime::now_utc() + Duration::hours(1);
 
     db.create_session(account_id, &token, initial_expires)
@@ -169,7 +169,7 @@ async fn cleanup_expired_sessions(pool: sqlx::PgPool) {
     let account_id = db.create_account("test@test.com", None).await.unwrap();
 
     // Create expired session
-    let expired_token = crypto::generate_session_token();
+    let expired_token = SessionToken::generate();
     db.create_session(
         account_id,
         &expired_token,
@@ -179,7 +179,7 @@ async fn cleanup_expired_sessions(pool: sqlx::PgPool) {
     .unwrap();
 
     // Create valid session
-    let valid_token = crypto::generate_session_token();
+    let valid_token = SessionToken::generate();
     db.create_session(
         account_id,
         &valid_token,

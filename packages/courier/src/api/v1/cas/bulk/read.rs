@@ -66,7 +66,6 @@ pub async fn handle(
 ) -> BulkReadResponse {
     info!(keys = req.keys.len(), "cas.bulk.read.start");
 
-    // Check access for all keys in a single query
     let accessible_keys = match db.check_cas_access_bulk(&auth, &req.keys).await {
         Ok(keys) => keys,
         Err(error) => {

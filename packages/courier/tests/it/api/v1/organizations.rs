@@ -35,10 +35,6 @@ struct UpdateRoleRequest {
     role: String,
 }
 
-// =============================================================================
-// Create Organization Tests
-// =============================================================================
-
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn create_organization_success(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
@@ -92,10 +88,6 @@ async fn create_organization_requires_auth(pool: PgPool) -> Result<()> {
 
     Ok(())
 }
-
-// =============================================================================
-// List Members Tests
-// =============================================================================
 
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn list_members_as_admin(pool: PgPool) -> Result<()> {
@@ -173,10 +165,6 @@ async fn list_members_non_member_forbidden(pool: PgPool) -> Result<()> {
     Ok(())
 }
 
-// =============================================================================
-// Update Member Role Tests
-// =============================================================================
-
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn update_member_role_promote_to_admin(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
@@ -248,10 +236,6 @@ async fn update_member_role_demote_last_admin_fails(pool: PgPool) -> Result<()> 
 
     Ok(())
 }
-
-// =============================================================================
-// Remove Member Tests
-// =============================================================================
 
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn remove_member_success(pool: PgPool) -> Result<()> {
@@ -331,10 +315,6 @@ async fn remove_self_via_delete_fails(pool: PgPool) -> Result<()> {
 
     Ok(())
 }
-
-// =============================================================================
-// Leave Organization Tests
-// =============================================================================
 
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn leave_organization_as_member(pool: PgPool) -> Result<()> {
@@ -430,10 +410,6 @@ async fn leave_organization_admin_after_promoting_another(pool: PgPool) -> Resul
 
     Ok(())
 }
-
-// =============================================================================
-// Bot Account Tests
-// =============================================================================
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]

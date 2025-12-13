@@ -16,8 +16,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     api::State,
-    auth::{AuthCode, SessionContext},
-    crypto::{generate_auth_code, generate_session_token},
+    auth::{AuthCode, SessionContext, SessionToken},
     db::{Postgres, RedeemExchangeCodeError},
     oauth::{self, GitHub},
 };
@@ -281,22 +280,23 @@ pub async fn callback(
         }
     };
 
-    let auth_code = generate_auth_code();
     let expires_at = OffsetDateTime::now_utc() + EXCHANGE_CODE_DURATION;
 
-    if let Err(error) = db
+    let auth_code = db
         .create_exchange_code(
-            &auth_code,
             account_id,
             oauth_state.redirect_uri.as_str(),
             new_user,
             expires_at,
         )
-        .await
-    {
-        error!(?error, "oauth.callback.create_exchange_code_error");
-        return CallbackResponse::Error(format!("Failed to create exchange code: {error}"));
-    }
+        .await;
+    let auth_code = match auth_code {
+        Ok(code) => code,
+        Err(error) => {
+            error!(?error, "oauth.callback.create_exchange_code_error");
+            return CallbackResponse::Error(format!("Failed to create exchange code: {error}"));
+        }
+    };
 
     let _ = db
         .log_audit_event(
@@ -438,7 +438,7 @@ pub async fn exchange(
 
     match db.redeem_exchange_code(&auth_code).await {
         Ok(Ok(redemption)) => {
-            let session_token = generate_session_token();
+            let session_token = SessionToken::generate();
             let expires_at = OffsetDateTime::now_utc() + SESSION_DURATION;
 
             if let Err(error) = db

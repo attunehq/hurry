@@ -67,7 +67,7 @@ pub async fn exec(opts: Options) -> Result<()> {
                 println!("      src path: {:?}", library_crate_unit_plan.src_path);
                 println!("      outputs: [");
                 for output in library_crate_unit_plan.outputs {
-                    println!("        {:?}", output);
+                    println!("        {output:?}");
                 }
                 println!("      ]");
                 println!("    }}");
@@ -97,7 +97,7 @@ pub async fn exec(opts: Options) -> Result<()> {
 
         match cached.take(&key) {
             Some(cached) => {
-                println!("\n  Cached: {:?}", cached);
+                println!("\n  Cached: {cached:?}");
             }
             None => {
                 println!("\n  Cached: None");

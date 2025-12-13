@@ -8,10 +8,6 @@ use sqlx::PgPool;
 
 use crate::helpers::TestFixture;
 
-// =============================================================================
-// Response types for API key tests
-// =============================================================================
-
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct CreateApiKeyResponse {
@@ -42,10 +38,6 @@ struct OrgApiKeyEntry {
     created_at: String,
     accessed_at: String,
 }
-
-// =============================================================================
-// Organization API Key Tests (/organizations/{org_id}/api-keys)
-// =============================================================================
 
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn list_org_api_keys(pool: PgPool) -> Result<()> {

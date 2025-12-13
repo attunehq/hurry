@@ -19,7 +19,6 @@ use color_eyre::{Result, eyre::Context};
 use courier::{
     api,
     auth::{AccountId, OrgId, OrgRole, RawToken, SessionToken},
-    crypto::generate_session_token,
     db, oauth, storage,
 };
 use futures::{StreamExt, TryStreamExt, stream};
@@ -307,7 +306,7 @@ impl TestAuth {
         let expires_at = OffsetDateTime::now_utc() + Duration::hours(24);
         let session_tokens = stream::iter(&account_ids)
             .then(|(account, &account_id)| async move {
-                let token = generate_session_token();
+                let token = SessionToken::generate();
                 db.create_session(account_id, &token, expires_at)
                     .await
                     .with_context(|| format!("create session for {account}"))?;

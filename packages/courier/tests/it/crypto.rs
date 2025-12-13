@@ -1,31 +1,31 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use courier::crypto::{
-    generate_api_key, generate_invitation_token, generate_oauth_state, generate_pkce,
-    generate_session_token,
+use courier::{
+    auth::{RawToken, SessionToken},
+    crypto::{generate_invitation_token, generate_oauth_state, generate_pkce},
 };
 use sha2::{Digest, Sha256};
 
 #[test]
 fn api_key_has_correct_length() {
-    let key = generate_api_key();
+    let key = RawToken::generate();
     assert_eq!(key.expose().len(), 32);
 }
 
 #[test]
 fn api_key_is_valid_hex() {
-    let key = generate_api_key();
+    let key = RawToken::generate();
     assert!(hex::decode(key.expose()).is_ok());
 }
 
 #[test]
 fn session_token_has_correct_length() {
-    let token = generate_session_token();
+    let token = SessionToken::generate();
     assert_eq!(token.expose().len(), 64);
 }
 
 #[test]
 fn session_token_is_valid_hex() {
-    let token = generate_session_token();
+    let token = SessionToken::generate();
     assert!(hex::decode(token.expose()).is_ok());
 }
 
@@ -92,7 +92,7 @@ fn pkce_challenge_is_s256_of_verifier() {
 #[test]
 fn tokens_are_unique() {
     // Generate multiple tokens and ensure they're different
-    let keys = (0..10).map(|_| generate_api_key()).collect::<Vec<_>>();
+    let keys = (0..10).map(|_| RawToken::generate()).collect::<Vec<_>>();
     for i in 0..keys.len() {
         for j in (i + 1)..keys.len() {
             assert_ne!(keys[i].expose(), keys[j].expose());

@@ -244,7 +244,7 @@ impl Postgres {
 
             let key = row.unit_hash.into();
             let unit = serde_json::from_value::<SavedUnit>(row.data)
-                .with_context(|| format!("deserialize value for cache key: {}", key))?;
+                .with_context(|| format!("deserialize value for cache key: {key}"))?;
 
             // Check for glibc version compatibility for units that compile
             // against glibc.
@@ -518,10 +518,6 @@ impl Postgres {
     }
 }
 
-// =============================================================================
-// Account Operations
-// =============================================================================
-
 /// An account record from the database.
 ///
 /// Note: Organization membership is tracked via the `organization_member`
@@ -567,7 +563,6 @@ impl Postgres {
     ) -> Result<SignupResult> {
         let mut tx = self.pool.begin().await?;
 
-        // Create the account
         let account_row = sqlx::query!(
             r#"
             INSERT INTO account (email, name)
@@ -583,7 +578,6 @@ impl Postgres {
 
         let account_id = AccountId::from_i64(account_row.id);
 
-        // Link GitHub identity
         sqlx::query!(
             r#"
             INSERT INTO github_identity (account_id, github_user_id, github_username)
@@ -597,7 +591,6 @@ impl Postgres {
         .await
         .context("link github identity")?;
 
-        // Create the default organization
         let org_row = sqlx::query!(
             r#"
             INSERT INTO organization (name)
@@ -612,7 +605,6 @@ impl Postgres {
 
         let org_id = OrgId::from_i64(org_row.id);
 
-        // Add user as admin of the organization
         sqlx::query!(
             r#"
             INSERT INTO organization_member (organization_id, account_id, role_id)
@@ -781,10 +773,6 @@ impl Postgres {
     }
 }
 
-// =============================================================================
-// GitHub Identity Operations
-// =============================================================================
-
 /// A GitHub identity record from the database.
 #[derive(Clone, Debug)]
 pub struct GitHubIdentity {
@@ -872,10 +860,6 @@ impl Postgres {
         Ok(())
     }
 }
-
-// =============================================================================
-// Session Operations
-// =============================================================================
 
 /// A user session record from the database.
 #[derive(Clone, Debug)]
@@ -1044,10 +1028,6 @@ impl Postgres {
     }
 }
 
-// =============================================================================
-// OAuth State Operations
-// =============================================================================
-
 /// An OAuth state record from the database.
 #[derive(Clone, Debug)]
 pub struct OAuthState {
@@ -1132,10 +1112,6 @@ impl Postgres {
     }
 }
 
-// =============================================================================
-// OAuth Exchange Code Operations
-// =============================================================================
-
 use crate::auth::AuthCode;
 
 /// Result of redeeming an OAuth exchange code.
@@ -1164,15 +1140,15 @@ impl Postgres {
     /// Exchange codes are short-lived (60 seconds), single-use tokens that
     /// the dashboard backend exchanges for a session token server-to-server.
     /// Only a SHA-256 hash of the code is stored.
-    #[tracing::instrument(name = "Postgres::create_exchange_code", skip(code))]
+    #[tracing::instrument(name = "Postgres::create_exchange_code")]
     pub async fn create_exchange_code(
         &self,
-        code: &AuthCode,
         account_id: AccountId,
         redirect_uri: &str,
         new_user: bool,
         expires_at: OffsetDateTime,
-    ) -> Result<()> {
+    ) -> Result<AuthCode> {
+        let code = AuthCode::generate();
         let hash = TokenHash::new(code.expose());
         sqlx::query!(
             r#"
@@ -1189,7 +1165,7 @@ impl Postgres {
         .await
         .context("create exchange code")?;
 
-        Ok(())
+        Ok(code)
     }
 
     /// Redeem an OAuth exchange code (atomically validates and marks as
@@ -1203,11 +1179,8 @@ impl Postgres {
         code: &AuthCode,
     ) -> Result<std::result::Result<ExchangeCodeRedemption, RedeemExchangeCodeError>> {
         let hash = TokenHash::new(code.expose());
-
-        // Use a transaction to ensure atomicity
         let mut tx = self.pool.begin().await?;
 
-        // Find the exchange code
         let row = sqlx::query!(
             r#"
             SELECT id, account_id, new_user, expires_at, redeemed_at
@@ -1225,18 +1198,15 @@ impl Postgres {
             return Ok(Err(RedeemExchangeCodeError::NotFound));
         };
 
-        // Check if already redeemed
         if row.redeemed_at.is_some() {
             return Ok(Err(RedeemExchangeCodeError::AlreadyRedeemed));
         }
 
-        // Check if expired
         let now = OffsetDateTime::now_utc();
         if row.expires_at <= now {
             return Ok(Err(RedeemExchangeCodeError::Expired));
         }
 
-        // Mark as redeemed
         sqlx::query!(
             r#"
             UPDATE oauth_exchange_code
@@ -1276,10 +1246,6 @@ impl Postgres {
     }
 }
 
-// =============================================================================
-// Organization Operations
-// =============================================================================
-
 /// An organization record from the database.
 #[derive(Clone, Debug)]
 pub struct Organization {
@@ -1311,7 +1277,6 @@ impl Postgres {
     ) -> Result<OrgId> {
         let mut tx = self.pool.begin().await?;
 
-        // Create the organization
         let row = sqlx::query!(
             r#"
             INSERT INTO organization (name)
@@ -1326,7 +1291,6 @@ impl Postgres {
 
         let org_id = OrgId::from_i64(row.id);
 
-        // Add creator as admin
         sqlx::query!(
             r#"
             INSERT INTO organization_member (organization_id, account_id, role_id)
@@ -1427,10 +1391,6 @@ impl Postgres {
             .collect()
     }
 }
-
-// =============================================================================
-// Membership Operations
-// =============================================================================
 
 /// An organization member record from the database.
 #[derive(Clone, Debug)]
@@ -1602,7 +1562,6 @@ impl Postgres {
             return Ok(false);
         }
 
-        // Check if the given account is that one admin
         let is_admin = self
             .get_member_role(org_id, account_id)
             .await?
@@ -1611,10 +1570,6 @@ impl Postgres {
         Ok(is_admin)
     }
 }
-
-// =============================================================================
-// Invitation Operations
-// =============================================================================
 
 /// An invitation record from the database.
 #[derive(Clone, Debug)]
@@ -1768,7 +1723,6 @@ impl Postgres {
     ) -> Result<AcceptInvitationResult> {
         let mut tx = self.pool.begin().await?;
 
-        // Get and lock the invitation
         let invitation = sqlx::query!(
             r#"
             SELECT i.id, i.organization_id, r.name as role_name, i.expires_at,
@@ -1788,16 +1742,15 @@ impl Postgres {
             return Ok(AcceptInvitationResult::NotFound);
         };
 
-        // Check if expired, revoked, or at max uses
+        // If the invitation revocation is none, that means it never expires.
         let now = OffsetDateTime::now_utc();
-        if inv.revoked_at.is_some() {
+        if inv.revoked_at.is_some_and(|revoked| revoked <= now) {
             return Ok(AcceptInvitationResult::Revoked);
         }
-        // Check expiration: None means never expires
-        if inv.expires_at.is_some_and(|exp| exp <= now) {
+        if inv.expires_at.is_some_and(|expires| expires <= now) {
             return Ok(AcceptInvitationResult::Expired);
         }
-        if inv.max_uses.is_some_and(|max| inv.use_count >= max) {
+        if inv.max_uses.is_some_and(|used| inv.use_count >= used) {
             return Ok(AcceptInvitationResult::MaxUsesReached);
         }
 
@@ -1805,7 +1758,6 @@ impl Postgres {
         let role = OrgRole::from_db_name(&inv.role_name)
             .ok_or_else(|| eyre!("unknown role: {}", inv.role_name))?;
 
-        // Check if already a member
         let existing = sqlx::query!(
             r#"
             SELECT 1 as exists
@@ -1823,7 +1775,6 @@ impl Postgres {
             return Ok(AcceptInvitationResult::AlreadyMember);
         }
 
-        // Increment use count
         sqlx::query!(
             r#"
             UPDATE organization_invitation
@@ -1836,7 +1787,6 @@ impl Postgres {
         .await
         .context("increment use count")?;
 
-        // Add member
         sqlx::query!(
             r#"
             INSERT INTO organization_member (organization_id, account_id, role_id)
@@ -1850,7 +1800,6 @@ impl Postgres {
         .await
         .context("add organization member")?;
 
-        // Log redemption
         sqlx::query!(
             r#"
             INSERT INTO invitation_redemption (invitation_id, account_id)
@@ -1863,7 +1812,6 @@ impl Postgres {
         .await
         .context("log invitation redemption")?;
 
-        // Get organization info
         let org = sqlx::query!(
             r#"
             SELECT name FROM organization WHERE id = $1
@@ -1960,10 +1908,6 @@ pub enum AcceptInvitationResult {
     AlreadyMember,
 }
 
-// =============================================================================
-// Audit Log Operations
-// =============================================================================
-
 impl Postgres {
     /// Log an audit event.
     #[tracing::instrument(name = "Postgres::log_audit_event", skip(details))]
@@ -1992,10 +1936,6 @@ impl Postgres {
     }
 }
 
-// =============================================================================
-// API Key Operations (extended for org_id support)
-// =============================================================================
-
 /// An API key record from the database.
 #[derive(Clone, Debug)]
 pub struct ApiKey {
@@ -2011,7 +1951,7 @@ pub struct ApiKey {
 impl Postgres {
     /// Create a new API key scoped to an organization.
     ///
-    /// Returns the raw token (only time it's available in plaintext).
+    /// This is the only time the token is available in plaintext.
     #[tracing::instrument(name = "Postgres::create_api_key")]
     pub async fn create_api_key(
         &self,
@@ -2019,7 +1959,7 @@ impl Postgres {
         name: &str,
         organization_id: OrgId,
     ) -> Result<(ApiKeyId, RawToken)> {
-        let token = crate::crypto::generate_api_key();
+        let token = RawToken::generate();
         let hash = TokenHash::new(token.expose());
 
         let row = sqlx::query!(
@@ -2093,7 +2033,7 @@ impl Postgres {
         Ok(result.rows_affected() > 0)
     }
 
-    /// Get an API key by ID (for authorization checks).
+    /// Get an API key by ID.
     #[tracing::instrument(name = "Postgres::get_api_key")]
     pub async fn get_api_key(&self, key_id: ApiKeyId) -> Result<Option<ApiKey>> {
         let row = sqlx::query!(
@@ -2119,7 +2059,7 @@ impl Postgres {
         }))
     }
 
-    /// List all API keys for an organization (from all members).
+    /// List all API keys for an organization.
     ///
     /// Includes account email for display purposes.
     #[tracing::instrument(name = "Postgres::list_all_org_api_keys")]
@@ -2169,10 +2109,6 @@ pub struct OrgApiKey {
     pub accessed_at: OffsetDateTime,
 }
 
-// =============================================================================
-// Bot Account Operations
-// =============================================================================
-
 /// A bot account record from the database.
 ///
 /// Bot accounts are organization-scoped accounts without GitHub identity,
@@ -2194,17 +2130,16 @@ impl Postgres {
     /// - Use `email` field for the responsible person's contact email
     /// - Get an initial API key created
     ///
-    /// Returns the account ID and the API key token.
+    /// This is the only time the token is available in plaintext.
     #[tracing::instrument(name = "Postgres::create_bot_account")]
     pub async fn create_bot_account(
         &self,
         org_id: OrgId,
         name: &str,
         responsible_email: &str,
-    ) -> Result<(AccountId, crate::auth::RawToken)> {
+    ) -> Result<(AccountId, RawToken)> {
         let mut tx = self.pool.begin().await?;
 
-        // Create the account
         let row = sqlx::query!(
             r#"
             INSERT INTO account (email, name)
@@ -2220,7 +2155,6 @@ impl Postgres {
 
         let account_id = AccountId::from_i64(row.id);
 
-        // Add as member of the organization
         sqlx::query!(
             r#"
             INSERT INTO organization_member (organization_id, account_id, role_id)
@@ -2233,10 +2167,9 @@ impl Postgres {
         .await
         .context("add bot to organization")?;
 
-        // Create an initial API key for the bot
-        let token = crate::crypto::generate_api_key();
+        let token = RawToken::generate();
         let hash = TokenHash::new(token.expose());
-        let key_name = format!("{} API Key", name);
+        let key_name = format!("{name} API Key");
 
         sqlx::query!(
             r#"

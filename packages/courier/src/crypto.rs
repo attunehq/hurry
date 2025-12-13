@@ -4,8 +4,6 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
-use crate::auth::{AuthCode, RawToken, SessionToken};
-
 /// A hashed API token.
 ///
 /// Hashed tokens use SHA2 (SHA256) algorithm: when you call `new`, the
@@ -24,14 +22,12 @@ use crate::auth::{AuthCode, RawToken, SessionToken};
 pub struct TokenHash(Vec<u8>);
 
 impl TokenHash {
-    /// Currently only used in tests. If used elsewhere, feel free to make this
-    /// generally available.
-    #[allow(dead_code)]
+    /// Parse a token hash from raw bytes.
     pub fn parse(hash: impl Into<Vec<u8>>) -> Self {
         Self(hash.into())
     }
 
-    /// Create a new instance from the given plaintext token.
+    /// Hash a plaintext token using SHA256.
     pub fn new(token: impl AsRef<[u8]>) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(token.as_ref());
@@ -39,14 +35,12 @@ impl TokenHash {
         Self(hash.to_vec())
     }
 
-    /// Currently only used in tests. If used elsewhere, feel free to make this
-    /// generally available.
-    #[allow(dead_code)]
+    /// Verify a token against the hash.
     pub fn verify(&self, token: impl AsRef<[u8]>) -> bool {
         Self::new(token) == *self
     }
 
-    /// Get the hash as bytes for storage or transmission.
+    /// Get the hash as bytes.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -58,30 +52,7 @@ impl AsRef<TokenHash> for TokenHash {
     }
 }
 
-/// Generate a new API key token with 128 bits of entropy.
-///
-/// Returns a 32-character hex string (16 random bytes, hex-encoded).
-/// This matches the existing Courier API key format.
-pub fn generate_api_key() -> RawToken {
-    let mut bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    RawToken::new(hex::encode(bytes))
-}
-
-/// Generate a new session token with 256 bits of entropy.
-///
-/// Returns a 64-character hex string (32 random bytes, hex-encoded).
-/// Session tokens have higher entropy than API keys for additional security.
-pub fn generate_session_token() -> SessionToken {
-    let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    SessionToken::new(hex::encode(bytes))
-}
-
-/// Generate an OAuth state token with 128 bits of entropy.
-///
-/// Returns a 32-character hex string. Used to prevent CSRF attacks
-/// during the OAuth flow.
+/// Generate an OAuth state token.
 pub fn generate_oauth_state() -> String {
     let mut bytes = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut bytes);
@@ -117,6 +88,7 @@ pub fn generate_invitation_token(long_lived: bool) -> String {
 pub struct PkceChallenge {
     /// The verifier (stored server-side, used during token exchange).
     pub verifier: String,
+
     /// The challenge (sent to the authorization server).
     pub challenge: String,
 }
@@ -139,18 +111,4 @@ pub fn generate_pkce() -> PkceChallenge {
         verifier,
         challenge,
     }
-}
-
-/// Generate an OAuth exchange code with 192 bits of entropy.
-///
-/// Returns a base64url-encoded string (24 random bytes, no padding).
-/// Exchange codes are short-lived (60 seconds) and single-use.
-///
-/// This is used in the two-step OAuth flow: the callback returns an auth_code
-/// in the URL, which the dashboard backend exchanges server-to-server for a
-/// session token.
-pub fn generate_auth_code() -> AuthCode {
-    let mut bytes = [0u8; 24]; // 192 bits
-    rand::thread_rng().fill_bytes(&mut bytes);
-    AuthCode::new(URL_SAFE_NO_PAD.encode(bytes))
 }

@@ -1,11 +1,11 @@
 //! GitHub OAuth client for user authentication.
-//!
-//! This module provides a client for authenticating users via GitHub OAuth.
-//! See RFC docs/rfc/0003-self-service-signup.md for the full flow.
 
 use std::{borrow::Cow, collections::HashSet};
 
-use color_eyre::{Result, eyre::eyre};
+use color_eyre::{
+    Result,
+    eyre::{bail, eyre},
+};
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet,
     PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, TokenResponse, TokenUrl, basic::BasicClient,
@@ -85,7 +85,7 @@ impl GitHub {
 
     /// Validate that a redirect URI is in the allowlist.
     pub fn validate_redirect_uri(&self, uri: &str) -> Result<Url> {
-        let parsed = Url::parse(uri).map_err(|e| eyre!("invalid redirect URI: {}", e))?;
+        let parsed = Url::parse(uri).map_err(|e| eyre!("invalid redirect URI: {e}"))?;
 
         // Normalize: check origin (scheme + host + port)
         let origin = parsed.origin().ascii_serialization();
@@ -98,7 +98,7 @@ impl GitHub {
         });
 
         if !allowed {
-            return Err(eyre!("redirect URI not in allowlist: {}", uri));
+            return Err(eyre!("redirect URI not in allowlist: {uri}"));
         }
 
         Ok(parsed)
@@ -110,7 +110,6 @@ impl GitHub {
     /// and CSRF state token that must be stored server-side.
     pub fn authorization_url(&self, redirect_uri: Url) -> (Url, PkceCodeVerifier, CsrfToken) {
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-
         let (auth_url, csrf_token) = self
             .client
             .authorize_url(CsrfToken::new_random)
@@ -138,7 +137,7 @@ impl GitHub {
             .set_pkce_verifier(pkce_verifier)
             .request_async(&self.http_client)
             .await
-            .map_err(|e| eyre!("token exchange failed: {}", e))?;
+            .map_err(|e| eyre!("token exchange failed: {e}"))?;
 
         Ok(token_result.access_token().secret().clone())
     }
@@ -173,7 +172,7 @@ pub async fn fetch_user(access_token: &str) -> Result<GitHubUser> {
     let client = ::reqwest::Client::new();
     let response = client
         .get(GitHub::USER_API_URL)
-        .header("Authorization", format!("Bearer {}", access_token))
+        .bearer_auth(access_token)
         .header("User-Agent", "Courier")
         .header("Accept", "application/vnd.github+json")
         .send()
@@ -181,11 +180,11 @@ pub async fn fetch_user(access_token: &str) -> Result<GitHubUser> {
         .map_err(|e| eyre!("failed to fetch user: {}", e))?;
 
     if !response.status().is_success() {
-        return Err(eyre!(
+        bail!(
             "GitHub API error: {} {}",
             response.status(),
             response.text().await.unwrap_or_default()
-        ));
+        );
     }
 
     response
@@ -199,7 +198,7 @@ pub async fn fetch_emails(access_token: &str) -> Result<Vec<GitHubEmail>> {
     let client = ::reqwest::Client::new();
     let response = client
         .get(GitHub::EMAILS_API_URL)
-        .header("Authorization", format!("Bearer {}", access_token))
+        .bearer_auth(access_token)
         .header("User-Agent", "Courier")
         .header("Accept", "application/vnd.github+json")
         .send()
@@ -207,11 +206,11 @@ pub async fn fetch_emails(access_token: &str) -> Result<Vec<GitHubEmail>> {
         .map_err(|e| eyre!("failed to fetch emails: {}", e))?;
 
     if !response.status().is_success() {
-        return Err(eyre!(
+        bail!(
             "GitHub API error: {} {}",
             response.status(),
             response.text().await.unwrap_or_default()
-        ));
+        );
     }
 
     response

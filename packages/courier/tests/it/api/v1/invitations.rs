@@ -63,10 +63,6 @@ struct CreateInvitationRequest {
     max_uses: Option<i32>,
 }
 
-// =============================================================================
-// Create Invitation Tests
-// =============================================================================
-
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn create_invitation_success(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
@@ -166,10 +162,6 @@ async fn create_invitation_non_member_forbidden(pool: PgPool) -> Result<()> {
     Ok(())
 }
 
-// =============================================================================
-// List Invitations Tests
-// =============================================================================
-
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn list_invitations_success(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
@@ -225,10 +217,6 @@ async fn list_invitations_non_admin_forbidden(pool: PgPool) -> Result<()> {
 
     Ok(())
 }
-
-// =============================================================================
-// Revoke Invitation Tests
-// =============================================================================
 
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn revoke_invitation_success(pool: PgPool) -> Result<()> {
@@ -308,10 +296,6 @@ async fn revoke_invitation_non_admin_forbidden(pool: PgPool) -> Result<()> {
     Ok(())
 }
 
-// =============================================================================
-// Invitation Preview Tests (Public)
-// =============================================================================
-
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn get_invitation_preview_success(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
@@ -362,10 +346,6 @@ async fn get_invitation_preview_not_found(pool: PgPool) -> Result<()> {
 
     Ok(())
 }
-
-// =============================================================================
-// Accept Invitation Tests
-// =============================================================================
 
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn accept_invitation_success(pool: PgPool) -> Result<()> {
