@@ -41,6 +41,7 @@ reqwest = { workspace = true, features = ["json"] }
 time = { workspace = true }
 tower_governor = { workspace = true }
 governor = { workspace = true }
+http.workspace = true
 
 [dev-dependencies]
 axum-test = { workspace = true, features = ["all"] }

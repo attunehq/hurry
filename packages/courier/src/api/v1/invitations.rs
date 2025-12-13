@@ -28,10 +28,14 @@ use crate::{
 const LONG_LIVED_THRESHOLD_DAYS: i64 = 30;
 
 pub fn router() -> Router<State> {
-    // Rate-limited routes (sensitive operations)
+    // Rate-limited routes: invitation acceptance uses token-prefix bucketing
+    // to prevent brute-force enumeration while not penalizing legitimate users
+    //
+    // Important: if we change the path of this route, we need to update the
+    // path extraction in the `rate_limit::invitation_accept()` function.
     let rate_limited = Router::new()
         .route("/invitations/{token}/accept", post(accept_invitation))
-        .layer(rate_limit::sensitive());
+        .layer(rate_limit::invitation_accept());
 
     Router::new()
         // Organization-scoped endpoints (require admin)

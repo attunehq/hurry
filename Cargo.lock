@@ -1239,6 +1239,7 @@ dependencies = [
  "futures",
  "governor",
  "hex",
+ "http",
  "oauth2",
  "piper",
  "pretty_assertions",
