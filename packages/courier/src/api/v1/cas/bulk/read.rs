@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use aerosol::axum::Dep;
 use async_tar::{Builder, Header};
 use axum::{
@@ -6,7 +8,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use clients::{ContentType, NETWORK_BUFFER_SIZE, courier::v1::cas::CasBulkReadRequest};
+use clients::{
+    ContentType, NETWORK_BUFFER_SIZE,
+    courier::v1::{Key, cas::CasBulkReadRequest},
+};
 use color_eyre::Report;
 use futures::AsyncWriteExt;
 use tokio_util::{
@@ -84,7 +89,7 @@ pub async fn handle(
 #[tracing::instrument(skip(accessible_keys))]
 async fn handle_compressed(
     cas: Disk,
-    accessible_keys: std::collections::HashSet<crate::storage::Key>,
+    accessible_keys: HashSet<Key>,
     req: CasBulkReadRequest,
 ) -> BulkReadResponse {
     info!("cas.bulk.read.compressed");
@@ -160,7 +165,7 @@ async fn handle_compressed(
 #[tracing::instrument(skip(accessible_keys))]
 async fn handle_plain(
     cas: Disk,
-    accessible_keys: std::collections::HashSet<crate::storage::Key>,
+    accessible_keys: HashSet<Key>,
     req: CasBulkReadRequest,
 ) -> BulkReadResponse {
     info!("cas.bulk.read.uncompressed");

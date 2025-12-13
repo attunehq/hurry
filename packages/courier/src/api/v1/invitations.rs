@@ -12,6 +12,8 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tap::Pipe;
 use time::{Duration, OffsetDateTime};
 use tracing::{error, info, warn};
 
@@ -23,49 +25,40 @@ use crate::{
     rate_limit,
 };
 
-/// Long-lived invitation threshold: 30 days.
-/// Invitations with expiration >30 days (or never) use longer tokens.
-const LONG_LIVED_THRESHOLD_DAYS: i64 = 30;
+/// Invitations that live longer than this threshold are considered long-lived
+/// and use more entropy in their tokens.
+const LONG_LIVED_THRESHOLD: Duration = Duration::days(7);
 
-pub fn router() -> Router<State> {
-    // Rate-limited routes: invitation acceptance uses token-prefix bucketing
-    // to prevent brute-force enumeration while not penalizing legitimate users
-    //
-    // Important: if we change the path of this route, we need to update the
-    // path extraction in the `rate_limit::invitation_accept()` function.
-    let rate_limited = Router::new()
-        .route("/invitations/{token}/accept", post(accept_invitation))
-        .layer(rate_limit::invitation_accept());
-
+pub fn organization_router() -> Router<State> {
     Router::new()
-        // Organization-scoped endpoints (require admin)
+        .route("/{org_id}/invitations", post(create_invitation))
+        .route("/{org_id}/invitations", get(list_invitations))
         .route(
-            "/organizations/{org_id}/invitations",
-            post(create_invitation),
-        )
-        .route("/organizations/{org_id}/invitations", get(list_invitations))
-        .route(
-            "/organizations/{org_id}/invitations/{invitation_id}",
+            "/{org_id}/invitations/{invitation_id}",
             delete(revoke_invitation),
         )
-        // Public endpoints
-        .route("/invitations/{token}", get(get_invitation_preview))
-        // Merge rate-limited routes
-        .merge(rate_limited)
 }
 
-// =============================================================================
-// Create Invitation
-// =============================================================================
+pub fn router() -> Router<State> {
+    let invitation = Router::new()
+        .route("/{token}/accept", post(accept_invitation))
+        .layer(rate_limit::invitation());
+
+    Router::new()
+        .route("/{token}", get(get_invitation_preview))
+        .merge(invitation)
+}
 
 #[derive(Debug, Deserialize)]
 pub struct CreateInvitationRequest {
     /// Role to grant (defaults to "member").
     #[serde(default = "default_role")]
     pub role: OrgRole,
+
     /// Expiration timestamp. If omitted or null, the invitation never expires.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
+
     /// Maximum number of uses (None = unlimited).
     pub max_uses: Option<i32>,
 }
@@ -75,23 +68,6 @@ fn default_role() -> OrgRole {
 }
 
 /// Create a new invitation for an organization.
-///
-/// Only admins can create invitations.
-///
-/// ## Endpoint
-/// ```
-/// POST /api/v1/organizations/{org_id}/invitations
-/// Authorization: Bearer <session_token>
-/// Content-Type: application/json
-///
-/// { "role": "member", "expires_at": "2025-01-08T00:00:00Z", "max_uses": 10 }
-/// ```
-///
-/// ## Responses
-/// - 201: Invitation created
-/// - 400: Invalid request
-/// - 401: Not authenticated
-/// - 403: Not an admin of the organization
 #[tracing::instrument(skip(db, session))]
 pub async fn create_invitation(
     Dep(db): Dep<Postgres>,
@@ -101,7 +77,6 @@ pub async fn create_invitation(
 ) -> CreateInvitationResponse {
     let org_id = OrgId::from_i64(org_id);
 
-    // Check if user is an admin
     match db.get_member_role(org_id, session.account_id).await {
         Ok(Some(role)) if role.is_admin() => {}
         Ok(Some(_)) => {
@@ -126,32 +101,26 @@ pub async fn create_invitation(
         }
     }
 
-    // Validate expiration timestamp if provided
     let now = OffsetDateTime::now_utc();
     if let Some(exp) = request.expires_at
         && exp <= now
     {
-        return CreateInvitationResponse::BadRequest(String::from(
-            "expires_at must be in the future",
-        ));
+        return CreateInvitationResponse::ExpiresAtInThePast;
     }
 
-    // Validate max_uses
     if let Some(max) = request.max_uses
         && max < 1
     {
-        return CreateInvitationResponse::BadRequest(String::from("max_uses must be at least 1"));
+        return CreateInvitationResponse::MaxUsesLessThanOne;
     }
 
-    // Generate token (longer for long-lived or never-expiring invitations)
     let long_lived = request
         .expires_at
-        .map(|exp| (exp - now) > Duration::days(LONG_LIVED_THRESHOLD_DAYS))
-        .unwrap_or(true); // Never-expiring invitations use long tokens
+        .map(|exp| (exp - now) > LONG_LIVED_THRESHOLD)
+        .unwrap_or(true);
     let token = generate_invitation_token(long_lived);
 
-    // Create invitation
-    let invitation_id = match db
+    let invitation = db
         .create_invitation(
             org_id,
             &token,
@@ -160,8 +129,8 @@ pub async fn create_invitation(
             request.expires_at,
             request.max_uses,
         )
-        .await
-    {
+        .await;
+    let invitation_id = match invitation {
         Ok(id) => id,
         Err(err) => {
             error!(?err, "invitations.create.error");
@@ -169,13 +138,12 @@ pub async fn create_invitation(
         }
     };
 
-    // Log audit event
     let _ = db
         .log_audit_event(
             Some(session.account_id),
             Some(org_id),
             "invitation.created",
-            Some(serde_json::json!({
+            Some(json!({
                 "invitation_id": invitation_id.as_i64(),
                 "role": request.role,
                 "expires_at": request.expires_at,
@@ -201,19 +169,28 @@ pub async fn create_invitation(
 
 #[derive(Debug, Serialize)]
 pub struct CreateInvitationResponseBody {
+    /// The invitation ID.
     pub id: i64,
+
+    /// The invitation token.
     pub token: String,
+
+    /// The role to grant.
     pub role: OrgRole,
-    /// Expiration timestamp. Null means the invitation never expires.
+
+    /// The expiration timestamp.
     #[serde(with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
+
+    /// The maximum number of uses.
     pub max_uses: Option<i32>,
 }
 
 #[derive(Debug)]
 pub enum CreateInvitationResponse {
     Created(CreateInvitationResponseBody),
-    BadRequest(String),
+    ExpiresAtInThePast,
+    MaxUsesLessThanOne,
     Forbidden,
     Error(String),
 }
@@ -224,8 +201,11 @@ impl IntoResponse for CreateInvitationResponse {
             CreateInvitationResponse::Created(body) => {
                 (StatusCode::CREATED, Json(body)).into_response()
             }
-            CreateInvitationResponse::BadRequest(msg) => {
-                (StatusCode::BAD_REQUEST, msg).into_response()
+            CreateInvitationResponse::ExpiresAtInThePast => {
+                (StatusCode::BAD_REQUEST, "expires_at must be in the future").into_response()
+            }
+            CreateInvitationResponse::MaxUsesLessThanOne => {
+                (StatusCode::BAD_REQUEST, "max_uses must be at least 1").into_response()
             }
             CreateInvitationResponse::Forbidden => {
                 (StatusCode::FORBIDDEN, "Only admins can create invitations").into_response()
@@ -237,43 +217,39 @@ impl IntoResponse for CreateInvitationResponse {
     }
 }
 
-// =============================================================================
-// List Invitations
-// =============================================================================
-
 #[derive(Debug, Serialize)]
 pub struct InvitationListResponse {
+    /// The list of invitations.
     pub invitations: Vec<InvitationEntry>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct InvitationEntry {
+    /// The invitation ID.
     pub id: i64,
+
+    /// The role to grant.
     pub role: OrgRole,
+
+    /// The creation timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    /// Expiration timestamp. Null means the invitation never expires.
+
+    /// The expiration timestamp. None means the invitation never expires.
     #[serde(with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
+
+    /// The maximum number of uses.
     pub max_uses: Option<i32>,
+
+    /// The number of times the invitation has been used.
     pub use_count: i32,
+
+    /// Whether the invitation has been revoked.
     pub revoked: bool,
 }
 
 /// List invitations for an organization.
-///
-/// Only admins can view invitations.
-///
-/// ## Endpoint
-/// ```
-/// GET /api/v1/organizations/{org_id}/invitations
-/// Authorization: Bearer <session_token>
-/// ```
-///
-/// ## Responses
-/// - 200: List of invitations
-/// - 401: Not authenticated
-/// - 403: Not an admin of the organization
 #[tracing::instrument(skip(db, session))]
 pub async fn list_invitations(
     Dep(db): Dep<Postgres>,
@@ -282,7 +258,6 @@ pub async fn list_invitations(
 ) -> ListInvitationsResponse {
     let org_id = OrgId::from_i64(org_id);
 
-    // Check if user is an admin
     match db.get_member_role(org_id, session.account_id).await {
         Ok(Some(role)) if role.is_admin() => {}
         Ok(Some(_)) => {
@@ -314,7 +289,7 @@ pub async fn list_invitations(
                 count = invitations.len(),
                 "invitations.list.success"
             );
-            let entries = invitations
+            invitations
                 .into_iter()
                 .map(|inv| InvitationEntry {
                     id: inv.id.as_i64(),
@@ -325,14 +300,13 @@ pub async fn list_invitations(
                     use_count: inv.use_count,
                     revoked: inv.revoked_at.is_some(),
                 })
-                .collect();
-            ListInvitationsResponse::Success(InvitationListResponse {
-                invitations: entries,
-            })
+                .collect::<Vec<_>>()
+                .pipe(|invitations| InvitationListResponse { invitations })
+                .pipe(ListInvitationsResponse::Success)
         }
-        Err(err) => {
-            error!(?err, "invitations.list.error");
-            ListInvitationsResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "invitations.list.error");
+            ListInvitationsResponse::Error(error.to_string())
         }
     }
 }
@@ -358,25 +332,7 @@ impl IntoResponse for ListInvitationsResponse {
     }
 }
 
-// =============================================================================
-// Revoke Invitation
-// =============================================================================
-
 /// Revoke an invitation.
-///
-/// Only admins can revoke invitations.
-///
-/// ## Endpoint
-/// ```
-/// DELETE /api/v1/organizations/{org_id}/invitations/{invitation_id}
-/// Authorization: Bearer <session_token>
-/// ```
-///
-/// ## Responses
-/// - 204: Invitation revoked
-/// - 401: Not authenticated
-/// - 403: Not an admin of the organization
-/// - 404: Invitation not found
 #[tracing::instrument(skip(db, session))]
 pub async fn revoke_invitation(
     Dep(db): Dep<Postgres>,
@@ -386,7 +342,6 @@ pub async fn revoke_invitation(
     let org_id = OrgId::from_i64(org_id);
     let invitation_id = InvitationId::from_i64(invitation_id);
 
-    // Check if user is an admin
     match db.get_member_role(org_id, session.account_id).await {
         Ok(Some(role)) if role.is_admin() => {}
         Ok(Some(_)) => {
@@ -413,13 +368,12 @@ pub async fn revoke_invitation(
 
     match db.revoke_invitation(invitation_id).await {
         Ok(true) => {
-            // Log audit event
             let _ = db
                 .log_audit_event(
                     Some(session.account_id),
                     Some(org_id),
                     "invitation.revoked",
-                    Some(serde_json::json!({
+                    Some(json!({
                         "invitation_id": invitation_id.as_i64(),
                     })),
                 )
@@ -433,9 +387,9 @@ pub async fn revoke_invitation(
             RevokeInvitationResponse::Success
         }
         Ok(false) => RevokeInvitationResponse::NotFound,
-        Err(err) => {
-            error!(?err, "invitations.revoke.error");
-            RevokeInvitationResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "invitations.revoke.error");
+            RevokeInvitationResponse::Error(error.to_string())
         }
     }
 }
@@ -467,17 +421,19 @@ impl IntoResponse for RevokeInvitationResponse {
     }
 }
 
-// =============================================================================
-// Get Invitation Preview (Public)
-// =============================================================================
-
 #[derive(Debug, Serialize)]
 pub struct InvitationPreviewResponse {
+    /// The organization name.
     pub organization_name: String,
+
+    /// The role to grant.
     pub role: OrgRole,
-    /// Expiration timestamp. Null means the invitation never expires.
+
+    /// The expiration timestamp. None means the invitation never expires.
     #[serde(with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
+
+    /// Whether the invitation is valid.
     pub valid: bool,
 }
 
@@ -485,15 +441,6 @@ pub struct InvitationPreviewResponse {
 ///
 /// This allows potential members to see what organization they're joining
 /// before signing in.
-///
-/// ## Endpoint
-/// ```
-/// GET /api/v1/invitations/{token}
-/// ```
-///
-/// ## Responses
-/// - 200: Invitation preview
-/// - 404: Invitation not found
 #[tracing::instrument(skip(db))]
 pub async fn get_invitation_preview(
     Dep(db): Dep<Postgres>,
@@ -541,10 +488,6 @@ impl IntoResponse for GetPreviewResponse {
     }
 }
 
-// =============================================================================
-// Accept Invitation
-// =============================================================================
-
 #[derive(Debug, Serialize)]
 pub struct AcceptInvitationResponseBody {
     pub organization_id: i64,
@@ -556,19 +499,6 @@ pub struct AcceptInvitationResponseBody {
 ///
 /// Requires authentication. The authenticated user will be added to the
 /// organization with the role specified in the invitation.
-///
-/// ## Endpoint
-/// ```
-/// POST /api/v1/invitations/{token}/accept
-/// Authorization: Bearer <session_token>
-/// ```
-///
-/// ## Responses
-/// - 200: Successfully joined organization
-/// - 400: Invalid invitation (expired, revoked, max uses reached)
-/// - 401: Not authenticated
-/// - 404: Invitation not found
-/// - 409: Already a member
 #[tracing::instrument(skip(db, session))]
 pub async fn accept_invitation(
     Dep(db): Dep<Postgres>,
@@ -581,13 +511,12 @@ pub async fn accept_invitation(
             organization_name,
             role,
         }) => {
-            // Log audit event
             let _ = db
                 .log_audit_event(
                     Some(session.account_id),
                     Some(organization_id),
                     "invitation.accepted",
-                    Some(serde_json::json!({
+                    Some(json!({
                         "role": role,
                     })),
                 )
@@ -610,25 +539,23 @@ pub async fn accept_invitation(
         }
         Ok(AcceptInvitationResult::Revoked) => {
             warn!(account_id = %session.account_id, "invitations.accept.revoked");
-            AcceptInvitationResponse::BadRequest(String::from("This invitation has been revoked"))
+            AcceptInvitationResponse::Revoked
         }
         Ok(AcceptInvitationResult::Expired) => {
             warn!(account_id = %session.account_id, "invitations.accept.expired");
-            AcceptInvitationResponse::BadRequest(String::from("This invitation has expired"))
+            AcceptInvitationResponse::Expired
         }
         Ok(AcceptInvitationResult::MaxUsesReached) => {
             warn!(account_id = %session.account_id, "invitations.accept.max_uses");
-            AcceptInvitationResponse::BadRequest(String::from(
-                "This invitation has reached its maximum number of uses",
-            ))
+            AcceptInvitationResponse::MaxUsesReached
         }
         Ok(AcceptInvitationResult::AlreadyMember) => {
             warn!(account_id = %session.account_id, "invitations.accept.already_member");
             AcceptInvitationResponse::Conflict
         }
-        Err(err) => {
-            error!(?err, "invitations.accept.error");
-            AcceptInvitationResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "invitations.accept.error");
+            AcceptInvitationResponse::Error(error.to_string())
         }
     }
 }
@@ -636,7 +563,9 @@ pub async fn accept_invitation(
 #[derive(Debug)]
 pub enum AcceptInvitationResponse {
     Success(AcceptInvitationResponseBody),
-    BadRequest(String),
+    Revoked,
+    Expired,
+    MaxUsesReached,
     NotFound,
     Conflict,
     Error(String),
@@ -646,9 +575,17 @@ impl IntoResponse for AcceptInvitationResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             AcceptInvitationResponse::Success(body) => (StatusCode::OK, Json(body)).into_response(),
-            AcceptInvitationResponse::BadRequest(msg) => {
-                (StatusCode::BAD_REQUEST, msg).into_response()
+            AcceptInvitationResponse::Revoked => {
+                (StatusCode::BAD_REQUEST, "This invitation has been revoked").into_response()
             }
+            AcceptInvitationResponse::Expired => {
+                (StatusCode::BAD_REQUEST, "This invitation has expired").into_response()
+            }
+            AcceptInvitationResponse::MaxUsesReached => (
+                StatusCode::BAD_REQUEST,
+                "This invitation has reached its maximum number of uses",
+            )
+                .into_response(),
             AcceptInvitationResponse::NotFound => {
                 (StatusCode::NOT_FOUND, "Invitation not found").into_response()
             }

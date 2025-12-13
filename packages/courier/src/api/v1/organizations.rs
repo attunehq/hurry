@@ -1,7 +1,4 @@
 //! Organization management endpoints.
-//!
-//! These endpoints allow authenticated users to create organizations,
-//! manage members, and leave organizations.
 
 use aerosol::axum::Dep;
 use axum::{
@@ -12,19 +9,20 @@ use axum::{
     routing::{delete, get, patch, post},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tap::Pipe;
 use time::OffsetDateTime;
 use tracing::{error, info, warn};
 
 use crate::{
-    api::State,
+    api::{State, v1::invitations},
     auth::{AccountId, ApiKeyId, OrgId, OrgRole, SessionContext},
     db::Postgres,
     rate_limit,
 };
 
 pub fn router() -> Router<State> {
-    // Rate-limited routes (sensitive operations)
-    let rate_limited = Router::new()
+    let sensitive = Router::new()
         .route("/{org_id}/api-keys", post(create_org_api_key))
         .route("/{org_id}/bots", post(create_bot))
         .layer(rate_limit::sensitive());
@@ -38,41 +36,26 @@ pub fn router() -> Router<State> {
         .route("/{org_id}/api-keys", get(list_org_api_keys))
         .route("/{org_id}/api-keys/{key_id}", delete(delete_org_api_key))
         .route("/{org_id}/bots", get(list_bots))
-        .merge(rate_limited)
+        .merge(invitations::organization_router())
+        .merge(sensitive)
 }
-
-// =============================================================================
-// Create Organization
-// =============================================================================
 
 #[derive(Debug, Deserialize)]
 pub struct CreateOrganizationRequest {
+    /// The organization name.
     pub name: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct CreateOrganizationResponse {
+    /// The organization ID.
     pub id: i64,
+
+    /// The organization name.
     pub name: String,
 }
 
 /// Create a new organization.
-///
-/// The authenticated user becomes the admin of the new organization.
-///
-/// ## Endpoint
-/// ```
-/// POST /api/v1/organizations
-/// Authorization: Bearer <session_token>
-/// Content-Type: application/json
-///
-/// { "name": "My Organization" }
-/// ```
-///
-/// ## Responses
-/// - 201: Organization created
-/// - 400: Invalid request
-/// - 401: Not authenticated
 #[tracing::instrument(skip(db, session))]
 pub async fn create_organization(
     Dep(db): Dep<Postgres>,
@@ -80,28 +63,26 @@ pub async fn create_organization(
     Json(request): Json<CreateOrganizationRequest>,
 ) -> CreateOrgResponse {
     if request.name.trim().is_empty() {
-        return CreateOrgResponse::BadRequest(String::from("Organization name cannot be empty"));
+        return CreateOrgResponse::EmptyName;
     }
 
-    // Create the organization and add the creator as admin (atomically)
     let org_id = match db
         .create_organization_with_admin(&request.name, session.account_id)
         .await
     {
         Ok(id) => id,
-        Err(err) => {
-            error!(?err, "organizations.create.error");
-            return CreateOrgResponse::Error(err.to_string());
+        Err(error) => {
+            error!(?error, "organizations.create.error");
+            return CreateOrgResponse::Error(error.to_string());
         }
     };
 
-    // Log audit event
     let _ = db
         .log_audit_event(
             Some(session.account_id),
             Some(org_id),
             "organization.created",
-            Some(serde_json::json!({ "name": request.name })),
+            Some(json!({ "name": request.name })),
         )
         .await;
 
@@ -120,7 +101,7 @@ pub async fn create_organization(
 #[derive(Debug)]
 pub enum CreateOrgResponse {
     Created(CreateOrganizationResponse),
-    BadRequest(String),
+    EmptyName,
     Error(String),
 }
 
@@ -128,7 +109,9 @@ impl IntoResponse for CreateOrgResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             CreateOrgResponse::Created(org) => (StatusCode::CREATED, Json(org)).into_response(),
-            CreateOrgResponse::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+            CreateOrgResponse::EmptyName => {
+                (StatusCode::BAD_REQUEST, "Organization name cannot be empty").into_response()
+            }
             CreateOrgResponse::Error(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
             }
@@ -136,41 +119,33 @@ impl IntoResponse for CreateOrgResponse {
     }
 }
 
-// =============================================================================
-// List Members
-// =============================================================================
-
 #[derive(Debug, Serialize)]
 pub struct MemberListResponse {
+    /// The list of members.
     pub members: Vec<MemberEntry>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct MemberEntry {
+    /// The account ID.
     pub account_id: i64,
+
+    /// The account email.
     pub email: String,
+
+    /// The account name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+
+    /// The member's role in the organization.
     pub role: OrgRole,
+
+    /// The date the member joined the organization.
     #[serde(with = "time::serde::rfc3339")]
     pub joined_at: OffsetDateTime,
 }
 
 /// List members of an organization.
-///
-/// Only members of the organization can view the member list.
-///
-/// ## Endpoint
-/// ```
-/// GET /api/v1/organizations/{org_id}/members
-/// Authorization: Bearer <session_token>
-/// ```
-///
-/// ## Responses
-/// - 200: List of members
-/// - 401: Not authenticated
-/// - 403: Not a member of the organization
-/// - 404: Organization not found
 #[tracing::instrument(skip(db, session))]
 pub async fn list_members(
     Dep(db): Dep<Postgres>,
@@ -179,7 +154,6 @@ pub async fn list_members(
 ) -> ListMembersResponse {
     let org_id = OrgId::from_i64(org_id);
 
-    // Check if user is a member
     match db.get_member_role(org_id, session.account_id).await {
         Ok(Some(_)) => {}
         Ok(None) => {
@@ -190,9 +164,9 @@ pub async fn list_members(
             );
             return ListMembersResponse::Forbidden;
         }
-        Err(err) => {
-            error!(?err, "organizations.list_members.role_check_error");
-            return ListMembersResponse::Error(err.to_string());
+        Err(error) => {
+            error!(?error, "organizations.list_members.role_check_error");
+            return ListMembersResponse::Error(error.to_string());
         }
     }
 
@@ -203,7 +177,7 @@ pub async fn list_members(
                 count = members.len(),
                 "organizations.list_members.success"
             );
-            let entries = members
+            members
                 .into_iter()
                 .map(|m| MemberEntry {
                     account_id: m.account_id.as_i64(),
@@ -212,12 +186,13 @@ pub async fn list_members(
                     role: m.role,
                     joined_at: m.created_at,
                 })
-                .collect();
-            ListMembersResponse::Success(MemberListResponse { members: entries })
+                .collect::<Vec<_>>()
+                .pipe(|members| MemberListResponse { members })
+                .pipe(ListMembersResponse::Success)
         }
-        Err(err) => {
-            error!(?err, "organizations.list_members.error");
-            ListMembersResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "organizations.list_members.error");
+            ListMembersResponse::Error(error.to_string())
         }
     }
 }
@@ -245,34 +220,13 @@ impl IntoResponse for ListMembersResponse {
     }
 }
 
-// =============================================================================
-// Update Member Role
-// =============================================================================
-
 #[derive(Debug, Deserialize)]
 pub struct UpdateRoleRequest {
+    /// The new role for the member.
     pub role: OrgRole,
 }
 
 /// Update a member's role in an organization.
-///
-/// Only admins can update member roles.
-///
-/// ## Endpoint
-/// ```
-/// PATCH /api/v1/organizations/{org_id}/members/{account_id}
-/// Authorization: Bearer <session_token>
-/// Content-Type: application/json
-///
-/// { "role": "admin" | "member" }
-/// ```
-///
-/// ## Responses
-/// - 204: Role updated
-/// - 400: Invalid request (e.g., demoting last admin)
-/// - 401: Not authenticated
-/// - 403: Not an admin of the organization
-/// - 404: Member not found
 #[tracing::instrument(skip(db, session))]
 pub async fn update_member_role(
     Dep(db): Dep<Postgres>,
@@ -283,7 +237,6 @@ pub async fn update_member_role(
     let org_id = OrgId::from_i64(org_id);
     let target_account_id = AccountId::from_i64(target_account_id);
 
-    // Check if user is an admin
     match db.get_member_role(org_id, session.account_id).await {
         Ok(Some(role)) if role.is_admin() => {}
         Ok(Some(_)) => {
@@ -302,25 +255,23 @@ pub async fn update_member_role(
             );
             return UpdateRoleResponse::Forbidden;
         }
-        Err(err) => {
-            error!(?err, "organizations.update_role.role_check_error");
-            return UpdateRoleResponse::Error(err.to_string());
+        Err(error) => {
+            error!(?error, "organizations.update_role.role_check_error");
+            return UpdateRoleResponse::Error(error.to_string());
         }
     }
 
-    // Check if target is a member
     let current_role = match db.get_member_role(org_id, target_account_id).await {
         Ok(Some(role)) => role,
         Ok(None) => {
             return UpdateRoleResponse::NotFound;
         }
-        Err(err) => {
-            error!(?err, "organizations.update_role.target_check_error");
-            return UpdateRoleResponse::Error(err.to_string());
+        Err(error) => {
+            error!(?error, "organizations.update_role.target_check_error");
+            return UpdateRoleResponse::Error(error.to_string());
         }
     };
 
-    // If demoting from admin, check if they're the last admin
     if current_role.is_admin() && !request.role.is_admin() {
         match db.is_last_admin(org_id, target_account_id).await {
             Ok(true) => {
@@ -329,31 +280,27 @@ pub async fn update_member_role(
                     target_account_id = %target_account_id,
                     "organizations.update_role.last_admin"
                 );
-                return UpdateRoleResponse::BadRequest(String::from(
-                    "Cannot demote the last admin. Promote another member first.",
-                ));
+                return UpdateRoleResponse::LastAdmin;
             }
             Ok(false) => {}
-            Err(err) => {
-                error!(?err, "organizations.update_role.last_admin_check_error");
-                return UpdateRoleResponse::Error(err.to_string());
+            Err(error) => {
+                error!(?error, "organizations.update_role.last_admin_check_error");
+                return UpdateRoleResponse::Error(error.to_string());
             }
         }
     }
 
-    // Update the role
     match db
         .update_member_role(org_id, target_account_id, request.role)
         .await
     {
         Ok(true) => {
-            // Log audit event
             let _ = db
                 .log_audit_event(
                     Some(session.account_id),
                     Some(org_id),
                     "organization.member.role_updated",
-                    Some(serde_json::json!({
+                    Some(json!({
                         "target_account_id": target_account_id.as_i64(),
                         "new_role": request.role,
                     })),
@@ -369,9 +316,9 @@ pub async fn update_member_role(
             UpdateRoleResponse::Success
         }
         Ok(false) => UpdateRoleResponse::NotFound,
-        Err(err) => {
-            error!(?err, "organizations.update_role.error");
-            UpdateRoleResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "organizations.update_role.error");
+            UpdateRoleResponse::Error(error.to_string())
         }
     }
 }
@@ -379,7 +326,7 @@ pub async fn update_member_role(
 #[derive(Debug)]
 pub enum UpdateRoleResponse {
     Success,
-    BadRequest(String),
+    LastAdmin,
     Forbidden,
     NotFound,
     Error(String),
@@ -389,7 +336,11 @@ impl IntoResponse for UpdateRoleResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             UpdateRoleResponse::Success => StatusCode::NO_CONTENT.into_response(),
-            UpdateRoleResponse::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+            UpdateRoleResponse::LastAdmin => (
+                StatusCode::BAD_REQUEST,
+                "Cannot demote the last admin. Promote another member first.",
+            )
+                .into_response(),
             UpdateRoleResponse::Forbidden => {
                 (StatusCode::FORBIDDEN, "Only admins can update member roles").into_response()
             }
@@ -403,27 +354,7 @@ impl IntoResponse for UpdateRoleResponse {
     }
 }
 
-// =============================================================================
-// Remove Member
-// =============================================================================
-
 /// Remove a member from an organization.
-///
-/// Only admins can remove members. Admins cannot remove themselves
-/// (use leave endpoint instead) or the last admin.
-///
-/// ## Endpoint
-/// ```
-/// DELETE /api/v1/organizations/{org_id}/members/{account_id}
-/// Authorization: Bearer <session_token>
-/// ```
-///
-/// ## Responses
-/// - 204: Member removed
-/// - 400: Cannot remove last admin
-/// - 401: Not authenticated
-/// - 403: Not an admin or trying to remove yourself
-/// - 404: Member not found
 #[tracing::instrument(skip(db, session))]
 pub async fn remove_member(
     Dep(db): Dep<Postgres>,
@@ -433,14 +364,10 @@ pub async fn remove_member(
     let org_id = OrgId::from_i64(org_id);
     let target_account_id = AccountId::from_i64(target_account_id);
 
-    // Cannot remove yourself via this endpoint
     if session.account_id == target_account_id {
-        return RemoveMemberResponse::BadRequest(String::from(
-            "Cannot remove yourself. Use the leave endpoint instead.",
-        ));
+        return RemoveMemberResponse::CannotRemoveSelf;
     }
 
-    // Check if user is an admin
     match db.get_member_role(org_id, session.account_id).await {
         Ok(Some(role)) if role.is_admin() => {}
         Ok(Some(_)) => {
@@ -459,13 +386,12 @@ pub async fn remove_member(
             );
             return RemoveMemberResponse::Forbidden;
         }
-        Err(err) => {
-            error!(?err, "organizations.remove_member.role_check_error");
-            return RemoveMemberResponse::Error(err.to_string());
+        Err(error) => {
+            error!(?error, "organizations.remove_member.role_check_error");
+            return RemoveMemberResponse::Error(error.to_string());
         }
     }
 
-    // Check if target is an admin and is the last admin
     match db.get_member_role(org_id, target_account_id).await {
         Ok(Some(role)) if role.is_admin() => {
             match db.is_last_admin(org_id, target_account_id).await {
@@ -475,14 +401,12 @@ pub async fn remove_member(
                         target_account_id = %target_account_id,
                         "organizations.remove_member.last_admin"
                     );
-                    return RemoveMemberResponse::BadRequest(String::from(
-                        "Cannot remove the last admin. Promote another member first.",
-                    ));
+                    return RemoveMemberResponse::LastAdmin;
                 }
                 Ok(false) => {}
-                Err(err) => {
-                    error!(?err, "organizations.remove_member.last_admin_check_error");
-                    return RemoveMemberResponse::Error(err.to_string());
+                Err(error) => {
+                    error!(?error, "organizations.remove_member.last_admin_check_error");
+                    return RemoveMemberResponse::Error(error.to_string());
                 }
             }
         }
@@ -490,25 +414,23 @@ pub async fn remove_member(
         Ok(None) => {
             return RemoveMemberResponse::NotFound;
         }
-        Err(err) => {
-            error!(?err, "organizations.remove_member.target_check_error");
-            return RemoveMemberResponse::Error(err.to_string());
+        Err(error) => {
+            error!(?error, "organizations.remove_member.target_check_error");
+            return RemoveMemberResponse::Error(error.to_string());
         }
     }
 
-    // Remove the member
     match db
         .remove_organization_member(org_id, target_account_id)
         .await
     {
         Ok(true) => {
-            // Log audit event
             let _ = db
                 .log_audit_event(
                     Some(session.account_id),
                     Some(org_id),
                     "organization.member.removed",
-                    Some(serde_json::json!({
+                    Some(json!({
                         "removed_account_id": target_account_id.as_i64(),
                     })),
                 )
@@ -522,9 +444,9 @@ pub async fn remove_member(
             RemoveMemberResponse::Success
         }
         Ok(false) => RemoveMemberResponse::NotFound,
-        Err(err) => {
-            error!(?err, "organizations.remove_member.error");
-            RemoveMemberResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "organizations.remove_member.error");
+            RemoveMemberResponse::Error(error.to_string())
         }
     }
 }
@@ -532,7 +454,8 @@ pub async fn remove_member(
 #[derive(Debug)]
 pub enum RemoveMemberResponse {
     Success,
-    BadRequest(String),
+    CannotRemoveSelf,
+    LastAdmin,
     Forbidden,
     NotFound,
     Error(String),
@@ -542,7 +465,16 @@ impl IntoResponse for RemoveMemberResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             RemoveMemberResponse::Success => StatusCode::NO_CONTENT.into_response(),
-            RemoveMemberResponse::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+            RemoveMemberResponse::CannotRemoveSelf => (
+                StatusCode::BAD_REQUEST,
+                "Cannot remove yourself. Use the leave endpoint instead.",
+            )
+                .into_response(),
+            RemoveMemberResponse::LastAdmin => (
+                StatusCode::BAD_REQUEST,
+                "Cannot remove the last admin. Promote another member first.",
+            )
+                .into_response(),
             RemoveMemberResponse::Forbidden => {
                 (StatusCode::FORBIDDEN, "Only admins can remove members").into_response()
             }
@@ -556,25 +488,7 @@ impl IntoResponse for RemoveMemberResponse {
     }
 }
 
-// =============================================================================
-// Leave Organization
-// =============================================================================
-
 /// Leave an organization.
-///
-/// The last admin cannot leave. They must transfer ownership first.
-///
-/// ## Endpoint
-/// ```
-/// POST /api/v1/organizations/{org_id}/leave
-/// Authorization: Bearer <session_token>
-/// ```
-///
-/// ## Responses
-/// - 204: Left organization
-/// - 400: Cannot leave as last admin
-/// - 401: Not authenticated
-/// - 404: Not a member of the organization
 #[tracing::instrument(skip(db, session))]
 pub async fn leave_organization(
     Dep(db): Dep<Postgres>,
@@ -583,7 +497,6 @@ pub async fn leave_organization(
 ) -> LeaveOrgResponse {
     let org_id = OrgId::from_i64(org_id);
 
-    // Check if user is a member and get their role
     let role = match db.get_member_role(org_id, session.account_id).await {
         Ok(Some(role)) => role,
         Ok(None) => {
@@ -594,13 +507,12 @@ pub async fn leave_organization(
             );
             return LeaveOrgResponse::NotFound;
         }
-        Err(err) => {
-            error!(?err, "organizations.leave.role_check_error");
-            return LeaveOrgResponse::Error(err.to_string());
+        Err(error) => {
+            error!(?error, "organizations.leave.role_check_error");
+            return LeaveOrgResponse::Error(error.to_string());
         }
     };
 
-    // If admin, check if last admin
     if role.is_admin() {
         match db.is_last_admin(org_id, session.account_id).await {
             Ok(true) => {
@@ -609,25 +521,21 @@ pub async fn leave_organization(
                     org_id = %org_id,
                     "organizations.leave.last_admin"
                 );
-                return LeaveOrgResponse::BadRequest(String::from(
-                    "Cannot leave as the last admin. Promote another member first or delete the organization.",
-                ));
+                return LeaveOrgResponse::LastAdmin;
             }
             Ok(false) => {}
-            Err(err) => {
-                error!(?err, "organizations.leave.last_admin_check_error");
-                return LeaveOrgResponse::Error(err.to_string());
+            Err(error) => {
+                error!(?error, "organizations.leave.last_admin_check_error");
+                return LeaveOrgResponse::Error(error.to_string());
             }
         }
     }
 
-    // Remove the member
     match db
         .remove_organization_member(org_id, session.account_id)
         .await
     {
         Ok(true) => {
-            // Log audit event
             let _ = db
                 .log_audit_event(
                     Some(session.account_id),
@@ -645,9 +553,9 @@ pub async fn leave_organization(
             LeaveOrgResponse::Success
         }
         Ok(false) => LeaveOrgResponse::NotFound,
-        Err(err) => {
-            error!(?err, "organizations.leave.error");
-            LeaveOrgResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "organizations.leave.error");
+            LeaveOrgResponse::Error(error.to_string())
         }
     }
 }
@@ -655,7 +563,7 @@ pub async fn leave_organization(
 #[derive(Debug)]
 pub enum LeaveOrgResponse {
     Success,
-    BadRequest(String),
+    LastAdmin,
     NotFound,
     Error(String),
 }
@@ -664,7 +572,11 @@ impl IntoResponse for LeaveOrgResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             LeaveOrgResponse::Success => StatusCode::NO_CONTENT.into_response(),
-            LeaveOrgResponse::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+            LeaveOrgResponse::LastAdmin => (
+                StatusCode::BAD_REQUEST,
+                "Cannot leave as the last admin. Promote another member first or delete the organization.",
+            )
+                .into_response(),
             LeaveOrgResponse::NotFound => (
                 StatusCode::NOT_FOUND,
                 "You are not a member of this organization",
@@ -677,44 +589,36 @@ impl IntoResponse for LeaveOrgResponse {
     }
 }
 
-// =============================================================================
-// Organization API Keys
-// =============================================================================
-
-/// Response for GET /organizations/{org_id}/api-keys endpoint.
 #[derive(Debug, Serialize)]
 pub struct OrgApiKeyListResponse {
+    /// The list of API keys.
     pub api_keys: Vec<OrgApiKeyEntry>,
 }
 
-/// A single organization API key entry.
 #[derive(Debug, Serialize)]
 pub struct OrgApiKeyEntry {
+    /// The API key ID.
     pub id: i64,
+
+    /// The API key name.
     pub name: String,
+
+    /// The account ID of the key owner.
     pub account_id: i64,
+
+    /// The email of the key owner.
     pub account_email: String,
+
+    /// The creation timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+
+    /// The last access timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub accessed_at: OffsetDateTime,
 }
 
 /// List API keys for an organization.
-///
-/// Only members of the organization can view API keys.
-/// All members can see all org-scoped keys (for transparency).
-///
-/// ## Endpoint
-/// ```
-/// GET /api/v1/organizations/{org_id}/api-keys
-/// Authorization: Bearer <session_token>
-/// ```
-///
-/// ## Responses
-/// - 200: List of API keys
-/// - 401: Not authenticated
-/// - 403: Not a member of the organization
 #[tracing::instrument(skip(db, session))]
 pub async fn list_org_api_keys(
     Dep(db): Dep<Postgres>,
@@ -723,7 +627,6 @@ pub async fn list_org_api_keys(
 ) -> ListOrgApiKeysResponse {
     let org_id = OrgId::from_i64(org_id);
 
-    // Check if user is a member
     match db.get_member_role(org_id, session.account_id).await {
         Ok(Some(_)) => {}
         Ok(None) => {
@@ -734,14 +637,12 @@ pub async fn list_org_api_keys(
             );
             return ListOrgApiKeysResponse::Forbidden;
         }
-        Err(err) => {
-            error!(?err, "organizations.api_keys.list.role_check_error");
-            return ListOrgApiKeysResponse::Error(err.to_string());
+        Err(error) => {
+            error!(?error, "organizations.api_keys.list.role_check_error");
+            return ListOrgApiKeysResponse::Error(error.to_string());
         }
     }
 
-    // List all org API keys (from all members)
-    // We need to join with account to get emails
     match db.list_all_org_api_keys(org_id).await {
         Ok(keys) => {
             info!(
@@ -749,8 +650,7 @@ pub async fn list_org_api_keys(
                 count = keys.len(),
                 "organizations.api_keys.list.success"
             );
-            let api_keys = keys
-                .into_iter()
+            keys.into_iter()
                 .map(|key| OrgApiKeyEntry {
                     id: key.id.as_i64(),
                     name: key.name,
@@ -759,12 +659,13 @@ pub async fn list_org_api_keys(
                     created_at: key.created_at,
                     accessed_at: key.accessed_at,
                 })
-                .collect();
-            ListOrgApiKeysResponse::Success(OrgApiKeyListResponse { api_keys })
+                .collect::<Vec<_>>()
+                .pipe(|api_keys| OrgApiKeyListResponse { api_keys })
+                .pipe(ListOrgApiKeysResponse::Success)
         }
-        Err(err) => {
-            error!(?err, "organizations.api_keys.list.error");
-            ListOrgApiKeysResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "organizations.api_keys.list.error");
+            ListOrgApiKeysResponse::Error(error.to_string())
         }
     }
 }
@@ -792,41 +693,29 @@ impl IntoResponse for ListOrgApiKeysResponse {
     }
 }
 
-/// Request body for creating an organization API key.
 #[derive(Debug, Deserialize)]
 pub struct CreateOrgApiKeyRequest {
+    /// The API key name.
     pub name: String,
 }
 
-/// Response for creating an organization API key.
 #[derive(Debug, Serialize)]
 pub struct CreateOrgApiKeyResponse {
+    /// The API key ID.
     pub id: i64,
+
+    /// The API key name.
     pub name: String,
+
+    /// The API key token. Only returned once at creation.
     pub token: String,
+
+    /// The creation timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
 /// Create a new organization API key.
-///
-/// Only members can create org-scoped API keys. The key is tied to both
-/// the creator's account and the organization.
-///
-/// ## Endpoint
-/// ```
-/// POST /api/v1/organizations/{org_id}/api-keys
-/// Authorization: Bearer <session_token>
-/// Content-Type: application/json
-///
-/// {"name": "CI/CD Key"}
-/// ```
-///
-/// ## Responses
-/// - 201: API key created (includes token)
-/// - 400: Invalid request (empty name)
-/// - 401: Not authenticated
-/// - 403: Not a member of the organization
 #[tracing::instrument(skip(db, session))]
 pub async fn create_org_api_key(
     Dep(db): Dep<Postgres>,
@@ -836,7 +725,6 @@ pub async fn create_org_api_key(
 ) -> CreateOrgApiKeyApiResponse {
     let org_id = OrgId::from_i64(org_id);
 
-    // Check if user is a member
     match db.get_member_role(org_id, session.account_id).await {
         Ok(Some(_)) => {}
         Ok(None) => {
@@ -847,26 +735,25 @@ pub async fn create_org_api_key(
             );
             return CreateOrgApiKeyApiResponse::Forbidden;
         }
-        Err(err) => {
-            error!(?err, "organizations.api_keys.create.role_check_error");
-            return CreateOrgApiKeyApiResponse::Error(err.to_string());
+        Err(error) => {
+            error!(?error, "organizations.api_keys.create.role_check_error");
+            return CreateOrgApiKeyApiResponse::Error(error.to_string());
         }
     }
 
     let name = request.name.trim();
     if name.is_empty() {
-        return CreateOrgApiKeyApiResponse::BadRequest("API key name cannot be empty");
+        return CreateOrgApiKeyApiResponse::EmptyName;
     }
 
     match db.create_api_key(session.account_id, name, org_id).await {
         Ok((key_id, token)) => {
-            // Log audit event
             let _ = db
                 .log_audit_event(
                     Some(session.account_id),
                     Some(org_id),
                     "api_key.created",
-                    Some(serde_json::json!({
+                    Some(json!({
                         "key_id": key_id.as_i64(),
                         "name": name,
                         "type": "organization",
@@ -880,7 +767,7 @@ pub async fn create_org_api_key(
                 key_id = %key_id,
                 "organizations.api_keys.create.success"
             );
-            // Fetch the key to get created_at
+
             match db.get_api_key(key_id).await {
                 Ok(Some(key)) => CreateOrgApiKeyApiResponse::Created(CreateOrgApiKeyResponse {
                     id: key.id.as_i64(),
@@ -892,15 +779,15 @@ pub async fn create_org_api_key(
                     error!(key_id = %key_id, "organizations.api_keys.create.not_found_after_create");
                     CreateOrgApiKeyApiResponse::Error(String::from("Key not found after creation"))
                 }
-                Err(err) => {
-                    error!(?err, "organizations.api_keys.create.fetch_error");
-                    CreateOrgApiKeyApiResponse::Error(err.to_string())
+                Err(error) => {
+                    error!(?error, "organizations.api_keys.create.fetch_error");
+                    CreateOrgApiKeyApiResponse::Error(error.to_string())
                 }
             }
         }
-        Err(err) => {
-            error!(?err, "organizations.api_keys.create.error");
-            CreateOrgApiKeyApiResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "organizations.api_keys.create.error");
+            CreateOrgApiKeyApiResponse::Error(error.to_string())
         }
     }
 }
@@ -908,7 +795,7 @@ pub async fn create_org_api_key(
 #[derive(Debug)]
 pub enum CreateOrgApiKeyApiResponse {
     Created(CreateOrgApiKeyResponse),
-    BadRequest(&'static str),
+    EmptyName,
     Forbidden,
     Error(String),
 }
@@ -919,8 +806,8 @@ impl IntoResponse for CreateOrgApiKeyApiResponse {
             CreateOrgApiKeyApiResponse::Created(key) => {
                 (StatusCode::CREATED, Json(key)).into_response()
             }
-            CreateOrgApiKeyApiResponse::BadRequest(msg) => {
-                (StatusCode::BAD_REQUEST, msg).into_response()
+            CreateOrgApiKeyApiResponse::EmptyName => {
+                (StatusCode::BAD_REQUEST, "API key name cannot be empty").into_response()
             }
             CreateOrgApiKeyApiResponse::Forbidden => (
                 StatusCode::FORBIDDEN,
@@ -935,21 +822,6 @@ impl IntoResponse for CreateOrgApiKeyApiResponse {
 }
 
 /// Delete an organization API key.
-///
-/// Members can delete their own org API keys. Admins can delete any org API
-/// key.
-///
-/// ## Endpoint
-/// ```
-/// DELETE /api/v1/organizations/{org_id}/api-keys/{key_id}
-/// Authorization: Bearer <session_token>
-/// ```
-///
-/// ## Responses
-/// - 204: API key deleted
-/// - 401: Not authenticated
-/// - 403: Not authorized to delete this key
-/// - 404: API key not found
 #[tracing::instrument(skip(db, session))]
 pub async fn delete_org_api_key(
     Dep(db): Dep<Postgres>,
@@ -959,7 +831,6 @@ pub async fn delete_org_api_key(
     let org_id = OrgId::from_i64(org_id);
     let key_id = ApiKeyId::from_i64(key_id);
 
-    // Check user's role in the org
     let user_role = match db.get_member_role(org_id, session.account_id).await {
         Ok(Some(role)) => role,
         Ok(None) => {
@@ -970,46 +841,41 @@ pub async fn delete_org_api_key(
             );
             return DeleteOrgApiKeyResponse::Forbidden;
         }
-        Err(err) => {
-            error!(?err, "organizations.api_keys.delete.role_check_error");
-            return DeleteOrgApiKeyResponse::Error(err.to_string());
+        Err(error) => {
+            error!(?error, "organizations.api_keys.delete.role_check_error");
+            return DeleteOrgApiKeyResponse::Error(error.to_string());
         }
     };
 
-    // Check key exists and belongs to this org
     let key = match db.get_api_key(key_id).await {
         Ok(Some(key)) => key,
         Ok(None) => return DeleteOrgApiKeyResponse::NotFound,
-        Err(err) => {
-            error!(?err, "organizations.api_keys.delete.fetch_error");
-            return DeleteOrgApiKeyResponse::Error(err.to_string());
+        Err(error) => {
+            error!(?error, "organizations.api_keys.delete.fetch_error");
+            return DeleteOrgApiKeyResponse::Error(error.to_string());
         }
     };
 
-    // Verify key belongs to this org
     if key.organization_id != org_id {
         return DeleteOrgApiKeyResponse::NotFound;
     }
 
-    // Check already revoked
     if key.revoked_at.is_some() {
         return DeleteOrgApiKeyResponse::NotFound;
     }
 
-    // Authorization: owner can delete their own key, admins can delete any key
     if key.account_id != session.account_id && !user_role.is_admin() {
         return DeleteOrgApiKeyResponse::Forbidden;
     }
 
     match db.revoke_api_key(key_id).await {
         Ok(true) => {
-            // Log audit event
             let _ = db
                 .log_audit_event(
                     Some(session.account_id),
                     Some(org_id),
                     "api_key.revoked",
-                    Some(serde_json::json!({
+                    Some(json!({
                         "key_id": key_id.as_i64(),
                         "key_owner_account_id": key.account_id.as_i64(),
                         "type": "organization",
@@ -1026,9 +892,9 @@ pub async fn delete_org_api_key(
             DeleteOrgApiKeyResponse::Deleted
         }
         Ok(false) => DeleteOrgApiKeyResponse::NotFound,
-        Err(err) => {
-            error!(?err, "organizations.api_keys.delete.error");
-            DeleteOrgApiKeyResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "organizations.api_keys.delete.error");
+            DeleteOrgApiKeyResponse::Error(error.to_string())
         }
     }
 }
@@ -1058,50 +924,28 @@ impl IntoResponse for DeleteOrgApiKeyResponse {
     }
 }
 
-// =============================================================================
-// Bot Account Endpoints
-// =============================================================================
-
-/// Request body for creating a bot account.
 #[derive(Debug, Deserialize)]
 pub struct CreateBotRequest {
-    /// Name of the bot (e.g., "CI Bot").
+    /// The bot name.
     pub name: String,
-    /// Email of the person/team responsible for this bot.
+
+    /// The email of the person/team responsible for this bot.
     pub responsible_email: String,
 }
 
-/// Response for creating a bot account.
 #[derive(Debug, Serialize)]
 pub struct CreateBotResponse {
+    /// The bot account ID.
     pub account_id: i64,
+
+    /// The bot name.
     pub name: String,
-    /// The API key token - only returned once at creation.
+
+    /// The API key token. Only returned once at creation.
     pub api_key: String,
 }
 
 /// Create a bot account for an organization.
-///
-/// Bot accounts are organization-scoped accounts without GitHub identity,
-/// for CI systems and automation. Only admins can create bot accounts.
-///
-/// ## Endpoint
-/// ```
-/// POST /api/v1/organizations/{org_id}/bots
-/// Authorization: Bearer <session_token>
-/// Content-Type: application/json
-///
-/// {
-///   "name": "CI Bot",
-///   "responsible_email": "alice@example.com"
-/// }
-/// ```
-///
-/// ## Responses
-/// - 201: Bot account created (includes API key)
-/// - 400: Invalid request
-/// - 401: Not authenticated
-/// - 403: Not an admin of the organization
 #[tracing::instrument(skip(db, session))]
 pub async fn create_bot(
     Dep(db): Dep<Postgres>,
@@ -1111,7 +955,6 @@ pub async fn create_bot(
 ) -> CreateBotApiResponse {
     let org_id = OrgId::from_i64(org_id);
 
-    // Check if user is an admin
     match db.get_member_role(org_id, session.account_id).await {
         Ok(Some(role)) if role.is_admin() => {}
         Ok(Some(_)) => {
@@ -1130,33 +973,30 @@ pub async fn create_bot(
             );
             return CreateBotApiResponse::Forbidden;
         }
-        Err(err) => {
-            error!(?err, "organizations.bots.create.role_check_error");
-            return CreateBotApiResponse::Error(err.to_string());
+        Err(error) => {
+            error!(?error, "organizations.bots.create.role_check_error");
+            return CreateBotApiResponse::Error(error.to_string());
         }
     }
 
-    // Validate request
     let name = request.name.trim();
     if name.is_empty() {
-        return CreateBotApiResponse::BadRequest("Bot name cannot be empty");
+        return CreateBotApiResponse::EmptyName;
     }
 
     let email = request.responsible_email.trim();
     if email.is_empty() {
-        return CreateBotApiResponse::BadRequest("Responsible email cannot be empty");
+        return CreateBotApiResponse::EmptyEmail;
     }
 
-    // Create the bot account
     match db.create_bot_account(org_id, name, email).await {
         Ok((account_id, token)) => {
-            // Log audit event
             let _ = db
                 .log_audit_event(
                     Some(session.account_id),
                     Some(org_id),
                     "bot.created",
-                    Some(serde_json::json!({
+                    Some(json!({
                         "bot_account_id": account_id.as_i64(),
                         "name": name,
                         "responsible_email": email,
@@ -1177,9 +1017,9 @@ pub async fn create_bot(
                 api_key: token.expose().to_string(),
             })
         }
-        Err(err) => {
-            error!(?err, "organizations.bots.create.error");
-            CreateBotApiResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "organizations.bots.create.error");
+            CreateBotApiResponse::Error(error.to_string())
         }
     }
 }
@@ -1187,7 +1027,8 @@ pub async fn create_bot(
 #[derive(Debug)]
 pub enum CreateBotApiResponse {
     Created(CreateBotResponse),
-    BadRequest(&'static str),
+    EmptyName,
+    EmptyEmail,
     Forbidden,
     Error(String),
 }
@@ -1196,7 +1037,12 @@ impl IntoResponse for CreateBotApiResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             CreateBotApiResponse::Created(bot) => (StatusCode::CREATED, Json(bot)).into_response(),
-            CreateBotApiResponse::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+            CreateBotApiResponse::EmptyName => {
+                (StatusCode::BAD_REQUEST, "Bot name cannot be empty").into_response()
+            }
+            CreateBotApiResponse::EmptyEmail => {
+                (StatusCode::BAD_REQUEST, "Responsible email cannot be empty").into_response()
+            }
             CreateBotApiResponse::Forbidden => {
                 (StatusCode::FORBIDDEN, "Only admins can create bot accounts").into_response()
             }
@@ -1207,37 +1053,30 @@ impl IntoResponse for CreateBotApiResponse {
     }
 }
 
-/// Response for listing bot accounts.
 #[derive(Debug, Serialize)]
 pub struct BotListResponse {
+    /// The list of bot accounts.
     pub bots: Vec<BotEntry>,
 }
 
-/// A single bot account entry.
 #[derive(Debug, Serialize)]
 pub struct BotEntry {
+    /// The bot account ID.
     pub account_id: i64,
+
+    /// The bot name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+
+    /// The email of the person/team responsible for this bot.
     pub responsible_email: String,
+
+    /// The creation timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
 /// List bot accounts for an organization.
-///
-/// Only admins can view bot accounts.
-///
-/// ## Endpoint
-/// ```
-/// GET /api/v1/organizations/{org_id}/bots
-/// Authorization: Bearer <session_token>
-/// ```
-///
-/// ## Responses
-/// - 200: List of bot accounts
-/// - 401: Not authenticated
-/// - 403: Not an admin of the organization
 #[tracing::instrument(skip(db, session))]
 pub async fn list_bots(
     Dep(db): Dep<Postgres>,
@@ -1246,7 +1085,6 @@ pub async fn list_bots(
 ) -> ListBotsResponse {
     let org_id = OrgId::from_i64(org_id);
 
-    // Check if user is an admin
     match db.get_member_role(org_id, session.account_id).await {
         Ok(Some(role)) if role.is_admin() => {}
         Ok(Some(_)) => {
@@ -1265,9 +1103,9 @@ pub async fn list_bots(
             );
             return ListBotsResponse::Forbidden;
         }
-        Err(err) => {
-            error!(?err, "organizations.bots.list.role_check_error");
-            return ListBotsResponse::Error(err.to_string());
+        Err(error) => {
+            error!(?error, "organizations.bots.list.role_check_error");
+            return ListBotsResponse::Error(error.to_string());
         }
     }
 
@@ -1278,20 +1116,20 @@ pub async fn list_bots(
                 count = bots.len(),
                 "organizations.bots.list.success"
             );
-            let entries = bots
-                .into_iter()
+            bots.into_iter()
                 .map(|bot| BotEntry {
                     account_id: bot.id.as_i64(),
                     name: bot.name,
                     responsible_email: bot.email,
                     created_at: bot.created_at,
                 })
-                .collect();
-            ListBotsResponse::Success(BotListResponse { bots: entries })
+                .collect::<Vec<_>>()
+                .pipe(|bots| BotListResponse { bots })
+                .pipe(ListBotsResponse::Success)
         }
-        Err(err) => {
-            error!(?err, "organizations.bots.list.error");
-            ListBotsResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "organizations.bots.list.error");
+            ListBotsResponse::Error(error.to_string())
         }
     }
 }

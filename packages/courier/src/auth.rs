@@ -17,6 +17,7 @@ use crate::{api, db};
 pub enum OrgRole {
     /// Regular organization member with basic access.
     Member,
+
     /// Organization administrator with full permissions.
     Admin,
 }

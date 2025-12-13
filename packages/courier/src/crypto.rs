@@ -90,11 +90,12 @@ pub fn generate_oauth_state() -> String {
 
 /// Generate an invitation token.
 ///
-/// Token length varies based on whether the invitation is long-lived:
-/// - Short-lived (≤30 days): 8 characters (~47 bits entropy)
-/// - Long-lived (>30 days or never expires): 12 characters (~71 bits entropy)
+/// The intention is to make the token easy to share but not so easy that they
+/// are able to be guessed. The endpoint to accept invitations is rate limited.
 ///
-/// Tokens use alphanumeric characters (a-zA-Z0-9) for easy sharing.
+/// Token length varies based on whether the invitation is long-lived:
+/// - Short-lived: 8 characters
+/// - Long-lived: 12 characters
 pub fn generate_invitation_token(long_lived: bool) -> String {
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 

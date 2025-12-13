@@ -1,7 +1,4 @@
 //! OAuth authentication endpoints.
-//!
-//! These endpoints handle the GitHub OAuth flow for user authentication.
-//! See RFC docs/rfc/0003-self-service-signup.md for the full flow.
 
 use aerosol::axum::Dep;
 use axum::{
@@ -13,6 +10,7 @@ use axum::{
 };
 use oauth2::PkceCodeVerifier;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use time::{Duration, OffsetDateTime};
 use tracing::{error, info, warn};
 
@@ -24,13 +22,8 @@ use crate::{
     oauth::{self, GitHub},
 };
 
-/// Session duration: 24 hours.
 const SESSION_DURATION: Duration = Duration::hours(24);
-
-/// OAuth state expiration: 10 minutes.
 const OAUTH_STATE_DURATION: Duration = Duration::minutes(10);
-
-/// OAuth exchange code expiration: 60 seconds.
 const EXCHANGE_CODE_DURATION: Duration = Duration::seconds(60);
 
 pub fn router() -> Router<State> {
@@ -41,7 +34,6 @@ pub fn router() -> Router<State> {
         .route("/logout", post(logout))
 }
 
-/// Query parameters for the OAuth start endpoint.
 #[derive(Debug, Deserialize)]
 pub struct StartParams {
     /// The URL to redirect to after authentication.
@@ -49,19 +41,6 @@ pub struct StartParams {
 }
 
 /// Start the GitHub OAuth flow.
-///
-/// Validates the redirect URI, generates PKCE challenge and state token,
-/// stores them in the database, and redirects to GitHub's authorization URL.
-///
-/// ## Endpoint
-/// ```
-/// GET /api/v1/oauth/github/start?redirect_uri=https://site.example.com/callback
-/// ```
-///
-/// ## Responses
-/// - 302: Redirect to GitHub authorization URL
-/// - 400: Invalid redirect URI
-/// - 503: OAuth not configured
 #[tracing::instrument(skip(db, github))]
 pub async fn start(
     Dep(db): Dep<Postgres>,
@@ -73,21 +52,17 @@ pub async fn start(
         return StartResponse::NotConfigured;
     };
 
-    // Validate redirect URI against allowlist
     let redirect_uri = match github.validate_redirect_uri(&params.redirect_uri) {
         Ok(uri) => uri,
-        Err(err) => {
-            warn!(?err, "oauth.start.invalid_redirect_uri");
-            return StartResponse::InvalidRedirectUri(err.to_string());
+        Err(error) => {
+            warn!(?error, "oauth.start.invalid_redirect_uri");
+            return StartResponse::InvalidRedirectUri(error.to_string());
         }
     };
 
-    // Generate authorization URL with PKCE
     let (auth_url, pkce_verifier, csrf_token) = github.authorization_url(redirect_uri.clone());
-
-    // Store state in database
     let expires_at = OffsetDateTime::now_utc() + OAUTH_STATE_DURATION;
-    if let Err(err) = db
+    if let Err(error) = db
         .store_oauth_state(
             csrf_token.secret(),
             pkce_verifier.secret(),
@@ -96,8 +71,8 @@ pub async fn start(
         )
         .await
     {
-        error!(?err, "oauth.start.store_state_error");
-        return StartResponse::Error(format!("Failed to store OAuth state: {}", err));
+        error!(?error, "oauth.start.store_state_error");
+        return StartResponse::Error(format!("Failed to store OAuth state: {error}"));
     }
 
     info!("oauth.start.redirecting");
@@ -131,36 +106,16 @@ impl IntoResponse for StartResponse {
     }
 }
 
-/// Query parameters for the OAuth callback endpoint.
 #[derive(Debug, Deserialize)]
 pub struct CallbackParams {
     /// The authorization code from GitHub.
     code: String,
+
     /// The state token (must match what we stored).
     state: String,
 }
 
 /// Handle the GitHub OAuth callback.
-///
-/// Validates the state token, exchanges the authorization code for an access
-/// token, fetches the user profile from GitHub, creates or updates the account,
-/// creates a short-lived exchange code, and redirects to the original redirect
-/// URI with the auth_code.
-///
-/// The dashboard backend should then call POST /api/v1/oauth/exchange with the
-/// auth_code to obtain a session token. This two-step flow avoids returning
-/// session tokens in URLs where they might be logged or leaked.
-///
-/// ## Endpoint
-/// ```
-/// GET /api/v1/oauth/github/callback?code=...&state=...
-/// ```
-///
-/// ## Responses
-/// - 302: Redirect to original redirect_uri with
-///   `?auth_code=...&new_user=true|false`
-/// - 400: Invalid state or code
-/// - 503: OAuth not configured
 #[tracing::instrument(skip(db, github, params), fields(state = %params.state))]
 pub async fn callback(
     Dep(db): Dep<Postgres>,
@@ -172,85 +127,78 @@ pub async fn callback(
         return CallbackResponse::NotConfigured;
     };
 
-    // Consume OAuth state (validates and deletes atomically)
     let oauth_state = match db.consume_oauth_state(&params.state).await {
         Ok(Some(state)) => state,
         Ok(None) => {
             warn!("oauth.callback.invalid_state");
             return CallbackResponse::InvalidState;
         }
-        Err(err) => {
-            error!(?err, "oauth.callback.state_error");
-            return CallbackResponse::Error(format!("Failed to validate OAuth state: {}", err));
+        Err(error) => {
+            error!(?error, "oauth.callback.state_error");
+            return CallbackResponse::Error(format!("Failed to validate OAuth state: {error}"));
         }
     };
 
-    // Parse redirect URI
     let redirect_uri = match oauth2::url::Url::parse(&oauth_state.redirect_uri) {
         Ok(uri) => uri,
-        Err(err) => {
-            error!(?err, "oauth.callback.invalid_stored_redirect_uri");
+        Err(error) => {
+            error!(?error, "oauth.callback.invalid_stored_redirect_uri");
             return CallbackResponse::Error(String::from("Invalid stored redirect URI"));
         }
     };
 
-    // Exchange code for access token
     let pkce_verifier = PkceCodeVerifier::new(oauth_state.pkce_verifier);
     let access_token = match github
         .exchange_code(params.code, redirect_uri.clone(), pkce_verifier)
         .await
     {
         Ok(token) => token,
-        Err(err) => {
-            warn!(?err, "oauth.callback.token_exchange_error");
-            // Log audit event for failed OAuth
+        Err(error) => {
+            warn!(?error, "oauth.callback.token_exchange_error");
             let _ = db
                 .log_audit_event(
                     None,
                     None,
                     "oauth.failure",
-                    Some(serde_json::json!({ "error": err.to_string() })),
+                    Some(json!({ "error": error.to_string() })),
                 )
                 .await;
             return CallbackResponse::TokenExchangeFailed;
         }
     };
 
-    // Fetch user profile from GitHub
     let github_user = match oauth::fetch_user(&access_token).await {
         Ok(user) => user,
-        Err(err) => {
-            error!(?err, "oauth.callback.fetch_user_error");
+        Err(error) => {
+            error!(?error, "oauth.callback.fetch_user_error");
             let _ = db
                 .log_audit_event(
                     None,
                     None,
                     "oauth.failure",
-                    Some(serde_json::json!({ "error": err.to_string() })),
+                    Some(json!({ "error": error.to_string() })),
                 )
                 .await;
-            return CallbackResponse::Error(format!("Failed to fetch GitHub user: {}", err));
+            return CallbackResponse::Error(format!("Failed to fetch GitHub user: {error}"));
         }
     };
 
-    // Fetch user emails from GitHub
     let emails = match oauth::fetch_emails(&access_token).await {
         Ok(emails) => emails,
-        Err(err) => {
-            error!(?err, "oauth.callback.fetch_emails_error");
+        Err(error) => {
+            error!(?error, "oauth.callback.fetch_emails_error");
             let _ = db
                 .log_audit_event(
                     None,
                     None,
                     "oauth.failure",
-                    Some(serde_json::json!({ "error": err.to_string() })),
+                    Some(json!({ "error": error.to_string() })),
                 )
                 .await;
-            return CallbackResponse::Error(format!("Failed to fetch GitHub emails: {}", err));
+            return CallbackResponse::Error(format!("Failed to fetch GitHub emails: {error}"));
         }
     };
 
-    // Get primary verified email
     let email = oauth::primary_email(&emails)
         .or(github_user.email.as_deref())
         .unwrap_or_default();
@@ -260,23 +208,20 @@ pub async fn callback(
         return CallbackResponse::NoEmail;
     }
 
-    // Check if user already exists
     let (account_id, new_user) = match db.get_account_by_github_id(github_user.id).await {
         Ok(Some(account)) => {
-            // Existing user - update email and username if changed
             if account.email != email
-                && let Err(err) = db.update_account_email(account.id, email).await
+                && let Err(error) = db.update_account_email(account.id, email).await
             {
-                error!(?err, "oauth.callback.update_email_error");
+                error!(?error, "oauth.callback.update_email_error");
             }
-            if let Err(err) = db
+            if let Err(error) = db
                 .update_github_username(account.id, &github_user.login)
                 .await
             {
-                error!(?err, "oauth.callback.update_username_error");
+                error!(?error, "oauth.callback.update_username_error");
             }
 
-            // Check if account is disabled
             if account.disabled_at.is_some() {
                 warn!(
                     account_id = %account.id,
@@ -293,8 +238,6 @@ pub async fn callback(
             (account.id, false)
         }
         Ok(None) => {
-            // New user - create account, GitHub identity, and default organization
-            // atomically
             let org_name = format!("{}'s Org", github_user.login);
             let signup_result = match db
                 .signup_with_github(
@@ -307,19 +250,18 @@ pub async fn callback(
                 .await
             {
                 Ok(result) => result,
-                Err(err) => {
-                    error!(?err, "oauth.callback.signup_error");
-                    return CallbackResponse::Error(format!("Failed to create account: {err}"));
+                Err(error) => {
+                    error!(?error, "oauth.callback.signup_error");
+                    return CallbackResponse::Error(format!("Failed to create account: {error}"));
                 }
             };
 
-            // Log account creation
             let _ = db
                 .log_audit_event(
                     Some(signup_result.account_id),
                     Some(signup_result.org_id),
                     "account.created",
-                    Some(serde_json::json!({
+                    Some(json!({
                         "github_user_id": github_user.id,
                         "github_username": github_user.login,
                     })),
@@ -333,17 +275,16 @@ pub async fn callback(
             );
             (signup_result.account_id, true)
         }
-        Err(err) => {
-            error!(?err, "oauth.callback.lookup_error");
-            return CallbackResponse::Error(format!("Failed to lookup account: {}", err));
+        Err(error) => {
+            error!(?error, "oauth.callback.lookup_error");
+            return CallbackResponse::Error(format!("Failed to lookup account: {error}"));
         }
     };
 
-    // Create exchange code (short-lived, single-use)
     let auth_code = generate_auth_code();
     let expires_at = OffsetDateTime::now_utc() + EXCHANGE_CODE_DURATION;
 
-    if let Err(err) = db
+    if let Err(error) = db
         .create_exchange_code(
             &auth_code,
             account_id,
@@ -353,17 +294,16 @@ pub async fn callback(
         )
         .await
     {
-        error!(?err, "oauth.callback.create_exchange_code_error");
-        return CallbackResponse::Error(format!("Failed to create exchange code: {err}"));
+        error!(?error, "oauth.callback.create_exchange_code_error");
+        return CallbackResponse::Error(format!("Failed to create exchange code: {error}"));
     }
 
-    // Log successful OAuth
     let _ = db
         .log_audit_event(
             Some(account_id),
             None,
             "oauth.success",
-            Some(serde_json::json!({
+            Some(json!({
                 "github_user_id": github_user.id,
                 "github_username": github_user.login,
                 "new_user": new_user,
@@ -371,18 +311,16 @@ pub async fn callback(
         )
         .await;
 
-    // Clean up expired OAuth states and exchange codes lazily (don't block on it)
     let db_cleanup = db.clone();
     tokio::spawn(async move {
-        if let Err(err) = db_cleanup.cleanup_expired_oauth_state().await {
-            error!(?err, "oauth.cleanup.state_error");
+        if let Err(error) = db_cleanup.cleanup_expired_oauth_state().await {
+            error!(?error, "oauth.cleanup.state_error");
         }
-        if let Err(err) = db_cleanup.cleanup_expired_exchange_codes().await {
-            error!(?err, "oauth.cleanup.exchange_code_error");
+        if let Err(error) = db_cleanup.cleanup_expired_exchange_codes().await {
+            error!(?error, "oauth.cleanup.exchange_code_error");
         }
     });
 
-    // Redirect to original redirect URI with auth_code
     let mut final_redirect = redirect_uri;
     final_redirect
         .query_pairs_mut()
@@ -441,23 +379,10 @@ impl IntoResponse for CallbackResponse {
 }
 
 /// Log out the current session.
-///
-/// Revokes the session token, invalidating it for future requests.
-///
-/// ## Endpoint
-/// ```
-/// POST /api/v1/oauth/logout
-/// Authorization: Bearer <session_token>
-/// ```
-///
-/// ## Responses
-/// - 204: Session revoked
-/// - 401: Not authenticated
 #[tracing::instrument(skip(db, session))]
 pub async fn logout(Dep(db): Dep<Postgres>, session: SessionContext) -> LogoutResponse {
     match db.revoke_session(&session.session_token).await {
         Ok(true) => {
-            // Log session revocation
             let _ = db
                 .log_audit_event(Some(session.account_id), None, "session.revoked", None)
                 .await;
@@ -465,12 +390,13 @@ pub async fn logout(Dep(db): Dep<Postgres>, session: SessionContext) -> LogoutRe
             LogoutResponse::Success
         }
         Ok(false) => {
+            // Still return success - session is gone either way
             warn!(account_id = %session.account_id, "oauth.logout.session_not_found");
-            LogoutResponse::Success // Still return success - session is gone either way
+            LogoutResponse::Success
         }
-        Err(err) => {
-            error!(?err, "oauth.logout.error");
-            LogoutResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "oauth.logout.error");
+            LogoutResponse::Error(error.to_string())
         }
     }
 }
@@ -490,18 +416,12 @@ impl IntoResponse for LogoutResponse {
     }
 }
 
-// =============================================================================
-// Exchange Auth Code for Session
-// =============================================================================
-
-/// Request body for the exchange endpoint.
 #[derive(Debug, Deserialize)]
 pub struct ExchangeRequest {
     /// The auth code received from the OAuth callback.
     auth_code: String,
 }
 
-/// Response body for the exchange endpoint.
 #[derive(Debug, Serialize)]
 pub struct ExchangeResponseBody {
     /// The session token to use for subsequent requests.
@@ -509,27 +429,6 @@ pub struct ExchangeResponseBody {
 }
 
 /// Exchange an auth code for a session token.
-///
-/// This is the second step of the OAuth flow. After the callback returns an
-/// auth_code in the URL, the dashboard backend calls this endpoint to exchange
-/// it for a session token.
-///
-/// Auth codes are:
-/// - High entropy (192 bits)
-/// - Short-lived (60 seconds)
-/// - Single-use (cannot be redeemed twice)
-///
-/// ## Endpoint
-/// ```
-/// POST /api/v1/oauth/exchange
-/// Content-Type: application/json
-///
-/// { "auth_code": "..." }
-/// ```
-///
-/// ## Responses
-/// - 200: Session token returned
-/// - 400: Auth code expired, already redeemed, or not found
 #[tracing::instrument(skip(db, request))]
 pub async fn exchange(
     Dep(db): Dep<Postgres>,
@@ -539,19 +438,17 @@ pub async fn exchange(
 
     match db.redeem_exchange_code(&auth_code).await {
         Ok(Ok(redemption)) => {
-            // Create session
             let session_token = generate_session_token();
             let expires_at = OffsetDateTime::now_utc() + SESSION_DURATION;
 
-            if let Err(err) = db
+            if let Err(error) = db
                 .create_session(redemption.account_id, &session_token, expires_at)
                 .await
             {
-                error!(?err, "oauth.exchange.create_session_error");
-                return ExchangeResponse::Error(format!("Failed to create session: {err}"));
+                error!(?error, "oauth.exchange.create_session_error");
+                return ExchangeResponse::Error(format!("Failed to create session: {error}"));
             }
 
-            // Log session creation
             let _ = db
                 .log_audit_event(Some(redemption.account_id), None, "session.created", None)
                 .await;
@@ -577,9 +474,9 @@ pub async fn exchange(
             warn!("oauth.exchange.already_redeemed");
             ExchangeResponse::AlreadyRedeemed
         }
-        Err(err) => {
-            error!(?err, "oauth.exchange.error");
-            ExchangeResponse::Error(err.to_string())
+        Err(error) => {
+            error!(?error, "oauth.exchange.error");
+            ExchangeResponse::Error(error.to_string())
         }
     }
 }
