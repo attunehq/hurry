@@ -26,6 +26,28 @@ DROP INDEX idx_invitation_expires;
 DROP INDEX idx_invitation_org;
 DROP TABLE organization_invitation;
 
+-- Restore organization_id to account BEFORE dropping organization_member
+-- so we can backfill from it. Add as nullable first, backfill, then make NOT NULL.
+ALTER TABLE account ADD COLUMN organization_id BIGINT REFERENCES organization(id);
+
+-- Backfill account.organization_id from organization_member
+-- Pick one org per account- this isn't perfect, but it's the best we can do
+-- with this old data model.
+UPDATE account
+SET organization_id = om.organization_id
+FROM (
+  SELECT DISTINCT ON (account_id) account_id, organization_id
+  FROM organization_member
+  ORDER BY account_id, organization_id
+) om
+WHERE account.id = om.account_id;
+ALTER TABLE account ALTER COLUMN organization_id SET NOT NULL;
+
+-- Drop columns that are no longer used
+ALTER TABLE api_key DROP COLUMN organization_id;
+ALTER TABLE account DROP COLUMN name;
+ALTER TABLE account DROP COLUMN disabled_at;
+
 -- Drop organization membership
 DROP INDEX idx_org_member_role;
 DROP INDEX idx_org_member_account;
@@ -35,10 +57,5 @@ DROP TABLE organization_role;
 -- Drop GitHub identity linking
 DROP TABLE github_identity;
 
--- Remove columns from existing tables
-ALTER TABLE api_key DROP COLUMN organization_id;
-ALTER TABLE account DROP COLUMN name;
-ALTER TABLE account DROP COLUMN disabled_at;
-
--- Restore organization_id column to account (required, will need data migration)
-ALTER TABLE account ADD COLUMN organization_id BIGINT NOT NULL REFERENCES organization(id);
+-- Restore account table comment
+COMMENT ON TABLE account IS 'Each distinct actor in the application is an "account"; this could be humans or it could be bots. In the case of bots, the "email" field is for where the person/team owning the bot can be reached.';
