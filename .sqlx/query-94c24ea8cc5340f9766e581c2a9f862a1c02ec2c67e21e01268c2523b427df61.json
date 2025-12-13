@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT o.name as org_name, r.name as role_name, i.expires_at, i.revoked_at,\n                   i.max_uses, i.use_count\n            FROM organization_invitation i\n            JOIN organization o ON i.organization_id = o.id\n            JOIN organization_role r ON i.role_id = r.id\n            WHERE i.token = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "role_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "revoked_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "max_uses",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "use_count",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "94c24ea8cc5340f9766e581c2a9f862a1c02ec2c67e21e01268c2523b427df61"
+}

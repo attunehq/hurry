@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# List bot accounts for an organization.
+set -euo pipefail
+
+source "$(dirname "$0")/_common"
+
+check_deps
+check_url
+
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <org-id>" >&2
+  echo "List bot accounts for an organization (admin only)" >&2
+  exit 1
+fi
+
+ORG_ID="$1"
+
+if ! [[ "$ORG_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Organization ID must be a number" >&2
+  exit 1
+fi
+
+response=$(api_get "/api/v1/organizations/${ORG_ID}/bots")
+handle_response "$response"

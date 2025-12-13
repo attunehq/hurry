@@ -1,0 +1,20 @@
+version: 1
+
+rules:
+  - name: no-section-separators
+    description: Block comment section separators like // ========
+    message: |
+      Remove this section separator comment. Use doc comments or whitespace for organization, then retry.
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '// *={3,}'
+      - hook: PreToolUse
+        tool: Edit
+        file: "**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '// *={3,}'

@@ -85,7 +85,7 @@ pub async fn handle(
 
         // Grant access even though it already exists (idempotent, in case org didn't
         // have access)
-        match db.grant_cas_access(auth.org_id, &key).await {
+        match db.grant_cas_access(&auth, &key).await {
             Ok(granted) => {
                 info!(?granted, "cas.write.exists");
                 return CasWriteResponse::Created;
@@ -111,7 +111,7 @@ pub async fn handle(
     match result {
         Ok(()) => {
             // Grant org access to the CAS key after successful write
-            match db.grant_cas_access(auth.org_id, &key).await {
+            match db.grant_cas_access(&auth, &key).await {
                 Ok(granted) => {
                     info!(?granted, "cas.write.success");
                     CasWriteResponse::Created

@@ -97,7 +97,7 @@ fn content_hash(mut files: Vec<StatusEntry>) -> Result<String, String> {
     }
     let final_hash = hasher.finish();
 
-    Ok(format!("{:x}", final_hash))
+    Ok(format!("{final_hash:x}"))
 }
 
 fn run(prog: &str, argv: &[&str]) -> Result<String, String> {
@@ -195,9 +195,9 @@ impl FromStr for StatusEntry {
         }
 
         let index = GitFileStatus::parse(index_char)
-            .ok_or_else(|| format!("invalid index status: {}", index_char))?;
+            .ok_or_else(|| format!("invalid index status: {index_char}"))?;
         let worktree = GitFileStatus::parse(worktree_char)
-            .ok_or_else(|| format!("invalid worktree status: {}", worktree_char))?;
+            .ok_or_else(|| format!("invalid worktree status: {worktree_char}"))?;
 
         let rest: String = chars.collect();
         let (path, orig_path) = if matches!(index, GitFileStatus::Renamed | GitFileStatus::Copied) {

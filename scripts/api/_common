@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# Common functions for API scripts. Source this file, don't execute it.
+# Usage: source "$(dirname "$0")/_common"
+#
+# Authentication: Set COURIER_TOKEN environment variable with a session token.
+# Example: export COURIER_TOKEN=$(./scripts/api/login ...)
+#
+# Debug: Set COURIER_DEBUG=1 to echo curl commands before running them.
+
+# Check for required dependencies
+check_deps() {
+  for cmd in curl jq; do
+    if ! command -v "$cmd" &>/dev/null; then
+      echo "Error: $cmd is required but not installed" >&2
+      exit 1
+    fi
+  done
+}
+
+# Check COURIER_URL is set
+check_url() {
+  if [ -z "${COURIER_URL:-}" ]; then
+    echo "Error: COURIER_URL environment variable is not set" >&2
+    echo "Example: export COURIER_URL=http://localhost:3000" >&2
+    exit 1
+  fi
+}
+
+# Get session token from environment variable
+get_session_token() {
+  if [ -z "${COURIER_TOKEN:-}" ]; then
+    echo "Error: COURIER_TOKEN environment variable is not set" >&2
+    echo "Get a token with: export COURIER_TOKEN=\$(./scripts/api/login ...)" >&2
+    exit 1
+  fi
+  echo "$COURIER_TOKEN"
+}
+
+# Make an authenticated GET request
+api_get() {
+  local path="$1"
+  local token
+  token=$(get_session_token)
+
+  if [ -n "${COURIER_DEBUG:-}" ]; then
+    echo "curl -s -H 'Authorization: Bearer ${token:0:8}...' '${COURIER_URL}${path}'" >&2
+  fi
+  curl -s -w "\n%{http_code}" \
+    -H "Authorization: Bearer $token" \
+    "${COURIER_URL}${path}"
+}
+
+# Make an authenticated POST request with JSON body
+api_post() {
+  local path="$1"
+  local body="${2:-"{}"}"
+  local token
+  token=$(get_session_token)
+
+  if [ -n "${COURIER_DEBUG:-}" ]; then
+    echo "curl -s -H 'Authorization: Bearer ${token:0:8}...' -H 'Content-Type: application/json' -d '$body' '${COURIER_URL}${path}'" >&2
+  fi
+  printf '%s' "$body" | curl -s -w "\n%{http_code}" \
+    -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/json" \
+    -d @- \
+    "${COURIER_URL}${path}"
+}
+
+# Make an authenticated PATCH request with JSON body
+api_patch() {
+  local path="$1"
+  local body="${2:-"{}"}"
+  local token
+  token=$(get_session_token)
+
+  if [ -n "${COURIER_DEBUG:-}" ]; then
+    echo "curl -s -X PATCH -H 'Authorization: Bearer ${token:0:8}...' -H 'Content-Type: application/json' -d '$body' '${COURIER_URL}${path}'" >&2
+  fi
+  printf '%s' "$body" | curl -s -w "\n%{http_code}" \
+    -X PATCH \
+    -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/json" \
+    -d @- \
+    "${COURIER_URL}${path}"
+}
+
+# Make an authenticated DELETE request
+api_delete() {
+  local path="$1"
+  local token
+  token=$(get_session_token)
+
+  if [ -n "${COURIER_DEBUG:-}" ]; then
+    echo "curl -s -X DELETE -H 'Authorization: Bearer ${token:0:8}...' '${COURIER_URL}${path}'" >&2
+  fi
+  curl -s -w "\n%{http_code}" \
+    -X DELETE \
+    -H "Authorization: Bearer $token" \
+    "${COURIER_URL}${path}"
+}
+
+# Make an unauthenticated GET request
+api_get_public() {
+  local path="$1"
+
+  if [ -n "${COURIER_DEBUG:-}" ]; then
+    echo "curl -s '${COURIER_URL}${path}'" >&2
+  fi
+  curl -s -w "\n%{http_code}" \
+    "${COURIER_URL}${path}"
+}
+
+# Parse response and handle errors
+# Expects input from api_* functions (body + newline + status code)
+# Returns 0 on success (2xx), 1 on error
+handle_response() {
+  local response="$1"
+  local body status_code
+
+  # Split body and status code
+  status_code=$(echo "$response" | tail -n1)
+  body=$(echo "$response" | sed '$d')
+
+  # Check for success (2xx status codes)
+  if [[ "$status_code" =~ ^2[0-9][0-9]$ ]]; then
+    # Pretty print JSON if it looks like JSON
+    if echo "$body" | jq . &>/dev/null; then
+      echo "$body" | jq .
+    else
+      echo "$body"
+    fi
+    return 0
+  else
+    echo "Error: HTTP $status_code" >&2
+    if echo "$body" | jq . &>/dev/null; then
+      echo "$body" | jq . >&2
+    else
+      echo "$body" >&2
+    fi
+    return 1
+  fi
+}

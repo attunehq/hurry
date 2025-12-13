@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Preview an invitation (no authentication required).
+set -euo pipefail
+
+source "$(dirname "$0")/_common"
+
+check_deps
+check_url
+
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <token>" >&2
+  echo "Preview invitation details (public, no auth required)" >&2
+  exit 1
+fi
+
+TOKEN="$1"
+
+response=$(api_get_public "/api/v1/invitations/${TOKEN}")
+handle_response "$response"

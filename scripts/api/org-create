@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Create a new organization.
+set -euo pipefail
+
+source "$(dirname "$0")/_common"
+
+check_deps
+check_url
+
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <name>" >&2
+  echo "Create a new organization (you become admin)" >&2
+  exit 1
+fi
+
+NAME="$1"
+
+BODY=$(jq -nc --arg name "$NAME" '{name: $name}')
+response=$(api_post "/api/v1/organizations" "$BODY")
+handle_response "$response"

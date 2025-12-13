@@ -15,7 +15,7 @@ GitHub is used solely for authentication—we get the user's identity and email,
 ### One account, multiple contexts
 
 A user has one Courier account linked to their GitHub identity. That account can:
-- Use Hurry without any organization (personal usage)
+- Use Hurry in a personal organization
 - Be a member of one or more organizations
 - Be an admin of one or more organizations
 
@@ -106,7 +106,7 @@ The same flow handles both new and returning users:
      │               │               │               │
      │               │<──────────────┤               │
      │<──────────────┤ Redirect with │               │
-     │               │ session       │               │
+     │               │ auth_code     │               │
 ```
 
 ### Flow details
@@ -117,13 +117,14 @@ The same flow handles both new and returning users:
 4. Token exchange: Courier validates state, exchanges code for access token using PKCE verifier
 5. Identity fetch: Courier queries GitHub for user profile and email
 6. Account provisioning: Courier creates account (if new) or updates existing account
-7. Session creation: Courier creates a session and redirects to the site with a session token
+7. Auth code creation: Courier creates a short-lived, single-use auth code (e.g., 60 seconds) and redirects to the site with that code
+8. Session creation: The dashboard backend exchanges the auth code for a session token (server-to-server)
 
 ### New vs returning users
 
-New users get an account created with their GitHub identity linked. An initial API key is generated and returned.
+New users get an account created with their GitHub identity linked. A personal organization is created for personal use (it is a normal organization; it just starts as the only org the user belongs to). By default, it is named after the user. No API key is generated automatically—users create keys via the dashboard or API when needed.
 
-Returning users are matched by GitHub user ID. Their email is updated if changed. No new API key is generated (user can create one via the API or dashboard).
+Returning users are matched by GitHub user ID. Their email is updated if changed.
 
 ## Database Schema
 
@@ -211,7 +212,7 @@ CREATE TABLE organization_invitation (
   role_id BIGINT NOT NULL REFERENCES organization_role(id),
   created_by BIGINT NOT NULL REFERENCES account(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  expires_at TIMESTAMPTZ NOT NULL,
+  expires_at TIMESTAMPTZ,
   max_uses INT,                          -- NULL = unlimited
   use_count INT NOT NULL DEFAULT 0,
   revoked_at TIMESTAMPTZ
@@ -260,6 +261,29 @@ CREATE INDEX idx_oauth_state_expires ON oauth_state(expires_at);
 
 OAuth state records expire after 10 minutes. A background job cleans up expired records.
 
+OAuth exchange codes:
+
+After a successful OAuth callback, Courier issues a short-lived, single-use exchange code. This avoids returning session tokens in URLs.
+
+```sql
+-- Short-lived, single-use auth codes issued after OAuth callback.
+CREATE TABLE oauth_exchange_code (
+  id BIGSERIAL PRIMARY KEY,
+  -- Store only a hash of the exchange code (like API keys/sessions), so DB
+  -- leaks don't allow redeeming live auth codes.
+  code_hash BYTEA NOT NULL UNIQUE,
+  account_id BIGINT NOT NULL REFERENCES account(id),
+  redirect_uri TEXT NOT NULL,
+  -- Stored server-side; never trusted from the client.
+  new_user BOOLEAN NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  redeemed_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_oauth_exchange_code_expires ON oauth_exchange_code(expires_at);
+```
+
 ### Sessions
 
 User sessions:
@@ -281,12 +305,7 @@ CREATE INDEX idx_session_expires ON user_session(expires_at);
 
 Sessions are used for web UI authentication. They're separate from API keys, which are used for CLI/CI authentication.
 
-Session tokens are designed to be stored by the dashboard application in an `HttpOnly`, `Secure`, `SameSite=Lax` cookie. The dashboard forwards the session token to Courier on each API request. This keeps the dashboard stateless—all session state lives in Courier's database.
-
-Cookie attributes:
-- `HttpOnly`: Prevents JavaScript access, mitigating XSS attacks
-- `Secure`: Only sent over HTTPS
-- `SameSite=Lax`: Cookie is sent for same-site requests and top-level navigations (clicking links), but not for cross-origin POST requests or iframes. This prevents CSRF attacks while allowing users to click links to the dashboard from emails or other sites.
+Session tokens are intended to be used by the dashboard backend when calling Courier. The browser typically authenticates to the dashboard backend using the dashboard's own session mechanism (often cookies). This keeps Courier's session tokens out of browser URLs and reduces exposure to XSS.
 
 ## API Endpoints
 
@@ -308,10 +327,33 @@ GET /api/v1/oauth/github/callback
   ?code=...
   &state=...
 
-Response: 302 redirect to redirect_uri with ?session=...&new_user=true|false
+Response: 302 redirect to redirect_uri with ?auth_code=...&new_user=true|false
 ```
 
 The `new_user` parameter indicates whether this was a first-time signup, so the site can show appropriate onboarding.
+
+We avoid returning a session token directly in the redirect URL because URLs are commonly persisted and leaked in ways that are hard to control:
+- Browser history and “recently visited” UI
+- Application/server access logs (both for Courier and the dashboard)
+- Analytics/monitoring tooling that records full URLs
+- `Referer` headers on subsequent navigations
+
+Exchange auth code (called by dashboard backend):
+```
+POST /api/v1/oauth/exchange
+Content-Type: application/json
+
+{
+  "auth_code": "..."
+}
+
+Response:
+{
+  "session_token": "..."
+}
+```
+
+Auth codes are high-entropy, short-lived, and single-use. A second attempt to redeem the same auth code fails.
 
 ### Session management
 
@@ -322,19 +364,15 @@ Authorization: Bearer <session_token>
 
 Response:
 {
-  "account_id": 1,
+  "id": 1,
   "email": "user@example.com",
   "name": "Alice",
   "github_username": "alice",
-  "organizations": [
-    {
-      "organization_id": 1,
-      "name": "Acme Corp",
-      "role": "admin"
-    }
-  ]
+  "created_at": "2025-01-01T00:00:00Z"
 }
 ```
+
+Organization memberships are fetched separately via `GET /api/v1/me/organizations`.
 
 Sign out:
 ```
@@ -392,19 +430,21 @@ Content-Type: application/json
 
 {
   "role": "member",           // or "admin"
-  "expires_in_hours": 168,    // optional, default 7 days
+  "expires_at": "2025-01-08T00:00:00Z", // optional, default now + 7 days; null = never
   "max_uses": 10              // optional, default unlimited
 }
 
 Response:
 {
   "invitation_id": 1,
-  "token": "hXkR4pN",
-  "url": "https://hurry.build/invite/hXkR4pN",
+  "token": "hXkR4pN8",
+  "url": "https://hurry.build/invite/hXkR4pN8",
   "expires_at": "2025-01-08T00:00:00Z",
   "max_uses": 10
 }
 ```
+
+If `expires_at` is null, the invitation never expires.
 
 List invitations (org admin only):
 ```
@@ -459,7 +499,7 @@ Response:
 {
   "organization_name": "Acme Corp",
   "role": "member",
-  "expires_at": "2025-01-08T00:00:00Z",
+  "expires_at": "2025-01-08T00:00:00Z", // may be null (never expires)
   "valid": true
 }
 ```
@@ -520,13 +560,13 @@ Returns 400 if user is the last admin (must transfer admin first or delete org).
 
 ### API key management
 
-API keys are scoped to either:
-- A specific organization (for org-related operations)
-- Personal usage only (no org context)
+API keys are scoped to an organization.
 
 This matches the existing Courier design where an API key identifies both an account and an org context. It also prevents accidentally interacting with the wrong organization.
 
-#### Personal API keys
+Each account has a personal organization that is created on signup. "Personal API keys" are simply API keys scoped to that personal organization.
+
+#### Personal API keys (personal org)
 
 List personal API keys:
 ```
@@ -679,7 +719,7 @@ Response:
 
 The key semantic difference between these token types:
 
-- **API keys** encode both an account AND an organization context (or personal context). When you use an API key, the org is implicit—no need to specify it in the request. This is ideal for CLI/CI where you configure the key once and all operations use that org.
+- **API keys** encode both an account AND an organization context. When you use an API key, the org is implicit—no need to specify it in the request. This is ideal for CLI/CI where you configure the key once and all operations use that org.
 
 - **Session tokens** identify only the account. Endpoints that operate on org-scoped resources must include the `org_id` in the URL. This is necessary for the web UI where users switch between orgs.
 
@@ -711,14 +751,14 @@ Account-level actions (not org-scoped):
 | Create own org API key      | Yes  |
 | Revoke own org API key      | Yes  |
 
-### Personal usage (no org)
+### Personal usage (personal org)
 
-Users who aren't members of any organization can still:
+Users who aren't members of any non-personal organization can still:
 - Authenticate and maintain a session
 - Create and manage personal API keys
-- Use Hurry for personal builds (cache stored under their account)
+- Use Hurry for personal builds (cache stored under their personal org)
 
-Personal API keys have no org context—they can only be used for personal cache operations, not org-scoped data.
+Personal API keys are scoped to the user's personal org and can only be used to access that org's data.
 
 ## Security Considerations
 
@@ -730,9 +770,35 @@ OAuth state tokens are generated using a CSPRNG, stored server-side, and expire 
 
 All OAuth flows use PKCE with the S256 challenge method. The verifier is stored server-side and never exposed to the client.
 
+### OAuth exchange codes
+
+OAuth exchange codes (`auth_code`) are generated using a CSPRNG (192 bits) and encoded as base64url without padding. They expire quickly (60 seconds) and can be redeemed only once. They exist to avoid returning long-lived credentials (session tokens) in URLs.
+
+Implementation notes:
+- Only a SHA-256 hash of the auth code is stored server-side (`code_hash`). The client sends the plaintext auth code for redemption.
+- Redemption is atomic: validate not expired, validate not redeemed, then set `redeemed_at` and issue a session token.
+- The `new_user` signal is stored server-side with the auth code and never trusted from the client.
+
+This reduces the blast radius of accidental disclosure: even if an `auth_code` is captured via logs or browser history, it will typically be expired or already redeemed by the time an attacker can use it.
+
 ### Redirect URI validation
 
-The `redirect_uri` parameter is validated against an allowlist of permitted domains before initiating OAuth. Open redirects are not possible.
+The `redirect_uri` parameter is validated against an allowlist of permitted redirect URIs before initiating OAuth.
+
+Validation rules:
+- The `redirect_uri` must exactly match one of the configured allowlist entries.
+- This list is configured per environment (e.g., strict production callback URL(s), and broader localhost URLs in development).
+
+Exact matching prevents attackers from supplying arbitrary paths on an allowlisted origin (which could otherwise include open-redirect endpoints or paths that leak query parameters).
+
+### Logging and redaction
+
+Courier must not log secrets or credentials, including:
+- OAuth callback query parameters (`code`, `state`)
+- OAuth exchange codes (`auth_code`)
+- Session tokens
+- API keys
+- `Authorization` headers
 
 ### API key generation
 
@@ -760,7 +826,7 @@ Invitation tokens are short, human-friendly codes designed to be easily shared (
 
 | Expiration        | Length   | Entropy  | Example        |
 |-------------------|----------|----------|----------------|
-| ≤30 days          | 8 chars  | ~47 bits | `hXkR4pN`      |
+| ≤30 days          | 8 chars  | ~47 bits | `hXkR4pN8`     |
 | >30 days or never | 12 chars | ~71 bits | `hXkR4pNq2mYz` |
 
 Short-lived tokens can be shorter because brute-force attacks are time-limited. Never-expiring tokens need more entropy since attackers have unlimited time.
@@ -771,11 +837,14 @@ Tokens can also be:
 
 ### Rate limiting
 
-Rate limiting protects against brute-force attacks and abuse. Authenticated endpoints are rate limited by account/session. Unauthenticated endpoints (OAuth start, invitation preview) rely on upstream rate limiting or are low-risk.
+Rate limiting protects against brute-force attacks and abuse. Authenticated endpoints are rate limited by account/session. Unauthenticated endpoints (OAuth start, auth code exchange, invitation preview) rely on strong randomness, short TTLs, and service-protection limits.
 
 Key endpoints with rate limits:
-- `/invitations/{token}/accept`: 10/minute per session (protects against brute-forcing invitation tokens)
-- `/me/api-keys` (POST): 10/minute per session (prevents API key spam)
+- `/api/v1/invitations/{token}/accept`: 10/minute per session (protects against brute-forcing invitation tokens)
+- `/api/v1/me/api-keys` (POST): 10/minute per session (prevents API key spam)
+- `/api/v1/oauth/exchange` (POST): rate limited without IP (auth codes are high-entropy and single-use):
+  - Bucketed by the first 12 characters of `auth_code` (protects against rapid replay/hammering on the same code)
+  - Optionally capped by a high-ceiling global limiter (protects DB/CPU from volumetric abuse)
 
 The OAuth flow is naturally rate-limited by GitHub's own rate limits on the token exchange endpoint.
 

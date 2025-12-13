@@ -48,7 +48,7 @@ pub async fn exec(
 
     let paths = DaemonPaths::initialize().await?;
     let pid = std::process::id();
-    let log_file_path = cache_dir.try_join_file(format!("hurryd.{}.log", pid))?;
+    let log_file_path = cache_dir.try_join_file(format!("hurryd.{pid}.log"))?;
 
     // Redirect logging into file (for daemon mode). We need to redirect the
     // logging firstly so that we can continue to see logs if the invoking

@@ -95,38 +95,38 @@ pub async fn handle(
         .is_some_and(|v| v == ContentType::TarZstd);
 
     if entries_compressed {
-        handle_compressed(db, cas, auth, body).await
+        handle_compressed(&auth, db, cas, body).await
     } else {
-        handle_plain(db, cas, auth, body).await
+        handle_plain(&auth, db, cas, body).await
     }
 }
 
-#[tracing::instrument(skip(body))]
+#[tracing::instrument(skip(auth, body))]
 async fn handle_compressed(
+    auth: &AuthenticatedToken,
     db: Postgres,
     cas: Disk,
-    auth: AuthenticatedToken,
     body: Body,
 ) -> BulkWriteResponse {
     info!("cas.bulk.write.compressed");
-    process_archive(db, cas, auth, body, true).await
+    process_archive(auth, db, cas, body, true).await
 }
 
-#[tracing::instrument(skip(body))]
+#[tracing::instrument(skip(auth, body))]
 async fn handle_plain(
+    auth: &AuthenticatedToken,
     db: Postgres,
     cas: Disk,
-    auth: AuthenticatedToken,
     body: Body,
 ) -> BulkWriteResponse {
     info!("cas.bulk.write.uncompressed");
-    process_archive(db, cas, auth, body, false).await
+    process_archive(auth, db, cas, body, false).await
 }
 
 async fn process_archive(
+    auth: &AuthenticatedToken,
     db: Postgres,
     cas: Disk,
-    auth: AuthenticatedToken,
     body: Body,
     entries_compressed: bool,
 ) -> BulkWriteResponse {
@@ -172,7 +172,7 @@ async fn process_archive(
 
         // We still need to grant access, even if the CAS item exists.
         if let Ok(true) = cas.exists(&key).await {
-            match db.grant_cas_access(auth.org_id, &key).await {
+            match db.grant_cas_access(auth, &key).await {
                 Ok(granted) => {
                     if granted {
                         // Org didn't have access, to them this was "written"
@@ -204,7 +204,7 @@ async fn process_archive(
         };
 
         match result {
-            Ok(()) => match db.grant_cas_access(auth.org_id, &key).await {
+            Ok(()) => match db.grant_cas_access(auth, &key).await {
                 Ok(granted) => {
                     info!(%key, ?granted, "cas.bulk.write.success");
                     written.insert(key);

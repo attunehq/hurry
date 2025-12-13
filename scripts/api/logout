@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Log out and revoke the current session.
+set -euo pipefail
+
+source "$(dirname "$0")/_common"
+
+check_deps
+check_url
+
+if [ -z "${COURIER_TOKEN:-}" ]; then
+  echo "COURIER_TOKEN not set, nothing to logout."
+  exit 0
+fi
+
+response=$(api_post "/api/v1/oauth/logout")
+status_code=$(echo "$response" | tail -n1)
+
+if [[ "$status_code" =~ ^2[0-9][0-9]$ ]]; then
+  echo "Logged out successfully. You can now unset COURIER_TOKEN."
+else
+  echo "Warning: API returned HTTP $status_code" >&2
+fi

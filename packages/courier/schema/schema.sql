@@ -13,11 +13,15 @@ CREATE TABLE organization (
 -- Each distinct actor in the application is an "account"; this could be humans
 -- or it could be bots. In the case of bots, the "email" field is for where the
 -- person/team owning the bot can be reached.
+--
+-- Note: Organization membership is tracked via the organization_member table.
+-- Accounts can belong to multiple organizations.
 CREATE TABLE account (
   id BIGSERIAL PRIMARY KEY,
-  organization_id BIGINT NOT NULL REFERENCES organization(id),
-  email TEXT NOT NULL UNIQUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  email TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  disabled_at TIMESTAMPTZ,
+  name TEXT
 );
 
 -- Keys for accounts to use to authenticate.
@@ -28,7 +32,8 @@ CREATE TABLE api_key (
   hash BYTEA NOT NULL UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ
+  revoked_at TIMESTAMPTZ,
+  organization_id BIGINT NOT NULL REFERENCES organization(id)
 );
 
 -- Lists CAS keys known about by the database.
@@ -118,3 +123,121 @@ CREATE TABLE cargo_saved_unit (
 );
 
 CREATE INDEX idx_cargo_saved_unit_org_key ON cargo_saved_unit(organization_id, unit_hash);
+
+-- Links a GitHub user to their Courier account (1:1)
+CREATE TABLE github_identity (
+  id BIGSERIAL PRIMARY KEY,
+  account_id BIGINT NOT NULL REFERENCES account(id) UNIQUE,
+  github_user_id BIGINT NOT NULL UNIQUE,
+  github_username TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Defines valid roles for organization membership
+CREATE TABLE organization_role (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed initial roles
+INSERT INTO organization_role (name, description) VALUES
+  ('member', 'Regular organization member'),
+  ('admin', 'Organization administrator with full permissions');
+
+-- Tracks which accounts belong to which organizations
+CREATE TABLE organization_member (
+  organization_id BIGINT NOT NULL REFERENCES organization(id),
+  account_id BIGINT NOT NULL REFERENCES account(id),
+  role_id BIGINT NOT NULL REFERENCES organization_role(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (organization_id, account_id)
+);
+
+CREATE INDEX idx_org_member_account ON organization_member(account_id);
+CREATE INDEX idx_org_member_role ON organization_member(role_id);
+
+-- Invitations for users to join organizations
+CREATE TABLE organization_invitation (
+  id BIGSERIAL PRIMARY KEY,
+  organization_id BIGINT NOT NULL REFERENCES organization(id),
+  token TEXT NOT NULL UNIQUE,
+  role_id BIGINT NOT NULL REFERENCES organization_role(id),
+  created_by BIGINT NOT NULL REFERENCES account(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ,                -- NULL = never expires
+  max_uses INT,                          -- NULL = unlimited
+  use_count INT NOT NULL DEFAULT 0,
+  revoked_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_invitation_org ON organization_invitation(organization_id);
+CREATE INDEX idx_invitation_expires ON organization_invitation(expires_at);
+
+-- Tracks who used which invitation
+CREATE TABLE invitation_redemption (
+  id BIGSERIAL PRIMARY KEY,
+  invitation_id BIGINT NOT NULL REFERENCES organization_invitation(id),
+  account_id BIGINT NOT NULL REFERENCES account(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (invitation_id, account_id)
+);
+
+-- Temporary storage for OAuth flow state
+CREATE TABLE oauth_state (
+  id BIGSERIAL PRIMARY KEY,
+  state_token TEXT NOT NULL UNIQUE,
+  pkce_verifier TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX idx_oauth_state_expires ON oauth_state(expires_at);
+
+-- Short-lived, single-use auth codes issued after OAuth callback.
+-- These avoid returning session tokens directly in URLs.
+CREATE TABLE oauth_exchange_code (
+  id BIGSERIAL PRIMARY KEY,
+  -- Store only a hash of the exchange code (like API keys/sessions), so DB
+  -- leaks don't allow redeeming live auth codes.
+  code_hash BYTEA NOT NULL UNIQUE,
+  account_id BIGINT NOT NULL REFERENCES account(id),
+  redirect_uri TEXT NOT NULL,
+  -- Stored server-side; never trusted from the client.
+  new_user BOOLEAN NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  redeemed_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_oauth_exchange_code_expires ON oauth_exchange_code(expires_at);
+
+-- Active user sessions (for web UI authentication)
+CREATE TABLE user_session (
+  id BIGSERIAL PRIMARY KEY,
+  account_id BIGINT NOT NULL REFERENCES account(id),
+  session_token BYTEA NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_session_account ON user_session(account_id);
+CREATE INDEX idx_session_expires ON user_session(expires_at);
+
+-- Records authorization-related events
+CREATE TABLE audit_log (
+  id BIGSERIAL PRIMARY KEY,
+  account_id BIGINT REFERENCES account(id),
+  organization_id BIGINT REFERENCES organization(id),
+  action TEXT NOT NULL,
+  details JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_audit_log_account ON audit_log(account_id);
+CREATE INDEX idx_audit_log_org ON audit_log(organization_id);
+CREATE INDEX idx_audit_log_created ON audit_log(created_at);

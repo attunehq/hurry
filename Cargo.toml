@@ -11,6 +11,7 @@ async-walkdir = "2.1.0"
 atomic-time = "0.1.5"
 axum = "0.8"
 axum-test = "18.1.0"
+base64 = "0.22.1"
 blake3 = "1.8.2"
 bollard = "0.19.2"
 bon = "3.7.1"
@@ -87,3 +88,10 @@ walkdir = "2.5.0"
 workspace_root = "0.2.0"
 xshell = "0.2.7"
 zstd = "0.13"
+oauth2 = "5.0.0"
+time = { version = "=0.3.41", features = ["serde"] }
+tower_governor = "0.8.0"
+governor = "0.10.2"
+
+[workspace.lints.clippy]
+redundant_pattern_matching = "allow"

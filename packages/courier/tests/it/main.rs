@@ -4,6 +4,7 @@
 //! server, ensuring that the API works as expected from a client's perspective.
 
 mod api;
+mod crypto;
 mod db;
 mod helpers;
 

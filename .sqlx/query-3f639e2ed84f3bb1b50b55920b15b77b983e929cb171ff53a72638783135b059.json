@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT r.name as role_name\n            FROM organization_member om\n            JOIN organization_role r ON om.role_id = r.id\n            WHERE om.organization_id = $1 AND om.account_id = $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "role_name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3f639e2ed84f3bb1b50b55920b15b77b983e929cb171ff53a72638783135b059"
+}

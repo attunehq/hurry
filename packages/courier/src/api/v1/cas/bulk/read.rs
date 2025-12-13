@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use aerosol::axum::Dep;
 use async_tar::{Builder, Header};
 use axum::{
@@ -6,7 +8,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use clients::{ContentType, NETWORK_BUFFER_SIZE, courier::v1::cas::CasBulkReadRequest};
+use clients::{
+    ContentType, NETWORK_BUFFER_SIZE,
+    courier::v1::{Key, cas::CasBulkReadRequest},
+};
 use color_eyre::Report;
 use futures::AsyncWriteExt;
 use tokio_util::{
@@ -61,34 +66,32 @@ pub async fn handle(
 ) -> BulkReadResponse {
     info!(keys = req.keys.len(), "cas.bulk.read.start");
 
-    let want_compressed = headers
-        .get(ContentType::ACCEPT)
-        .is_some_and(|accept| accept == ContentType::TarZstd);
-
-    if want_compressed {
-        handle_compressed(db, cas, auth, req).await
-    } else {
-        handle_plain(db, cas, auth, req).await
-    }
-}
-
-#[tracing::instrument]
-async fn handle_compressed(
-    db: Postgres,
-    cas: Disk,
-    auth: AuthenticatedToken,
-    req: CasBulkReadRequest,
-) -> BulkReadResponse {
-    info!("cas.bulk.read.compressed");
-
-    // Check access for all keys in a single query
-    let accessible_keys = match db.check_cas_access_bulk(auth.org_id, &req.keys).await {
+    let accessible_keys = match db.check_cas_access_bulk(&auth, &req.keys).await {
         Ok(keys) => keys,
         Err(error) => {
             error!(?error, "cas.bulk.read.access_check_bulk.error");
             return BulkReadResponse::Error(error);
         }
     };
+
+    let want_compressed = headers
+        .get(ContentType::ACCEPT)
+        .is_some_and(|accept| accept == ContentType::TarZstd);
+
+    if want_compressed {
+        handle_compressed(cas, accessible_keys, req).await
+    } else {
+        handle_plain(cas, accessible_keys, req).await
+    }
+}
+
+#[tracing::instrument(skip(accessible_keys))]
+async fn handle_compressed(
+    cas: Disk,
+    accessible_keys: HashSet<Key>,
+    req: CasBulkReadRequest,
+) -> BulkReadResponse {
+    info!("cas.bulk.read.compressed");
 
     let (reader, writer) = piper::pipe(NETWORK_BUFFER_SIZE);
     let span = tracing::info_span!("cas_bulk_read_compressed_worker");
@@ -158,23 +161,13 @@ async fn handle_compressed(
     BulkReadResponse::Success(body, ContentType::TarZstd)
 }
 
-#[tracing::instrument]
+#[tracing::instrument(skip(accessible_keys))]
 async fn handle_plain(
-    db: Postgres,
     cas: Disk,
-    auth: AuthenticatedToken,
+    accessible_keys: HashSet<Key>,
     req: CasBulkReadRequest,
 ) -> BulkReadResponse {
     info!("cas.bulk.read.uncompressed");
-
-    // Check access for all keys in a single query
-    let accessible_keys = match db.check_cas_access_bulk(auth.org_id, &req.keys).await {
-        Ok(keys) => keys,
-        Err(error) => {
-            error!(?error, "cas.bulk.read.access_check_bulk.error");
-            return BulkReadResponse::Error(error);
-        }
-    };
 
     let (reader, writer) = piper::pipe(NETWORK_BUFFER_SIZE);
     let span = tracing::info_span!("cas_bulk_read_plain_worker");

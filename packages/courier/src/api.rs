@@ -33,7 +33,11 @@ use std::time::{Duration, Instant};
 
 use aerosol::Aero;
 use axum::{
-    Router, extract::DefaultBodyLimit, extract::Request, http::HeaderValue, middleware::Next,
+    Router,
+    extract::DefaultBodyLimit,
+    extract::Request,
+    http::{HeaderValue, StatusCode},
+    middleware::Next,
     response::Response,
 };
 use tower::ServiceBuilder;
@@ -61,14 +65,21 @@ const MAX_BODY_SIZE: usize = 10 * 1024 * 1024 * 1024; // 10GB
 /// operations like bulk restore requests.
 const MAX_JSON_BODY_SIZE: usize = 100 * 1024 * 1024; // 100MB
 
-pub type State = Aero![crate::db::Postgres, crate::storage::Disk,];
+pub type State = Aero![
+    crate::db::Postgres,
+    crate::storage::Disk,
+    Option<crate::oauth::GitHub>,
+];
 
 pub fn router(state: State) -> Router {
     let middleware = ServiceBuilder::new()
         .layer(RequestDecompressionLayer::new())
         .layer(CompressionLayer::new())
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
-        .layer(TimeoutLayer::new(REQUEST_TIMEOUT));
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            REQUEST_TIMEOUT,
+        ));
 
     Router::new()
         .nest("/api/v1", v1::router())
