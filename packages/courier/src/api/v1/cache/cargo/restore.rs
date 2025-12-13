@@ -12,12 +12,7 @@ pub async fn handle(
     Dep(db): Dep<Postgres>,
     Json(request): Json<CargoRestoreRequest>,
 ) -> CacheRestoreResponse {
-    let org_id = match auth.require_org() {
-        Ok(id) => id,
-        Err((status, msg)) => return CacheRestoreResponse::Forbidden(status, msg),
-    };
-
-    match db.cargo_cache_restore(org_id, request).await {
+    match db.cargo_cache_restore(&auth, request).await {
         Ok(artifacts) if artifacts.is_empty() => {
             info!("cache.restore.miss");
             CacheRestoreResponse::NotFound
@@ -37,7 +32,6 @@ pub async fn handle(
 pub enum CacheRestoreResponse {
     Ok(CargoRestoreResponse),
     NotFound,
-    Forbidden(StatusCode, &'static str),
     Error(Report),
 }
 
@@ -46,7 +40,6 @@ impl IntoResponse for CacheRestoreResponse {
         match self {
             CacheRestoreResponse::Ok(body) => (StatusCode::OK, Json(body)).into_response(),
             CacheRestoreResponse::NotFound => StatusCode::NOT_FOUND.into_response(),
-            CacheRestoreResponse::Forbidden(status, msg) => (status, msg).into_response(),
             CacheRestoreResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }

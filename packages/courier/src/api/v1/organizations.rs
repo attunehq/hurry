@@ -858,10 +858,7 @@ pub async fn create_org_api_key(
         return CreateOrgApiKeyApiResponse::BadRequest("API key name cannot be empty");
     }
 
-    match db
-        .create_api_key(session.account_id, name, Some(org_id))
-        .await
-    {
+    match db.create_api_key(session.account_id, name, org_id).await {
         Ok((key_id, token)) => {
             // Log audit event
             let _ = db
@@ -990,7 +987,7 @@ pub async fn delete_org_api_key(
     };
 
     // Verify key belongs to this org
-    if key.organization_id != Some(org_id) {
+    if key.organization_id != org_id {
         return DeleteOrgApiKeyResponse::NotFound;
     }
 

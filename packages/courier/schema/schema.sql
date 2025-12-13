@@ -33,7 +33,7 @@ CREATE TABLE api_key (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   revoked_at TIMESTAMPTZ,
-  organization_id BIGINT REFERENCES organization(id)
+  organization_id BIGINT NOT NULL REFERENCES organization(id)
 );
 
 -- Lists CAS keys known about by the database.

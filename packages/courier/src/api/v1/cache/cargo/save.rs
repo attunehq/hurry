@@ -12,12 +12,7 @@ pub async fn handle(
     Dep(db): Dep<Postgres>,
     Json(request): Json<CargoSaveRequest>,
 ) -> CacheSaveResponse {
-    let org_id = match auth.require_org() {
-        Ok(id) => id,
-        Err((status, msg)) => return CacheSaveResponse::Forbidden(status, msg),
-    };
-
-    match db.cargo_cache_save(org_id, request).await {
+    match db.cargo_cache_save(&auth, request).await {
         Ok(()) => {
             info!("cache.save.created");
             CacheSaveResponse::Created
@@ -32,7 +27,6 @@ pub async fn handle(
 #[derive(Debug)]
 pub enum CacheSaveResponse {
     Created,
-    Forbidden(StatusCode, &'static str),
     Error(Report),
 }
 
@@ -40,7 +34,6 @@ impl IntoResponse for CacheSaveResponse {
     fn into_response(self) -> axum::response::Response {
         match self {
             CacheSaveResponse::Created => StatusCode::CREATED.into_response(),
-            CacheSaveResponse::Forbidden(status, msg) => (status, msg).into_response(),
             CacheSaveResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }

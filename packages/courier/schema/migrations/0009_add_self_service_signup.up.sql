@@ -1,16 +1,12 @@
 -- Add self-service signup tables for GitHub OAuth authentication
 -- See RFC docs/rfc/0003-self-service-signup.md for details
 
--- Modify account table: remove organization_id, add disabled_at and name
-ALTER TABLE account DROP COLUMN organization_id;
+-- Add disabled_at and name to account
 ALTER TABLE account ADD COLUMN disabled_at TIMESTAMPTZ;
 ALTER TABLE account ADD COLUMN name TEXT;
 
 -- Update account comment
 COMMENT ON TABLE account IS 'Each distinct actor in the application is an "account"; this could be humans or it could be bots. In the case of bots, the "email" field is for where the person/team owning the bot can be reached. Note: Organization membership is tracked via the organization_member table. Accounts can belong to multiple organizations.';
-
--- Add organization_id to api_key for org-scoped keys (NULL = personal)
-ALTER TABLE api_key ADD COLUMN organization_id BIGINT REFERENCES organization(id);
 
 -- Links a GitHub user to their Courier account (1:1)
 CREATE TABLE github_identity (
@@ -46,6 +42,24 @@ CREATE TABLE organization_member (
 
 CREATE INDEX idx_org_member_account ON organization_member(account_id);
 CREATE INDEX idx_org_member_role ON organization_member(role_id);
+
+-- Backfill organization_member from account.organization_id
+-- Existing accounts become admins of their organizations becuase we didn't have
+-- roles before this migration.
+INSERT INTO organization_member (organization_id, account_id, role_id)
+SELECT account.organization_id, account.id, organization_role.id
+FROM account, organization_role
+WHERE account.organization_id IS NOT NULL
+  AND organization_role.name = 'admin';
+
+-- Add organization_id to api_key (all keys are org-scoped)
+-- First add as nullable, backfill from account.organization_id, then make NOT NULL
+ALTER TABLE api_key ADD COLUMN organization_id BIGINT REFERENCES organization(id);
+UPDATE api_key SET organization_id = account.organization_id FROM account WHERE api_key.account_id = account.id;
+ALTER TABLE api_key ALTER COLUMN organization_id SET NOT NULL;
+
+-- Now we can remove organization_id from account (membership tracked via organization_member)
+ALTER TABLE account DROP COLUMN organization_id;
 
 -- Invitations for users to join organizations
 CREATE TABLE organization_invitation (
@@ -94,7 +108,6 @@ CREATE TABLE oauth_exchange_code (
   code_hash BYTEA NOT NULL UNIQUE,
   account_id BIGINT NOT NULL REFERENCES account(id),
   redirect_uri TEXT NOT NULL,
-  -- Stored server-side; never trusted from the client.
   new_user BOOLEAN NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expires_at TIMESTAMPTZ NOT NULL,

@@ -238,27 +238,11 @@ pub struct AuthenticatedToken {
     /// The account ID in the database.
     pub account_id: AccountId,
 
-    /// The organization ID from the API key, if scoped to an organization.
-    ///
-    /// Personal API keys have no organization scope (None).
-    /// Organization-scoped API keys have Some(org_id).
-    pub org_id: Option<OrgId>,
+    /// The organization ID this API key is scoped to.
+    pub org_id: OrgId,
 
     /// The plaintext value of the token for the user.
     pub plaintext: RawToken,
-}
-
-impl AuthenticatedToken {
-    /// Require that this token is scoped to an organization.
-    ///
-    /// Returns the org_id if present, or FORBIDDEN status if this is a personal
-    /// token.
-    pub fn require_org(&self) -> Result<OrgId, (StatusCode, &'static str)> {
-        self.org_id.ok_or((
-            StatusCode::FORBIDDEN,
-            "This endpoint requires an organization-scoped API key",
-        ))
-    }
 }
 
 impl AsRef<RawToken> for AuthenticatedToken {

@@ -19,6 +19,7 @@ use color_eyre::{
 };
 use derive_more::Debug;
 use futures::StreamExt;
+use rand::RngCore;
 use sqlx::migrate::Migrate;
 use sqlx::{PgPool, migrate::Migrator};
 use time::OffsetDateTime;
@@ -186,8 +187,12 @@ impl AsRef<PgPool> for Postgres {
 }
 
 impl Postgres {
-    #[tracing::instrument(name = "Postgres::save_cargo_cache")]
-    pub async fn cargo_cache_save(&self, org_id: OrgId, request: CargoSaveRequest) -> Result<()> {
+    #[tracing::instrument(name = "Postgres::save_cargo_cache", skip(auth))]
+    pub async fn cargo_cache_save(
+        &self,
+        auth: &AuthenticatedToken,
+        request: CargoSaveRequest,
+    ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         // TODO: bulk insert
@@ -198,7 +203,7 @@ impl Postgres {
                 r#"INSERT INTO cargo_saved_unit (organization_id, unit_hash, unit_resolved_target, linux_glibc_version, data)
                 VALUES ($1, $2, $3, $4, $5)
                 ON CONFLICT DO NOTHING"#,
-                org_id.as_i64(),
+                auth.org_id.as_i64(),
                 item.unit.unit_hash().as_str(),
                 item.resolved_target,
                 item.linux_glibc_version.map(|v| v.to_string()),
@@ -212,10 +217,10 @@ impl Postgres {
         tx.commit().await.context("commit transaction")
     }
 
-    #[tracing::instrument(name = "Postgres::cargo_cache_restore")]
+    #[tracing::instrument(name = "Postgres::cargo_cache_restore", skip(auth))]
     pub async fn cargo_cache_restore(
         &self,
-        org_id: OrgId,
+        auth: &AuthenticatedToken,
         request: CargoRestoreRequest,
     ) -> Result<HashMap<SavedUnitHash, SavedUnit>> {
         let mut rows = sqlx::query!(
@@ -223,7 +228,7 @@ impl Postgres {
             FROM cargo_saved_unit
             WHERE organization_id = $1
             AND unit_hash = ANY($2)"#,
-            org_id.as_i64(),
+            auth.org_id.as_i64(),
             &request
                 .units
                 .iter()
@@ -274,7 +279,7 @@ impl Postgres {
     async fn token_lookup(
         &self,
         token: impl AsRef<RawToken>,
-    ) -> Result<Option<(AccountId, Option<OrgId>)>> {
+    ) -> Result<Option<(AccountId, OrgId)>> {
         let hash = TokenHash::new(token.as_ref().expose());
         let row = sqlx::query!(
             r#"
@@ -293,7 +298,7 @@ impl Postgres {
         Ok(row.map(|r| {
             (
                 AccountId::from_i64(r.account_id),
-                r.organization_id.map(OrgId::from_i64),
+                OrgId::from_i64(r.organization_id),
             )
         }))
     }
@@ -321,9 +326,12 @@ impl Postgres {
     /// generally available.
     #[allow(dead_code)]
     #[tracing::instrument(name = "Postgres::create_token")]
-    pub async fn create_token(&self, account: AccountId, name: &str) -> Result<RawToken> {
-        use rand::RngCore;
-
+    pub async fn create_token(
+        &self,
+        account: AccountId,
+        org_id: OrgId,
+        name: &str,
+    ) -> Result<RawToken> {
         let plaintext = {
             let mut plaintext = [0u8; 16];
             rand::thread_rng()
@@ -335,12 +343,13 @@ impl Postgres {
         let token = TokenHash::new(&plaintext);
         sqlx::query!(
             r#"
-            INSERT INTO api_key (account_id, name, hash)
-            VALUES ($1, $2, $3)
+            INSERT INTO api_key (account_id, name, hash, organization_id)
+            VALUES ($1, $2, $3, $4)
             "#,
             account.as_i64(),
             name,
             token.as_bytes(),
+            org_id.as_i64(),
         )
         .execute(&self.pool)
         .await
@@ -383,8 +392,8 @@ impl Postgres {
     ///
     /// Returns `true` if access was newly granted, `false` if the org already
     /// had access.
-    #[tracing::instrument(name = "Postgres::grant_cas_access")]
-    pub async fn grant_cas_access(&self, org_id: OrgId, key: &Key) -> Result<bool> {
+    #[tracing::instrument(name = "Postgres::grant_cas_access", skip(auth))]
+    pub async fn grant_cas_access(&self, auth: &AuthenticatedToken, key: &Key) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
 
         // First, ensure the CAS key exists
@@ -409,7 +418,7 @@ impl Postgres {
             VALUES ($1, $2)
             ON CONFLICT (organization_id, cas_key_id) DO NOTHING
             "#,
-            org_id.as_i64(),
+            auth.org_id.as_i64(),
             key_id,
         )
         .execute(tx.as_mut())
@@ -424,8 +433,8 @@ impl Postgres {
     }
 
     /// Check if an organization has access to a CAS key.
-    #[tracing::instrument(name = "Postgres::check_cas_access")]
-    pub async fn check_cas_access(&self, org_id: OrgId, key: &Key) -> Result<bool> {
+    #[tracing::instrument(name = "Postgres::check_cas_access", skip(auth))]
+    pub async fn check_cas_access(&self, auth: &AuthenticatedToken, key: &Key) -> Result<bool> {
         let result = sqlx::query!(
             r#"
             SELECT EXISTS(
@@ -434,7 +443,7 @@ impl Postgres {
                 AND cas_key_id = (SELECT id FROM cas_key WHERE content = $2)
             ) as "exists!"
             "#,
-            org_id.as_i64(),
+            auth.org_id.as_i64(),
             key.as_bytes(),
         )
         .fetch_one(&self.pool)
@@ -446,17 +455,20 @@ impl Postgres {
 
     /// Check which keys from a set the organization has access to.
     /// Returns a HashSet of keys that the organization can access.
-    #[tracing::instrument(name = "Postgres::check_cas_access_bulk", skip(keys))]
+    #[tracing::instrument(name = "Postgres::check_cas_access_bulk", skip(auth, keys))]
     pub async fn check_cas_access_bulk(
         &self,
-        org_id: OrgId,
+        auth: &AuthenticatedToken,
         keys: &[Key],
     ) -> Result<std::collections::HashSet<Key>> {
         if keys.is_empty() {
             return Ok(std::collections::HashSet::new());
         }
 
-        let key_bytes: Vec<Vec<u8>> = keys.iter().map(|k| k.as_bytes().to_vec()).collect();
+        let key_bytes = keys
+            .iter()
+            .map(|k| k.as_bytes().to_vec())
+            .collect::<Vec<_>>();
 
         let rows = sqlx::query!(
             r#"
@@ -466,7 +478,7 @@ impl Postgres {
             WHERE cas_access.organization_id = $1
             AND cas_key.content = ANY($2)
             "#,
-            org_id.as_i64(),
+            auth.org_id.as_i64(),
             &key_bytes,
         )
         .fetch_all(&self.pool)
@@ -481,13 +493,13 @@ impl Postgres {
             .collect()
     }
 
-    #[tracing::instrument(name = "Postgres::cargo_cache_reset")]
-    pub async fn cargo_cache_reset(&self, org_id: OrgId) -> Result<()> {
+    #[tracing::instrument(name = "Postgres::cargo_cache_reset", skip(auth))]
+    pub async fn cargo_cache_reset(&self, auth: &AuthenticatedToken) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query!(
             "delete from cargo_saved_unit where organization_id = $1",
-            org_id.as_i64()
+            auth.org_id.as_i64()
         )
         .execute(tx.as_mut())
         .await
@@ -495,7 +507,7 @@ impl Postgres {
 
         sqlx::query!(
             "delete from cas_access where organization_id = $1",
-            org_id.as_i64()
+            auth.org_id.as_i64()
         )
         .execute(tx.as_mut())
         .await
@@ -1989,7 +2001,7 @@ impl Postgres {
 pub struct ApiKey {
     pub id: ApiKeyId,
     pub account_id: AccountId,
-    pub organization_id: Option<OrgId>,
+    pub organization_id: OrgId,
     pub name: String,
     pub created_at: OffsetDateTime,
     pub accessed_at: OffsetDateTime,
@@ -1997,7 +2009,7 @@ pub struct ApiKey {
 }
 
 impl Postgres {
-    /// Create a new API key with optional organization scope.
+    /// Create a new API key scoped to an organization.
     ///
     /// Returns the raw token (only time it's available in plaintext).
     #[tracing::instrument(name = "Postgres::create_api_key")]
@@ -2005,7 +2017,7 @@ impl Postgres {
         &self,
         account_id: AccountId,
         name: &str,
-        organization_id: Option<OrgId>,
+        organization_id: OrgId,
     ) -> Result<(ApiKeyId, RawToken)> {
         let token = crate::crypto::generate_api_key();
         let hash = TokenHash::new(token.expose());
@@ -2019,7 +2031,7 @@ impl Postgres {
             account_id.as_i64(),
             name,
             hash.as_bytes(),
-            organization_id.map(|id| id.as_i64()),
+            organization_id.as_i64(),
         )
         .fetch_one(&self.pool)
         .await
@@ -2028,37 +2040,7 @@ impl Postgres {
         Ok((ApiKeyId::from_i64(row.id), token))
     }
 
-    /// List personal API keys (no organization scope) for an account.
-    #[tracing::instrument(name = "Postgres::list_personal_api_keys")]
-    pub async fn list_personal_api_keys(&self, account_id: AccountId) -> Result<Vec<ApiKey>> {
-        let rows = sqlx::query!(
-            r#"
-            SELECT id, account_id, organization_id, name, created_at, accessed_at, revoked_at
-            FROM api_key
-            WHERE account_id = $1 AND organization_id IS NULL AND revoked_at IS NULL
-            ORDER BY created_at DESC
-            "#,
-            account_id.as_i64(),
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("list personal api keys")?;
-
-        Ok(rows
-            .into_iter()
-            .map(|r| ApiKey {
-                id: ApiKeyId::from_i64(r.id),
-                account_id: AccountId::from_i64(r.account_id),
-                organization_id: r.organization_id.map(OrgId::from_i64),
-                name: r.name,
-                created_at: r.created_at,
-                accessed_at: r.accessed_at,
-                revoked_at: r.revoked_at,
-            })
-            .collect())
-    }
-
-    /// List organization-scoped API keys for an account in a specific org.
+    /// List API keys for an account in a specific org.
     #[tracing::instrument(name = "Postgres::list_org_api_keys")]
     pub async fn list_org_api_keys(
         &self,
@@ -2084,7 +2066,7 @@ impl Postgres {
             .map(|r| ApiKey {
                 id: ApiKeyId::from_i64(r.id),
                 account_id: AccountId::from_i64(r.account_id),
-                organization_id: r.organization_id.map(OrgId::from_i64),
+                organization_id: OrgId::from_i64(r.organization_id),
                 name: r.name,
                 created_at: r.created_at,
                 accessed_at: r.accessed_at,
@@ -2129,7 +2111,7 @@ impl Postgres {
         Ok(row.map(|r| ApiKey {
             id: ApiKeyId::from_i64(r.id),
             account_id: AccountId::from_i64(r.account_id),
-            organization_id: r.organization_id.map(OrgId::from_i64),
+            organization_id: OrgId::from_i64(r.organization_id),
             name: r.name,
             created_at: r.created_at,
             accessed_at: r.accessed_at,

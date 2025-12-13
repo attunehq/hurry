@@ -14,21 +14,6 @@ use crate::helpers::TestFixture;
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
-struct ApiKeyListResponse {
-    api_keys: Vec<ApiKeyEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct ApiKeyEntry {
-    id: i64,
-    name: String,
-    created_at: String,
-    accessed_at: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct CreateApiKeyResponse {
     id: i64,
     name: String,
@@ -56,176 +41,6 @@ struct OrgApiKeyEntry {
     account_email: String,
     created_at: String,
     accessed_at: String,
-}
-
-// =============================================================================
-// Personal API Key Tests (/me/api-keys)
-// =============================================================================
-
-#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
-async fn list_personal_api_keys_empty(pool: PgPool) -> Result<()> {
-    let fixture = TestFixture::spawn(pool).await?;
-    let url = fixture.base_url.join("api/v1/me/api-keys")?;
-
-    let response = reqwest::Client::new()
-        .get(url)
-        .bearer_auth(fixture.auth.session_alice().expose())
-        .send()
-        .await?;
-
-    pretty_assert_eq!(response.status(), StatusCode::OK);
-
-    let list = response.json::<ApiKeyListResponse>().await?;
-    // Alice has no personal API keys (her test tokens are org-scoped)
-    pretty_assert_eq!(list.api_keys.len(), 0);
-
-    Ok(())
-}
-
-#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
-async fn create_personal_api_key(pool: PgPool) -> Result<()> {
-    let fixture = TestFixture::spawn(pool).await?;
-    let url = fixture.base_url.join("api/v1/me/api-keys")?;
-
-    let response = reqwest::Client::new()
-        .post(url)
-        .bearer_auth(fixture.auth.session_alice().expose())
-        .json(&CreateApiKeyRequest {
-            name: String::from("My Personal Key"),
-        })
-        .send()
-        .await?;
-
-    pretty_assert_eq!(response.status(), StatusCode::CREATED);
-
-    let key = response.json::<CreateApiKeyResponse>().await?;
-    pretty_assert_eq!(key.name, "My Personal Key");
-    assert!(!key.token.is_empty());
-    assert!(key.id > 0);
-
-    // Verify it shows up in the list
-    let list_url = fixture.base_url.join("api/v1/me/api-keys")?;
-    let list_response = reqwest::Client::new()
-        .get(list_url)
-        .bearer_auth(fixture.auth.session_alice().expose())
-        .send()
-        .await?;
-
-    let list = list_response.json::<ApiKeyListResponse>().await?;
-    pretty_assert_eq!(list.api_keys.len(), 1);
-    pretty_assert_eq!(list.api_keys[0].name, "My Personal Key");
-
-    Ok(())
-}
-
-#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
-async fn create_personal_api_key_empty_name_fails(pool: PgPool) -> Result<()> {
-    let fixture = TestFixture::spawn(pool).await?;
-    let url = fixture.base_url.join("api/v1/me/api-keys")?;
-
-    let response = reqwest::Client::new()
-        .post(url)
-        .bearer_auth(fixture.auth.session_alice().expose())
-        .json(&CreateApiKeyRequest {
-            name: String::from("  "),
-        })
-        .send()
-        .await?;
-
-    pretty_assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-    Ok(())
-}
-
-#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
-async fn delete_personal_api_key(pool: PgPool) -> Result<()> {
-    let fixture = TestFixture::spawn(pool).await?;
-
-    // Create a key first
-    let create_url = fixture.base_url.join("api/v1/me/api-keys")?;
-    let create_response = reqwest::Client::new()
-        .post(create_url)
-        .bearer_auth(fixture.auth.session_alice().expose())
-        .json(&CreateApiKeyRequest {
-            name: String::from("Key To Delete"),
-        })
-        .send()
-        .await?;
-
-    let key = create_response.json::<CreateApiKeyResponse>().await?;
-
-    // Delete the key
-    let delete_url = fixture
-        .base_url
-        .join(&format!("api/v1/me/api-keys/{}", key.id))?;
-    let delete_response = reqwest::Client::new()
-        .delete(delete_url)
-        .bearer_auth(fixture.auth.session_alice().expose())
-        .send()
-        .await?;
-
-    pretty_assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
-
-    // Verify it's gone from the list
-    let list_url = fixture.base_url.join("api/v1/me/api-keys")?;
-    let list_response = reqwest::Client::new()
-        .get(list_url)
-        .bearer_auth(fixture.auth.session_alice().expose())
-        .send()
-        .await?;
-
-    let list = list_response.json::<ApiKeyListResponse>().await?;
-    pretty_assert_eq!(list.api_keys.len(), 0);
-
-    Ok(())
-}
-
-#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
-async fn delete_personal_api_key_not_found(pool: PgPool) -> Result<()> {
-    let fixture = TestFixture::spawn(pool).await?;
-    let url = fixture.base_url.join("api/v1/me/api-keys/99999")?;
-
-    let response = reqwest::Client::new()
-        .delete(url)
-        .bearer_auth(fixture.auth.session_alice().expose())
-        .send()
-        .await?;
-
-    pretty_assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
-    Ok(())
-}
-
-#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
-async fn delete_personal_api_key_forbidden_other_user(pool: PgPool) -> Result<()> {
-    let fixture = TestFixture::spawn(pool).await?;
-
-    // Alice creates a key
-    let create_url = fixture.base_url.join("api/v1/me/api-keys")?;
-    let create_response = reqwest::Client::new()
-        .post(create_url)
-        .bearer_auth(fixture.auth.session_alice().expose())
-        .json(&CreateApiKeyRequest {
-            name: String::from("Alice's Key"),
-        })
-        .send()
-        .await?;
-
-    let key = create_response.json::<CreateApiKeyResponse>().await?;
-
-    // Bob tries to delete it
-    let delete_url = fixture
-        .base_url
-        .join(&format!("api/v1/me/api-keys/{}", key.id))?;
-    let delete_response = reqwest::Client::new()
-        .delete(delete_url)
-        .bearer_auth(fixture.auth.session_bob().expose())
-        .send()
-        .await?;
-
-    pretty_assert_eq!(delete_response.status(), StatusCode::FORBIDDEN);
-
-    Ok(())
 }
 
 // =============================================================================
@@ -297,6 +112,28 @@ async fn create_org_api_key(pool: PgPool) -> Result<()> {
     let key = response.json::<CreateApiKeyResponse>().await?;
     pretty_assert_eq!(key.name, "CI/CD Key");
     assert!(!key.token.is_empty());
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn create_org_api_key_empty_name_fails(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/api-keys"))?;
+
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .json(&CreateApiKeyRequest {
+            name: String::from("  "),
+        })
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     Ok(())
 }
@@ -488,6 +325,25 @@ async fn delete_org_api_key_wrong_org_not_found(pool: PgPool) -> Result<()> {
         .await?;
 
     pretty_assert_eq!(delete_response.status(), StatusCode::NOT_FOUND);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn delete_org_api_key_not_found(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/api-keys/99999"))?;
+
+    let response = reqwest::Client::new()
+        .delete(url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     Ok(())
 }

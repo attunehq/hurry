@@ -222,6 +222,7 @@ impl TestAuth {
 
     /// Seed the database with test authentication data.
     pub async fn seed(db: &db::Postgres) -> Result<Self> {
+        // Create organizations first
         let org_ids = sqlx::query!(
             r#"
             INSERT INTO organization (name, created_at) VALUES
@@ -239,6 +240,10 @@ impl TestAuth {
         .map(|row| (row.name, OrgId::from_i64(row.id)))
         .collect::<HashMap<_, _>>();
 
+        let org_acme = *org_ids.get(Self::ORG_ACME).expect("Acme org missing");
+        let org_widget = *org_ids.get(Self::ORG_WIDGET).expect("Widget org missing");
+
+        // Create accounts
         let account_ids = sqlx::query!(
             r#"
             INSERT INTO account (email, created_at) VALUES
@@ -258,10 +263,25 @@ impl TestAuth {
         .map(|row| (row.email, AccountId::from_i64(row.id)))
         .collect::<HashMap<_, _>>();
 
-        let tokens = stream::iter(&account_ids)
-            .then(|(account, &account_id)| async move {
+        let alice_id = *account_ids.get(Self::ACCT_ALICE).expect("Alice missing");
+        let bob_id = *account_ids.get(Self::ACCT_BOB).expect("Bob missing");
+        let charlie_id = *account_ids
+            .get(Self::ACCT_CHARLIE)
+            .expect("Charlie missing");
+
+        // Map accounts to their organizations
+        // Alice and Bob -> Acme, Charlie -> Widget
+        let account_orgs = [
+            (Self::ACCT_ALICE.to_string(), alice_id, org_acme),
+            (Self::ACCT_BOB.to_string(), bob_id, org_acme),
+            (Self::ACCT_CHARLIE.to_string(), charlie_id, org_widget),
+        ];
+
+        // Create API key tokens with org scope
+        let tokens = stream::iter(&account_orgs)
+            .then(|(account, account_id, org_id)| async move {
                 let hash = db
-                    .create_token(account_id, &format!("{account}-token"))
+                    .create_token(*account_id, *org_id, &format!("{account}-token"))
                     .await
                     .with_context(|| format!("set up {account}"))?;
                 Result::<_>::Ok((account.to_string(), hash))
@@ -269,10 +289,10 @@ impl TestAuth {
             .try_collect::<HashMap<_, _>>()
             .await?;
 
-        let revoked_tokens = stream::iter(&account_ids)
-            .then(|(account, &account_id)| async move {
+        let revoked_tokens = stream::iter(&account_orgs)
+            .then(|(account, account_id, org_id)| async move {
                 let hash = db
-                    .create_token(account_id, &format!("{account}-revoked"))
+                    .create_token(*account_id, *org_id, &format!("{account}-revoked"))
                     .await
                     .with_context(|| format!("set up {account}"))?;
                 db.revoke_token(&hash)
@@ -299,14 +319,6 @@ impl TestAuth {
         // Add organization memberships
         // Alice and Bob are both members of Acme Corp (Alice is admin)
         // Charlie is admin of Widget Inc
-        let org_acme = *org_ids.get(Self::ORG_ACME).expect("Acme org missing");
-        let org_widget = *org_ids.get(Self::ORG_WIDGET).expect("Widget org missing");
-        let alice_id = *account_ids.get(Self::ACCT_ALICE).expect("Alice missing");
-        let bob_id = *account_ids.get(Self::ACCT_BOB).expect("Bob missing");
-        let charlie_id = *account_ids
-            .get(Self::ACCT_CHARLIE)
-            .expect("Charlie missing");
-
         db.add_organization_member(org_acme, alice_id, OrgRole::Admin)
             .await
             .context("add Alice to Acme")?;
@@ -328,27 +340,6 @@ impl TestAuth {
         db.link_github_identity(charlie_id, 1003, "charlie-github")
             .await
             .context("link Charlie GitHub")?;
-
-        // Update existing API key tokens to be org-scoped
-        // Alice and Bob get Acme tokens, Charlie gets Widget tokens
-        sqlx::query!(
-            "UPDATE api_key SET organization_id = $1 WHERE account_id IN ($2, $3)",
-            org_acme.as_i64(),
-            alice_id.as_i64(),
-            bob_id.as_i64(),
-        )
-        .execute(&db.pool)
-        .await
-        .context("set org_id for Alice and Bob tokens")?;
-
-        sqlx::query!(
-            "UPDATE api_key SET organization_id = $1 WHERE account_id = $2",
-            org_widget.as_i64(),
-            charlie_id.as_i64(),
-        )
-        .execute(&db.pool)
-        .await
-        .context("set org_id for Charlie tokens")?;
 
         sqlx::query!("SELECT setval('organization_id_seq', (SELECT MAX(id) FROM organization))")
             .fetch_one(&db.pool)

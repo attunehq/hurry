@@ -15,11 +15,7 @@ use tokio_util::{
 };
 use tracing::{Instrument, error, info};
 
-use crate::{
-    auth::{AuthenticatedToken, OrgId},
-    db::Postgres,
-    storage::Disk,
-};
+use crate::{auth::AuthenticatedToken, db::Postgres, storage::Disk};
 
 /// Read multiple blobs from the CAS and return them as a tar archive.
 ///
@@ -63,41 +59,35 @@ pub async fn handle(
     headers: HeaderMap,
     Json(req): Json<CasBulkReadRequest>,
 ) -> BulkReadResponse {
-    let org_id = match auth.require_org() {
-        Ok(id) => id,
-        Err((status, msg)) => return BulkReadResponse::Forbidden(status, msg),
-    };
-
     info!(keys = req.keys.len(), "cas.bulk.read.start");
 
-    let want_compressed = headers
-        .get(ContentType::ACCEPT)
-        .is_some_and(|accept| accept == ContentType::TarZstd);
-
-    if want_compressed {
-        handle_compressed(db, cas, org_id, req).await
-    } else {
-        handle_plain(db, cas, org_id, req).await
-    }
-}
-
-#[tracing::instrument]
-async fn handle_compressed(
-    db: Postgres,
-    cas: Disk,
-    org_id: OrgId,
-    req: CasBulkReadRequest,
-) -> BulkReadResponse {
-    info!("cas.bulk.read.compressed");
-
     // Check access for all keys in a single query
-    let accessible_keys = match db.check_cas_access_bulk(org_id, &req.keys).await {
+    let accessible_keys = match db.check_cas_access_bulk(&auth, &req.keys).await {
         Ok(keys) => keys,
         Err(error) => {
             error!(?error, "cas.bulk.read.access_check_bulk.error");
             return BulkReadResponse::Error(error);
         }
     };
+
+    let want_compressed = headers
+        .get(ContentType::ACCEPT)
+        .is_some_and(|accept| accept == ContentType::TarZstd);
+
+    if want_compressed {
+        handle_compressed(cas, accessible_keys, req).await
+    } else {
+        handle_plain(cas, accessible_keys, req).await
+    }
+}
+
+#[tracing::instrument(skip(accessible_keys))]
+async fn handle_compressed(
+    cas: Disk,
+    accessible_keys: std::collections::HashSet<crate::storage::Key>,
+    req: CasBulkReadRequest,
+) -> BulkReadResponse {
+    info!("cas.bulk.read.compressed");
 
     let (reader, writer) = piper::pipe(NETWORK_BUFFER_SIZE);
     let span = tracing::info_span!("cas_bulk_read_compressed_worker");
@@ -167,23 +157,13 @@ async fn handle_compressed(
     BulkReadResponse::Success(body, ContentType::TarZstd)
 }
 
-#[tracing::instrument]
+#[tracing::instrument(skip(accessible_keys))]
 async fn handle_plain(
-    db: Postgres,
     cas: Disk,
-    org_id: OrgId,
+    accessible_keys: std::collections::HashSet<crate::storage::Key>,
     req: CasBulkReadRequest,
 ) -> BulkReadResponse {
     info!("cas.bulk.read.uncompressed");
-
-    // Check access for all keys in a single query
-    let accessible_keys = match db.check_cas_access_bulk(org_id, &req.keys).await {
-        Ok(keys) => keys,
-        Err(error) => {
-            error!(?error, "cas.bulk.read.access_check_bulk.error");
-            return BulkReadResponse::Error(error);
-        }
-    };
 
     let (reader, writer) = piper::pipe(NETWORK_BUFFER_SIZE);
     let span = tracing::info_span!("cas_bulk_read_plain_worker");
@@ -256,7 +236,6 @@ async fn handle_plain(
 #[derive(Debug)]
 pub enum BulkReadResponse {
     Success(Body, ContentType),
-    Forbidden(StatusCode, &'static str),
     Error(Report),
 }
 
@@ -266,7 +245,6 @@ impl IntoResponse for BulkReadResponse {
             BulkReadResponse::Success(body, ct) => {
                 (StatusCode::OK, [(ContentType::HEADER, ct.value())], body).into_response()
             }
-            BulkReadResponse::Forbidden(status, msg) => (status, msg).into_response(),
             BulkReadResponse::Error(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{err:?}")).into_response()
             }

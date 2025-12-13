@@ -22,7 +22,7 @@ use tokio_util::{
 use tracing::{error, info};
 
 use crate::{
-    auth::{AuthenticatedToken, OrgId},
+    auth::AuthenticatedToken,
     db::Postgres,
     storage::{Disk, Key},
 };
@@ -31,7 +31,6 @@ use crate::{
 pub enum BulkWriteResponse {
     Success(CasBulkWriteResponse),
     PartialSuccess(CasBulkWriteResponse),
-    Forbidden(StatusCode, &'static str),
     InvalidRequest(Report),
     Error(Report),
 }
@@ -88,11 +87,6 @@ pub async fn handle(
     headers: HeaderMap,
     body: Body,
 ) -> BulkWriteResponse {
-    let org_id = match auth.require_org() {
-        Ok(id) => id,
-        Err((status, msg)) => return BulkWriteResponse::Forbidden(status, msg),
-    };
-
     info!("cas.bulk.write.start");
 
     // Check Content-Type to determine if entries are pre-compressed
@@ -101,33 +95,38 @@ pub async fn handle(
         .is_some_and(|v| v == ContentType::TarZstd);
 
     if entries_compressed {
-        handle_compressed(db, cas, org_id, body).await
+        handle_compressed(&auth, db, cas, body).await
     } else {
-        handle_plain(db, cas, org_id, body).await
+        handle_plain(&auth, db, cas, body).await
     }
 }
 
-#[tracing::instrument(skip(body))]
+#[tracing::instrument(skip(auth, body))]
 async fn handle_compressed(
+    auth: &AuthenticatedToken,
     db: Postgres,
     cas: Disk,
-    org_id: OrgId,
     body: Body,
 ) -> BulkWriteResponse {
     info!("cas.bulk.write.compressed");
-    process_archive(db, cas, org_id, body, true).await
+    process_archive(auth, db, cas, body, true).await
 }
 
-#[tracing::instrument(skip(body))]
-async fn handle_plain(db: Postgres, cas: Disk, org_id: OrgId, body: Body) -> BulkWriteResponse {
+#[tracing::instrument(skip(auth, body))]
+async fn handle_plain(
+    auth: &AuthenticatedToken,
+    db: Postgres,
+    cas: Disk,
+    body: Body,
+) -> BulkWriteResponse {
     info!("cas.bulk.write.uncompressed");
-    process_archive(db, cas, org_id, body, false).await
+    process_archive(auth, db, cas, body, false).await
 }
 
 async fn process_archive(
+    auth: &AuthenticatedToken,
     db: Postgres,
     cas: Disk,
-    org_id: OrgId,
     body: Body,
     entries_compressed: bool,
 ) -> BulkWriteResponse {
@@ -173,7 +172,7 @@ async fn process_archive(
 
         // We still need to grant access, even if the CAS item exists.
         if let Ok(true) = cas.exists(&key).await {
-            match db.grant_cas_access(org_id, &key).await {
+            match db.grant_cas_access(auth, &key).await {
                 Ok(granted) => {
                     if granted {
                         // Org didn't have access, to them this was "written"
@@ -205,7 +204,7 @@ async fn process_archive(
         };
 
         match result {
-            Ok(()) => match db.grant_cas_access(org_id, &key).await {
+            Ok(()) => match db.grant_cas_access(auth, &key).await {
                 Ok(granted) => {
                     info!(%key, ?granted, "cas.bulk.write.success");
                     written.insert(key);
@@ -261,7 +260,6 @@ impl IntoResponse for BulkWriteResponse {
             BulkWriteResponse::PartialSuccess(body) => {
                 (StatusCode::ACCEPTED, Json(body)).into_response()
             }
-            BulkWriteResponse::Forbidden(status, msg) => (status, msg).into_response(),
             BulkWriteResponse::Error(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:?}")).into_response()
             }
