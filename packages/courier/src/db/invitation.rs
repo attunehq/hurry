@@ -201,7 +201,7 @@ impl Postgres {
             return Ok(AcceptInvitationResult::NotFound);
         };
 
-        // If the invitation revocation is none, that means it never expires.
+        // If the invitation expiration is none, that means it never expires.
         let now = OffsetDateTime::now_utc();
         if inv.revoked_at.is_some_and(|revoked| revoked <= now) {
             return Ok(AcceptInvitationResult::Revoked);
