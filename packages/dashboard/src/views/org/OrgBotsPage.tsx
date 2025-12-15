@@ -1,9 +1,8 @@
 import { Bot, Copy, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { apiRequest } from "../../api/client";
 import type { BotListResponse, CreateBotResponse } from "../../api/types";
-import { useSession } from "../../auth/session";
+import { useApi } from "../../api/useApi";
 import { Badge } from "../../ui/primitives/Badge";
 import { Button } from "../../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
@@ -15,7 +14,7 @@ import { useOrgContext } from "./orgContext";
 
 export function OrgBotsPage() {
   const toast = useToast();
-  const { sessionToken } = useSession();
+  const { request, signedIn } = useApi();
   const { orgId, role } = useOrgContext();
   const [data, setData] = useState<BotListResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -29,15 +28,15 @@ export function OrgBotsPage() {
   const canAdmin = role === "admin";
 
   async function load() {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     setLoading(true);
     try {
-      const out = await apiRequest<BotListResponse>({
+      const out = await request<BotListResponse>({
         path: `/api/v1/organizations/${orgId}/bots`,
-        sessionToken,
       });
       setData(out);
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Failed to load bots", detail: msg });
       setData(null);
@@ -47,7 +46,7 @@ export function OrgBotsPage() {
   }
 
   async function createBot() {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     const n = botName.trim();
     const e = responsibleEmail.trim();
     if (!n || !e) {
@@ -55,10 +54,9 @@ export function OrgBotsPage() {
       return;
     }
     try {
-      const out = await apiRequest<CreateBotResponse>({
+      const out = await request<CreateBotResponse>({
         path: `/api/v1/organizations/${orgId}/bots`,
         method: "POST",
-        sessionToken,
         body: { name: n, responsible_email: e },
       });
       setCreated(out);
@@ -67,6 +65,7 @@ export function OrgBotsPage() {
       setCreateOpen(false);
       await load();
     } catch (err) {
+      if (err && typeof err === "object" && "status" in err && (err as any).status === 401) return;
       const msg =
         err && typeof err === "object" && "message" in err ? String((err as any).message) : "";
       toast.push({ kind: "error", title: "Create failed", detail: msg });
@@ -74,17 +73,17 @@ export function OrgBotsPage() {
   }
 
   async function revokeBot(accountId: number, name: string | null) {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     if (!confirm(`Revoke bot "${name ?? "Unnamed bot"}"? This removes the bot from the organization.`))
       return;
     try {
-      await apiRequest<void>({
+      await request<void>({
         path: `/api/v1/organizations/${orgId}/members/${accountId}`,
         method: "DELETE",
-        sessionToken,
       });
       await load();
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Revoke failed", detail: msg });
     }
@@ -101,7 +100,7 @@ export function OrgBotsPage() {
 
   useEffect(() => {
     void load();
-  }, [sessionToken, orgId]);
+  }, [signedIn, orgId]);
 
   return (
     <div className="space-y-4">

@@ -2,14 +2,13 @@ import { Building2, ExternalLink, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { apiRequest } from "../../api/client";
 import type {
   CreateOrganizationResponse,
   MeResponse,
   OrganizationEntry,
   OrganizationListResponse,
 } from "../../api/types";
-import { useSession } from "../../auth/session";
+import { useApi } from "../../api/useApi";
 import { Badge } from "../../ui/primitives/Badge";
 import { Button } from "../../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
@@ -21,13 +20,11 @@ import { useToast } from "../../ui/toast/ToastProvider";
 export function DashboardHome() {
   const nav = useNavigate();
   const toast = useToast();
-  const { sessionToken } = useSession();
+  const { request, signedIn } = useApi();
   const [me, setMe] = useState<MeResponse | null>(null);
   const [orgs, setOrgs] = useState<OrganizationEntry[] | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [orgName, setOrgName] = useState("");
-
-  const signedIn = Boolean(sessionToken);
 
   const headerLine = useMemo(() => {
     if (!me) return "Hurry Console";
@@ -41,20 +38,19 @@ export function DashboardHome() {
   }, [orgs]);
 
   async function refresh() {
-    if (!sessionToken) {
+    if (!signedIn) {
       setMe(null);
       setOrgs(null);
       return;
     }
     try {
-      const meOut = await apiRequest<MeResponse>({ path: "/api/v1/me", sessionToken });
-      const orgsOut = await apiRequest<OrganizationListResponse>({
-        path: "/api/v1/me/organizations",
-        sessionToken,
-      });
+      const meOut = await request<MeResponse>({ path: "/api/v1/me" });
+      const orgsOut = await request<OrganizationListResponse>({ path: "/api/v1/me/organizations" });
       setMe(meOut);
       setOrgs(orgsOut.organizations);
     } catch (e) {
+      // Don't show error toast for 401 - handled by session invalidation
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       setMe(null);
       setOrgs(null);
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
@@ -63,7 +59,7 @@ export function DashboardHome() {
   }
 
   async function createOrg() {
-    if (!sessionToken) {
+    if (!signedIn) {
       toast.push({ kind: "error", title: "Sign in first" });
       nav("/auth");
       return;
@@ -74,10 +70,9 @@ export function DashboardHome() {
       return;
     }
     try {
-      const created = await apiRequest<CreateOrganizationResponse>({
+      const created = await request<CreateOrganizationResponse>({
         path: "/api/v1/organizations",
         method: "POST",
-        sessionToken,
         body: { name },
       });
       setCreateOpen(false);
@@ -85,6 +80,7 @@ export function DashboardHome() {
       await refresh();
       nav(`/org/${created.id}`);
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Create failed", detail: msg });
     }
@@ -92,7 +88,7 @@ export function DashboardHome() {
 
   useEffect(() => {
     void refresh();
-  }, [sessionToken]);
+  }, [signedIn]);
 
   return (
     <div className="space-y-8">

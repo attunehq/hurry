@@ -1,9 +1,9 @@
-import { CreditCard, LogIn, LogOut, User, Users } from "lucide-react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { CreditCard, User, Users } from "lucide-react";
+import { useEffect } from "react";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
-import { apiRequest } from "../../api/client";
 import { useSession } from "../../auth/session";
-import { Button } from "../primitives/Button";
+import { useToast } from "../toast/ToastProvider";
 
 function brand() {
   return (
@@ -20,25 +20,20 @@ function brand() {
 
 export function AppShell() {
   const nav = useNavigate();
-  const loc = useLocation();
-  const { sessionToken, setSessionToken } = useSession();
+  const toast = useToast();
+  const { onSessionInvalidated } = useSession();
 
-  const signedIn = Boolean(sessionToken);
-
-  async function logout() {
-    try {
-      await apiRequest<void>({
-        path: "/api/v1/oauth/logout",
-        method: "POST",
-        sessionToken,
+  // Handle session invalidation (401 from any API request)
+  useEffect(() => {
+    return onSessionInvalidated(() => {
+      toast.push({
+        kind: "error",
+        title: "Session expired",
+        detail: "Your session is no longer active. Please sign in again.",
       });
-    } catch {
-      // Even if logout fails, clearing local state is still useful.
-    } finally {
-      setSessionToken(null);
       nav("/auth");
-    }
-  }
+    });
+  }, [nav, toast, onSessionInvalidated]);
 
   return (
     <div className="noise min-h-screen">
@@ -88,44 +83,11 @@ export function AppShell() {
               </NavLink>
             </nav>
           </div>
-
-          <div className="mt-auto rounded-2xl border border-border bg-surface-raised p-4 text-xs text-content-muted shadow-glow-soft backdrop-blur">
-            <div className="font-semibold text-content-tertiary">Deployment</div>
-            <div className="mt-1">Target: app.hurry.attunehq.com</div>
-            <div className="mt-3">
-              {signedIn ? (
-                <Button variant="secondary" size="sm" onClick={logout}>
-                  <LogOut className="h-4 w-4" />
-                  Sign out
-                </Button>
-              ) : (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => nav("/auth", { state: { from: loc.pathname } })}
-                >
-                  <LogIn className="h-4 w-4" />
-                  Sign in
-                </Button>
-              )}
-            </div>
-          </div>
         </aside>
 
         <main className="min-w-0 flex-1">
-          <div className="mb-4 flex items-center justify-between md:hidden">
+          <div className="mb-4 md:hidden">
             {brand()}
-            {signedIn ? (
-              <Button variant="secondary" size="sm" onClick={logout}>
-                <LogOut className="h-4 w-4" />
-                Sign out
-              </Button>
-            ) : (
-              <Button variant="secondary" size="sm" onClick={() => nav("/auth")}>
-                <LogIn className="h-4 w-4" />
-                Sign in
-              </Button>
-            )}
           </div>
 
           <Outlet />

@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { apiRequest } from "../../api/client";
 import type { AcceptInvitationResponse, InvitationPreviewResponse } from "../../api/types";
-import { useSession } from "../../auth/session";
+import { useApi } from "../../api/useApi";
 import { Badge } from "../../ui/primitives/Badge";
 import { Button } from "../../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
@@ -13,7 +12,7 @@ export function InvitePage() {
   const nav = useNavigate();
   const toast = useToast();
   const { token } = useParams();
-  const { sessionToken } = useSession();
+  const { request, signedIn } = useApi();
   const [preview, setPreview] = useState<InvitationPreviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [accepting, setAccepting] = useState(false);
@@ -24,11 +23,12 @@ export function InvitePage() {
     if (!inviteToken) return;
     setLoading(true);
     try {
-      const out = await apiRequest<InvitationPreviewResponse>({
+      const out = await request<InvitationPreviewResponse>({
         path: `/api/v1/invitations/${encodeURIComponent(inviteToken)}`,
       });
       setPreview(out);
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Invite not found", detail: msg });
       setPreview(null);
@@ -38,19 +38,19 @@ export function InvitePage() {
   }
 
   async function accept() {
-    if (!sessionToken) {
+    if (!signedIn) {
       nav("/auth", { state: { from: `/invite/${inviteToken}` } });
       return;
     }
     setAccepting(true);
     try {
-      const out = await apiRequest<AcceptInvitationResponse>({
+      const out = await request<AcceptInvitationResponse>({
         path: `/api/v1/invitations/${encodeURIComponent(inviteToken)}/accept`,
         method: "POST",
-        sessionToken,
       });
       nav(`/org/${out.organization_id}`);
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Accept failed", detail: msg });
     } finally {

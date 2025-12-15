@@ -32,6 +32,8 @@ export async function apiRequest<T>(args: {
   method?: "GET" | "POST" | "PATCH" | "DELETE";
   sessionToken?: string | null;
   body?: unknown;
+  /** Called when a 401 response is received (session expired/invalid) */
+  onUnauthorized?: () => void;
 }): Promise<T> {
   const res = await fetch(apiUrl(args.path), {
     method: args.method ?? "GET",
@@ -44,6 +46,12 @@ export async function apiRequest<T>(args: {
 
   if (!res.ok) {
     const bodyText = await readBodyTextSafe(res);
+
+    // Handle 401 - session is no longer valid
+    if (res.status === 401 && args.onUnauthorized) {
+      args.onUnauthorized();
+    }
+
     throw {
       status: res.status,
       message: bodyText || res.statusText || "Request failed",

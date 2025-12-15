@@ -1,10 +1,9 @@
-import { Github, Mail, Pencil, Calendar } from "lucide-react";
+import { Calendar, Github, LogOut, Mail, Pencil } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { apiRequest } from "../../api/client";
 import type { MeResponse } from "../../api/types";
-import { useSession } from "../../auth/session";
+import { useApi } from "../../api/useApi";
 import { Button } from "../../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
 import { Input } from "../../ui/primitives/Input";
@@ -15,22 +14,21 @@ import { useToast } from "../../ui/toast/ToastProvider";
 export function UserPage() {
   const nav = useNavigate();
   const toast = useToast();
-  const { sessionToken } = useSession();
+  const { request, logout, signedIn } = useApi();
   const [me, setMe] = useState<MeResponse | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [newName, setNewName] = useState("");
 
-  const signedIn = Boolean(sessionToken);
-
   async function refresh() {
-    if (!sessionToken) {
+    if (!signedIn) {
       setMe(null);
       return;
     }
     try {
-      const meOut = await apiRequest<MeResponse>({ path: "/api/v1/me", sessionToken });
+      const meOut = await request<MeResponse>({ path: "/api/v1/me" });
       setMe(meOut);
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       setMe(null);
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Failed to load user", detail: msg });
@@ -43,23 +41,23 @@ export function UserPage() {
   }
 
   async function rename() {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     const trimmed = newName.trim();
     if (!trimmed) {
       toast.push({ kind: "error", title: "Name cannot be empty" });
       return;
     }
     try {
-      await apiRequest<void>({
+      await request<void>({
         path: "/api/v1/me",
         method: "PATCH",
-        sessionToken,
         body: { name: trimmed },
       });
       toast.push({ kind: "success", title: "Account name updated" });
       setRenameOpen(false);
       await refresh();
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Update failed", detail: msg });
     }
@@ -67,7 +65,7 @@ export function UserPage() {
 
   useEffect(() => {
     void refresh();
-  }, [sessionToken]);
+  }, [signedIn]);
 
   return (
     <div className="space-y-8">
@@ -78,10 +76,16 @@ export function UserPage() {
             View your account information.
           </p>
         </div>
-        <Button variant="secondary" onClick={openRename} disabled={!signedIn || !me}>
-          <Pencil className="h-4 w-4" />
-          Rename
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={openRename} disabled={!signedIn || !me}>
+            <Pencil className="h-4 w-4" />
+            Rename
+          </Button>
+          <Button variant="danger" onClick={logout} disabled={!signedIn}>
+            <LogOut className="h-4 w-4" />
+            Sign out
+          </Button>
+        </div>
       </div>
 
       {!signedIn ? (

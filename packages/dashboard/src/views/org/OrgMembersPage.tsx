@@ -2,9 +2,8 @@ import { Bot, Crown, DoorOpen, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { apiRequest } from "../../api/client";
 import type { MeResponse, MemberListResponse, OrgRole } from "../../api/types";
-import { useSession } from "../../auth/session";
+import { useApi } from "../../api/useApi";
 import { Badge } from "../../ui/primitives/Badge";
 import { Button } from "../../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
@@ -14,7 +13,7 @@ import { useOrgContext } from "./orgContext";
 export function OrgMembersPage() {
   const nav = useNavigate();
   const toast = useToast();
-  const { sessionToken } = useSession();
+  const { request, signedIn } = useApi();
   const { orgId, role } = useOrgContext();
   const [members, setMembers] = useState<MemberListResponse | null>(null);
   const [me, setMe] = useState<MeResponse | null>(null);
@@ -28,19 +27,19 @@ export function OrgMembersPage() {
   const isOnlyAdmin = role === "admin" && adminCount === 1;
 
   async function load() {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     setLoading(true);
     try {
       const [membersOut, meOut] = await Promise.all([
-        apiRequest<MemberListResponse>({
+        request<MemberListResponse>({
           path: `/api/v1/organizations/${orgId}/members`,
-          sessionToken,
         }),
-        apiRequest<MeResponse>({ path: "/api/v1/me", sessionToken }),
+        request<MeResponse>({ path: "/api/v1/me" }),
       ]);
       setMembers(membersOut);
       setMe(meOut);
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Failed to load members", detail: msg });
       setMembers(null);
@@ -50,48 +49,48 @@ export function OrgMembersPage() {
   }
 
   async function setRole(accountId: number, newRole: OrgRole) {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     try {
-      await apiRequest<void>({
+      await request<void>({
         path: `/api/v1/organizations/${orgId}/members/${accountId}`,
         method: "PATCH",
-        sessionToken,
         body: { role: newRole },
       });
       await load();
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Update failed", detail: msg });
     }
   }
 
   async function remove(accountId: number) {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     if (!confirm(`Remove member ${accountId}?`)) return;
     try {
-      await apiRequest<void>({
+      await request<void>({
         path: `/api/v1/organizations/${orgId}/members/${accountId}`,
         method: "DELETE",
-        sessionToken,
       });
       await load();
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Remove failed", detail: msg });
     }
   }
 
   async function leave() {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     if (!confirm("Leave this organization?")) return;
     try {
-      await apiRequest<void>({
+      await request<void>({
         path: `/api/v1/organizations/${orgId}/leave`,
         method: "POST",
-        sessionToken,
       });
       nav("/");
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Leave failed", detail: msg });
     }
@@ -104,7 +103,7 @@ export function OrgMembersPage() {
 
   useEffect(() => {
     void load();
-  }, [sessionToken, orgId]);
+  }, [signedIn, orgId]);
 
   return (
     <Card>

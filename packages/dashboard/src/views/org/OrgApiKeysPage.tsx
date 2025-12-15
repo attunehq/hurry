@@ -1,9 +1,8 @@
 import { Bot, Copy, KeyRound, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { apiRequest } from "../../api/client";
 import type { CreateOrgApiKeyResponse, OrgApiKeyListResponse } from "../../api/types";
-import { useSession } from "../../auth/session";
+import { useApi } from "../../api/useApi";
 import { Button } from "../../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
 import { Input } from "../../ui/primitives/Input";
@@ -14,7 +13,7 @@ import { useOrgContext } from "./orgContext";
 
 export function OrgApiKeysPage() {
   const toast = useToast();
-  const { sessionToken } = useSession();
+  const { request, signedIn } = useApi();
   const { orgId } = useOrgContext();
   const [data, setData] = useState<OrgApiKeyListResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -25,15 +24,15 @@ export function OrgApiKeysPage() {
   const keys = useMemo(() => data?.api_keys ?? [], [data]);
 
   async function load() {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     setLoading(true);
     try {
-      const out = await apiRequest<OrgApiKeyListResponse>({
+      const out = await request<OrgApiKeyListResponse>({
         path: `/api/v1/organizations/${orgId}/api-keys`,
-        sessionToken,
       });
       setData(out);
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Failed to load API keys", detail: msg });
       setData(null);
@@ -43,39 +42,39 @@ export function OrgApiKeysPage() {
   }
 
   async function createKey() {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     const n = name.trim();
     if (!n) {
       toast.push({ kind: "error", title: "Name required" });
       return;
     }
     try {
-      const out = await apiRequest<CreateOrgApiKeyResponse>({
+      const out = await request<CreateOrgApiKeyResponse>({
         path: `/api/v1/organizations/${orgId}/api-keys`,
         method: "POST",
-        sessionToken,
         body: { name: n },
       });
       setCreated(out);
       setName("");
       await load();
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Create failed", detail: msg });
     }
   }
 
   async function revoke(keyId: number) {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     if (!confirm(`Revoke API key ${keyId}?`)) return;
     try {
-      await apiRequest<void>({
+      await request<void>({
         path: `/api/v1/organizations/${orgId}/api-keys/${keyId}`,
         method: "DELETE",
-        sessionToken,
       });
       await load();
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Revoke failed", detail: msg });
     }
@@ -92,7 +91,7 @@ export function OrgApiKeysPage() {
 
   useEffect(() => {
     void load();
-  }, [sessionToken, orgId]);
+  }, [signedIn, orgId]);
 
   return (
     <div className="space-y-4">
@@ -105,7 +104,7 @@ export function OrgApiKeysPage() {
                 Keys authenticate builds and automation against Hurry.
               </div>
             </div>
-            <Button onClick={() => setCreateOpen(true)} disabled={!sessionToken}>
+            <Button onClick={() => setCreateOpen(true)} disabled={!signedIn}>
               <Plus className="h-4 w-4" />
               New key
             </Button>

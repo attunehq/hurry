@@ -2,9 +2,8 @@ import { Pencil } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 
-import { apiRequest } from "../../api/client";
 import type { OrganizationEntry, OrganizationListResponse } from "../../api/types";
-import { useSession } from "../../auth/session";
+import { useApi } from "../../api/useApi";
 import { Badge } from "../../ui/primitives/Badge";
 import { Button } from "../../ui/primitives/Button";
 import { Card, CardBody } from "../../ui/primitives/Card";
@@ -17,7 +16,7 @@ export function OrgLayout() {
   const nav = useNavigate();
   const toast = useToast();
   const { orgId } = useParams();
-  const { sessionToken } = useSession();
+  const { request, signedIn } = useApi();
   const [org, setOrg] = useState<OrganizationEntry | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -25,16 +24,16 @@ export function OrgLayout() {
   const id = useMemo(() => Number(orgId ?? "0"), [orgId]);
 
   async function refresh() {
-    if (!sessionToken || !id) return;
+    if (!signedIn || !id) return;
     try {
-      const out = await apiRequest<OrganizationListResponse>({
+      const out = await request<OrganizationListResponse>({
         path: "/api/v1/me/organizations",
-        sessionToken,
       });
       const found = out.organizations.find((o) => o.id === id) ?? null;
       setOrg(found);
       if (!found) toast.push({ kind: "error", title: "Org not found (or no access)" });
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Failed to load org", detail: msg });
     }
@@ -48,23 +47,23 @@ export function OrgLayout() {
   }
 
   async function rename() {
-    if (!sessionToken || !id) return;
+    if (!signedIn || !id) return;
     const trimmed = newName.trim();
     if (!trimmed) {
       toast.push({ kind: "error", title: "Name cannot be empty" });
       return;
     }
     try {
-      await apiRequest<void>({
+      await request<void>({
         path: `/api/v1/organizations/${id}`,
         method: "PATCH",
-        sessionToken,
         body: { name: trimmed },
       });
       toast.push({ kind: "success", title: "Organization renamed" });
       setRenameOpen(false);
       await refresh();
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Rename failed", detail: msg });
     }
@@ -72,9 +71,9 @@ export function OrgLayout() {
 
   useEffect(() => {
     void refresh();
-  }, [sessionToken, id]);
+  }, [signedIn, id]);
 
-  if (!sessionToken) {
+  if (!signedIn) {
     return (
       <Card>
         <CardBody>

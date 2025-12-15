@@ -1,10 +1,14 @@
-import React, { createContext, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 
 const STORAGE_KEY = "courier.sessionToken";
 
 type SessionState = {
   sessionToken: string | null;
   setSessionToken: (token: string | null) => void;
+  /** Called when an API request returns 401 - clears session and triggers redirect */
+  handleUnauthorized: () => void;
+  /** Register a callback to be notified when session is invalidated due to 401 */
+  onSessionInvalidated: (callback: () => void) => () => void;
 };
 
 const SessionContext = createContext<SessionState | null>(null);
@@ -15,6 +19,31 @@ export function SessionProvider(props: { children: React.ReactNode }) {
     return raw && raw.trim().length > 0 ? raw : null;
   });
 
+  // Callbacks to notify when session is invalidated
+  const invalidationCallbacksRef = useRef<Set<() => void>>(new Set());
+
+  const clearSession = useCallback(() => {
+    localStorage.removeItem(STORAGE_KEY);
+    setSessionTokenState(null);
+  }, []);
+
+  const handleUnauthorized = useCallback(() => {
+    // Only handle if we currently have a session token
+    // (avoids loops when already logged out)
+    if (!localStorage.getItem(STORAGE_KEY)) return;
+
+    clearSession();
+    // Notify all registered callbacks
+    invalidationCallbacksRef.current.forEach((cb) => cb());
+  }, [clearSession]);
+
+  const onSessionInvalidated = useCallback((callback: () => void) => {
+    invalidationCallbacksRef.current.add(callback);
+    return () => {
+      invalidationCallbacksRef.current.delete(callback);
+    };
+  }, []);
+
   const state = useMemo<SessionState>(() => {
     return {
       sessionToken,
@@ -24,11 +53,12 @@ export function SessionProvider(props: { children: React.ReactNode }) {
           setSessionTokenState(token);
           return;
         }
-        localStorage.removeItem(STORAGE_KEY);
-        setSessionTokenState(null);
+        clearSession();
       },
+      handleUnauthorized,
+      onSessionInvalidated,
     };
-  }, [sessionToken]);
+  }, [sessionToken, clearSession, handleUnauthorized, onSessionInvalidated]);
 
   return (
     <SessionContext.Provider value={state}>

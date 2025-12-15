@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { exchangeAuthCode } from "../../api/client";
@@ -13,10 +13,18 @@ export function AuthCallbackPage() {
   const [status, setStatus] = useState<"working" | "error" | "done">("working");
   const [detail, setDetail] = useState<string | null>(null);
 
+  // Track whether we've already attempted to exchange this code.
+  // This prevents double-exchange in React StrictMode (which runs effects twice).
+  const attemptedRef = useRef(false);
+
   const authCode = useMemo(() => params.get("auth_code"), [params]);
 
   useEffect(() => {
-    let cancelled = false;
+    // Prevent double-exchange in StrictMode.
+    // StrictMode mounts, unmounts, then remounts - the ref persists across this.
+    if (attemptedRef.current) return;
+    attemptedRef.current = true;
+
     async function run() {
       if (!authCode) {
         setStatus("error");
@@ -26,21 +34,16 @@ export function AuthCallbackPage() {
 
       try {
         const out = await exchangeAuthCode(authCode);
-        if (cancelled) return;
         setSessionToken(out.session_token);
         setStatus("done");
         nav("/");
       } catch (e) {
-        if (cancelled) return;
         const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
         setStatus("error");
         setDetail(msg || "Failed to exchange auth code.");
       }
     }
     void run();
-    return () => {
-      cancelled = true;
-    };
   }, [authCode, nav, setSessionToken]);
 
   return (

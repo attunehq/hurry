@@ -1,9 +1,8 @@
 import { Copy, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { apiRequest } from "../../api/client";
 import type { CreateInvitationResponse, InvitationListResponse, OrgRole } from "../../api/types";
-import { useSession } from "../../auth/session";
+import { useApi } from "../../api/useApi";
 import { Badge } from "../../ui/primitives/Badge";
 import { Button } from "../../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
@@ -15,7 +14,7 @@ import { useOrgContext } from "./orgContext";
 
 export function OrgInvitationsPage() {
   const toast = useToast();
-  const { sessionToken } = useSession();
+  const { request, signedIn } = useApi();
   const { orgId, role } = useOrgContext();
   const [data, setData] = useState<InvitationListResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -29,15 +28,15 @@ export function OrgInvitationsPage() {
   const invites = useMemo(() => data?.invitations ?? [], [data]);
 
   async function load() {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     setLoading(true);
     try {
-      const out = await apiRequest<InvitationListResponse>({
+      const out = await request<InvitationListResponse>({
         path: `/api/v1/organizations/${orgId}/invitations`,
-        sessionToken,
       });
       setData(out);
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Failed to load invitations", detail: msg });
       setData(null);
@@ -47,7 +46,7 @@ export function OrgInvitationsPage() {
   }
 
   async function createInvite() {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     const max =
       maxUses.trim().length === 0 ? undefined : Number.isFinite(Number(maxUses)) ? Number(maxUses) : NaN;
     if (max === 0 || Number.isNaN(max)) {
@@ -56,10 +55,9 @@ export function OrgInvitationsPage() {
     }
 
     try {
-      const out = await apiRequest<CreateInvitationResponse>({
+      const out = await request<CreateInvitationResponse>({
         path: `/api/v1/organizations/${orgId}/invitations`,
         method: "POST",
-        sessionToken,
         body: { role: inviteRole, ...(max ? { max_uses: max } : {}) },
       });
       setCreated(out);
@@ -67,22 +65,23 @@ export function OrgInvitationsPage() {
       setMaxUses("");
       await load();
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Create failed", detail: msg });
     }
   }
 
   async function revoke(invitationId: number) {
-    if (!sessionToken) return;
+    if (!signedIn) return;
     if (!confirm(`Revoke invitation ${invitationId}?`)) return;
     try {
-      await apiRequest<void>({
+      await request<void>({
         path: `/api/v1/organizations/${orgId}/invitations/${invitationId}`,
         method: "DELETE",
-        sessionToken,
       });
       await load();
     } catch (e) {
+      if (e && typeof e === "object" && "status" in e && (e as any).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Revoke failed", detail: msg });
     }
@@ -103,7 +102,7 @@ export function OrgInvitationsPage() {
 
   useEffect(() => {
     void load();
-  }, [sessionToken, orgId]);
+  }, [signedIn, orgId]);
 
   return (
     <div className="space-y-4">
