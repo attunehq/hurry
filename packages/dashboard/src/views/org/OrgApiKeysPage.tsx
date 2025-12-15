@@ -100,8 +100,8 @@ export function OrgApiKeysPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-sm font-semibold text-slate-100">API Keys</div>
-              <div className="mt-1 text-sm text-slate-300">
+              <div className="text-sm font-semibold text-content-primary">API Keys</div>
+              <div className="mt-1 text-sm text-content-tertiary">
                 Keys authenticate builds and automation against Hurry.
               </div>
             </div>
@@ -114,8 +114,8 @@ export function OrgApiKeysPage() {
         <CardBody>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="text-xs text-slate-400">
-                <tr className="border-b border-white/10">
+              <thead className="text-xs text-content-muted">
+                <tr className="border-b border-border">
                   <th className="py-2 pr-3">Key</th>
                   <th className="py-2 pr-3">Owner</th>
                   <th className="py-2 pr-3">Last used</th>
@@ -124,20 +124,20 @@ export function OrgApiKeysPage() {
               </thead>
               <tbody>
                 {keys.map((k) => (
-                  <tr key={k.id} className="border-b border-white/5">
+                  <tr key={k.id} className="border-b border-border-subtle">
                     <td className="py-3 pr-3">
-                      <div className="flex items-center gap-2 font-medium text-slate-100">
-                        <KeyRound className="h-4 w-4 text-neon-300" />
+                      <div className="flex items-center gap-2 font-medium text-content-primary">
+                        <KeyRound className="h-4 w-4 text-accent-text" />
                         {k.name}
                       </div>
                     </td>
-                    <td className="py-3 pr-3 text-slate-200">
+                    <td className="py-3 pr-3 text-content-secondary">
                       <div className="flex items-center gap-2">
-                        {k.bot ? <Bot className="h-4 w-4 text-slate-400" /> : null}
+                        {k.bot ? <Bot className="h-4 w-4 text-content-muted" /> : null}
                         {k.account_email}
                       </div>
                     </td>
-                    <td className="py-3 pr-3 text-xs text-slate-300">{k.accessed_at}</td>
+                    <td className="py-3 pr-3 text-xs text-content-tertiary">{k.accessed_at}</td>
                     <td className="py-3 pr-3">
                       <div className="flex justify-end">
                         <Button variant="danger" size="sm" onClick={() => revoke(k.id)}>
@@ -150,7 +150,7 @@ export function OrgApiKeysPage() {
                 ))}
                 {keys.length === 0 && !loading ? (
                   <tr>
-                    <td colSpan={4} className="py-6 text-center text-sm text-slate-400">
+                    <td colSpan={4} className="py-6 text-center text-sm text-content-muted">
                       No API keys yet.
                     </td>
                   </tr>
@@ -158,7 +158,7 @@ export function OrgApiKeysPage() {
               </tbody>
             </table>
           </div>
-          <div className="mt-3 text-xs text-slate-400">
+          <div className="mt-3 text-xs text-content-muted">
             Note: API key tokens are only shown at creation time.
           </div>
         </CardBody>
@@ -187,12 +187,12 @@ export function OrgApiKeysPage() {
       <Modal open={Boolean(created)} title="API key token (save now)" onClose={() => setCreated(null)}>
         {created ? (
           <div className="space-y-3">
-            <div className="text-sm text-slate-300">
+            <div className="text-sm text-content-tertiary">
               This token is only shown once. Copy it somewhere safe.
             </div>
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="text-xs text-slate-400">Token</div>
-              <div className="mt-1 break-all font-mono text-xs text-slate-100">
+            <div className="rounded-2xl border border-border bg-surface-subtle p-4">
+              <div className="text-xs text-content-muted">Token</div>
+              <div className="mt-1 break-all font-mono text-xs text-content-primary">
                 {created.token}
               </div>
             </div>
@@ -209,4 +209,3 @@ export function OrgApiKeysPage() {
     </div>
   );
 }
-

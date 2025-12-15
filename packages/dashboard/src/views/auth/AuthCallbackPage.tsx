@@ -47,19 +47,19 @@ export function AuthCallbackPage() {
     <div className="mx-auto max-w-xl">
       <Card>
         <CardHeader>
-          <div className="text-sm font-semibold text-slate-100">Signing you in…</div>
-          <div className="mt-1 text-sm text-slate-300">
+          <div className="text-sm font-semibold text-content-primary">Signing you in…</div>
+          <div className="mt-1 text-sm text-content-tertiary">
             Exchanging OAuth callback code for a session token.
           </div>
         </CardHeader>
         <CardBody>
           {status === "working" ? (
-            <div className="text-sm text-slate-300">Working…</div>
+            <div className="text-sm text-content-tertiary">Working…</div>
           ) : null}
           {status === "error" ? (
             <div className="space-y-3">
-              <div className="text-sm text-red-200">Sign-in failed.</div>
-              {detail ? <div className="text-xs text-slate-300">{detail}</div> : null}
+              <div className="text-sm text-red-600 dark:text-red-200">Sign-in failed.</div>
+              {detail ? <div className="text-xs text-content-tertiary">{detail}</div> : null}
               <div className="flex gap-2">
                 <Button variant="secondary" onClick={() => nav("/auth")}>
                   Back to auth
@@ -72,4 +72,3 @@ export function AuthCallbackPage() {
     </div>
   );
 }
-

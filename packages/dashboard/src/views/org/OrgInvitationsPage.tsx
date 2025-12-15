@@ -111,8 +111,8 @@ export function OrgInvitationsPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-sm font-semibold text-slate-100">Invitations</div>
-              <div className="mt-1 text-sm text-slate-300">
+              <div className="text-sm font-semibold text-content-primary">Invitations</div>
+              <div className="mt-1 text-sm text-content-tertiary">
                 Admins can generate shareable links for members to join.
               </div>
             </div>
@@ -125,8 +125,8 @@ export function OrgInvitationsPage() {
         <CardBody>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="text-xs text-slate-400">
-                <tr className="border-b border-white/10">
+              <thead className="text-xs text-content-muted">
+                <tr className="border-b border-border">
                   <th className="py-2 pr-3">ID</th>
                   <th className="py-2 pr-3">Role</th>
                   <th className="py-2 pr-3">Uses</th>
@@ -136,14 +136,14 @@ export function OrgInvitationsPage() {
               </thead>
               <tbody>
                 {invites.map((i) => (
-                  <tr key={i.id} className="border-b border-white/5">
-                    <td className="py-3 pr-3 font-medium text-slate-100">{i.id}</td>
+                  <tr key={i.id} className="border-b border-border-subtle">
+                    <td className="py-3 pr-3 font-medium text-content-primary">{i.id}</td>
                     <td className="py-3 pr-3">
                       <Badge tone={i.role === "admin" ? "neon" : "muted"}>{i.role}</Badge>
                     </td>
-                    <td className="py-3 pr-3 text-slate-200">
+                    <td className="py-3 pr-3 text-content-secondary">
                       {i.use_count}
-                      <span className="text-slate-500">
+                      <span className="text-content-muted">
                         {i.max_uses ? ` / ${i.max_uses}` : " / ∞"}
                       </span>
                     </td>
@@ -167,7 +167,7 @@ export function OrgInvitationsPage() {
                 ))}
                 {invites.length === 0 && !loading ? (
                   <tr>
-                    <td colSpan={5} className="py-6 text-center text-sm text-slate-400">
+                    <td colSpan={5} className="py-6 text-center text-sm text-content-muted">
                       No invitations yet.
                     </td>
                   </tr>
@@ -175,7 +175,7 @@ export function OrgInvitationsPage() {
               </tbody>
             </table>
           </div>
-          <div className="mt-3 text-xs text-slate-400">
+          <div className="mt-3 text-xs text-content-muted">
             Note: Invitation tokens are only shown at creation time.
           </div>
         </CardBody>
@@ -188,7 +188,7 @@ export function OrgInvitationsPage() {
               <Label htmlFor="role">Role</Label>
               <select
                 id="role"
-                className="h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100"
+                className="h-10 w-full rounded-xl border border-border bg-surface-subtle px-3 text-sm text-content-primary"
                 value={inviteRole}
                 onChange={(e) => setInviteRole(e.target.value as OrgRole)}
               >
@@ -224,12 +224,12 @@ export function OrgInvitationsPage() {
       >
         {created ? (
           <div className="space-y-3">
-            <div className="text-sm text-slate-300">
+            <div className="text-sm text-content-tertiary">
               Share this link to invite someone. The token is embedded.
             </div>
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="text-xs text-slate-400">Invite link</div>
-              <div className="mt-1 break-all font-mono text-xs text-slate-100">
+            <div className="rounded-2xl border border-border bg-surface-subtle p-4">
+              <div className="text-xs text-content-muted">Invite link</div>
+              <div className="mt-1 break-all font-mono text-xs text-content-primary">
                 {inviteLink(created.token)}
               </div>
             </div>

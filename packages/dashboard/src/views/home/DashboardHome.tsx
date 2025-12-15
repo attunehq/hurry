@@ -98,8 +98,8 @@ export function DashboardHome() {
     <div className="space-y-8">
       <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-100">{headerLine}</h1>
-          <p className="mt-1.5 text-sm text-slate-300">
+          <h1 className="text-2xl font-semibold text-content-primary">{headerLine}</h1>
+          <p className="mt-1.5 text-sm text-content-tertiary">
             Manage organizations, invitations, API keys, and bot identities.
           </p>
         </div>
@@ -114,8 +114,8 @@ export function DashboardHome() {
           <CardBody>
             <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
               <div>
-                <div className="text-sm font-semibold text-slate-100">Sign in required</div>
-                <div className="mt-1 text-sm text-slate-300">
+                <div className="text-sm font-semibold text-content-primary">Sign in required</div>
+                <div className="mt-1 text-sm text-content-tertiary">
                   Paste a session token or use GitHub OAuth to continue.
                 </div>
               </div>
@@ -128,15 +128,15 @@ export function DashboardHome() {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <div className="text-sm font-semibold text-slate-100">Organizations</div>
-            <div className="text-xs text-slate-400">
+            <div className="text-sm font-semibold text-content-primary">Organizations</div>
+            <div className="text-xs text-content-muted">
               {orgs ? `${orgs.length} total` : signedIn ? "Loading…" : "—"}
             </div>
           </div>
         </CardHeader>
         <CardBody>
           {sortedOrgs && sortedOrgs.length === 0 ? (
-            <div className="text-sm text-slate-300">
+            <div className="text-sm text-content-tertiary">
               No organizations yet. Create one to get started.
             </div>
           ) : null}
@@ -147,26 +147,26 @@ export function DashboardHome() {
                 <Link
                   key={o.id}
                   to={`/org/${o.id}`}
-                  className="group flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 p-5 transition hover:border-neon-500/30 hover:bg-white/7"
+                  className="group flex items-center justify-between rounded-2xl border border-border bg-surface-subtle p-5 transition hover:border-border-accent-hover hover:bg-surface-subtle-hover"
                 >
                   <div className="flex items-center gap-3">
-                    <Building2 className="h-5 w-5 text-neon-300" />
+                    <Building2 className="h-5 w-5 text-accent-text" />
                     <div>
-                      <div className="text-base font-semibold text-slate-100">{o.name}</div>
-                      <div className="mt-0.5 text-xs text-slate-400">
+                      <div className="text-base font-semibold text-content-primary">{o.name}</div>
+                      <div className="mt-0.5 text-xs text-content-muted">
                         Created {new Date(o.created_at).toLocaleDateString()}
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
                     <Badge tone={o.role === "admin" ? "neon" : "muted"}>{o.role}</Badge>
-                    <ExternalLink className="h-4 w-4 text-slate-500 transition group-hover:text-slate-300" />
+                    <ExternalLink className="h-4 w-4 text-content-muted transition group-hover:text-content-tertiary" />
                   </div>
                 </Link>
               ))}
             </div>
           ) : (
-            <div className="text-sm text-slate-300">{signedIn ? "Loading…" : "—"}</div>
+            <div className="text-sm text-content-tertiary">{signedIn ? "Loading…" : "—"}</div>
           )}
         </CardBody>
       </Card>
@@ -193,4 +193,3 @@ export function DashboardHome() {
     </div>
   );
 }
-

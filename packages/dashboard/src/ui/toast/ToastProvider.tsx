@@ -39,20 +39,20 @@ export function ToastProvider(props: { children: React.ReactNode }) {
           <div
             key={t.id}
             className={[
-              "rounded-xl border border-white/10 bg-ink-900/80 p-4 shadow-glow-soft backdrop-blur",
-              t.kind === "success" ? "ring-1 ring-aurora-400/30" : "",
+              "rounded-xl border border-border bg-surface-overlay p-4 shadow-glow-soft backdrop-blur",
+              t.kind === "success" ? "ring-1 ring-accent-bold/30" : "",
               t.kind === "error" ? "ring-1 ring-red-500/30" : "",
             ].join(" ")}
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-sm font-semibold text-slate-100">{t.title}</div>
+                <div className="text-sm font-semibold text-content-primary">{t.title}</div>
                 {t.detail ? (
-                  <div className="mt-1 break-words text-xs text-slate-300">{t.detail}</div>
+                  <div className="mt-1 break-words text-xs text-content-tertiary">{t.detail}</div>
                 ) : null}
               </div>
               <button
-                className="rounded-md p-1 text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                className="rounded-md p-1 text-content-muted hover:bg-surface-subtle hover:text-content-secondary"
                 onClick={() => remove(t.id)}
                 aria-label="Dismiss"
               >
@@ -71,4 +71,3 @@ export function useToast() {
   if (!ctx) throw new Error("useToast must be used within ToastProvider");
   return ctx;
 }
-

@@ -45,14 +45,14 @@ export function Modal(props: {
   return (
     <dialog
       ref={ref}
-      className="fixed left-1/2 top-[20%] w-[640px] max-w-[92vw] -translate-x-1/2 rounded-2xl border border-white/10 bg-ink-900/90 p-0 text-slate-100 shadow-glow-soft backdrop:bg-black/60"
+      className="fixed left-1/2 top-[20%] w-[640px] max-w-[92vw] -translate-x-1/2 rounded-2xl border border-border bg-surface-overlay p-0 text-content-primary shadow-glow-soft backdrop:bg-backdrop"
       onClose={props.onClose}
       onKeyDown={handleKeyDown}
     >
-      <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+      <div className="flex items-center justify-between border-b border-border px-5 py-4">
         <div className="text-sm font-semibold">{props.title}</div>
         <button
-          className="rounded-md p-1 text-slate-400 hover:bg-white/5 hover:text-slate-200"
+          className="rounded-md p-1 text-content-muted hover:bg-surface-subtle hover:text-content-secondary"
           onClick={props.onClose}
           aria-label="Close"
         >
@@ -63,4 +63,3 @@ export function Modal(props: {
     </dialog>
   );
 }
-

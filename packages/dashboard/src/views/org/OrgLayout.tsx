@@ -79,7 +79,7 @@ export function OrgLayout() {
       <Card>
         <CardBody>
           <div className="flex items-center justify-between">
-            <div className="text-sm text-slate-300">Sign in to view this organization.</div>
+            <div className="text-sm text-content-tertiary">Sign in to view this organization.</div>
             <Button onClick={() => nav("/auth")} variant="secondary">
               Go to auth
             </Button>
@@ -93,7 +93,7 @@ export function OrgLayout() {
     <div className="space-y-6">
       <div className="flex flex-col items-start justify-between gap-3 md:flex-row md:items-center">
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold text-slate-100">
+          <h1 className="text-xl font-semibold text-content-primary">
             {org ? org.name : "Organization"}
           </h1>
           {org ? (
@@ -106,7 +106,7 @@ export function OrgLayout() {
         </Button>
       </div>
 
-      <div className="rounded-2xl border border-white/10 bg-ink-900/55 p-2 shadow-glow-soft backdrop-blur">
+      <div className="rounded-2xl border border-border bg-surface-raised p-2 shadow-glow-soft backdrop-blur">
         <div className="flex flex-wrap gap-1">
           <Tab to="members" label="Members" />
           <Tab to="api-keys" label="API Keys" />
@@ -149,7 +149,7 @@ function Tab(props: { to: string; label: string }) {
       className={({ isActive }) =>
         [
           "rounded-xl px-3 py-2 text-sm transition",
-          isActive ? "bg-white/6 text-slate-100" : "text-slate-300 hover:bg-white/5 hover:text-slate-100",
+          isActive ? "bg-surface-subtle text-content-primary" : "text-content-tertiary hover:bg-surface-subtle hover:text-content-primary",
         ].join(" ")
       }
     >
@@ -157,4 +157,3 @@ function Tab(props: { to: string; label: string }) {
     </NavLink>
   );
 }
-

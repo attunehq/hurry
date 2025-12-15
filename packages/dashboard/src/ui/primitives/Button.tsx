@@ -20,16 +20,16 @@ export function Button(
         "disabled:cursor-not-allowed disabled:opacity-50",
         size === "sm" ? "h-9 text-sm" : "h-10 text-sm",
         variant === "primary"
-          ? "border-neon-500/35 bg-neon-500/15 text-slate-100 shadow-glow hover:bg-neon-500/20"
+          ? "border-border-accent bg-accent-subtle text-content-primary shadow-glow hover:bg-accent-subtle/80"
           : "",
         variant === "secondary"
-          ? "border-white/10 bg-white/5 text-slate-100 hover:bg-white/8"
+          ? "border-border bg-surface-subtle text-content-primary hover:bg-surface-subtle-hover"
           : "",
         variant === "danger"
-          ? "border-red-500/30 bg-red-500/10 text-red-100 hover:bg-red-500/15"
+          ? "border-danger-border bg-danger-bg text-danger-text hover:bg-danger-bg-hover"
           : "",
         variant === "ghost"
-          ? "border-transparent bg-transparent text-slate-200 hover:bg-white/5"
+          ? "border-transparent bg-transparent text-content-secondary hover:bg-surface-subtle"
           : "",
         className,
       )}

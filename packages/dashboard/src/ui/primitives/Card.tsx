@@ -6,7 +6,7 @@ export function Card(props: React.HTMLAttributes<HTMLDivElement>) {
     <div
       {...props}
       className={clsx(
-        "rounded-2xl border border-white/10 bg-ink-900/65 shadow-glow-soft backdrop-blur",
+        "rounded-2xl border border-border bg-surface-raised shadow-glow-soft backdrop-blur",
         props.className,
       )}
     />
@@ -15,7 +15,7 @@ export function Card(props: React.HTMLAttributes<HTMLDivElement>) {
 
 export function CardHeader(props: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div {...props} className={clsx("border-b border-white/10 p-5", props.className)} />
+    <div {...props} className={clsx("border-b border-border p-5", props.className)} />
   );
 }
 

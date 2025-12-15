@@ -1,5 +1,8 @@
 import { Navigate, createBrowserRouter, RouterProvider } from "react-router-dom";
 
+import { SessionProvider } from "../auth/session";
+import { ThemeProvider } from "../ui/theme/ThemeProvider";
+import { ToastProvider } from "../ui/toast/ToastProvider";
 import { AppShell } from "../ui/shell/AppShell";
 import { AuthCallbackPage } from "../views/auth/AuthCallbackPage";
 import { AuthPage } from "../views/auth/AuthPage";
@@ -13,18 +16,18 @@ import { OrgLayout } from "../views/org/OrgLayout";
 import { OrgMembersPage } from "../views/org/OrgMembersPage";
 import { NotFoundPage } from "../views/system/NotFoundPage";
 import { UserPage } from "../views/user/UserPage";
-import { SessionProvider } from "../auth/session";
-import { ToastProvider } from "../ui/toast/ToastProvider";
 
 const router = createBrowserRouter([
   {
     path: "/",
     element: (
-      <SessionProvider>
-        <ToastProvider>
-          <AppShell />
-        </ToastProvider>
-      </SessionProvider>
+      <ThemeProvider>
+        <SessionProvider>
+          <ToastProvider>
+            <AppShell />
+          </ToastProvider>
+        </SessionProvider>
+      </ThemeProvider>
     ),
     errorElement: <NotFoundPage />,
     children: [

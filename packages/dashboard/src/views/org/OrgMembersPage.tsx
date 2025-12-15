@@ -111,19 +111,19 @@ export function OrgMembersPage() {
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>
-            <div className="text-sm font-semibold text-slate-100">Members</div>
-            <div className="mt-1 text-sm text-slate-300">
+            <div className="text-sm font-semibold text-content-primary">Members</div>
+            <div className="mt-1 text-sm text-content-tertiary">
               Manage who has access to this organization.
             </div>
           </div>
-          <div className="text-xs text-slate-400">{loading ? "Loading…" : `${rows.length} total`}</div>
+          <div className="text-xs text-content-muted">{loading ? "Loading…" : `${rows.length} total`}</div>
         </div>
       </CardHeader>
       <CardBody>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="text-xs text-slate-400">
-              <tr className="border-b border-white/10">
+            <thead className="text-xs text-content-muted">
+              <tr className="border-b border-border">
                 <th className="py-2 pr-3">Name</th>
                 <th className="py-2 pr-3">Email</th>
                 <th className="py-2 pr-3">Role</th>
@@ -132,14 +132,14 @@ export function OrgMembersPage() {
             </thead>
             <tbody>
               {rows.map((m) => (
-                <tr key={m.account_id} className="border-b border-white/5">
+                <tr key={m.account_id} className="border-b border-border-subtle">
                   <td className="py-3 pr-3">
-                    <div className="flex items-center gap-2 font-medium text-slate-100">
-                      {m.bot ? <Bot className="h-4 w-4 text-slate-400" /> : null}
+                    <div className="flex items-center gap-2 font-medium text-content-primary">
+                      {m.bot ? <Bot className="h-4 w-4 text-accent-text" /> : null}
                       {m.name ?? m.email}
                     </div>
                   </td>
-                  <td className="py-3 pr-3 text-slate-200">{m.email}</td>
+                  <td className="py-3 pr-3 text-content-secondary">{m.email}</td>
                   <td className="py-3 pr-3">
                     <div className="flex items-center gap-2">
                       <Badge tone={m.role === "admin" ? "neon" : "muted"}>{m.role}</Badge>
@@ -203,7 +203,7 @@ export function OrgMembersPage() {
               ))}
               {rows.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={4} className="py-6 text-center text-sm text-slate-400">
+                  <td colSpan={4} className="py-6 text-center text-sm text-content-muted">
                     No members found.
                   </td>
                 </tr>
@@ -215,4 +215,3 @@ export function OrgMembersPage() {
     </Card>
   );
 }
-

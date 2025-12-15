@@ -47,24 +47,24 @@ export function AuthPage() {
         <CardHeader>
           <div className="flex items-center justify-between gap-4">
             <div>
-              <div className="text-sm font-semibold text-slate-100">Authentication</div>
-              <div className="mt-1 text-sm text-slate-300">
+              <div className="text-sm font-semibold text-content-primary">Authentication</div>
+              <div className="mt-1 text-sm text-content-tertiary">
                 Sign in to manage orgs, invitations, API keys, and bots.
               </div>
             </div>
             {sessionToken ? (
-              <div className="text-xs text-slate-400">Session token stored locally</div>
+              <div className="text-xs text-content-muted">Session token stored locally</div>
             ) : null}
           </div>
         </CardHeader>
         <CardBody>
           <div className="grid gap-6 md:grid-cols-2">
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
-              <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-                <Github className="h-4 w-4 text-slate-200" />
+            <div className="rounded-2xl border border-border bg-surface-subtle p-5">
+              <div className="flex items-center gap-2 text-sm font-semibold text-content-primary">
+                <Github className="h-4 w-4 text-content-secondary" />
                 Continue with GitHub
               </div>
-              <div className="mt-2 text-sm text-slate-300">
+              <div className="mt-2 text-sm text-content-tertiary">
                 Uses GitHub OAuth. If OAuth isn't configured yet,
                 use the session token option.
               </div>
@@ -76,12 +76,12 @@ export function AuthPage() {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
-              <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-                <KeyRound className="h-4 w-4 text-neon-300" />
+            <div className="rounded-2xl border border-border bg-surface-subtle p-5">
+              <div className="flex items-center gap-2 text-sm font-semibold text-content-primary">
+                <KeyRound className="h-4 w-4 text-accent-text" />
                 Use a session token
               </div>
-              <div className="mt-2 text-sm text-slate-300">
+              <div className="mt-2 text-sm text-content-tertiary">
                 Paste a session token.
               </div>
 
@@ -101,7 +101,7 @@ export function AuthPage() {
                   </Button>
                   <Button onClick={saveToken}>Save</Button>
                 </div>
-                <div className="text-xs text-slate-400">
+                <div className="text-xs text-content-muted">
                   Stored in `localStorage` only; never written to git.
                 </div>
               </div>
@@ -112,4 +112,3 @@ export function AuthPage() {
     </div>
   );
 }
-

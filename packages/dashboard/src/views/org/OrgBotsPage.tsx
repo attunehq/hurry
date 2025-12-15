@@ -109,8 +109,8 @@ export function OrgBotsPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-sm font-semibold text-slate-100">Bots</div>
-              <div className="mt-1 text-sm text-slate-300">
+              <div className="text-sm font-semibold text-content-primary">Bots</div>
+              <div className="mt-1 text-sm text-content-tertiary">
                 Machine accounts for automated workflows.
               </div>
             </div>
@@ -123,8 +123,8 @@ export function OrgBotsPage() {
         <CardBody>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="text-xs text-slate-400">
-                <tr className="border-b border-white/10">
+              <thead className="text-xs text-content-muted">
+                <tr className="border-b border-border">
                   <th className="py-2 pr-3">Bot</th>
                   <th className="py-2 pr-3">Responsible</th>
                   <th className="py-2 pr-3">Created</th>
@@ -133,15 +133,15 @@ export function OrgBotsPage() {
               </thead>
               <tbody>
                 {bots.map((b) => (
-                  <tr key={b.account_id} className="border-b border-white/5">
+                  <tr key={b.account_id} className="border-b border-border-subtle">
                     <td className="py-3 pr-3">
-                      <div className="flex items-center gap-2 font-medium text-slate-100">
-                        <Bot className="h-4 w-4 text-neon-300" />
+                      <div className="flex items-center gap-2 font-medium text-content-primary">
+                        <Bot className="h-4 w-4 text-accent-text" />
                         {b.name ?? "Unnamed bot"}
                       </div>
                     </td>
-                    <td className="py-3 pr-3 text-slate-200">{b.responsible_email}</td>
-                    <td className="py-3 pr-3 text-xs text-slate-300">{b.created_at}</td>
+                    <td className="py-3 pr-3 text-content-secondary">{b.responsible_email}</td>
+                    <td className="py-3 pr-3 text-xs text-content-tertiary">{b.created_at}</td>
                     <td className="py-3 pr-3">
                       <div className="flex justify-end">
                         <Button
@@ -159,7 +159,7 @@ export function OrgBotsPage() {
                 ))}
                 {bots.length === 0 && !loading ? (
                   <tr>
-                    <td colSpan={4} className="py-6 text-center text-sm text-slate-400">
+                    <td colSpan={4} className="py-6 text-center text-sm text-content-muted">
                       No bots yet.
                     </td>
                   </tr>
@@ -167,7 +167,7 @@ export function OrgBotsPage() {
               </tbody>
             </table>
           </div>
-          <div className="mt-3 text-xs text-slate-400">
+          <div className="mt-3 text-xs text-content-muted">
             Note: Bot API keys are only shown at creation time.
           </div>
         </CardBody>
@@ -215,14 +215,14 @@ export function OrgBotsPage() {
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <Badge tone="neon">bot</Badge>
-              <div className="text-sm font-semibold text-slate-100">{created.name}</div>
+              <div className="text-sm font-semibold text-content-primary">{created.name}</div>
             </div>
-            <div className="text-sm text-slate-300">
+            <div className="text-sm text-content-tertiary">
               This API key is shown once. Copy it somewhere safe.
             </div>
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="text-xs text-slate-400">API key</div>
-              <div className="mt-1 break-all font-mono text-xs text-slate-100">
+            <div className="rounded-2xl border border-border bg-surface-subtle p-4">
+              <div className="text-xs text-content-muted">API key</div>
+              <div className="mt-1 break-all font-mono text-xs text-content-primary">
                 {created.api_key}
               </div>
             </div>
@@ -239,4 +239,3 @@ export function OrgBotsPage() {
     </div>
   );
 }
-

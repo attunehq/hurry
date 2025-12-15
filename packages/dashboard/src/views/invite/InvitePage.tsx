@@ -66,18 +66,18 @@ export function InvitePage() {
     <div className="mx-auto max-w-2xl">
       <Card>
         <CardHeader>
-          <div className="text-sm font-semibold text-slate-100">Invitation</div>
-          <div className="mt-1 text-sm text-slate-300">
-            Preview what you’re joining before you accept.
+          <div className="text-sm font-semibold text-content-primary">Invitation</div>
+          <div className="mt-1 text-sm text-content-tertiary">
+            Preview what you're joining before you accept.
           </div>
         </CardHeader>
         <CardBody>
-          {loading ? <div className="text-sm text-slate-300">Loading…</div> : null}
+          {loading ? <div className="text-sm text-content-tertiary">Loading…</div> : null}
           {preview ? (
             <div className="space-y-4">
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="text-xs text-slate-400">Organization</div>
-                <div className="mt-1 text-sm font-semibold text-slate-100">
+              <div className="rounded-2xl border border-border bg-surface-subtle p-4">
+                <div className="text-xs text-content-muted">Organization</div>
+                <div className="mt-1 text-sm font-semibold text-content-primary">
                   {preview.organization_name}
                 </div>
                 <div className="mt-2 flex items-center gap-2">
@@ -97,11 +97,10 @@ export function InvitePage() {
               </div>
             </div>
           ) : !loading ? (
-            <div className="text-sm text-slate-300">No preview available.</div>
+            <div className="text-sm text-content-tertiary">No preview available.</div>
           ) : null}
         </CardBody>
       </Card>
     </div>
   );
 }
-

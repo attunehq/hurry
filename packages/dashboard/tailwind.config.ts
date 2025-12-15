@@ -5,42 +5,61 @@ export default {
   theme: {
     extend: {
       colors: {
-        ink: {
-          950: "#070A0C",
-          900: "#0A100F",
-          800: "#0E1614",
-          700: "#131E1A",
+        // Semantic surface colors (theme-aware)
+        surface: {
+          base: "var(--surface-base)",
+          raised: "var(--surface-raised)",
+          overlay: "var(--surface-overlay)",
+          subtle: "var(--surface-subtle)",
+          "subtle-hover": "var(--surface-subtle-hover)",
         },
-        // Attune brand teal/mint gradient colors
+        // Semantic border colors
+        border: {
+          DEFAULT: "var(--border-default)",
+          subtle: "var(--border-subtle)",
+          accent: "var(--border-accent)",
+          "accent-hover": "var(--border-accent-hover)",
+        },
+        // Semantic text colors
+        content: {
+          primary: "var(--text-primary)",
+          secondary: "var(--text-secondary)",
+          tertiary: "var(--text-tertiary)",
+          muted: "var(--text-muted)",
+        },
+        // Accent colors (theme-aware)
+        accent: {
+          bold: "var(--accent-bold)",
+          muted: "var(--accent-muted)",
+          subtle: "var(--accent-subtle)",
+          text: "var(--accent-text)",
+        },
+        // Danger colors (theme-aware)
+        danger: {
+          bg: "var(--danger-bg)",
+          "bg-hover": "var(--danger-bg-hover)",
+          border: "var(--danger-border)",
+          text: "var(--danger-text)",
+        },
+        // Keep attune for gradient text (static brand colors)
         attune: {
           600: "#2D9B7B",
           500: "#5AC7A3",
           400: "#6AD4B0",
           300: "#8FE0C4",
         },
-        // Keep neon for accent compatibility, but shift to teal
-        neon: {
-          500: "#3DA88A",
-          400: "#5AC7A3",
-          300: "#8FE0C4",
-        },
-        aurora: {
-          500: "#22D3EE",
-          400: "#5AC7A3",
-          300: "#8FE0C4",
-        },
+      },
+      borderColor: {
+        DEFAULT: "var(--border-default)",
       },
       boxShadow: {
-        glow: "0 0 0 1px rgba(90,199,163,.35), 0 10px 40px rgba(90,199,163,.18)",
-        "glow-soft":
-          "0 0 0 1px rgba(90,199,163,.25), 0 8px 30px rgba(90,199,163,.12)",
+        glow: "var(--glow)",
+        "glow-soft": "var(--glow-soft)",
       },
-      backgroundImage: {
-        "grid-fade":
-          "radial-gradient(ellipse at top, rgba(90,199,163,.15), transparent 55%), radial-gradient(ellipse at bottom, rgba(34,211,238,.10), transparent 55%)",
+      backgroundColor: {
+        backdrop: "var(--backdrop-overlay)",
       },
     },
   },
   plugins: [],
 } satisfies Config;
-

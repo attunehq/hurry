@@ -73,8 +73,8 @@ export function UserPage() {
     <div className="space-y-8">
       <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-100">Account</h1>
-          <p className="mt-1.5 text-sm text-slate-300">
+          <h1 className="text-2xl font-semibold text-content-primary">Account</h1>
+          <p className="mt-1.5 text-sm text-content-tertiary">
             View your account information.
           </p>
         </div>
@@ -89,8 +89,8 @@ export function UserPage() {
           <CardBody>
             <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
               <div>
-                <div className="text-sm font-semibold text-slate-100">Sign in required</div>
-                <div className="mt-1 text-sm text-slate-300">
+                <div className="text-sm font-semibold text-content-primary">Sign in required</div>
+                <div className="mt-1 text-sm text-content-tertiary">
                   Sign in to view your profile information.
                 </div>
               </div>
@@ -103,43 +103,43 @@ export function UserPage() {
       {signedIn && me ? (
         <Card>
           <CardHeader>
-            <div className="text-sm font-semibold text-slate-100">Account Details</div>
+            <div className="text-sm font-semibold text-content-primary">Account Details</div>
           </CardHeader>
           <CardBody>
             <div className="space-y-4">
               {me.name ? (
                 <div className="flex items-start gap-3">
-                  <div className="mt-0.5 h-4 w-4 text-center text-neon-300 text-xs font-bold">N</div>
+                  <div className="mt-0.5 h-4 w-4 text-center text-accent-text text-xs font-bold">N</div>
                   <div>
-                    <div className="text-xs font-medium text-slate-400">Name</div>
-                    <div className="mt-0.5 text-sm text-slate-100">{me.name}</div>
+                    <div className="text-xs font-medium text-content-muted">Name</div>
+                    <div className="mt-0.5 text-sm text-content-primary">{me.name}</div>
                   </div>
                 </div>
               ) : null}
 
               <div className="flex items-start gap-3">
-                <Mail className="mt-0.5 h-4 w-4 text-neon-300" />
+                <Mail className="mt-0.5 h-4 w-4 text-accent-text" />
                 <div>
-                  <div className="text-xs font-medium text-slate-400">Email</div>
-                  <div className="mt-0.5 text-sm text-slate-100">{me.email}</div>
+                  <div className="text-xs font-medium text-content-muted">Email</div>
+                  <div className="mt-0.5 text-sm text-content-primary">{me.email}</div>
                 </div>
               </div>
 
               {me.github_username ? (
                 <div className="flex items-start gap-3">
-                  <Github className="mt-0.5 h-4 w-4 text-neon-300" />
+                  <Github className="mt-0.5 h-4 w-4 text-accent-text" />
                   <div>
-                    <div className="text-xs font-medium text-slate-400">GitHub Username</div>
-                    <div className="mt-0.5 text-sm text-slate-100">{me.github_username}</div>
+                    <div className="text-xs font-medium text-content-muted">GitHub Username</div>
+                    <div className="mt-0.5 text-sm text-content-primary">{me.github_username}</div>
                   </div>
                 </div>
               ) : null}
 
               <div className="flex items-start gap-3">
-                <Calendar className="mt-0.5 h-4 w-4 text-neon-300" />
+                <Calendar className="mt-0.5 h-4 w-4 text-accent-text" />
                 <div>
-                  <div className="text-xs font-medium text-slate-400">Member Since</div>
-                  <div className="mt-0.5 text-sm text-slate-100">
+                  <div className="text-xs font-medium text-content-muted">Member Since</div>
+                  <div className="mt-0.5 text-sm text-content-primary">
                     {new Date(me.created_at).toLocaleDateString(undefined, {
                       year: "numeric",
                       month: "long",
@@ -155,7 +155,7 @@ export function UserPage() {
       ) : signedIn ? (
         <Card>
           <CardBody>
-            <div className="text-sm text-slate-300">Loading...</div>
+            <div className="text-sm text-content-tertiary">Loading...</div>
           </CardBody>
         </Card>
       ) : null}
