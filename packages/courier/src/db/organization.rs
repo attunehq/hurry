@@ -117,6 +117,27 @@ impl Postgres {
         }))
     }
 
+    /// Rename an organization.
+    ///
+    /// Returns `true` if the organization was updated, `false` if not found.
+    #[tracing::instrument(name = "Postgres::rename_organization")]
+    pub async fn rename_organization(&self, org_id: OrgId, name: &str) -> Result<bool> {
+        let result = sqlx::query!(
+            r#"
+            UPDATE organization
+            SET name = $2
+            WHERE id = $1
+            "#,
+            org_id.as_i64(),
+            name,
+        )
+        .execute(&self.pool)
+        .await
+        .context("rename organization")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     /// List all organizations an account is a member of.
     #[tracing::instrument(name = "Postgres::list_organizations_for_account")]
     pub async fn list_organizations_for_account(

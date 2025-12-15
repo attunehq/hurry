@@ -12,6 +12,7 @@ pub mod bots;
 pub mod create;
 pub mod leave;
 pub mod members;
+pub mod rename;
 
 pub fn router() -> Router<State> {
     let sensitive = Router::new()
@@ -21,6 +22,7 @@ pub fn router() -> Router<State> {
 
     Router::new()
         .route("/", post(create::handle))
+        .route("/{org_id}", patch(rename::handle))
         .route("/{org_id}/members", get(members::list::handle))
         .route(
             "/{org_id}/members/{account_id}",
