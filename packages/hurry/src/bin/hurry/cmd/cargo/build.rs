@@ -37,21 +37,21 @@ use hurry::{
 #[derive(Clone, Args, Debug)]
 #[command(disable_help_flag = true)]
 pub struct Options {
-    /// Base URL for the Courier instance.
+    /// Base URL for the Hurry API.
     #[arg(
-        long = "hurry-courier-url",
-        env = "HURRY_COURIER_URL",
+        long = "hurry-api-url",
+        env = "HURRY_API_URL",
         default_value = "https://courier.staging.corp.attunehq.com"
     )]
-    #[debug("{courier_url}")]
-    courier_url: Url,
+    #[debug("{api_url}")]
+    api_url: Url,
 
-    /// Authentication token for the Courier instance.
+    /// Authentication token for the Hurry API.
     // Note: this field is not _actually_ optional for `hurry` to operate; we're just telling clap
     // that it is so that if the user runs with the `-h` or `--help` arguments we can not require
     // the token in that case.
-    #[arg(long = "hurry-courier-token", env = "HURRY_COURIER_TOKEN")]
-    courier_token: Option<Token>,
+    #[arg(long = "hurry-api-token", env = "HURRY_API_TOKEN")]
+    api_token: Option<Token>,
 
     /// Skip backing up the cache.
     #[arg(long = "hurry-skip-backup", default_value_t = false)]
@@ -125,12 +125,12 @@ pub async fn exec(options: Options) -> Result<()> {
         return cargo::invoke("build", &options.argv).await;
     }
 
-    // We make the courier token required here; if we make it required in the actual
+    // We make the API token required here; if we make it required in the actual
     // clap state then we aren't able to support e.g. `cargo build -h` passthrough.
-    let Some(token) = &options.courier_token else {
-        return Err(eyre!("Courier authentication token is required"))
-            .suggestion("Set the `HURRY_COURIER_TOKEN` environment variable")
-            .suggestion("Provide it with the `--hurry-courier-token` argument");
+    let Some(token) = &options.api_token else {
+        return Err(eyre!("Hurry API authentication token is required"))
+            .suggestion("Set the `HURRY_API_TOKEN` environment variable")
+            .suggestion("Provide it with the `--hurry-api-token` argument");
     };
 
     info!("Starting");
@@ -155,7 +155,7 @@ pub async fn exec(options: Options) -> Result<()> {
         .context("calculating expected units")?;
 
     // Initialize cache.
-    let cache = CargoCache::open(options.courier_url, token.clone(), workspace)
+    let cache = CargoCache::open(options.api_url, token.clone(), workspace)
         .await
         .context("opening cache")?;
 

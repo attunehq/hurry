@@ -7,18 +7,18 @@ use url::Url;
 
 #[derive(Clone, Args, Debug)]
 pub struct Options {
-    /// Base URL for the Courier instance.
+    /// Base URL for the Hurry API.
     #[arg(
-        long = "courier-url",
-        env = "HURRY_COURIER_URL",
+        long = "api-url",
+        env = "HURRY_API_URL",
         default_value = "https://courier.staging.corp.attunehq.com"
     )]
-    #[debug("{courier_url}")]
-    courier_url: Url,
+    #[debug("{api_url}")]
+    api_url: Url,
 
-    /// Authentication token for the Courier instance.
-    #[arg(long = "courier-token", env = "HURRY_COURIER_TOKEN")]
-    courier_token: Token,
+    /// Authentication token for the Hurry API.
+    #[arg(long = "api-token", env = "HURRY_API_TOKEN")]
+    api_token: Token,
 
     /// Name of the package to display.
     #[arg(long)]
@@ -51,7 +51,7 @@ pub async fn exec(opts: Options) -> Result<()> {
         })
         .collect::<Vec<_>>();
 
-    let courier = Courier::new(opts.courier_url, opts.courier_token)?;
+    let courier = Courier::new(opts.api_url, opts.api_token)?;
 
     println!("Found {} matching units:", matching_units.len());
     for unit in matching_units {

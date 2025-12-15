@@ -1,5 +1,5 @@
 
-# Courier
+# Hurry API (Courier)
 
 Courier is the API service for Hurry, providing CAS functionality (and in the future, caching functionality as well).
 
@@ -49,8 +49,8 @@ Local auth fixture loaded. Available tokens:
 You can then use these tokens to test authenticated requests:
 ```sh
 hurry cargo build \
-  --hurry-courier-url http://localhost:3000 \
-  --hurry-courier-token acme-alice-token-001
+  --hurry-api-url http://localhost:3000 \
+  --hurry-api-token acme-alice-token-001
 ```
 
 To load just the auth fixtures without resetting everything:

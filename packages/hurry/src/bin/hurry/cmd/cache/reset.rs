@@ -14,18 +14,18 @@ pub struct Options {
     #[arg(short, long)]
     yes: bool,
 
-    /// Base URL for the Courier instance.
+    /// Base URL for the Hurry API.
     #[arg(
-        long = "courier-url",
-        env = "HURRY_COURIER_URL",
+        long = "api-url",
+        env = "HURRY_API_URL",
         default_value = "https://courier.staging.corp.attunehq.com"
     )]
-    #[debug("{courier_url}")]
-    courier_url: Url,
+    #[debug("{api_url}")]
+    api_url: Url,
 
-    /// Authentication token for the Courier instance.
-    #[arg(long = "courier-token", env = "HURRY_COURIER_TOKEN")]
-    courier_token: Token,
+    /// Authentication token for the Hurry API.
+    #[arg(long = "api-token", env = "HURRY_API_TOKEN")]
+    api_token: Token,
 
     /// Delete remote cache.
     // TODO: Once we have a tiered local cache, add a `--local` option.
@@ -56,8 +56,8 @@ pub async fn exec(options: Options) -> Result<()> {
         }
     }
     if options.remote {
-        let courier = Courier::new(options.courier_url, options.courier_token)?;
-        courier.ping().await.context("ping courier service")?;
+        let courier = Courier::new(options.api_url, options.api_token)?;
+        courier.ping().await.context("ping Hurry API")?;
 
         println!("Resetting remote cache...");
         courier.cache_reset().await.context("reset remote cache")?;

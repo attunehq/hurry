@@ -56,19 +56,19 @@ pub struct Build {
     #[builder(default)]
     release: bool,
 
-    /// The Courier API URL for distributed caching.
+    /// The Hurry API URL for distributed caching.
     ///
-    /// If provided, this is passed to hurry via the `HURRY_COURIER_URL`
+    /// If provided, this is passed to hurry via the `HURRY_API_URL`
     /// environment variable.
     #[builder(into)]
-    courier_url: Option<String>,
+    api_url: Option<String>,
 
-    /// The Courier API token for authentication.
+    /// The Hurry API token for authentication.
     ///
-    /// If provided, this is passed to hurry via the `HURRY_COURIER_TOKEN`
+    /// If provided, this is passed to hurry via the `HURRY_API_TOKEN`
     /// environment variable.
     #[builder(into)]
-    courier_token: Option<String>,
+    api_token: Option<String>,
 }
 
 impl Build {
@@ -119,11 +119,11 @@ impl Build {
         // around argument ordering; see https://github.com/attunehq/hurry/issues/170
         // This also lets us not have to worry about whether we're using a wrapper or
         // not, since non-hurry binaries will just ignore these.
-        if let Some(url) = &self.courier_url {
-            cmd = cmd.env("HURRY_COURIER_URL", url);
+        if let Some(url) = &self.api_url {
+            cmd = cmd.env("HURRY_API_URL", url);
         }
-        if let Some(token) = &self.courier_token {
-            cmd = cmd.env("HURRY_COURIER_TOKEN", token);
+        if let Some(token) = &self.api_token {
+            cmd = cmd.env("HURRY_API_TOKEN", token);
         }
 
         // Always wait for uploads in tests to ensure artifacts are available for
