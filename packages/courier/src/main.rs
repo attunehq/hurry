@@ -155,8 +155,10 @@ async fn serve(config: ServeConfig) -> Result<()> {
         }
     };
 
-    let router =
-        courier::api::router(Aero::new().with(github).with(storage).with(db), cors_origins);
+    let router = courier::api::router(
+        Aero::new().with(github).with(storage).with(db),
+        cors_origins,
+    );
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;

@@ -64,8 +64,7 @@ pub async fn handle(
     // Exchange the authorization code for an access token. The redirect_uri used
     // here is courier's callback URL (stored in the GitHub client), which must
     // match what was sent in the authorization request.
-    let access_token = match github.exchange_code(params.code, pkce_verifier).await
-    {
+    let access_token = match github.exchange_code(params.code, pkce_verifier).await {
         Ok(token) => token,
         Err(error) => {
             warn!(?error, "oauth.callback.token_exchange_error");
