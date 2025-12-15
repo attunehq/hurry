@@ -1,6 +1,6 @@
 //! GitHub OAuth client for user authentication.
 
-use std::{borrow::Cow, collections::HashSet};
+use std::collections::HashSet;
 
 use color_eyre::{
     Result,
@@ -8,7 +8,7 @@ use color_eyre::{
 };
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, TokenResponse, TokenUrl, basic::BasicClient,
+    PkceCodeChallenge, PkceCodeVerifier, TokenResponse, TokenUrl, basic::BasicClient,
     reqwest as oauth_reqwest, url::Url,
 };
 
@@ -108,12 +108,15 @@ impl GitHub {
     ///
     /// Returns the URL to redirect the user to, along with the PKCE verifier
     /// and CSRF state token that must be stored server-side.
-    pub fn authorization_url(&self, redirect_uri: Url) -> (Url, PkceCodeVerifier, CsrfToken) {
+    ///
+    /// No redirect_uri is sent to GitHub - it uses the callback URL configured
+    /// in the GitHub App settings. The client's redirect_uri is stored in
+    /// oauth_state and used after the callback to redirect the user back.
+    pub fn authorization_url(&self) -> (Url, PkceCodeVerifier, CsrfToken) {
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
         let (auth_url, csrf_token) = self
             .client
             .authorize_url(CsrfToken::new_random)
-            .set_redirect_uri(Cow::Owned(RedirectUrl::from_url(redirect_uri)))
             .set_pkce_challenge(pkce_challenge)
             .url();
 
@@ -127,13 +130,11 @@ impl GitHub {
     pub async fn exchange_code(
         &self,
         code: String,
-        redirect_uri: Url,
         pkce_verifier: PkceCodeVerifier,
     ) -> Result<String> {
         let token_result = self
             .client
             .exchange_code(AuthorizationCode::new(code))
-            .set_redirect_uri(Cow::Owned(RedirectUrl::from_url(redirect_uri)))
             .set_pkce_verifier(pkce_verifier)
             .request_async(&self.http_client)
             .await

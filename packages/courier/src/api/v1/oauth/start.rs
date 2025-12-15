@@ -40,7 +40,10 @@ pub async fn handle(
         }
     };
 
-    let (auth_url, pkce_verifier, csrf_token) = github.authorization_url(redirect_uri.clone());
+    // Generate authorization URL using courier's callback URL (not the client's
+    // redirect_uri). The client's redirect_uri is stored in oauth_state and used
+    // after the callback to redirect the user back to the client.
+    let (auth_url, pkce_verifier, csrf_token) = github.authorization_url();
     let expires_at = OffsetDateTime::now_utc() + OAUTH_STATE_DURATION;
     if let Err(error) = db
         .store_oauth_state(

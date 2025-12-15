@@ -36,14 +36,17 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     extract::Request,
-    http::{HeaderValue, StatusCode},
+    http::{HeaderValue, Method, StatusCode},
     middleware::Next,
     response::Response,
 };
 use tower::ServiceBuilder;
 use tower_http::{
-    compression::CompressionLayer, decompression::RequestDecompressionLayer,
-    limit::RequestBodyLimitLayer, timeout::TimeoutLayer,
+    compression::CompressionLayer,
+    cors::{AllowOrigin, Any, CorsLayer},
+    decompression::RequestDecompressionLayer,
+    limit::RequestBodyLimitLayer,
+    timeout::TimeoutLayer,
 };
 use tracing::Instrument;
 use uuid::Uuid;
@@ -71,7 +74,7 @@ pub type State = Aero![
     Option<crate::oauth::GitHub>,
 ];
 
-pub fn router(state: State) -> Router {
+pub fn router(state: State, allowed_origins: Vec<HeaderValue>) -> Router {
     let middleware = ServiceBuilder::new()
         .layer(RequestDecompressionLayer::new())
         .layer(CompressionLayer::new())
@@ -81,10 +84,18 @@ pub fn router(state: State) -> Router {
             REQUEST_TIMEOUT,
         ));
 
+    // CORS configuration: restrict origins to the OAuth redirect allowlist.
+    // This ensures only trusted frontends can make cross-origin requests.
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::list(allowed_origins))
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        .allow_headers(Any);
+
     Router::new()
         .nest("/api/v1", v1::router())
         .layer(DefaultBodyLimit::max(MAX_JSON_BODY_SIZE))
         .layer(middleware)
+        .layer(cors)
         .layer(axum::middleware::from_fn(trace_request))
         .with_state(state)
 }

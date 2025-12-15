@@ -96,6 +96,9 @@ async fn main() -> Result<()> {
 }
 
 async fn serve(config: ServeConfig) -> Result<()> {
+    use axum::http::HeaderValue;
+    use oauth2::url::Url;
+
     tracing::info!("constructing application router...");
     let storage = courier::storage::Disk::new(&config.cas_root);
     let db = courier::db::Postgres::connect(&config.database_url)
@@ -108,6 +111,19 @@ async fn serve(config: ServeConfig) -> Result<()> {
     db.validate_migrations()
         .await
         .context("validate database migrations")?;
+
+    // Extract CORS allowed origins from the OAuth redirect allowlist.
+    // We use the origin (scheme + host + port) of each allowed redirect URI.
+    let cors_origins = config
+        .oauth_redirect_allowlist
+        .iter()
+        .filter_map(|uri| {
+            Url::parse(uri)
+                .ok()
+                .map(|u| u.origin().ascii_serialization())
+        })
+        .filter_map(|origin| HeaderValue::from_str(&origin).ok())
+        .collect::<Vec<_>>();
 
     // Construct GitHub OAuth client if configured
     let github = match (config.github_client_id, config.github_client_secret) {
@@ -139,7 +155,8 @@ async fn serve(config: ServeConfig) -> Result<()> {
         }
     };
 
-    let router = courier::api::router(Aero::new().with(github).with(storage).with(db));
+    let router =
+        courier::api::router(Aero::new().with(github).with(storage).with(db), cors_origins);
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;

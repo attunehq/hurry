@@ -70,7 +70,8 @@ impl TestFixture {
         // In tests, we don't configure GitHub OAuth (tests use API keys)
         let github = None::<oauth::GitHub>;
         let state = Aero::new().with(github).with(storage).with(db.clone());
-        let router = api::router(state);
+        // Tests don't need CORS (not browser-based)
+        let router = api::router(state, vec![]);
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await

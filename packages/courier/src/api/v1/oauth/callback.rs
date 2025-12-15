@@ -61,9 +61,10 @@ pub async fn handle(
     };
 
     let pkce_verifier = PkceCodeVerifier::new(oauth_state.pkce_verifier);
-    let access_token = match github
-        .exchange_code(params.code, redirect_uri.clone(), pkce_verifier)
-        .await
+    // Exchange the authorization code for an access token. The redirect_uri used
+    // here is courier's callback URL (stored in the GitHub client), which must
+    // match what was sent in the authorization request.
+    let access_token = match github.exchange_code(params.code, pkce_verifier).await
     {
         Ok(token) => token,
         Err(error) => {
