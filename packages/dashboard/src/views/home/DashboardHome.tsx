@@ -15,6 +15,7 @@ import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
 import { Input } from "../../ui/primitives/Input";
 import { Label } from "../../ui/primitives/Label";
 import { Modal } from "../../ui/primitives/Modal";
+import { PageLayout } from "../../ui/shell/PageLayout";
 import { useToast } from "../../ui/toast/ToastProvider";
 
 export function DashboardHome() {
@@ -91,20 +92,16 @@ export function DashboardHome() {
   }, [signedIn]);
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
-        <div>
-          <h1 className="text-2xl font-semibold text-content-primary">{headerLine}</h1>
-          <p className="mt-1.5 text-sm text-content-tertiary">
-            Manage organizations, invitations, API keys, and bot identities.
-          </p>
-        </div>
+    <PageLayout
+      title={headerLine}
+      subtitle="Manage organizations, invitations, API keys, and bot identities."
+      actions={
         <Button onClick={() => setCreateOpen(true)} disabled={!signedIn}>
           <Plus className="h-4 w-4" />
           New org
         </Button>
-      </div>
-
+      }
+    >
       {!signedIn ? (
         <Card>
           <CardBody>
@@ -186,6 +183,6 @@ export function DashboardHome() {
           </div>
         </div>
       </Modal>
-    </div>
+    </PageLayout>
   );
 }

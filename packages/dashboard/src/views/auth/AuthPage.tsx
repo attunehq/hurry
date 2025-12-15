@@ -5,9 +5,10 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { apiUrl } from "../../api/client";
 import { useSession } from "../../auth/session";
 import { Button } from "../../ui/primitives/Button";
-import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
+import { Card, CardBody } from "../../ui/primitives/Card";
 import { Input } from "../../ui/primitives/Input";
 import { Label } from "../../ui/primitives/Label";
+import { PageLayout } from "../../ui/shell/PageLayout";
 import { useToast } from "../../ui/toast/ToastProvider";
 
 type LocationState = { from?: string } | null;
@@ -42,21 +43,16 @@ export function AuthPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <PageLayout
+      title="Authentication"
+      subtitle="Sign in to manage orgs, invitations, API keys, and bots."
+      actions={
+        sessionToken ? (
+          <div className="text-xs text-content-muted">Session token stored locally</div>
+        ) : null
+      }
+    >
       <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <div className="text-sm font-semibold text-content-primary">Authentication</div>
-              <div className="mt-1 text-sm text-content-tertiary">
-                Sign in to manage orgs, invitations, API keys, and bots.
-              </div>
-            </div>
-            {sessionToken ? (
-              <div className="text-xs text-content-muted">Session token stored locally</div>
-            ) : null}
-          </div>
-        </CardHeader>
         <CardBody>
           <div className="grid gap-6 md:grid-cols-2">
             <div className="rounded-2xl border border-border bg-surface-subtle p-5">
@@ -109,6 +105,6 @@ export function AuthPage() {
           </div>
         </CardBody>
       </Card>
-    </div>
+    </PageLayout>
   );
 }

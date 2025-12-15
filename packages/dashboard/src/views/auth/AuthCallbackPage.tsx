@@ -4,7 +4,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { exchangeAuthCode } from "../../api/client";
 import { useSession } from "../../auth/session";
 import { Button } from "../../ui/primitives/Button";
-import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
+import { Card, CardBody } from "../../ui/primitives/Card";
+import { PageLayout } from "../../ui/shell/PageLayout";
 
 export function AuthCallbackPage() {
   const nav = useNavigate();
@@ -47,14 +48,11 @@ export function AuthCallbackPage() {
   }, [authCode, nav, setSessionToken]);
 
   return (
-    <div className="mx-auto max-w-xl">
+    <PageLayout
+      title="Signing you in…"
+      subtitle="Exchanging OAuth callback code for a session token."
+    >
       <Card>
-        <CardHeader>
-          <div className="text-sm font-semibold text-content-primary">Signing you in…</div>
-          <div className="mt-1 text-sm text-content-tertiary">
-            Exchanging OAuth callback code for a session token.
-          </div>
-        </CardHeader>
         <CardBody>
           {status === "working" ? (
             <div className="text-sm text-content-tertiary">Working…</div>
@@ -72,6 +70,6 @@ export function AuthCallbackPage() {
           ) : null}
         </CardBody>
       </Card>
-    </div>
+    </PageLayout>
   );
 }

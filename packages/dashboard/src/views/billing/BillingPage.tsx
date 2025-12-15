@@ -1,17 +1,14 @@
 import { Gift, Sparkles } from "lucide-react";
 
 import { Card, CardBody } from "../../ui/primitives/Card";
+import { PageLayout } from "../../ui/shell/PageLayout";
 
 export function BillingPage() {
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold text-content-primary">Billing</h1>
-        <p className="mt-1.5 text-sm text-content-tertiary">
-          Manage your subscription and payment details.
-        </p>
-      </div>
-
+    <PageLayout
+      title="Billing"
+      subtitle="Manage your subscription and payment details."
+    >
       <Card>
         <CardBody>
           <div className="flex flex-col items-center py-8 text-center">
@@ -32,6 +29,6 @@ export function BillingPage() {
           </div>
         </CardBody>
       </Card>
-    </div>
+    </PageLayout>
   );
 }

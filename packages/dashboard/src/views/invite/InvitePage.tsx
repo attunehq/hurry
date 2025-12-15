@@ -5,7 +5,8 @@ import type { AcceptInvitationResponse, InvitationPreviewResponse } from "../../
 import { useApi } from "../../api/useApi";
 import { Badge } from "../../ui/primitives/Badge";
 import { Button } from "../../ui/primitives/Button";
-import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
+import { Card, CardBody } from "../../ui/primitives/Card";
+import { PageLayout } from "../../ui/shell/PageLayout";
 import { useToast } from "../../ui/toast/ToastProvider";
 
 export function InvitePage() {
@@ -63,14 +64,11 @@ export function InvitePage() {
   }, [inviteToken]);
 
   return (
-    <div className="mx-auto max-w-2xl">
+    <PageLayout
+      title="Invitation"
+      subtitle="Preview what you're joining before you accept."
+    >
       <Card>
-        <CardHeader>
-          <div className="text-sm font-semibold text-content-primary">Invitation</div>
-          <div className="mt-1 text-sm text-content-tertiary">
-            Preview what you're joining before you accept.
-          </div>
-        </CardHeader>
         <CardBody>
           {loading ? <div className="text-sm text-content-tertiary">Loading…</div> : null}
           {preview ? (
@@ -101,6 +99,6 @@ export function InvitePage() {
           ) : null}
         </CardBody>
       </Card>
-    </div>
+    </PageLayout>
   );
 }

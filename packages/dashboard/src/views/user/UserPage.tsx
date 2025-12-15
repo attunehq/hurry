@@ -9,6 +9,7 @@ import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
 import { Input } from "../../ui/primitives/Input";
 import { Label } from "../../ui/primitives/Label";
 import { Modal } from "../../ui/primitives/Modal";
+import { PageLayout } from "../../ui/shell/PageLayout";
 import { useToast } from "../../ui/toast/ToastProvider";
 
 export function UserPage() {
@@ -68,14 +69,10 @@ export function UserPage() {
   }, [signedIn]);
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
-        <div>
-          <h1 className="text-2xl font-semibold text-content-primary">Account</h1>
-          <p className="mt-1.5 text-sm text-content-tertiary">
-            View your account information.
-          </p>
-        </div>
+    <PageLayout
+      title="Account"
+      subtitle="View your account information."
+      actions={
         <div className="flex gap-2">
           <Button variant="secondary" onClick={openRename} disabled={!signedIn || !me}>
             <Pencil className="h-4 w-4" />
@@ -86,8 +83,8 @@ export function UserPage() {
             Sign out
           </Button>
         </div>
-      </div>
-
+      }
+    >
       {!signedIn ? (
         <Card>
           <CardBody>
@@ -185,6 +182,6 @@ export function UserPage() {
           </div>
         </div>
       </Modal>
-    </div>
+    </PageLayout>
   );
 }

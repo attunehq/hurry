@@ -10,6 +10,7 @@ import { Card, CardBody } from "../../ui/primitives/Card";
 import { Input } from "../../ui/primitives/Input";
 import { Label } from "../../ui/primitives/Label";
 import { Modal } from "../../ui/primitives/Modal";
+import { PageLayout } from "../../ui/shell/PageLayout";
 import { useToast } from "../../ui/toast/ToastProvider";
 
 export function OrgLayout() {
@@ -75,36 +76,38 @@ export function OrgLayout() {
 
   if (!signedIn) {
     return (
-      <Card>
-        <CardBody>
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-content-tertiary">Sign in to view this organization.</div>
-            <Button onClick={() => nav("/auth")} variant="secondary">
-              Go to auth
-            </Button>
-          </div>
-        </CardBody>
-      </Card>
+      <PageLayout title="Organization">
+        <Card>
+          <CardBody>
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-content-tertiary">Sign in to view this organization.</div>
+              <Button onClick={() => nav("/auth")} variant="secondary">
+                Go to auth
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
+      </PageLayout>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col items-start justify-between gap-3 md:flex-row md:items-center">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold text-content-primary">
-            {org ? org.name : "Organization"}
-          </h1>
+    <PageLayout
+      title={
+        <span className="flex items-center gap-3">
+          {org ? org.name : "Organization"}
           {org ? (
             <Badge tone={org.role === "admin" ? "neon" : "muted"}>{org.role}</Badge>
           ) : null}
-        </div>
+        </span>
+      }
+      actions={
         <Button variant="secondary" onClick={openRename} disabled={!canAdmin}>
           <Pencil className="h-4 w-4" />
           Rename
         </Button>
-      </div>
-
+      }
+    >
       <div className="rounded-2xl border border-border bg-surface-raised p-2 shadow-glow-soft backdrop-blur">
         <div className="flex flex-wrap gap-1">
           <Tab to="members" label="Members" />
@@ -137,7 +140,7 @@ export function OrgLayout() {
           </div>
         </div>
       </Modal>
-    </div>
+    </PageLayout>
   );
 }
 
