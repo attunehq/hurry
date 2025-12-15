@@ -10,25 +10,25 @@ body {
 body {
   background: radial-gradient(
       1000px 650px at 25% -10%,
-      rgba(124, 92, 255, 0.28),
+      rgba(90, 199, 163, 0.22),
       transparent 60%
     ),
     radial-gradient(
       900px 520px at 85% 0%,
-      rgba(34, 211, 238, 0.18),
+      rgba(45, 155, 123, 0.18),
       transparent 60%
     ),
     radial-gradient(
       800px 520px at 50% 110%,
-      rgba(52, 211, 153, 0.14),
+      rgba(106, 212, 176, 0.12),
       transparent 55%
     ),
-    linear-gradient(180deg, #070a12 0%, #070a12 100%);
+    linear-gradient(180deg, #070a0c 0%, #070a0c 100%);
   color: rgb(226 232 240);
 }
 
 :focus-visible {
-  outline: 2px solid rgba(124, 92, 255, 0.7);
+  outline: 2px solid rgba(90, 199, 163, 0.7);
   outline-offset: 2px;
 }
 

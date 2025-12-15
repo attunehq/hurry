@@ -1,4 +1,4 @@
-import { CreditCard, FlaskConical, LogIn, LogOut, User, Users } from "lucide-react";
+import { CreditCard, LogIn, LogOut, User, Users } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../api/client";
@@ -9,7 +9,9 @@ function brand() {
   return (
     <div className="flex items-center gap-3">
       <div className="grid h-11 w-11 place-items-center rounded-xl border border-white/10 bg-white/5 shadow-glow-soft">
-        <FlaskConical className="h-5 w-5 text-neon-300" />
+        <span className="text-2xl font-bold bg-gradient-to-br from-attune-300 to-attune-500 bg-clip-text text-transparent">
+          A
+        </span>
       </div>
       <div className="text-xl font-semibold text-slate-100">Hurry</div>
     </div>
