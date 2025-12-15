@@ -1,6 +1,6 @@
-# Courier Dashboard (Self-Serve)
+# Hurry Console
 
-Vite + React Router dashboard for managing Courier accounts, orgs, invitations, API keys, and bots.
+Vite + React Router console for managing Hurry accounts, orgs, invitations, API keys, and bots.
 
 ## Local dev
 
@@ -14,13 +14,13 @@ npm install
 npm run dev
 ```
 
-The Vite dev server proxies `/api/*` to `http://localhost:3000` so the app can call Courier without CORS.
+The Vite dev server proxies `/api/*` to `http://localhost:3000` so the app can call the API without CORS.
 
 ### Auth
 
 Preferred: GitHub OAuth (if configured on your Courier instance).
 
-Dev fallback: create a session token using the repo scripts, then paste it into the dashboard:
+Dev fallback: create a session token using the repo scripts, then paste it into the console:
 
 ```bash
 export COURIER_URL=http://localhost:3000
@@ -29,8 +29,8 @@ export COURIER_TOKEN=$(../../scripts/api/login "dev@example.com" "dev-user" "Dev
 echo "$COURIER_TOKEN"
 ```
 
-Open the dashboard at `http://localhost:5173/auth` and use “Use a session token”.
+Open the console at `http://localhost:5173/auth` and use "Use a session token".
 
 ## Config
 
-- `VITE_API_ORIGIN` (optional): API origin for Courier (default: same-origin). Example: `http://localhost:3000`
+- `VITE_API_ORIGIN` (optional): API origin (default: same-origin). Example: `http://localhost:3000`

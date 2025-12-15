@@ -30,7 +30,7 @@ export function DashboardHome() {
   const signedIn = Boolean(sessionToken);
 
   const headerLine = useMemo(() => {
-    if (!me) return "Hurry Dashboard";
+    if (!me) return "Hurry Console";
     const who = me.name?.trim() ? me.name.trim() : me.github_username ?? me.email;
     return `Welcome, ${who}`;
   }, [me]);
