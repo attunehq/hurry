@@ -3,6 +3,8 @@
 .vscode
 .hurrydata
 target
+node_modules
+dist
 
 # Un-ignore .claude directory to share commands with team
 !.claude
