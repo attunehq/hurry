@@ -1,4 +1,4 @@
-import { Github, Mail, RefreshCw, Calendar } from "lucide-react";
+import { Github, Mail, Pencil, Calendar } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -7,6 +7,9 @@ import type { MeResponse } from "../../api/types";
 import { useSession } from "../../auth/session";
 import { Button } from "../../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
+import { Input } from "../../ui/primitives/Input";
+import { Label } from "../../ui/primitives/Label";
+import { Modal } from "../../ui/primitives/Modal";
 import { useToast } from "../../ui/toast/ToastProvider";
 
 export function UserPage() {
@@ -14,7 +17,8 @@ export function UserPage() {
   const toast = useToast();
   const { sessionToken } = useSession();
   const [me, setMe] = useState<MeResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [newName, setNewName] = useState("");
 
   const signedIn = Boolean(sessionToken);
 
@@ -23,7 +27,6 @@ export function UserPage() {
       setMe(null);
       return;
     }
-    setLoading(true);
     try {
       const meOut = await apiRequest<MeResponse>({ path: "/api/v1/me", sessionToken });
       setMe(meOut);
@@ -31,8 +34,34 @@ export function UserPage() {
       setMe(null);
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Failed to load user", detail: msg });
-    } finally {
-      setLoading(false);
+    }
+  }
+
+  function openRename() {
+    setNewName(me?.name ?? "");
+    setRenameOpen(true);
+  }
+
+  async function rename() {
+    if (!sessionToken) return;
+    const trimmed = newName.trim();
+    if (!trimmed) {
+      toast.push({ kind: "error", title: "Name cannot be empty" });
+      return;
+    }
+    try {
+      await apiRequest<void>({
+        path: "/api/v1/me",
+        method: "PATCH",
+        sessionToken,
+        body: { name: trimmed },
+      });
+      toast.push({ kind: "success", title: "Account name updated" });
+      setRenameOpen(false);
+      await refresh();
+    } catch (e) {
+      const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
+      toast.push({ kind: "error", title: "Update failed", detail: msg });
     }
   }
 
@@ -49,9 +78,9 @@ export function UserPage() {
             View your account information.
           </p>
         </div>
-        <Button variant="secondary" onClick={refresh} disabled={!signedIn || loading}>
-          <RefreshCw className="h-4 w-4" />
-          Refresh
+        <Button variant="secondary" onClick={openRename} disabled={!signedIn || !me}>
+          <Pencil className="h-4 w-4" />
+          Rename
         </Button>
       </div>
 
@@ -130,6 +159,28 @@ export function UserPage() {
           </CardBody>
         </Card>
       ) : null}
+
+      <Modal open={renameOpen} title="Update account name" onClose={() => setRenameOpen(false)} onSubmit={rename}>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="account-name">Name</Label>
+            <Input
+              id="account-name"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Enter your name"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setRenameOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={rename}>
+              Save
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

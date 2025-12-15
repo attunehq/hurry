@@ -1,4 +1,4 @@
-import { Building2, ExternalLink, Plus, RefreshCw } from "lucide-react";
+import { Building2, ExternalLink, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -24,7 +24,6 @@ export function DashboardHome() {
   const { sessionToken } = useSession();
   const [me, setMe] = useState<MeResponse | null>(null);
   const [orgs, setOrgs] = useState<OrganizationEntry[] | null>(null);
-  const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [orgName, setOrgName] = useState("");
 
@@ -47,7 +46,6 @@ export function DashboardHome() {
       setOrgs(null);
       return;
     }
-    setLoading(true);
     try {
       const meOut = await apiRequest<MeResponse>({ path: "/api/v1/me", sessionToken });
       const orgsOut = await apiRequest<OrganizationListResponse>({
@@ -61,8 +59,6 @@ export function DashboardHome() {
       setOrgs(null);
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Failed to load", detail: msg });
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -107,16 +103,10 @@ export function DashboardHome() {
             Manage organizations, invitations, API keys, and bot identities.
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={refresh} disabled={!signedIn || loading}>
-            <RefreshCw className="h-4 w-4" />
-            Refresh
-          </Button>
-          <Button onClick={() => setCreateOpen(true)} disabled={!signedIn}>
-            <Plus className="h-4 w-4" />
-            New org
-          </Button>
-        </div>
+        <Button onClick={() => setCreateOpen(true)} disabled={!signedIn}>
+          <Plus className="h-4 w-4" />
+          New org
+        </Button>
       </div>
 
       {!signedIn ? (

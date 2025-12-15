@@ -1,4 +1,4 @@
-import { RefreshCw } from "lucide-react";
+import { Pencil } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 
@@ -8,6 +8,9 @@ import { useSession } from "../../auth/session";
 import { Badge } from "../../ui/primitives/Badge";
 import { Button } from "../../ui/primitives/Button";
 import { Card, CardBody } from "../../ui/primitives/Card";
+import { Input } from "../../ui/primitives/Input";
+import { Label } from "../../ui/primitives/Label";
+import { Modal } from "../../ui/primitives/Modal";
 import { useToast } from "../../ui/toast/ToastProvider";
 
 export function OrgLayout() {
@@ -16,13 +19,13 @@ export function OrgLayout() {
   const { orgId } = useParams();
   const { sessionToken } = useSession();
   const [org, setOrg] = useState<OrganizationEntry | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [newName, setNewName] = useState("");
 
   const id = useMemo(() => Number(orgId ?? "0"), [orgId]);
 
   async function refresh() {
     if (!sessionToken || !id) return;
-    setLoading(true);
     try {
       const out = await apiRequest<OrganizationListResponse>({
         path: "/api/v1/me/organizations",
@@ -34,8 +37,36 @@ export function OrgLayout() {
     } catch (e) {
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Failed to load org", detail: msg });
-    } finally {
-      setLoading(false);
+    }
+  }
+
+  const canAdmin = org?.role === "admin";
+
+  function openRename() {
+    setNewName(org?.name ?? "");
+    setRenameOpen(true);
+  }
+
+  async function rename() {
+    if (!sessionToken || !id) return;
+    const trimmed = newName.trim();
+    if (!trimmed) {
+      toast.push({ kind: "error", title: "Name cannot be empty" });
+      return;
+    }
+    try {
+      await apiRequest<void>({
+        path: `/api/v1/organizations/${id}`,
+        method: "PATCH",
+        sessionToken,
+        body: { name: trimmed },
+      });
+      toast.push({ kind: "success", title: "Organization renamed" });
+      setRenameOpen(false);
+      await refresh();
+    } catch (e) {
+      const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
+      toast.push({ kind: "error", title: "Rename failed", detail: msg });
     }
   }
 
@@ -69,9 +100,9 @@ export function OrgLayout() {
             <Badge tone={org.role === "admin" ? "neon" : "muted"}>{org.role}</Badge>
           ) : null}
         </div>
-        <Button variant="secondary" onClick={refresh} disabled={loading}>
-          <RefreshCw className="h-4 w-4" />
-          Refresh
+        <Button variant="secondary" onClick={openRename} disabled={!canAdmin}>
+          <Pencil className="h-4 w-4" />
+          Rename
         </Button>
       </div>
 
@@ -85,6 +116,28 @@ export function OrgLayout() {
       </div>
 
       <Outlet context={{ orgId: id, role: org?.role ?? null }} />
+
+      <Modal open={renameOpen} title="Rename organization" onClose={() => setRenameOpen(false)} onSubmit={rename}>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="org-name">Organization name</Label>
+            <Input
+              id="org-name"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Enter new name"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setRenameOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={rename}>
+              Rename
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

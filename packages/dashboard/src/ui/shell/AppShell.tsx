@@ -11,10 +11,7 @@ function brand() {
       <div className="grid h-11 w-11 place-items-center rounded-xl border border-white/10 bg-white/5 shadow-glow-soft">
         <FlaskConical className="h-5 w-5 text-neon-300" />
       </div>
-      <div className="leading-tight">
-        <div className="font-semibold text-slate-100">Hurry</div>
-        <div className="text-xs text-slate-400">Dashboard</div>
-      </div>
+      <div className="text-xl font-semibold text-slate-100">Hurry</div>
     </div>
   );
 }
@@ -61,7 +58,7 @@ export function AppShell() {
                 }
               >
                 <Users className="h-4 w-4" />
-                Orgs
+                Organizations
               </NavLink>
               <NavLink
                 to="/user"
