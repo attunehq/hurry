@@ -1,4 +1,4 @@
-.PHONY: help format check check-fix autoinherit machete machete-fix precommit dev release sqlx-prepare install install-dev reset-local-cache courier-local-auth
+.PHONY: help format check check-fix autoinherit machete machete-fix cargo-sort precommit dev release sqlx-prepare install install-dev reset-local-cache courier-local-auth
 
 .DEFAULT_GOAL := help
 
@@ -7,6 +7,7 @@ help:
 	@echo "  make format             - Format code with cargo +nightly fmt"
 	@echo "  make check              - Run clippy linter"
 	@echo "  make check-fix          - Run clippy with automatic fixes"
+	@echo "  make cargo-sort         - Sort dependencies in Cargo.toml files"
 	@echo "  make precommit          - Run checks and automated fixes before committing"
 	@echo "  make dev                - Build in debug mode"
 	@echo "  make release            - Build in release mode"
@@ -34,7 +35,10 @@ machete:
 machete-fix:
 	cargo machete --fix || true
 
-precommit: machete-fix autoinherit check-fix format sqlx-prepare
+cargo-sort:
+	cargo sort --workspace
+
+precommit: machete-fix autoinherit cargo-sort check-fix format sqlx-prepare
 
 dev:
 	cargo build

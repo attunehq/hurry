@@ -1,0 +1,17 @@
+# Hurry Dockerfile needs .git for build.rs version detection
+# This is a test-only image, not shipped anywhere
+
+.env
+.env.example
+.github
+.gitignore
+.gitmodules
+.scratch
+.vscode
+.hurrydata
+docker/courier/
+!docker/dev/entrypoint.sh
+docs/
+target/
+LICENSE
+README.md

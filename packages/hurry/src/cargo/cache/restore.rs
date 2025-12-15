@@ -1,3 +1,9 @@
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
+
 use color_eyre::{
     Result,
     eyre::{Context as _, OptionExt as _, bail},
@@ -6,16 +12,11 @@ use dashmap::{DashMap, DashSet};
 use derive_more::Debug;
 use futures::{StreamExt, future::BoxFuture};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, instrument, trace, warn};
 
 use crate::{
-    cargo::{self, QualifiedPath, UnitHash, UnitPlan, Workspace},
+    cargo::{self, QualifiedPath, UnitHash, UnitPlan, Workspace, host_glibc_version},
     cas::CourierCas,
     fs,
     path::JoinWith as _,
@@ -23,10 +24,7 @@ use crate::{
 };
 use clients::{
     Courier,
-    courier::v1::{
-        Key, SavedUnit,
-        cache::{CargoRestoreRequest, SavedUnitCacheKey},
-    },
+    courier::v1::{Key, SavedUnit, cache::CargoRestoreRequest},
 };
 
 /// Tracks items that were restored from the cache.
@@ -107,10 +105,23 @@ pub async fn restore_units(
         )
         .await
         {
+            // TODO: We actually don't want to always skip uploading the unit
+            // because we might not have the unit uploaded remotely. What we
+            // really want to do is:
+            //
+            // 1. Calculate the unit plan.
+            // 2. Call the API for _all_ units in the plan, so we know which are and are not
+            //    stored but not present.
+            // 3. Iterate through all units in the unit plan, restoring it only if it is not
+            //    present, and marking it for upload if it is not stored.
             units_to_skip.insert(info.unit_hash.clone());
             restored.units.insert(info.unit_hash.clone());
         }
     }
+
+    // If this build is against glibc, we need to know the glibc version so we
+    // don't restore objects that link to missing symbols.
+    let host_glibc_symbol_version = host_glibc_version()?;
 
     // Load unit information from remote cache. Note that this does NOT download
     // the actual files, which are loaded as CAS keys.
@@ -118,11 +129,8 @@ pub async fn restore_units(
         units
             .iter()
             .filter(|unit| !units_to_skip.contains(&unit.info().unit_hash))
-            .map(|unit| {
-                SavedUnitCacheKey::builder()
-                    .unit_hash(unit.info().unit_hash.clone())
-                    .build()
-            }),
+            .map(|unit| unit.info().unit_hash.clone()),
+        host_glibc_symbol_version,
     );
     let mut saved_units = courier.cargo_cache_restore(bulk_req).await?;
 
@@ -207,12 +215,7 @@ pub async fn restore_units(
         let mtime = starting_mtime + Duration::from_secs(i as u64);
 
         // Load the saved file info from the response.
-        let saved = saved_units.take(
-            &SavedUnitCacheKey::builder()
-                .unit_hash(unit_hash.clone())
-                .build(),
-        );
-        let Some(saved) = saved else {
+        let Some(saved) = saved_units.take(&unit_hash.into()) else {
             debug!(?unit_hash, "unit missing from cache");
             // Even when skipped, unit mtimes must be updated to maintain the
             // invariant that dependencies always have older mtimes than their

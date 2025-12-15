@@ -12,21 +12,21 @@ ci = []
 
 [dependencies]
 bollard = { workspace = true }
-bon.workspace = true
-cargo_metadata.workspace = true
-color-eyre.workspace = true
-fslock.workspace = true
-futures.workspace = true
-itertools.workspace = true
+bon = { workspace = true }
+cargo_metadata = { workspace = true }
+color-eyre = { workspace = true }
+fslock = { workspace = true }
+futures = { workspace = true }
+itertools = { workspace = true }
 testcontainers = { workspace = true, features = ["docker-compose"] }
 tokio = { workspace = true, features = ["full"] }
-tracing.workspace = true
-workspace_root.workspace = true
+tracing = { workspace = true }
+workspace_root = { workspace = true }
 
 [dev-dependencies]
-itertools.workspace = true
-pretty_assertions.workspace = true
-reqwest.workspace = true
+itertools = { workspace = true }
+pretty_assertions = { workspace = true }
+reqwest = { workspace = true }
 simple_test_case = { workspace = true }
-test-log.workspace = true
+test-log = { workspace = true }
 workspace_root = { workspace = true, features = ["tokio"] }

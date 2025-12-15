@@ -3,29 +3,6 @@ name = "clients"
 version = "0.0.0"
 edition = "2024"
 
-[dependencies]
-serde = { workspace = true, features = ["derive"] }
-bon = { workspace = true }
-derive_more = { workspace = true, features = ["full"] }
-hex = { workspace = true }
-blake3 = { workspace = true }
-color-eyre = { workspace = true }
-reqwest = { workspace = true, features = ["json", "stream", "rustls-tls", "gzip", "brotli"], optional = true }
-tokio = { workspace = true, features = ["full"], optional = true }
-tokio-util = { workspace = true, features = ["full"], optional = true }
-futures = { workspace = true, optional = true }
-url = { workspace = true, optional = true }
-async-tar = { workspace = true, optional = true }
-piper = { workspace = true, optional = true }
-tap = { workspace = true }
-tracing = { workspace = true }
-flume = { workspace = true, optional = true }
-enum-assoc.workspace = true
-async-compression = { workspace = true, features = ["tokio", "zstd"], optional = true }
-zstd = { workspace = true, optional = true }
-http = { workspace = true }
-serde_json.workspace = true
-
 [features]
 default = []
 client = [
@@ -38,8 +15,31 @@ client = [
     "dep:piper",
     "dep:flume",
     "dep:async-compression",
-    "dep:zstd"
+    "dep:zstd",
 ]
 
+[dependencies]
+async-compression = { workspace = true, features = ["tokio", "zstd"], optional = true }
+async-tar = { workspace = true, optional = true }
+blake3 = { workspace = true }
+bon = { workspace = true }
+color-eyre = { workspace = true }
+derive_more = { workspace = true, features = ["full"] }
+enum-assoc = { workspace = true }
+flume = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+hex = { workspace = true }
+http = { workspace = true }
+piper = { workspace = true, optional = true }
+reqwest = { workspace = true, features = ["json", "stream", "rustls-tls", "gzip", "brotli"], optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tap = { workspace = true }
+tokio = { workspace = true, features = ["full"], optional = true }
+tokio-util = { workspace = true, features = ["full"], optional = true }
+tracing = { workspace = true }
+url = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
+
 [dev-dependencies]
-pretty_assertions.workspace = true
+pretty_assertions = { workspace = true }

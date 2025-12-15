@@ -3,38 +3,37 @@ name = "courier"
 version = "0.0.0"
 edition = "2024"
 
-[[bench]]
-name = "cas_transport"
-harness = false
-
 [dependencies]
-clients = { workspace = true }
+aerosol = { workspace = true, features = ["async", "axum", "axum-extra", "tracing"] }
+async-compression = { workspace = true, features = ["tokio", "zstd"] }
+async-tar = { workspace = true }
+async-tempfile = { workspace = true }
 axum = { workspace = true }
+blake3 = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+clients = { workspace = true }
+color-eyre = { workspace = true }
+derive_more = { workspace = true, features = ["full"] }
+futures = { workspace = true }
+hex = { workspace = true }
+piper = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate", "bigdecimal", "time"] }
+tap = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["compat", "io"] }
 tower = { workspace = true, features = ["buffer", "limit", "load-shed"] }
 tower-http = { workspace = true, features = ["trace", "limit", "timeout", "compression-full", "decompression-full"] }
-sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate", "bigdecimal", "time"] }
-async-compression = { workspace = true, features = ["tokio", "zstd"] }
-blake3 = { workspace = true }
-hex = { workspace = true }
-color-eyre = { workspace = true }
 tracing = { workspace = true }
 tracing-error = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-clap = { workspace = true, features = ["derive", "env"] }
-tap = { workspace = true }
-derive_more = { workspace = true, features = ["full"] }
-serde = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
-aerosol = { workspace = true, features = ["async", "axum", "axum-extra", "tracing"] }
-futures = { workspace = true }
-async-tar = { workspace = true }
-piper = { workspace = true }
-rand = { workspace = true }
-sha2 = { workspace = true }
-serde_json.workspace = true
-async-tempfile.workspace = true
+
+[build-dependencies]
+dotenvy = { workspace = true }
 
 [dev-dependencies]
 axum-test = { workspace = true, features = ["all"] }
@@ -44,13 +43,14 @@ futures = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }
-reqwest.workspace = true
-serde_json.workspace = true
-simple_test_case.workspace = true
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+simple_test_case = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
 test-strategy = { workspace = true }
 tokio-util = { workspace = true, features = ["compat", "io"] }
 url = { workspace = true }
 
-[build-dependencies]
-dotenvy = { workspace = true }
+[[bench]]
+name = "cas_transport"
+harness = false
