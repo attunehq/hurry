@@ -41,6 +41,10 @@ pub async fn exec(arguments: Vec<String>) -> Result<()> {
     }
 
     // The first argument being a flag means we're running against `cross` directly.
+    //
+    // FIXME: This isn't always true - e.g. `cross --locked build` would have
+    // `--locked` as the first argument but should still accelerate `build`.
+    // See: https://github.com/attunehq/hurry/issues/266
     if command.starts_with('-') {
         return cross::invoke(command, options).await;
     }
