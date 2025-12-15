@@ -84,18 +84,6 @@ impl KeyExtractor for RouteHashExtractor {
 ///
 /// This configuration is used for endpoints that should be protected against
 /// abuse, such as API key creation.
-///
-/// **Configuration:**
-/// - 10 requests per minute per Authorization header value
-/// - Unauthenticated requests share a single "anonymous" bucket
-///
-/// ## Usage
-///
-/// ```ignore
-/// Router::new()
-///     .route("/sensitive", post(handler))
-///     .layer(rate_limit::sensitive())
-/// ```
 pub fn sensitive() -> GovernorLayer<AuthHeaderKeyExtractor, NoOpMiddleware<QuantaInstant>, Body> {
     GovernorConfigBuilder::default()
         .per_second(6)
@@ -111,10 +99,6 @@ pub fn sensitive() -> GovernorLayer<AuthHeaderKeyExtractor, NoOpMiddleware<Quant
 ///
 /// This configuration buckets requests by the hash of the route, and then
 /// uses the first few characters of the hex-encoded hash to bucket requests.
-///
-/// **Configuration:**
-/// - 10 requests per minute per route hash prefix bucket
-/// - Burst of 5 to allow some legitimate retries
 pub fn invitation() -> GovernorLayer<RouteHashExtractor, NoOpMiddleware<QuantaInstant>, Body> {
     GovernorConfigBuilder::default()
         .per_second(6) // ~10 per minute
@@ -128,14 +112,10 @@ pub fn invitation() -> GovernorLayer<RouteHashExtractor, NoOpMiddleware<QuantaIn
 
 /// The default rate limiter layer is really just for protecting the API from
 /// outright abuse or DOS attacks.
-///
-/// **Configuration:**
-/// - 6,000 requests per minute per Authorization header value
-/// - Unauthenticated requests share a single "anonymous" bucket
 pub fn standard() -> GovernorLayer<AuthHeaderKeyExtractor, NoOpMiddleware<QuantaInstant>, Body> {
     GovernorConfigBuilder::default()
-        .per_second(6000)
-        .burst_size(200)
+        .per_millisecond(1)
+        .burst_size(1000)
         .key_extractor(AuthHeaderKeyExtractor)
         .finish()
         .expect("valid governor config")
@@ -147,13 +127,9 @@ pub fn standard() -> GovernorLayer<AuthHeaderKeyExtractor, NoOpMiddleware<Quanta
 /// abuse or DOS attacks on the caching endpoints. This is higher than the
 /// standard rate limiter because the caching endpoints are likely to be hit
 /// extremely often.
-///
-/// **Configuration:**
-/// - 60,000 requests per minute per Authorization header value
-/// - Unauthenticated requests share a single "anonymous" bucket
 pub fn caching() -> GovernorLayer<AuthHeaderKeyExtractor, NoOpMiddleware<QuantaInstant>, Body> {
     GovernorConfigBuilder::default()
-        .per_second(60_000)
+        .per_millisecond(60)
         .burst_size(20_000)
         .key_extractor(AuthHeaderKeyExtractor)
         .finish()
