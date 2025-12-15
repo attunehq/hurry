@@ -88,7 +88,14 @@ pub fn router(state: State, allowed_origins: Vec<HeaderValue>) -> Router {
     // This ensures only trusted frontends can make cross-origin requests.
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(allowed_origins))
-        .allow_methods([Method::GET, Method::HEAD, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
         .allow_headers(Any);
 
     Router::new()

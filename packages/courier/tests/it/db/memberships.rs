@@ -217,10 +217,7 @@ async fn is_last_admin_ignores_bot_admins(pool: sqlx::PgPool) {
 
     let org_id = db.create_organization("Test Org").await.unwrap();
 
-    let human_admin_id = db
-        .create_account("human@test.com", None)
-        .await
-        .unwrap();
+    let human_admin_id = db.create_account("human@test.com", None).await.unwrap();
     let bot_admin_id = db.create_account("bot@test.com", None).await.unwrap();
 
     // Only link GitHub identity to the human admin
