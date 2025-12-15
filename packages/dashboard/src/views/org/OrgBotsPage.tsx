@@ -1,4 +1,4 @@
-import { Bot, Copy, Plus } from "lucide-react";
+import { Bot, Copy, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { apiRequest } from "../../api/client";
@@ -64,13 +64,29 @@ export function OrgBotsPage() {
       setCreated(out);
       setBotName("");
       setResponsibleEmail("");
-      toast.push({ kind: "success", title: "Bot created", detail: out.name });
       setCreateOpen(false);
       await load();
     } catch (err) {
       const msg =
         err && typeof err === "object" && "message" in err ? String((err as any).message) : "";
       toast.push({ kind: "error", title: "Create failed", detail: msg });
+    }
+  }
+
+  async function revokeBot(accountId: number, name: string | null) {
+    if (!sessionToken) return;
+    if (!confirm(`Revoke bot "${name ?? "Unnamed bot"}"? This removes the bot from the organization.`))
+      return;
+    try {
+      await apiRequest<void>({
+        path: `/api/v1/organizations/${orgId}/members/${accountId}`,
+        method: "DELETE",
+        sessionToken,
+      });
+      await load();
+    } catch (e) {
+      const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
+      toast.push({ kind: "error", title: "Revoke failed", detail: msg });
     }
   }
 
@@ -95,7 +111,7 @@ export function OrgBotsPage() {
             <div>
               <div className="text-sm font-semibold text-slate-100">Bots</div>
               <div className="mt-1 text-sm text-slate-300">
-                Bots are org-scoped accounts for CI/automation. Creating a bot returns an API key once.
+                Machine accounts for automated workflows.
               </div>
             </div>
             <Button onClick={() => setCreateOpen(true)} disabled={!canAdmin}>
@@ -112,6 +128,7 @@ export function OrgBotsPage() {
                   <th className="py-2 pr-3">Bot</th>
                   <th className="py-2 pr-3">Responsible</th>
                   <th className="py-2 pr-3">Created</th>
+                  <th className="py-2 pr-3"></th>
                 </tr>
               </thead>
               <tbody>
@@ -120,17 +137,29 @@ export function OrgBotsPage() {
                     <td className="py-3 pr-3">
                       <div className="flex items-center gap-2 font-medium text-slate-100">
                         <Bot className="h-4 w-4 text-neon-300" />
-                        {b.name ?? `Bot ${b.account_id}`}
+                        {b.name ?? "Unnamed bot"}
                       </div>
-                      <div className="text-xs text-slate-400">Account ID: {b.account_id}</div>
                     </td>
                     <td className="py-3 pr-3 text-slate-200">{b.responsible_email}</td>
                     <td className="py-3 pr-3 text-xs text-slate-300">{b.created_at}</td>
+                    <td className="py-3 pr-3">
+                      <div className="flex justify-end">
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          disabled={!canAdmin}
+                          onClick={() => revokeBot(b.account_id, b.name ?? null)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Revoke
+                        </Button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
                 {bots.length === 0 && !loading ? (
                   <tr>
-                    <td colSpan={3} className="py-6 text-center text-sm text-slate-400">
+                    <td colSpan={4} className="py-6 text-center text-sm text-slate-400">
                       No bots yet.
                     </td>
                   </tr>
@@ -139,12 +168,12 @@ export function OrgBotsPage() {
             </table>
           </div>
           <div className="mt-3 text-xs text-slate-400">
-            To revoke a bot, disable its account via server-side tooling (bots are accounts).
+            Note: Bot API keys are only shown at creation time.
           </div>
         </CardBody>
       </Card>
 
-      <Modal open={createOpen} title="Create bot" onClose={() => setCreateOpen(false)}>
+      <Modal open={createOpen} title="Create bot" onClose={() => setCreateOpen(false)} onSubmit={createBot}>
         <div className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">

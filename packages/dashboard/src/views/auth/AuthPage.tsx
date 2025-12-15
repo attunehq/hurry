@@ -38,7 +38,6 @@ export function AuthPage() {
       return;
     }
     setSessionToken(token.trim());
-    toast.push({ kind: "success", title: "Session token saved" });
     nav(from);
   }
 
@@ -66,7 +65,7 @@ export function AuthPage() {
                 Continue with GitHub
               </div>
               <div className="mt-2 text-sm text-slate-300">
-                Uses Courier’s OAuth flow. If your local Courier isn’t configured for OAuth yet,
+                Uses GitHub OAuth. If OAuth isn't configured yet,
                 use the session token option.
               </div>
               <div className="mt-4">
@@ -83,7 +82,7 @@ export function AuthPage() {
                 Use a session token
               </div>
               <div className="mt-2 text-sm text-slate-300">
-                Paste a Courier session token (dev-friendly; e.g. from `scripts/api/login`).
+                Paste a session token.
               </div>
 
               <div className="mt-4 space-y-2">

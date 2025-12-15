@@ -39,7 +39,6 @@ export function InvitePage() {
 
   async function accept() {
     if (!sessionToken) {
-      toast.push({ kind: "info", title: "Sign in to accept the invite" });
       nav("/auth", { state: { from: `/invite/${inviteToken}` } });
       return;
     }
@@ -49,11 +48,6 @@ export function InvitePage() {
         path: `/api/v1/invitations/${encodeURIComponent(inviteToken)}/accept`,
         method: "POST",
         sessionToken,
-      });
-      toast.push({
-        kind: "success",
-        title: "Joined organization",
-        detail: `${out.organization_name} (${out.role})`,
       });
       nav(`/org/${out.organization_id}`);
     } catch (e) {

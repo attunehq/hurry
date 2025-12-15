@@ -1,8 +1,9 @@
-import { Crown, Trash2 } from "lucide-react";
+import { Bot, Crown, DoorOpen, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../api/client";
-import type { MemberListResponse, OrgRole } from "../../api/types";
+import type { MeResponse, MemberListResponse, OrgRole } from "../../api/types";
 import { useSession } from "../../auth/session";
 import { Badge } from "../../ui/primitives/Badge";
 import { Button } from "../../ui/primitives/Button";
@@ -11,23 +12,34 @@ import { useToast } from "../../ui/toast/ToastProvider";
 import { useOrgContext } from "./orgContext";
 
 export function OrgMembersPage() {
+  const nav = useNavigate();
   const toast = useToast();
   const { sessionToken } = useSession();
   const { orgId, role } = useOrgContext();
   const [members, setMembers] = useState<MemberListResponse | null>(null);
+  const [me, setMe] = useState<MeResponse | null>(null);
   const [loading, setLoading] = useState(false);
 
   const canAdmin = role === "admin";
+  const adminCount = useMemo(
+    () => members?.members.filter((m) => m.role === "admin" && !m.bot).length ?? 0,
+    [members]
+  );
+  const isOnlyAdmin = role === "admin" && adminCount === 1;
 
   async function load() {
     if (!sessionToken) return;
     setLoading(true);
     try {
-      const out = await apiRequest<MemberListResponse>({
-        path: `/api/v1/organizations/${orgId}/members`,
-        sessionToken,
-      });
-      setMembers(out);
+      const [membersOut, meOut] = await Promise.all([
+        apiRequest<MemberListResponse>({
+          path: `/api/v1/organizations/${orgId}/members`,
+          sessionToken,
+        }),
+        apiRequest<MeResponse>({ path: "/api/v1/me", sessionToken }),
+      ]);
+      setMembers(membersOut);
+      setMe(meOut);
     } catch (e) {
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Failed to load members", detail: msg });
@@ -46,7 +58,6 @@ export function OrgMembersPage() {
         sessionToken,
         body: { role: newRole },
       });
-      toast.push({ kind: "success", title: "Role updated", detail: `${accountId} → ${newRole}` });
       await load();
     } catch (e) {
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
@@ -63,7 +74,6 @@ export function OrgMembersPage() {
         method: "DELETE",
         sessionToken,
       });
-      toast.push({ kind: "success", title: "Member removed" });
       await load();
     } catch (e) {
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
@@ -71,7 +81,26 @@ export function OrgMembersPage() {
     }
   }
 
-  const rows = useMemo(() => members?.members ?? [], [members]);
+  async function leave() {
+    if (!sessionToken) return;
+    if (!confirm("Leave this organization?")) return;
+    try {
+      await apiRequest<void>({
+        path: `/api/v1/organizations/${orgId}/leave`,
+        method: "POST",
+        sessionToken,
+      });
+      nav("/");
+    } catch (e) {
+      const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
+      toast.push({ kind: "error", title: "Leave failed", detail: msg });
+    }
+  }
+
+  const rows = useMemo(() => {
+    const list = members?.members ?? [];
+    return [...list].sort((a, b) => Number(a.bot) - Number(b.bot));
+  }, [members]);
 
   useEffect(() => {
     void load();
@@ -84,7 +113,7 @@ export function OrgMembersPage() {
           <div>
             <div className="text-sm font-semibold text-slate-100">Members</div>
             <div className="mt-1 text-sm text-slate-300">
-              Membership + roles are managed inside Courier.
+              Manage who has access to this organization.
             </div>
           </div>
           <div className="text-xs text-slate-400">{loading ? "Loading…" : `${rows.length} total`}</div>
@@ -95,7 +124,7 @@ export function OrgMembersPage() {
           <table className="w-full text-left text-sm">
             <thead className="text-xs text-slate-400">
               <tr className="border-b border-white/10">
-                <th className="py-2 pr-3">Account</th>
+                <th className="py-2 pr-3">Name</th>
                 <th className="py-2 pr-3">Email</th>
                 <th className="py-2 pr-3">Role</th>
                 <th className="py-2 pr-3"></th>
@@ -105,12 +134,17 @@ export function OrgMembersPage() {
               {rows.map((m) => (
                 <tr key={m.account_id} className="border-b border-white/5">
                   <td className="py-3 pr-3">
-                    <div className="font-medium text-slate-100">{m.account_id}</div>
-                    {m.name ? <div className="text-xs text-slate-400">{m.name}</div> : null}
+                    <div className="flex items-center gap-2 font-medium text-slate-100">
+                      {m.bot ? <Bot className="h-4 w-4 text-slate-400" /> : null}
+                      {m.name ?? m.email}
+                    </div>
                   </td>
                   <td className="py-3 pr-3 text-slate-200">{m.email}</td>
                   <td className="py-3 pr-3">
-                    <Badge tone={m.role === "admin" ? "neon" : "muted"}>{m.role}</Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge tone={m.role === "admin" ? "neon" : "muted"}>{m.role}</Badge>
+                      {m.bot ? <Badge tone="muted">bot</Badge> : null}
+                    </div>
                   </td>
                   <td className="py-3 pr-3">
                     <div className="flex justify-end gap-2">
@@ -123,23 +157,46 @@ export function OrgMembersPage() {
                         <Crown className="h-4 w-4" />
                         Promote
                       </Button>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={!canAdmin || m.role === "member"}
-                        onClick={() => setRole(m.account_id, "member")}
-                      >
-                        Demote
-                      </Button>
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        disabled={!canAdmin}
-                        onClick={() => remove(m.account_id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        Remove
-                      </Button>
+                      {m.account_id === me?.id && isOnlyAdmin ? (
+                        <div
+                          className="relative"
+                          title="You're the only admin. Promote another member before demoting yourself."
+                        >
+                          <Button variant="secondary" size="sm" disabled>
+                            Demote
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={!canAdmin || m.role === "member"}
+                          onClick={() => setRole(m.account_id, "member")}
+                        >
+                          Demote
+                        </Button>
+                      )}
+                      {m.account_id === me?.id ? (
+                        <div
+                          className="relative"
+                          title={isOnlyAdmin ? "You're the only admin. Promote another member before leaving." : undefined}
+                        >
+                          <Button variant="danger" size="sm" disabled={isOnlyAdmin} onClick={leave}>
+                            <DoorOpen className="h-4 w-4" />
+                            Leave
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          disabled={!canAdmin}
+                          onClick={() => remove(m.account_id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Remove
+                        </Button>
+                      )}
                     </div>
                   </td>
                 </tr>

@@ -6,13 +6,21 @@ export function Modal(props: {
   title: string;
   children: React.ReactNode;
   onClose: () => void;
+  onSubmit?: () => void;
 }) {
   const ref = useRef<HTMLDialogElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
-    if (props.open && !dialog.open) dialog.showModal();
+    if (props.open && !dialog.open) {
+      dialog.showModal();
+      const input = contentRef.current?.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+        "input, textarea, select"
+      );
+      input?.focus();
+    }
     if (!props.open && dialog.open) dialog.close();
   }, [props.open]);
 
@@ -25,13 +33,21 @@ export function Modal(props: {
     };
     dialog.addEventListener("cancel", onCancel);
     return () => dialog.removeEventListener("cancel", onCancel);
-  }, [props]);
+  }, [props.onClose]);
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey && props.onSubmit) {
+      e.preventDefault();
+      props.onSubmit();
+    }
+  }
 
   return (
     <dialog
       ref={ref}
-      className="w-[640px] max-w-[92vw] rounded-2xl border border-white/10 bg-ink-900/90 p-0 text-slate-100 shadow-glow-soft backdrop:bg-black/60"
+      className="fixed left-1/2 top-[20%] w-[640px] max-w-[92vw] -translate-x-1/2 rounded-2xl border border-white/10 bg-ink-900/90 p-0 text-slate-100 shadow-glow-soft backdrop:bg-black/60"
       onClose={props.onClose}
+      onKeyDown={handleKeyDown}
     >
       <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
         <div className="text-sm font-semibold">{props.title}</div>
@@ -43,7 +59,7 @@ export function Modal(props: {
           <X className="h-4 w-4" />
         </button>
       </div>
-      <div className="p-5">{props.children}</div>
+      <div ref={contentRef} className="p-5">{props.children}</div>
     </dialog>
   );
 }

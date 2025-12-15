@@ -5,18 +5,15 @@ import { exchangeAuthCode } from "../../api/client";
 import { useSession } from "../../auth/session";
 import { Button } from "../../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../../ui/primitives/Card";
-import { useToast } from "../../ui/toast/ToastProvider";
 
 export function AuthCallbackPage() {
   const nav = useNavigate();
-  const toast = useToast();
   const { setSessionToken } = useSession();
   const [params] = useSearchParams();
   const [status, setStatus] = useState<"working" | "error" | "done">("working");
   const [detail, setDetail] = useState<string | null>(null);
 
   const authCode = useMemo(() => params.get("auth_code"), [params]);
-  const newUser = useMemo(() => params.get("new_user") === "true", [params]);
 
   useEffect(() => {
     let cancelled = false;
@@ -31,10 +28,6 @@ export function AuthCallbackPage() {
         const out = await exchangeAuthCode(authCode);
         if (cancelled) return;
         setSessionToken(out.session_token);
-        toast.push({
-          kind: "success",
-          title: newUser ? "Welcome aboard" : "Signed in",
-        });
         setStatus("done");
         nav("/");
       } catch (e) {
@@ -48,7 +41,7 @@ export function AuthCallbackPage() {
     return () => {
       cancelled = true;
     };
-  }, [authCode, nav, newUser, setSessionToken, toast]);
+  }, [authCode, nav, setSessionToken]);
 
   return (
     <div className="mx-auto max-w-xl">

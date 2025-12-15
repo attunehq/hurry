@@ -30,6 +30,7 @@ export type MemberEntry = {
   name?: string | null;
   role: OrgRole;
   joined_at: string;
+  bot: boolean;
 };
 
 export type MemberListResponse = {
@@ -41,6 +42,7 @@ export type OrgApiKeyEntry = {
   name: string;
   account_id: number;
   account_email: string;
+  bot: boolean;
   created_at: string;
   accessed_at: string;
 };

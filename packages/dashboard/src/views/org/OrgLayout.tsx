@@ -1,4 +1,4 @@
-import { ArrowLeft, DoorOpen, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 
@@ -39,23 +39,6 @@ export function OrgLayout() {
     }
   }
 
-  async function leave() {
-    if (!sessionToken || !id) return;
-    if (!confirm("Leave this organization?")) return;
-    try {
-      await apiRequest<void>({
-        path: `/api/v1/organizations/${id}/leave`,
-        method: "POST",
-        sessionToken,
-      });
-      toast.push({ kind: "success", title: "Left organization" });
-      nav("/");
-    } catch (e) {
-      const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
-      toast.push({ kind: "error", title: "Leave failed", detail: msg });
-    }
-  }
-
   useEffect(() => {
     void refresh();
   }, [sessionToken, id]);
@@ -76,33 +59,20 @@ export function OrgLayout() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex flex-col items-start justify-between gap-3 md:flex-row md:items-center">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" onClick={() => nav("/")}>
-            <ArrowLeft className="h-4 w-4" />
-            Back
-          </Button>
-          <div>
-            <div className="text-lg font-semibold text-slate-100">
-              {org ? org.name : `Org ${id}`}
-            </div>
-            <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
-              <span>Org ID: {id}</span>
-              {org ? <Badge tone={org.role === "admin" ? "neon" : "muted"}>{org.role}</Badge> : null}
-            </div>
-          </div>
+          <h1 className="text-xl font-semibold text-slate-100">
+            {org ? org.name : "Organization"}
+          </h1>
+          {org ? (
+            <Badge tone={org.role === "admin" ? "neon" : "muted"}>{org.role}</Badge>
+          ) : null}
         </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={refresh} disabled={loading}>
-            <RefreshCw className="h-4 w-4" />
-            Refresh
-          </Button>
-          <Button variant="danger" onClick={leave}>
-            <DoorOpen className="h-4 w-4" />
-            Leave
-          </Button>
-        </div>
+        <Button variant="secondary" onClick={refresh} disabled={loading}>
+          <RefreshCw className="h-4 w-4" />
+          Refresh
+        </Button>
       </div>
 
       <div className="rounded-2xl border border-white/10 bg-ink-900/55 p-2 shadow-glow-soft backdrop-blur">

@@ -31,10 +31,15 @@ export function DashboardHome() {
   const signedIn = Boolean(sessionToken);
 
   const headerLine = useMemo(() => {
-    if (!me) return "Courier Dashboard";
+    if (!me) return "Hurry Dashboard";
     const who = me.name?.trim() ? me.name.trim() : me.github_username ?? me.email;
     return `Welcome, ${who}`;
   }, [me]);
+
+  const sortedOrgs = useMemo(() => {
+    if (!orgs) return null;
+    return [...orgs].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  }, [orgs]);
 
   async function refresh() {
     if (!sessionToken) {
@@ -79,7 +84,6 @@ export function DashboardHome() {
         sessionToken,
         body: { name },
       });
-      toast.push({ kind: "success", title: "Organization created", detail: created.name });
       setCreateOpen(false);
       setOrgName("");
       await refresh();
@@ -95,13 +99,13 @@ export function DashboardHome() {
   }, [sessionToken]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
         <div>
-          <div className="text-xl font-semibold text-slate-100">{headerLine}</div>
-          <div className="mt-1 text-sm text-slate-300">
+          <h1 className="text-2xl font-semibold text-slate-100">{headerLine}</h1>
+          <p className="mt-1.5 text-sm text-slate-300">
             Manage organizations, invitations, API keys, and bot identities.
-          </div>
+          </p>
         </div>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={refresh} disabled={!signedIn || loading}>
@@ -141,34 +145,32 @@ export function DashboardHome() {
           </div>
         </CardHeader>
         <CardBody>
-          {orgs && orgs.length === 0 ? (
+          {sortedOrgs && sortedOrgs.length === 0 ? (
             <div className="text-sm text-slate-300">
               No organizations yet. Create one to get started.
             </div>
           ) : null}
 
-          {orgs ? (
-            <div className="grid gap-3 md:grid-cols-2">
-              {orgs.map((o) => (
+          {sortedOrgs ? (
+            <div className="space-y-3">
+              {sortedOrgs.map((o) => (
                 <Link
                   key={o.id}
                   to={`/org/${o.id}`}
-                  className="group rounded-2xl border border-white/10 bg-white/5 p-4 transition hover:border-neon-500/30 hover:bg-white/7"
+                  className="group flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 p-5 transition hover:border-neon-500/30 hover:bg-white/7"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <Building2 className="h-4 w-4 text-neon-300" />
-                        <div className="truncate text-sm font-semibold text-slate-100">
-                          {o.name}
-                        </div>
+                  <div className="flex items-center gap-3">
+                    <Building2 className="h-5 w-5 text-neon-300" />
+                    <div>
+                      <div className="text-base font-semibold text-slate-100">{o.name}</div>
+                      <div className="mt-0.5 text-xs text-slate-400">
+                        Created {new Date(o.created_at).toLocaleDateString()}
                       </div>
-                      <div className="mt-1 text-xs text-slate-400">Org ID: {o.id}</div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Badge tone={o.role === "admin" ? "neon" : "muted"}>{o.role}</Badge>
-                      <ExternalLink className="h-4 w-4 text-slate-500 transition group-hover:text-slate-300" />
-                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Badge tone={o.role === "admin" ? "neon" : "muted"}>{o.role}</Badge>
+                    <ExternalLink className="h-4 w-4 text-slate-500 transition group-hover:text-slate-300" />
                   </div>
                 </Link>
               ))}
@@ -179,7 +181,7 @@ export function DashboardHome() {
         </CardBody>
       </Card>
 
-      <Modal open={createOpen} title="Create organization" onClose={() => setCreateOpen(false)}>
+      <Modal open={createOpen} title="Create organization" onClose={() => setCreateOpen(false)} onSubmit={createOrg}>
         <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="orgName">Name</Label>

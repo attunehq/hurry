@@ -65,7 +65,6 @@ export function OrgInvitationsPage() {
       setCreated(out);
       setCreateOpen(false);
       setMaxUses("");
-      toast.push({ kind: "success", title: "Invitation created" });
       await load();
     } catch (e) {
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
@@ -82,7 +81,6 @@ export function OrgInvitationsPage() {
         method: "DELETE",
         sessionToken,
       });
-      toast.push({ kind: "success", title: "Invitation revoked" });
       await load();
     } catch (e) {
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
@@ -178,13 +176,12 @@ export function OrgInvitationsPage() {
             </table>
           </div>
           <div className="mt-3 text-xs text-slate-400">
-            Note: listing invitations intentionally does not reveal tokens; you only get tokens at
-            creation time.
+            Note: Invitation tokens are only shown at creation time.
           </div>
         </CardBody>
       </Card>
 
-      <Modal open={createOpen} title="Create invitation" onClose={() => setCreateOpen(false)}>
+      <Modal open={createOpen} title="Create invitation" onClose={() => setCreateOpen(false)} onSubmit={createInvite}>
         <div className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">

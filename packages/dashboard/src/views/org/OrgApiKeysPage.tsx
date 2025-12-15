@@ -1,4 +1,4 @@
-import { Copy, KeyRound, Plus, Trash2 } from "lucide-react";
+import { Bot, Copy, KeyRound, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { apiRequest } from "../../api/client";
@@ -58,7 +58,6 @@ export function OrgApiKeysPage() {
       });
       setCreated(out);
       setName("");
-      toast.push({ kind: "success", title: "API key created", detail: out.name });
       await load();
     } catch (e) {
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
@@ -75,7 +74,6 @@ export function OrgApiKeysPage() {
         method: "DELETE",
         sessionToken,
       });
-      toast.push({ kind: "success", title: "API key revoked" });
       await load();
     } catch (e) {
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
@@ -104,7 +102,7 @@ export function OrgApiKeysPage() {
             <div>
               <div className="text-sm font-semibold text-slate-100">API Keys</div>
               <div className="mt-1 text-sm text-slate-300">
-                Keys authenticate builds and automation against Courier. Tokens are shown once.
+                Keys authenticate builds and automation against Hurry.
               </div>
             </div>
             <Button onClick={() => setCreateOpen(true)} disabled={!sessionToken}>
@@ -132,10 +130,12 @@ export function OrgApiKeysPage() {
                         <KeyRound className="h-4 w-4 text-neon-300" />
                         {k.name}
                       </div>
-                      <div className="text-xs text-slate-400">ID: {k.id}</div>
                     </td>
                     <td className="py-3 pr-3 text-slate-200">
-                      {k.account_email} <span className="text-slate-500">({k.account_id})</span>
+                      <div className="flex items-center gap-2">
+                        {k.bot ? <Bot className="h-4 w-4 text-slate-400" /> : null}
+                        {k.account_email}
+                      </div>
                     </td>
                     <td className="py-3 pr-3 text-xs text-slate-300">{k.accessed_at}</td>
                     <td className="py-3 pr-3">
@@ -158,10 +158,13 @@ export function OrgApiKeysPage() {
               </tbody>
             </table>
           </div>
+          <div className="mt-3 text-xs text-slate-400">
+            Note: API key tokens are only shown at creation time.
+          </div>
         </CardBody>
       </Card>
 
-      <Modal open={createOpen} title="Create API key" onClose={() => setCreateOpen(false)}>
+      <Modal open={createOpen} title="Create API key" onClose={() => setCreateOpen(false)} onSubmit={createKey}>
         <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="keyName">Name</Label>
@@ -185,7 +188,7 @@ export function OrgApiKeysPage() {
         {created ? (
           <div className="space-y-3">
             <div className="text-sm text-slate-300">
-              Courier will not show this token again. Copy it somewhere safe.
+              This token is only shown once. Copy it somewhere safe.
             </div>
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
               <div className="text-xs text-slate-400">Token</div>

@@ -1,20 +1,19 @@
-import { FlaskConical, KeyRound, LogIn, LogOut, Users } from "lucide-react";
+import { CreditCard, FlaskConical, LogIn, LogOut, User, Users } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../api/client";
 import { useSession } from "../../auth/session";
 import { Button } from "../primitives/Button";
-import { useToast } from "../toast/ToastProvider";
 
 function brand() {
   return (
     <div className="flex items-center gap-3">
-      <div className="grid h-10 w-10 place-items-center rounded-xl border border-white/10 bg-white/5 shadow-glow-soft">
+      <div className="grid h-11 w-11 place-items-center rounded-xl border border-white/10 bg-white/5 shadow-glow-soft">
         <FlaskConical className="h-5 w-5 text-neon-300" />
       </div>
       <div className="leading-tight">
-        <div className="text-sm font-semibold text-slate-100">Hurry</div>
-        <div className="text-xs text-slate-400">Courier Lab Console</div>
+        <div className="font-semibold text-slate-100">Hurry</div>
+        <div className="text-xs text-slate-400">Dashboard</div>
       </div>
     </div>
   );
@@ -24,7 +23,6 @@ export function AppShell() {
   const nav = useNavigate();
   const loc = useLocation();
   const { sessionToken, setSessionToken } = useSession();
-  const toast = useToast();
 
   const signedIn = Boolean(sessionToken);
 
@@ -39,15 +37,14 @@ export function AppShell() {
       // Even if logout fails, clearing local state is still useful.
     } finally {
       setSessionToken(null);
-      toast.push({ kind: "success", title: "Signed out" });
       nav("/auth");
     }
   }
 
   return (
     <div className="noise min-h-screen">
-      <div className="mx-auto flex max-w-6xl gap-6 px-4 py-6">
-        <aside className="hidden w-64 shrink-0 flex-col gap-4 md:flex">
+      <div className="mx-auto flex max-w-6xl gap-8 px-6 pb-12 pt-10">
+        <aside className="hidden w-64 shrink-0 flex-col gap-5 md:flex">
           {brand()}
           <div className="rounded-2xl border border-white/10 bg-ink-900/55 shadow-glow-soft backdrop-blur">
             <div className="border-b border-white/10 px-4 py-3 text-xs font-semibold text-slate-300">
@@ -67,7 +64,7 @@ export function AppShell() {
                 Orgs
               </NavLink>
               <NavLink
-                to="/auth"
+                to="/user"
                 className={({ isActive }) =>
                   [
                     "flex items-center gap-2 rounded-xl px-3 py-2 text-slate-300 hover:bg-white/5 hover:text-slate-100",
@@ -75,8 +72,20 @@ export function AppShell() {
                   ].join(" ")
                 }
               >
-                <KeyRound className="h-4 w-4" />
-                Auth
+                <User className="h-4 w-4" />
+                Account
+              </NavLink>
+              <NavLink
+                to="/billing"
+                className={({ isActive }) =>
+                  [
+                    "flex items-center gap-2 rounded-xl px-3 py-2 text-slate-300 hover:bg-white/5 hover:text-slate-100",
+                    isActive ? "bg-white/5 text-slate-100" : "",
+                  ].join(" ")
+                }
+              >
+                <CreditCard className="h-4 w-4" />
+                Billing
               </NavLink>
             </nav>
           </div>
