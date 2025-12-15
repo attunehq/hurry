@@ -32,6 +32,7 @@ pub struct OrgApiKey {
     pub account_email: String,
     pub created_at: OffsetDateTime,
     pub accessed_at: OffsetDateTime,
+    pub has_github_identity: bool,
 }
 
 impl Postgres {
@@ -269,9 +270,11 @@ impl Postgres {
                 api_key.name,
                 api_key.created_at,
                 api_key.accessed_at,
-                account.email as account_email
+                account.email as account_email,
+                gi.id IS NOT NULL as "has_github_identity!"
             FROM api_key
             JOIN account ON api_key.account_id = account.id
+            LEFT JOIN github_identity gi ON gi.account_id = account.id
             WHERE api_key.organization_id = $1 AND api_key.revoked_at IS NULL
             ORDER BY api_key.created_at DESC
             "#,
@@ -290,6 +293,7 @@ impl Postgres {
                 account_email: r.account_email,
                 created_at: r.created_at,
                 accessed_at: r.accessed_at,
+                has_github_identity: r.has_github_identity,
             })
             .collect())
     }

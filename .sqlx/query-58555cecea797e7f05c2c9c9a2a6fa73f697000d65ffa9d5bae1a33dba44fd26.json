@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                a.id as account_id,\n                a.email,\n                a.name,\n                r.name as role_name,\n                om.created_at,\n                gi.id IS NOT NULL as \"has_github_identity!\"\n            FROM organization_member om\n            JOIN account a ON om.account_id = a.id\n            JOIN organization_role r ON om.role_id = r.id\n            LEFT JOIN github_identity gi ON gi.account_id = a.id\n            WHERE om.organization_id = $1\n            ORDER BY a.email\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "account_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "role_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "has_github_identity!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "58555cecea797e7f05c2c9c9a2a6fa73f697000d65ffa9d5bae1a33dba44fd26"
+}

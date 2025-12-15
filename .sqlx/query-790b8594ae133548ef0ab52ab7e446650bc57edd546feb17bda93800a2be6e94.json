@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                api_key.id,\n                api_key.account_id,\n                api_key.name,\n                api_key.created_at,\n                api_key.accessed_at,\n                account.email as account_email,\n                gi.id IS NOT NULL as \"has_github_identity!\"\n            FROM api_key\n            JOIN account ON api_key.account_id = account.id\n            LEFT JOIN github_identity gi ON gi.account_id = account.id\n            WHERE api_key.organization_id = $1 AND api_key.revoked_at IS NULL\n            ORDER BY api_key.created_at DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "account_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "accessed_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "account_email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "has_github_identity!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "790b8594ae133548ef0ab52ab7e446650bc57edd546feb17bda93800a2be6e94"
+}

@@ -158,6 +158,11 @@ async fn is_last_admin_true(pool: sqlx::PgPool) {
     let admin_id = db.create_account("admin@test.com", None).await.unwrap();
     let member_id = db.create_account("member@test.com", None).await.unwrap();
 
+    // Link GitHub identity to make admin a "human" (not a bot)
+    db.link_github_identity(admin_id, 12345, "admin_user")
+        .await
+        .unwrap();
+
     db.add_organization_member(org_id, admin_id, OrgRole::Admin)
         .await
         .unwrap();
@@ -165,7 +170,7 @@ async fn is_last_admin_true(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    // admin is the last admin
+    // admin is the last human admin
     let is_last = db.is_last_admin(org_id, admin_id).await.unwrap();
     assert!(is_last);
 
@@ -183,6 +188,14 @@ async fn is_last_admin_false_with_multiple_admins(pool: sqlx::PgPool) {
     let admin1_id = db.create_account("admin1@test.com", None).await.unwrap();
     let admin2_id = db.create_account("admin2@test.com", None).await.unwrap();
 
+    // Link GitHub identities to make both admins "humans" (not bots)
+    db.link_github_identity(admin1_id, 12345, "admin1_user")
+        .await
+        .unwrap();
+    db.link_github_identity(admin2_id, 67890, "admin2_user")
+        .await
+        .unwrap();
+
     db.add_organization_member(org_id, admin1_id, OrgRole::Admin)
         .await
         .unwrap();
@@ -190,10 +203,43 @@ async fn is_last_admin_false_with_multiple_admins(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    // Neither is the last admin
+    // Neither is the last human admin
     let is_last = db.is_last_admin(org_id, admin1_id).await.unwrap();
     assert!(!is_last);
 
     let is_last = db.is_last_admin(org_id, admin2_id).await.unwrap();
+    assert!(!is_last);
+}
+
+#[sqlx::test(migrator = "Postgres::MIGRATOR")]
+async fn is_last_admin_ignores_bot_admins(pool: sqlx::PgPool) {
+    let db = Postgres { pool };
+
+    let org_id = db.create_organization("Test Org").await.unwrap();
+
+    let human_admin_id = db
+        .create_account("human@test.com", None)
+        .await
+        .unwrap();
+    let bot_admin_id = db.create_account("bot@test.com", None).await.unwrap();
+
+    // Only link GitHub identity to the human admin
+    db.link_github_identity(human_admin_id, 12345, "human_user")
+        .await
+        .unwrap();
+
+    db.add_organization_member(org_id, human_admin_id, OrgRole::Admin)
+        .await
+        .unwrap();
+    db.add_organization_member(org_id, bot_admin_id, OrgRole::Admin)
+        .await
+        .unwrap();
+
+    // Human admin is the last human admin (bot admin doesn't count)
+    let is_last = db.is_last_admin(org_id, human_admin_id).await.unwrap();
+    assert!(is_last);
+
+    // Bot admin is not considered a human admin
+    let is_last = db.is_last_admin(org_id, bot_admin_id).await.unwrap();
     assert!(!is_last);
 }

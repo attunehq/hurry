@@ -36,6 +36,9 @@ pub struct MemberEntry {
     /// The date the member joined the organization.
     #[serde(with = "time::serde::rfc3339")]
     pub joined_at: OffsetDateTime,
+
+    /// Whether the account is a bot (i.e., does not have a GitHub identity).
+    pub bot: bool,
 }
 
 /// List members of an organization.
@@ -78,6 +81,7 @@ pub async fn handle(
                     name: m.name,
                     role: m.role,
                     joined_at: m.created_at,
+                    bot: !m.has_github_identity,
                 })
                 .collect::<Vec<_>>()
                 .pipe(|members| MemberListResponse { members })

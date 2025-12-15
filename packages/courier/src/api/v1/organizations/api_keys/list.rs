@@ -32,6 +32,9 @@ pub struct OrgApiKeyEntry {
     /// The email of the key owner.
     pub account_email: String,
 
+    /// Whether the key owner is a bot (i.e., does not have a GitHub identity).
+    pub bot: bool,
+
     /// The creation timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -79,6 +82,7 @@ pub async fn handle(
                     name: key.name,
                     account_id: key.account_id.as_i64(),
                     account_email: key.account_email,
+                    bot: !key.has_github_identity,
                     created_at: key.created_at,
                     accessed_at: key.accessed_at,
                 })

@@ -17,6 +17,7 @@ pub struct OrganizationMember {
     pub name: Option<String>,
     pub role: OrgRole,
     pub created_at: OffsetDateTime,
+    pub has_github_identity: bool,
 }
 
 impl Postgres {
@@ -130,10 +131,17 @@ impl Postgres {
     ) -> Result<Vec<OrganizationMember>> {
         let rows = sqlx::query!(
             r#"
-            SELECT a.id as account_id, a.email, a.name, r.name as role_name, om.created_at
+            SELECT
+                a.id as account_id,
+                a.email,
+                a.name,
+                r.name as role_name,
+                om.created_at,
+                gi.id IS NOT NULL as "has_github_identity!"
             FROM organization_member om
             JOIN account a ON om.account_id = a.id
             JOIN organization_role r ON om.role_id = r.id
+            LEFT JOIN github_identity gi ON gi.account_id = a.id
             WHERE om.organization_id = $1
             ORDER BY a.email
             "#,
@@ -153,37 +161,58 @@ impl Postgres {
                     name: r.name,
                     role,
                     created_at: r.created_at,
+                    has_github_identity: r.has_github_identity,
                 })
             })
             .collect()
     }
 
-    /// Check if an account is the last admin of an organization.
+    /// Check if an account is the last human admin of an organization.
+    ///
+    /// Bot accounts (those without a GitHub identity) are excluded from this
+    /// check, so a human can leave even if bot admins remain.
     #[tracing::instrument(name = "Postgres::is_last_admin")]
     pub async fn is_last_admin(&self, org_id: OrgId, account_id: AccountId) -> Result<bool> {
+        // Check if the account is a human admin (has GitHub identity and is admin)
+        let row = sqlx::query!(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM organization_member om
+                JOIN organization_role r ON om.role_id = r.id
+                JOIN github_identity gi ON gi.account_id = om.account_id
+                WHERE om.organization_id = $1
+                  AND om.account_id = $2
+                  AND r.name = 'admin'
+            ) as "is_human_admin!"
+            "#,
+            org_id.as_i64(),
+            account_id.as_i64(),
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("check if human admin")?;
+
+        if !row.is_human_admin {
+            return Ok(false);
+        }
+
+        // Count total human admins
         let row = sqlx::query!(
             r#"
             SELECT COUNT(*) as count
             FROM organization_member om
             JOIN organization_role r ON om.role_id = r.id
+            JOIN github_identity gi ON gi.account_id = om.account_id
             WHERE om.organization_id = $1 AND r.name = 'admin'
             "#,
             org_id.as_i64(),
         )
         .fetch_one(&self.pool)
         .await
-        .context("count admins")?;
+        .context("count human admins")?;
 
-        let admin_count = row.count.unwrap_or(0);
-        if admin_count != 1 {
-            return Ok(false);
-        }
-
-        let is_admin = self
-            .get_member_role(org_id, account_id)
-            .await?
-            .is_some_and(|role| role.is_admin());
-
-        Ok(is_admin)
+        let human_admin_count = row.count.unwrap_or(0);
+        Ok(human_admin_count == 1)
     }
 }
