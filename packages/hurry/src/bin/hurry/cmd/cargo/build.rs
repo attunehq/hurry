@@ -21,7 +21,7 @@ use hurry::{
     cargo::{self, CargoBuildArguments, CargoCache, Workspace},
     ci::is_ci,
     daemon::{CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse, DaemonPaths},
-    progress::TransferBar,
+    progress::{Spinner, TransferBar},
 };
 
 /// Options for `cargo build`.
@@ -149,10 +149,13 @@ pub async fn exec(options: Options) -> Result<()> {
     // running build scripts, these "unit plans" do not contain fully
     // unambiguous cache key information (e.g. they do not provide build script
     // outputs).
-    let units = workspace
-        .units(&args)
-        .await
-        .context("calculating expected units")?;
+    let units = {
+        let _spinner = Spinner::new("Computing build plan");
+        workspace
+            .units(&args)
+            .await
+            .context("calculating expected units")?
+    };
 
     // Initialize cache.
     let cache = CargoCache::open(options.api_url, token.clone(), workspace)
