@@ -1,4 +1,4 @@
-import { ArrowRight, Github, KeyRound } from "lucide-react";
+import { ArrowRight, Github } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 
@@ -54,31 +54,29 @@ export function AuthPage() {
     >
       <Card>
         <CardBody>
-          <div className="grid gap-6 md:grid-cols-2">
-            <div className="rounded-2xl border border-border bg-surface-subtle p-5">
-              <div className="flex items-center gap-2 text-sm font-semibold text-content-primary">
-                <Github className="h-4 w-4 text-content-secondary" />
-                Continue with GitHub
-              </div>
-              <div className="mt-2 text-sm text-content-tertiary">
-                Uses GitHub OAuth. If OAuth isn't configured yet,
-                use the session token option.
-              </div>
-              <div className="mt-4">
-                <Button onClick={startOAuth}>
-                  Start OAuth
-                  <ArrowRight className="h-4 w-4" />
-                </Button>
-              </div>
+          <div className="rounded-2xl border border-border bg-surface-subtle p-5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-content-primary">
+              <Github className="h-4 w-4 text-content-secondary" />
+              Continue with GitHub
             </div>
+            <div className="mt-2 text-sm text-content-tertiary">
+              Sign in with your GitHub account.
+            </div>
+            <div className="mt-4">
+              <Button onClick={startOAuth}>
+                Sign in with GitHub
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
 
+          {import.meta.env.DEV && (
             <div className="rounded-2xl border border-border bg-surface-subtle p-5">
               <div className="flex items-center gap-2 text-sm font-semibold text-content-primary">
-                <KeyRound className="h-4 w-4 text-accent-text" />
-                Use a session token
+                Dev: Use a session token
               </div>
               <div className="mt-2 text-sm text-content-tertiary">
-                Paste a session token.
+                Paste a session token for local development.
               </div>
 
               <div className="mt-4 space-y-2">
@@ -97,12 +95,9 @@ export function AuthPage() {
                   </Button>
                   <Button onClick={saveToken}>Save</Button>
                 </div>
-                <div className="text-xs text-content-muted">
-                  Stored in `localStorage` only; never written to git.
-                </div>
               </div>
             </div>
-          </div>
+          )}
         </CardBody>
       </Card>
     </PageLayout>
