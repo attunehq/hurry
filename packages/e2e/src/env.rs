@@ -134,12 +134,14 @@ impl TestEnv {
         Ok(TestEnv { compose })
     }
 
-    /// Get the URL to access Courier from within the Docker Compose network.
+    /// Get the URL to access the Hurry API from within the Docker Compose
+    /// network.
     ///
     /// Returns the internal service URL (e.g., "http://courier:3000") that
-    /// containers can use to communicate with courier over the shared network.
-    pub fn courier_url(&self) -> String {
-        "http://courier:3000".to_string()
+    /// containers can use to communicate with the Hurry API over the shared
+    /// network.
+    pub fn api_url(&self) -> String {
+        String::from("http://courier:3000")
     }
 
     /// Get the test API token for authentication.

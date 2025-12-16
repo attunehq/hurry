@@ -18,18 +18,18 @@ use hurry::{
 
 #[derive(Clone, Args, Debug)]
 pub struct Options {
-    /// Base URL for the Courier instance.
+    /// Base URL for the Hurry API.
     #[arg(
-        long = "hurry-courier-url",
-        env = "HURRY_COURIER_URL",
+        long = "hurry-api-url",
+        env = "HURRY_API_URL",
         default_value = "https://courier.staging.corp.attunehq.com"
     )]
-    #[debug("{courier_url}")]
-    courier_url: Url,
+    #[debug("{api_url}")]
+    api_url: Url,
 
-    /// Authentication token for the Courier instance.
-    #[arg(long = "hurry-courier-token", env = "HURRY_COURIER_TOKEN")]
-    courier_token: Token,
+    /// Authentication token for the Hurry API.
+    #[arg(long = "hurry-api-token", env = "HURRY_API_TOKEN")]
+    api_token: Token,
 
     /// These arguments are passed directly to `cargo build` as provided.
     #[arg(
@@ -62,7 +62,7 @@ pub async fn exec(options: Options) -> Result<()> {
     info!(target = ?workspace.target_arch, "restoring using target");
 
     // Initialize cache.
-    let cache = CargoCache::open(options.courier_url, options.courier_token, workspace)
+    let cache = CargoCache::open(options.api_url, options.api_token, workspace)
         .await
         .context("opening cache")?;
 

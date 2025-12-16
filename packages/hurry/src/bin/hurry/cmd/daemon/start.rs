@@ -26,14 +26,14 @@ use hurry::{
 
 #[derive(Clone, Args, Debug)]
 pub struct Options {
-    /// Base URL for the Courier instance.
+    /// Base URL for the Hurry API.
     #[arg(
-        long = "hurry-courier-url",
-        env = "HURRY_COURIER_URL",
+        long = "hurry-api-url",
+        env = "HURRY_API_URL",
         default_value = "https://courier.staging.corp.attunehq.com"
     )]
-    #[debug("{courier_url}")]
-    courier_url: Url,
+    #[debug("{api_url}")]
+    api_url: Url,
 }
 
 #[instrument(skip(cli_logger))]

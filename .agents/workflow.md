@@ -147,7 +147,7 @@ Hurry acts as a drop-in replacement for cargo, supporting any cargo command:
 `hurry cargo build` accepts all standard `cargo build` flags plus hurry-specific options:
 
 **Hurry-specific flags** (all prefixed with `--hurry-`):
-- `--hurry-courier-url <URL>`: Base URL for Courier instance (env: `HURRY_COURIER_URL`, default: staging)
+- `--hurry-api-url <URL>`: Base URL for the Hurry API (env: `HURRY_API_URL`, default: staging)
 - `--hurry-skip-backup`: Skip backing up the cache
 - `--hurry-skip-build`: Skip the cargo build, only perform cache actions
 - `--hurry-skip-restore`: Skip restoring the cache

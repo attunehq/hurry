@@ -84,10 +84,13 @@ jobs:
               uses: ./.github/actions/hurry-dev
 
             - name: Populate cache if needed
+              env:
+                  HURRY_API_TOKEN: ${{ secrets.HURRY_COURIER_TOKEN }}
               run: hurry-dev cargo build --verbose
 
             - name: Check that cache restores are fresh
               env:
+                  HURRY_API_TOKEN: ${{ secrets.HURRY_COURIER_TOKEN }}
                   HURRY_LOG: hurry::cmd::debug::check=info
               run: |
                   cargo clean

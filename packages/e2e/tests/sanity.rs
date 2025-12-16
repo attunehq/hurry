@@ -22,9 +22,9 @@ async fn compose_stack_starts() -> Result<()> {
     // Start the ephemeral test environment
     let env = TestEnv::new().await?;
 
-    // Verify we can get the courier URL (internal Docker network URL)
-    let courier_url = env.courier_url();
-    pretty_assert_eq!(courier_url, "http://courier:3000");
+    // Verify we can get the API URL (internal Docker network URL)
+    let api_url = env.api_url();
+    pretty_assert_eq!(api_url, "http://courier:3000");
 
     // Verify we can get the test token
     let token = env.test_token();

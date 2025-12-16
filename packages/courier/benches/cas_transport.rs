@@ -5,11 +5,11 @@
 //!
 //! ## Setup
 //!
-//! These benchmarks require a running Courier server. Set the server URL
-//! using the `HURRY_COURIER_URL` environment variable:
+//! These benchmarks require a running Hurry API server. Set the server URL
+//! using the `HURRY_API_URL` environment variable:
 //!
 //! ```bash
-//! export HURRY_COURIER_URL=http://localhost:3000
+//! export HURRY_API_URL=http://localhost:3000
 //! cargo bench --package courier
 //! ```
 //!
@@ -41,20 +41,20 @@ fn main() {
     divan::main();
 }
 
-/// Get the Courier URL from environment or panic with a helpful message.
-fn courier_url() -> Url {
-    env::var("HURRY_COURIER_URL")
-        .expect("HURRY_COURIER_URL must be set to run benchmarks")
+/// Get the Hurry API URL from environment or panic with a helpful message.
+fn api_url() -> Url {
+    env::var("HURRY_API_URL")
+        .expect("HURRY_API_URL must be set to run benchmarks")
         .parse()
-        .expect("HURRY_COURIER_URL must be a valid URL")
+        .expect("HURRY_API_URL must be a valid URL")
 }
 
-/// Get the Courier token from environment or panic with a helpful message.
-fn courier_token() -> Token {
-    env::var("HURRY_COURIER_TOKEN")
-        .expect("HURRY_COURIER_TOKEN must be set to run benchmarks")
+/// Get the Hurry API token from environment or panic with a helpful message.
+fn api_token() -> Token {
+    env::var("HURRY_API_TOKEN")
+        .expect("HURRY_API_TOKEN must be set to run benchmarks")
         .parse()
-        .expect("HURRY_COURIER_TOKEN must be a valid token")
+        .expect("HURRY_API_TOKEN must be a valid token")
 }
 
 /// Test data generator for CAS benchmarks.
@@ -79,7 +79,7 @@ mod upload {
     #[divan::bench(args = SIZES, sample_count = 5)]
     fn bytes(bencher: divan::Bencher, size: usize) {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
-        let client = Client::new(courier_url(), courier_token()).expect("create client");
+        let client = Client::new(api_url(), api_token()).expect("create client");
 
         bencher
             .with_inputs(|| helpers::generate_test_data(size))
@@ -93,7 +93,7 @@ mod upload {
     #[divan::bench(args = SIZES, sample_count = 5)]
     fn streaming(bencher: divan::Bencher, size: usize) {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
-        let client = Client::new(courier_url(), courier_token()).expect("create client");
+        let client = Client::new(api_url(), api_token()).expect("create client");
 
         bencher
             .with_inputs(|| helpers::generate_test_data(size))
@@ -113,7 +113,7 @@ mod upload {
     #[divan::bench(args = BULK_SIZES, consts = BULK_COUNTS, sample_count = 5)]
     fn bulk<const COUNT: usize>(bencher: divan::Bencher, size: usize) {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
-        let client = Client::new(courier_url(), courier_token()).expect("create client");
+        let client = Client::new(api_url(), api_token()).expect("create client");
 
         bencher
             .with_inputs(|| {
@@ -138,7 +138,7 @@ mod download {
     #[divan::bench(args = SIZES, sample_count = 5)]
     fn bytes(bencher: divan::Bencher, size: usize) {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
-        let client = Client::new(courier_url(), courier_token()).expect("create client");
+        let client = Client::new(api_url(), api_token()).expect("create client");
 
         bencher
             .with_inputs(|| {
@@ -159,7 +159,7 @@ mod download {
     #[divan::bench(args = SIZES, sample_count = 5)]
     fn streaming(bencher: divan::Bencher, size: usize) {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
-        let client = Client::new(courier_url(), courier_token()).expect("create client");
+        let client = Client::new(api_url(), api_token()).expect("create client");
 
         bencher
             .with_inputs(|| {
@@ -182,7 +182,7 @@ mod download {
     #[divan::bench(args = BULK_SIZES, consts = BULK_COUNTS, sample_count = 5)]
     fn bulk<const COUNT: usize>(bencher: divan::Bencher, size: usize) {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
-        let client = Client::new(courier_url(), courier_token()).expect("create client");
+        let client = Client::new(api_url(), api_token()).expect("create client");
 
         bencher
             .with_inputs(|| {
