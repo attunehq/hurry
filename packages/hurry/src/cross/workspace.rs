@@ -223,11 +223,8 @@ impl Workspace {
 
         // Build env vars: always need RUSTC_BOOTSTRAP, optionally CROSS_CONFIG
         let mut env = vec![(String::from("RUSTC_BOOTSTRAP"), String::from("1"))];
-        if let Some(config_path) = cross_config.cross_config_path() {
-            env.push((
-                String::from("CROSS_CONFIG"),
-                config_path.to_string_lossy().into_owned(),
-            ));
+        if let Some(config) = cross_config {
+            env.push((String::from("CROSS_CONFIG"), config.path().to_string()));
         }
 
         let output = cross::invoke_output("build", build_args, env)
