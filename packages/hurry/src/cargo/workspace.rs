@@ -340,6 +340,23 @@ impl Workspace {
         // [^1]: https://github.com/rust-lang/cargo/issues/7614
         // [^2]: https://doc.rust-lang.org/cargo/reference/unstable.html#unit-graph
         let build_plan = self.build_plan(&args).await?;
+        self.units_from_build_plan(build_plan).await
+    }
+
+    /// Parse unit plans from a build plan.
+    ///
+    /// This is the core parsing logic shared by both `units()` and
+    /// cross-compilation variants. It takes a build plan (which may come
+    /// from cargo or cross) and parses it into unit structures.
+    ///
+    /// The build plan must have host-relative paths (for cross builds,
+    /// container paths should already be converted before calling this
+    /// method).
+    #[instrument(name = "Workspace::units_from_build_plan", skip(build_plan))]
+    pub(crate) async fn units_from_build_plan(
+        &self,
+        build_plan: BuildPlan,
+    ) -> Result<Vec<UnitPlan>> {
         trace!(?build_plan, "build plan");
 
         let mut units: Vec<UnitPlan> = Vec::new();

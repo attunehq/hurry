@@ -25,7 +25,6 @@ concurrency:
 
 env:
     AWS_REGION: us-west-1
-    ECR_REGISTRY: 419868707503.dkr.ecr.us-west-1.amazonaws.com
     ECR_REPOSITORY: courier
 
 jobs:
@@ -45,7 +44,7 @@ jobs:
             - name: Configure AWS credentials
               uses: aws-actions/configure-aws-credentials@v4
               with:
-                  role-to-assume: arn:aws:iam::419868707503:role/courier-github-actions
+                  role-to-assume: ${{ secrets.ECR_ROLE }}
                   aws-region: ${{ env.AWS_REGION }}
 
             - name: Login to Amazon ECR
@@ -73,6 +72,6 @@ jobs:
                   file: docker/courier/Dockerfile
                   platforms: linux/amd64,linux/arm64
                   push: true
-                  tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}
+                  tags: ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}
                   cache-from: type=gha
                   cache-to: type=gha,mode=max
