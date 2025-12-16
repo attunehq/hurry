@@ -5,11 +5,19 @@ import { exchangeAuthCode } from "../api/client";
 import { useSession } from "../auth/session";
 import { Button } from "../ui/primitives/Button";
 
+type Status = "working" | "error" | "done";
+
+const STATUS_COPY: Record<Status, { title: string; subtitle: string }> = {
+  working: { title: "Signing you in…", subtitle: "Exchanging OAuth callback code." },
+  error: { title: "Sign-in failed", subtitle: "There was a problem signing you in." },
+  done: { title: "Success", subtitle: "Redirecting to dashboard…" },
+};
+
 export default function AuthCallbackPage() {
   const nav = useNavigate();
   const { setSessionToken } = useSession();
   const [params] = useSearchParams();
-  const [status, setStatus] = useState<"working" | "error" | "done">("working");
+  const [status, setStatus] = useState<Status>("working");
   const [detail, setDetail] = useState<string | null>(null);
 
   // Track whether we've already attempted to exchange this code.
@@ -62,12 +70,10 @@ export default function AuthCallbackPage() {
         <div className="rounded-2xl border border-border bg-surface-raised shadow-glow-soft backdrop-blur">
           <div className="border-b border-border px-6 py-4">
             <div className="text-base font-semibold text-content-primary">
-              {status === "working" ? "Signing you in…" : status === "error" ? "Sign-in failed" : "Success"}
+              {STATUS_COPY[status].title}
             </div>
             <div className="mt-1 text-sm text-content-tertiary">
-              {status === "working" && "Exchanging OAuth callback code."}
-              {status === "error" && "There was a problem signing you in."}
-              {status === "done" && "Redirecting to dashboard…"}
+              {STATUS_COPY[status].subtitle}
             </div>
           </div>
 
