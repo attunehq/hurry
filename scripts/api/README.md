@@ -214,7 +214,7 @@ export COURIER_TOKEN=$(./scripts/api/login "dev@example.com" "dev-user" "Dev Use
 
 # List your organizations
 ./scripts/api/org-list
-# Output: {"organizations": [{"id": 1, "name": "dev-user's Org", ...}]}
+# Output: {"organizations": [{"id": 1, "name": "Personal", ...}]}
 
 # Create an API key for your org
 ./scripts/api/key-create 1 "my-dev-key"

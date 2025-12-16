@@ -38,7 +38,7 @@ if [ -n "$EXISTING_ACCOUNT" ]; then
   echo "Found existing account ID: $ACCOUNT_ID" >&2
 else
   # Create the account, GitHub identity, and default org in a single transaction
-  ORG_NAME="${GITHUB_USERNAME}'s Org"
+  ORG_NAME="Personal"
 
   # Do everything in one psql call to maintain transaction
   ACCOUNT_ID=$(psql "$COURIER_DATABASE_URL" -t -A \

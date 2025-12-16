@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
-import { exchangeAuthCode } from "../api/client";
+import { apiRequest, exchangeAuthCode } from "../api/client";
+import type { CreateOrgApiKeyResponse, OrganizationListResponse } from "../api/types";
 import { useSession } from "../auth/session";
 import { Button } from "../ui/primitives/Button";
 
@@ -25,6 +26,7 @@ export default function AuthCallbackPage() {
   const attemptedRef = useRef(false);
 
   const authCode = useMemo(() => params.get("auth_code"), [params]);
+  const isNewUser = useMemo(() => params.get("new_user") === "true", [params]);
 
   useEffect(() => {
     // Prevent double-exchange in StrictMode.
@@ -43,15 +45,57 @@ export default function AuthCallbackPage() {
         const out = await exchangeAuthCode(authCode);
         setSessionToken(out.session_token);
         setStatus("done");
-        nav("/");
+
+        if (isNewUser) {
+          // New user onboarding: create API key and redirect to onboarding flow
+          await handleNewUserOnboarding(out.session_token);
+        } else {
+          nav("/");
+        }
       } catch (e) {
         const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
         setStatus("error");
         setDetail(msg || "Failed to exchange auth code.");
       }
     }
+
+    async function handleNewUserOnboarding(sessionToken: string) {
+      try {
+        // Fetch user's organizations
+        const orgsResponse = await apiRequest<OrganizationListResponse>({
+          path: "/api/v1/me/organizations",
+          sessionToken,
+        });
+
+        const orgs = orgsResponse.organizations;
+        if (orgs.length === 0) {
+          // No org found, fall back to home
+          nav("/");
+          return;
+        }
+
+        // Use the first org (auto-created by Courier)
+        const org = orgs[0];
+
+        // Create a default API key for onboarding
+        const keyName = "Default";
+        const apiKey = await apiRequest<CreateOrgApiKeyResponse>({
+          path: `/api/v1/organizations/${org.id}/api-keys`,
+          method: "POST",
+          sessionToken,
+          body: { name: keyName },
+        });
+
+        // Redirect to onboarding page with token and org
+        nav(`/onboarding?token=${encodeURIComponent(apiKey.token)}&org=${org.id}`);
+      } catch {
+        // If onboarding setup fails, just go to home page
+        nav("/");
+      }
+    }
+
     void run();
-  }, [authCode, nav, setSessionToken]);
+  }, [authCode, isNewUser, nav, setSessionToken]);
 
   return (
     <div className="noise fixed inset-0 flex items-center justify-center">

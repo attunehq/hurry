@@ -60,7 +60,7 @@ export function LoginCard() {
             <button
               type="button"
               onClick={startOAuth}
-              className="w-full rounded-xl border border-border bg-surface-subtle p-4 text-left transition-colors hover:bg-surface-overlay"
+              className="w-full cursor-pointer rounded-xl border border-border bg-surface-subtle p-4 text-left transition-colors hover:bg-surface-overlay"
             >
               <div className="flex items-center gap-3">
                 <Github className="h-5 w-5 text-content-secondary" />
