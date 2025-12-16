@@ -11,6 +11,15 @@ import { useOrgContext } from "./org.$orgId";
 
 const GETTING_STARTED_DISMISSED_KEY = "hurry.gettingStartedDismissed";
 
+type Platform = "unix" | "windows";
+
+function detectPlatform(): Platform {
+  if (typeof window === "undefined") return "unix";
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes("win")) return "windows";
+  return "unix";
+}
+
 export default function OrgIndexPage() {
   const nav = useNavigate();
   const toast = useToast();
@@ -115,6 +124,16 @@ export default function OrgIndexPage() {
 
               <GettingStartedStep
                 number={3}
+                title="Install Hurry"
+              >
+                <div className="space-y-2 text-xs text-content-tertiary">
+                  <div>Run this in your terminal to install the hurry CLI.</div>
+                  <GettingStartedInstallTabs onCopy={copyToClipboard} />
+                </div>
+              </GettingStartedStep>
+
+              <GettingStartedStep
+                number={4}
                 title="Start using Hurry"
               >
                 <div className="space-y-2 text-xs text-content-tertiary">
@@ -196,6 +215,47 @@ function GettingStartedCodeBlock(props: { code: string; onCopy: (value: string) 
       >
         <Copy className="h-3.5 w-3.5" />
       </button>
+    </div>
+  );
+}
+
+function GettingStartedInstallTabs(props: { onCopy: (value: string) => void }) {
+  const [platform, setPlatform] = useState<Platform>(detectPlatform);
+
+  const commands = {
+    unix: "curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash",
+    windows: "irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex",
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex gap-1 rounded-md border border-border bg-surface-subtle p-0.5">
+        <button
+          type="button"
+          onClick={() => setPlatform("unix")}
+          className={[
+            "flex-1 rounded px-2 py-1 text-xs font-medium transition",
+            platform === "unix"
+              ? "bg-surface-raised text-content-primary shadow-sm"
+              : "text-content-tertiary hover:text-content-secondary",
+          ].join(" ")}
+        >
+          macOS / Linux
+        </button>
+        <button
+          type="button"
+          onClick={() => setPlatform("windows")}
+          className={[
+            "flex-1 rounded px-2 py-1 text-xs font-medium transition",
+            platform === "windows"
+              ? "bg-surface-raised text-content-primary shadow-sm"
+              : "text-content-tertiary hover:text-content-secondary",
+          ].join(" ")}
+        >
+          Windows
+        </button>
+      </div>
+      <GettingStartedCodeBlock code={commands[platform]} onCopy={props.onCopy} />
     </div>
   );
 }

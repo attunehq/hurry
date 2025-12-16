@@ -1,8 +1,18 @@
 import { AlertTriangle, Check, Copy } from "lucide-react";
+import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
 import { Button } from "../ui/primitives/Button";
 import { useToast } from "../ui/toast/ToastProvider";
+
+type Platform = "unix" | "windows";
+
+function detectPlatform(): Platform {
+  if (typeof window === "undefined") return "unix";
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes("win")) return "windows";
+  return "unix";
+}
 
 export default function OnboardingPage() {
   const nav = useNavigate();
@@ -40,7 +50,7 @@ export default function OnboardingPage() {
   return (
     <div className="noise fixed inset-0 overflow-y-auto">
       <div className="flex min-h-full items-center justify-center px-6 py-12">
-        <div className="w-full max-w-xl">
+        <div className="w-full max-w-2xl">
           {/* Brand */}
           <div className="mb-8 flex items-center justify-center gap-3">
             <div className="grid h-11 w-11 place-items-center rounded-xl border border-border bg-surface-subtle shadow-glow-soft">
@@ -54,9 +64,8 @@ export default function OnboardingPage() {
           {/* Welcome card */}
           <div className="rounded-2xl border border-border bg-surface-raised shadow-glow-soft backdrop-blur">
             <div className="border-b border-border px-6 py-4 text-center">
-              <div className="text-lg font-semibold text-content-primary">Welcome to Hurry!</div>
-              <div className="mt-1 text-sm text-content-tertiary">
-                Your API key has been created. Follow these steps to start using Hurry:
+              <div className="text-sm text-content-tertiary">
+                An initial API key for you to use has been created. Get ready for faster builds!
               </div>
             </div>
 
@@ -80,6 +89,14 @@ export default function OnboardingPage() {
 
               <OnboardingStep
                 number={3}
+                title="Install Hurry"
+                description="Run this in your terminal to install the hurry CLI."
+              >
+                <InstallTabs onCopy={copy} />
+              </OnboardingStep>
+
+              <OnboardingStep
+                number={4}
                 title="Start using Hurry"
                 description="Replace your cargo commands with hurry."
               >
@@ -156,6 +173,47 @@ function CodeBlock(props: { code: string; onCopy: (value: string) => void; label
       >
         <Copy className="h-3.5 w-3.5" />
       </button>
+    </div>
+  );
+}
+
+function InstallTabs(props: { onCopy: (value: string) => void }) {
+  const [platform, setPlatform] = useState<Platform>(detectPlatform);
+
+  const commands = {
+    unix: "curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash",
+    windows: "irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex",
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-1 rounded-lg border border-border bg-surface-subtle p-1">
+        <button
+          type="button"
+          onClick={() => setPlatform("unix")}
+          className={[
+            "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition",
+            platform === "unix"
+              ? "bg-surface-raised text-content-primary shadow-sm"
+              : "text-content-tertiary hover:text-content-secondary",
+          ].join(" ")}
+        >
+          macOS / Linux
+        </button>
+        <button
+          type="button"
+          onClick={() => setPlatform("windows")}
+          className={[
+            "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition",
+            platform === "windows"
+              ? "bg-surface-raised text-content-primary shadow-sm"
+              : "text-content-tertiary hover:text-content-secondary",
+          ].join(" ")}
+        >
+          Windows
+        </button>
+      </div>
+      <CodeBlock code={commands[platform]} onCopy={props.onCopy} />
     </div>
   );
 }
