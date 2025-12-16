@@ -82,6 +82,20 @@ pub async fn restore_units(
 
     let restored = Restored::default();
 
+    // If this build is against glibc, we need to know the glibc version so we
+    // don't restore objects that link to missing symbols.
+    let host_glibc_symbol_version = host_glibc_version()?;
+
+    // Load unit information from remote cache for ALL units. This tells us
+    // which units are stored remotely (and therefore should be skipped from
+    // upload). Note that this does NOT download the actual files, which are
+    // loaded as CAS keys.
+    let bulk_req = CargoRestoreRequest::new(
+        units.iter().map(|unit| unit.info().unit_hash.clone()),
+        host_glibc_symbol_version,
+    );
+    let mut saved_units = courier.cargo_cache_restore(bulk_req).await?;
+
     // Check which units are already on disk, and don't attempt to restore them.
     // Note that this does not attempt to check actual _freshness_, since that
     // logic is quite complicated[^1] and involves synthesizing a complete
@@ -92,7 +106,7 @@ pub async fn restore_units(
     // present-but-not-fresh units are still compiled.
     //
     // [^1]: https://github.com/attunehq/cargo/blob/10fcf1b64e201d1754b50be76a7d2db269d81408/src/cargo/core/compiler/fingerprint/mod.rs#L994
-    let mut units_to_skip: HashSet<UnitHash> = HashSet::new();
+    let mut units_on_disk: HashSet<UnitHash> = HashSet::new();
     for unit in units {
         let info = unit.info();
         // TODO: We should really just check the existence of the entire unit's
@@ -105,34 +119,15 @@ pub async fn restore_units(
         )
         .await
         {
-            // TODO: We actually don't want to always skip uploading the unit
-            // because we might not have the unit uploaded remotely. What we
-            // really want to do is:
-            //
-            // 1. Calculate the unit plan.
-            // 2. Call the API for _all_ units in the plan, so we know which are and are not
-            //    stored but not present.
-            // 3. Iterate through all units in the unit plan, restoring it only if it is not
-            //    present, and marking it for upload if it is not stored.
-            units_to_skip.insert(info.unit_hash.clone());
-            restored.units.insert(info.unit_hash.clone());
+            units_on_disk.insert(info.unit_hash.clone());
+            // Only mark units as restored (skip upload) if they exist remotely.
+            // This ensures units that were built locally but never uploaded will
+            // be uploaded after the build completes.
+            if saved_units.get(&info.unit_hash.clone().into()).is_some() {
+                restored.units.insert(info.unit_hash.clone());
+            }
         }
     }
-
-    // If this build is against glibc, we need to know the glibc version so we
-    // don't restore objects that link to missing symbols.
-    let host_glibc_symbol_version = host_glibc_version()?;
-
-    // Load unit information from remote cache. Note that this does NOT download
-    // the actual files, which are loaded as CAS keys.
-    let bulk_req = CargoRestoreRequest::new(
-        units
-            .iter()
-            .filter(|unit| !units_to_skip.contains(&unit.info().unit_hash))
-            .map(|unit| unit.info().unit_hash.clone()),
-        host_glibc_symbol_version,
-    );
-    let mut saved_units = courier.cargo_cache_restore(bulk_req).await?;
 
     // Track restore progress.
     let restore_progress = RestoreProgress::default();
@@ -221,7 +216,7 @@ pub async fn restore_units(
             // invariant that dependencies always have older mtimes than their
             // dependents. Otherwise, units that are skipped may have mtimes
             // that are out of sync with units that are restored.
-            if units_to_skip.contains(unit_hash)
+            if units_on_disk.contains(unit_hash)
                 && let Err(err) = unit.touch(&ws, starting_mtime).await
             {
                 warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
