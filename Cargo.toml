@@ -93,6 +93,7 @@ walkdir = "2.5.0"
 workspace_root = "0.2.0"
 xshell = "0.2.7"
 zstd = "0.13"
+toml = "0.9.8"
 
 [workspace.lints.clippy]
 redundant_pattern_matching = "allow"

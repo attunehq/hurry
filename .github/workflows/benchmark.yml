@@ -41,7 +41,7 @@ jobs:
             - uses: ./.github/actions/hurry-dev
             - id: build
               env:
-                  HURRY_COURIER_TOKEN: ${{ secrets.HURRY_COURIER_TOKEN }}
+                  HURRY_API_TOKEN: ${{ secrets.HURRY_COURIER_TOKEN }}
               run: |
                   START=$(date +%s)
                   hurry-dev cargo build --verbose

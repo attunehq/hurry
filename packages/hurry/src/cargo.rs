@@ -28,7 +28,7 @@ mod units;
 mod workspace;
 
 pub use build_args::{CargoBuildArgument, CargoBuildArguments, ColorWhen, MessageFormat};
-pub use build_plan::BuildPlan;
+pub use build_plan::{BuildPlan, BuildPlanInvocation};
 pub use build_script::BuildScriptOutput;
 pub use cache::{CargoCache, Restored, SaveProgress, SavedFile, save_units};
 pub use dep_info::{DepInfo, DepInfoLine};

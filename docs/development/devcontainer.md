@@ -77,11 +77,11 @@ The container automatically sets the following environment variables:
 COURIER_DATABASE_URL=postgres://courier:courier@postgres:5432/courier
 PGPASSWORD=courier
 
-# Hurry courier URLs
-HURRY_COURIER_URL=https://courier.staging.corp.attunehq.com  # Default
-HURRY_COURIER_URL_STAGING=https://courier.staging.corp.attunehq.com
-HURRY_COURIER_URL_DOCKER=http://courier:3000  # Container-to-container
-HURRY_COURIER_URL_LOCAL=http://host.docker.internal:3000  # Container-to-host
+# Hurry API URLs
+HURRY_API_URL=https://courier.staging.corp.attunehq.com  # Default
+HURRY_API_URL_STAGING=https://courier.staging.corp.attunehq.com
+HURRY_API_URL_DOCKER=http://courier:3000  # Container-to-container
+HURRY_API_URL_LOCAL=http://host.docker.internal:3000  # Container-to-host
 
 # Development
 RUST_BACKTRACE=1
