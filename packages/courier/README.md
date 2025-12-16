@@ -58,6 +58,33 @@ To load just the auth fixtures without resetting everything:
 make courier-local-auth
 ```
 
+### Testing GitHub OAuth Locally
+
+To test the full GitHub OAuth flow locally:
+
+1. Go to the GitHub OAuth app settings: https://github.com/organizations/attunehq/settings/apps/attune-hurry-dev
+
+2. Click "Generate a new client secret" (if you don't already have one)
+
+3. Add the credentials to your `.env` file:
+   ```sh
+   GITHUB_CLIENT_ID="<copy Client ID from the OAuth app page>"
+   GITHUB_CLIENT_SECRET="<paste the generated secret>"
+   OAUTH_REDIRECT_ALLOWLIST=http://localhost:3000,http://localhost:5173
+   ```
+
+4. Run Courier (it will read from `.env` automatically):
+   ```sh
+   cargo run -p courier --release -- serve
+   ```
+
+5. Start the dashboard dev server (in another terminal):
+   ```sh
+   cd packages/dashboard && npm run dev
+   ```
+
+6. Visit http://localhost:5173 and click "Sign in with GitHub"
+
 ## Migrations
 
 The canonical database state is at `schema/schema.sql`.

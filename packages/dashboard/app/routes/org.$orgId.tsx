@@ -119,6 +119,7 @@ export default function OrgLayout() {
     >
       <div className="rounded-2xl border border-border bg-surface-raised p-2 shadow-glow-soft backdrop-blur">
         <div className="flex flex-wrap gap-1">
+          <Tab to="" label="Overview" end />
           <Tab to="members" label="Members" />
           <Tab to="api-keys" label="API Keys" />
           <Tab to="invitations" label="Invitations" />
@@ -153,10 +154,11 @@ export default function OrgLayout() {
   );
 }
 
-function Tab(props: { to: string; label: string }) {
+function Tab(props: { to: string; label: string; end?: boolean }) {
   return (
     <NavLink
       to={props.to}
+      end={props.end}
       className={({ isActive }) =>
         [
           "rounded-xl px-3 py-2 text-sm transition",
