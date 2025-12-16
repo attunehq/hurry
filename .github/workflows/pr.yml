@@ -79,6 +79,8 @@ jobs:
               with:
                   shared-key: test
             - run: cargo sqlx migrate run --source packages/courier/schema/migrations/ --database-url $COURIER_DATABASE_URL
+            - name: Setup hurry-dev
+              uses: ./.github/actions/hurry-dev
             - run: cargo nextest run -p hurry -p courier
 
     build:
