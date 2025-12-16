@@ -1,4 +1,4 @@
-import { Check, Copy } from "lucide-react";
+import { AlertTriangle, Check, Copy } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router";
 
 import { Button } from "../ui/primitives/Button";
@@ -64,7 +64,7 @@ export default function OnboardingPage() {
               <OnboardingStep
                 number={1}
                 title="Copy your API token"
-                description="This token is only shown once. Save it somewhere safe."
+                warning="This token is only shown once. Save it somewhere safe."
                 subdescription="You can create more tokens later on your API Keys page."
               >
                 <CodeBlock code={token} onCopy={copy} wrap />
@@ -73,7 +73,7 @@ export default function OnboardingPage() {
               <OnboardingStep
                 number={2}
                 title="Set up your environment"
-                description="You may want to add this to your shell config for persistence:"
+                description="You may want to add this to your shell config for persistence."
               >
                 <CodeBlock code={`export HURRY_API_TOKEN="${token}"`} onCopy={copy} />
               </OnboardingStep>
@@ -81,12 +81,12 @@ export default function OnboardingPage() {
               <OnboardingStep
                 number={3}
                 title="Start using Hurry"
-                description="Replace your cargo commands with hurry:"
+                description="Replace your cargo commands with hurry."
               >
                 <div className="space-y-2">
-                  <CodeBlock code="hurry cargo build" onCopy={copy} label="instead of: cargo build" />
-                  <CodeBlock code="hurry cargo test" onCopy={copy} label="instead of: cargo test" />
-                  <CodeBlock code="hurry cargo check" onCopy={copy} label="instead of: cargo check" />
+                  <CodeBlock code="hurry cargo build" onCopy={copy} />
+                  <CodeBlock code="hurry cargo test" onCopy={copy} />
+                  <CodeBlock code="hurry cargo check" onCopy={copy} />
                 </div>
               </OnboardingStep>
             </div>
@@ -107,7 +107,8 @@ export default function OnboardingPage() {
 function OnboardingStep(props: {
   number: number;
   title: string;
-  description: string;
+  description?: string;
+  warning?: string;
   subdescription?: string;
   children: React.ReactNode;
 }) {
@@ -120,7 +121,15 @@ function OnboardingStep(props: {
         <div className="text-sm font-semibold text-content-primary">{props.title}</div>
       </div>
       <div className="ml-8 space-y-2">
-        <div className="text-xs text-content-tertiary">{props.description}</div>
+        {props.description ? (
+          <div className="text-xs text-content-tertiary">{props.description}</div>
+        ) : null}
+        {props.warning ? (
+          <div className="flex items-center gap-1.5 text-xs text-amber-500">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>{props.warning}</span>
+          </div>
+        ) : null}
         {props.subdescription ? (
           <div className="text-xs text-content-muted">{props.subdescription}</div>
         ) : null}

@@ -105,7 +105,7 @@ export default function OrgIndexPage() {
                 title="Set up your environment"
               >
                 <div className="space-y-2 text-xs text-content-tertiary">
-                  <div>Add your API token to your shell config:</div>
+                  <div>Add your API token to your shell config.</div>
                   <GettingStartedCodeBlock
                     code='export HURRY_API_TOKEN="your-token-here"'
                     onCopy={copyToClipboard}
@@ -118,7 +118,7 @@ export default function OrgIndexPage() {
                 title="Start using Hurry"
               >
                 <div className="space-y-2 text-xs text-content-tertiary">
-                  <div>Replace your cargo commands with hurry:</div>
+                  <div>Replace your cargo commands with hurry.</div>
                   <div className="space-y-1.5">
                     <GettingStartedCodeBlock code="hurry cargo build" onCopy={copyToClipboard} />
                     <GettingStartedCodeBlock code="hurry cargo test" onCopy={copyToClipboard} />
