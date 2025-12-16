@@ -1,14 +1,14 @@
-#[cfg(target_env = "gnu")]
+#[cfg(all(target_env = "gnu", not(target_os = "windows")))]
 use std::ffi::CStr;
 
 use clients::courier::v1::GlibcVersion;
 use color_eyre::Result;
-#[cfg(target_env = "gnu")]
+#[cfg(all(target_env = "gnu", not(target_os = "windows")))]
 use color_eyre::eyre::Context as _;
-#[cfg(target_env = "gnu")]
+#[cfg(all(target_env = "gnu", not(target_os = "windows")))]
 use tap::Pipe as _;
 
-#[cfg(target_env = "gnu")]
+#[cfg(all(target_env = "gnu", not(target_os = "windows")))]
 pub fn host_glibc_version() -> Result<Option<GlibcVersion>> {
     // TODO: Does this actually get the specific libc that rustc will
     // compile user code against? Maybe we have to run a special command to
@@ -35,7 +35,7 @@ pub fn host_glibc_version() -> Result<Option<GlibcVersion>> {
         .pipe(Ok)
 }
 
-#[cfg(not(target_env = "gnu"))]
+#[cfg(any(not(target_env = "gnu"), target_os = "windows"))]
 pub fn host_glibc_version() -> Result<Option<GlibcVersion>> {
     Ok(None)
 }
