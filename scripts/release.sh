@@ -386,56 +386,37 @@ TAG="v$VERSION"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Set up cleanup trap to restore all git changes and remove tag on failure
-cleanup() {
-    local exit_code=$?
-
-    # Restore all modified files in the working tree
-    if ! git diff --quiet 2>/dev/null || ! git diff --quiet --cached 2>/dev/null; then
-        step "Restoring git working state"
-        git restore . 2>/dev/null || true
-        git restore --staged . 2>/dev/null || true
-        info "✓ Restored git working state"
-    fi
-
-    # If script failed and tag was created, remove it
-    if [[ $exit_code -ne 0 ]] && [[ "$DRY_RUN" == "false" ]] && git rev-parse "$TAG" >/dev/null 2>&1; then
-        step "Removing tag $TAG due to failure"
-        git tag -d "$TAG" 2>/dev/null || true
-        info "✓ Removed tag $TAG"
-    fi
-}
-trap cleanup EXIT
-
-# Check that we're on main branch
+# Check that we're on main branch (skip in dry run mode)
 CURRENT_BRANCH="$(git branch --show-current)"
-if [[ "$CURRENT_BRANCH" != "main" ]]; then
+if [[ "$DRY_RUN" != "true" ]] && [[ "$CURRENT_BRANCH" != "main" ]]; then
     fail "Releases must be created from the 'main' branch. Currently on: $CURRENT_BRANCH"
 fi
 
-# Check that main is up-to-date with remote
-step "Checking that main is up-to-date with origin"
-git fetch origin main || fail "Failed to fetch from origin"
+# Check that main is up-to-date with remote (skip in dry run mode)
+if [[ "$DRY_RUN" != "true" ]]; then
+    step "Checking that main is up-to-date with origin"
+    git fetch origin main || fail "Failed to fetch from origin"
 
-LOCAL_REV="$(git rev-parse main)"
-REMOTE_REV="$(git rev-parse origin/main)"
+    LOCAL_REV="$(git rev-parse main)"
+    REMOTE_REV="$(git rev-parse origin/main)"
 
-if [[ "$LOCAL_REV" != "$REMOTE_REV" ]]; then
-    # Check if local is ahead, behind, or diverged
-    MERGE_BASE="$(git merge-base main origin/main)"
-    if [[ "$LOCAL_REV" == "$MERGE_BASE" ]]; then
-        fail "Your local main branch is behind origin/main. Please pull the latest changes: git pull origin main"
-    elif [[ "$REMOTE_REV" == "$MERGE_BASE" ]]; then
-        fail "Your local main branch is ahead of origin/main. Please push your changes: git push origin main"
-    else
-        fail "Your local main branch has diverged from origin/main. Please sync your branches."
+    if [[ "$LOCAL_REV" != "$REMOTE_REV" ]]; then
+        # Check if local is ahead, behind, or diverged
+        MERGE_BASE="$(git merge-base main origin/main)"
+        if [[ "$LOCAL_REV" == "$MERGE_BASE" ]]; then
+            fail "Your local main branch is behind origin/main. Please pull the latest changes: git pull origin main"
+        elif [[ "$REMOTE_REV" == "$MERGE_BASE" ]]; then
+            fail "Your local main branch is ahead of origin/main. Please push your changes: git push origin main"
+        else
+            fail "Your local main branch has diverged from origin/main. Please sync your branches."
+        fi
     fi
+
+    info "✓ main is up-to-date with origin/main"
 fi
 
-info "✓ main is up-to-date with origin/main"
-
-# Check for uncommitted changes
-if [[ "$DRY_RUN" == "false" ]] && ! git diff-index --quiet HEAD --; then
+# Check for uncommitted changes (skip in dry run mode)
+if [[ "$DRY_RUN" != "true" ]] && ! git diff-index --quiet HEAD --; then
     fail "You have uncommitted changes. Please commit or stash them before releasing."
 fi
 
