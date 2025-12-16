@@ -10,6 +10,7 @@
     "typecheck": "react-router typegen && tsc --noEmit --pretty false"
   },
   "dependencies": {
+    "@react-router/fs-routes": "^7.10.1",
     "@react-router/node": "^7.10.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.561.0",

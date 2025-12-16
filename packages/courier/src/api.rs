@@ -109,7 +109,8 @@ pub fn router(
     let mut router = Router::new().nest("/api/v1", v1::router());
 
     // Serve the console SPA if a directory is configured.
-    // The fallback ensures client-side routing works (all non-API routes serve index.html).
+    // The fallback ensures client-side routing works (all non-API routes serve
+    // index.html).
     if let Some(dir) = console_dir {
         tracing::info!(?dir, "serving console from directory");
         let index = dir.join("index.html");
