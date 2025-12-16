@@ -1,7 +1,7 @@
 import React from "react";
 import clsx from "clsx";
 
-type Variant = "primary" | "secondary" | "danger" | "ghost";
+type Variant = "primary" | "secondary" | "danger" | "warn" | "ghost";
 type Size = "sm" | "md";
 
 export function Button(
@@ -27,6 +27,9 @@ export function Button(
           : "",
         variant === "danger"
           ? "border-danger-border bg-danger-bg text-danger-text hover:bg-danger-bg-hover"
+          : "",
+        variant === "warn"
+          ? "border-warn-border bg-warn-bg text-warn-text hover:bg-warn-bg-hover"
           : "",
         variant === "ghost"
           ? "border-transparent bg-transparent text-content-secondary hover:bg-surface-subtle"

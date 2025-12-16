@@ -48,6 +48,7 @@ export function UserPage() {
       toast.push({ kind: "error", title: "Name cannot be empty" });
       return;
     }
+    setRenameOpen(false);
     try {
       await request<void>({
         path: "/api/v1/me",
@@ -55,7 +56,6 @@ export function UserPage() {
         body: { name: trimmed },
       });
       toast.push({ kind: "success", title: "Account name updated" });
-      setRenameOpen(false);
       await refresh();
     } catch (e) {
       if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;

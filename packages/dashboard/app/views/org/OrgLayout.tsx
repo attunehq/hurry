@@ -54,6 +54,7 @@ export function OrgLayout() {
       toast.push({ kind: "error", title: "Name cannot be empty" });
       return;
     }
+    setRenameOpen(false);
     try {
       await request<void>({
         path: `/api/v1/organizations/${id}`,
@@ -61,7 +62,6 @@ export function OrgLayout() {
         body: { name: trimmed },
       });
       toast.push({ kind: "success", title: "Organization renamed" });
-      setRenameOpen(false);
       await refresh();
     } catch (e) {
       if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;

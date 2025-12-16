@@ -48,6 +48,7 @@ export function OrgApiKeysPage() {
       toast.push({ kind: "error", title: "Name required" });
       return;
     }
+    setCreateOpen(false);
     try {
       const out = await request<CreateOrgApiKeyResponse>({
         path: `/api/v1/organizations/${orgId}/api-keys`,

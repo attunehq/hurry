@@ -53,7 +53,7 @@ export function OrgInvitationsPage() {
       toast.push({ kind: "error", title: "max_uses must be a number ≥ 1" });
       return;
     }
-
+    setCreateOpen(false);
     try {
       const out = await request<CreateInvitationResponse>({
         path: `/api/v1/organizations/${orgId}/invitations`,
@@ -61,7 +61,6 @@ export function OrgInvitationsPage() {
         body: { role: inviteRole, ...(max ? { max_uses: max } : {}) },
       });
       setCreated(out);
-      setCreateOpen(false);
       setMaxUses("");
       await load();
     } catch (e) {

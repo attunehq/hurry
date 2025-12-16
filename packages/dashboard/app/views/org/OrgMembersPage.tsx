@@ -147,32 +147,33 @@ export function OrgMembersPage() {
                   </td>
                   <td className="py-3 pr-3">
                     <div className="flex justify-end gap-2">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={!canAdmin || m.role === "admin"}
-                        onClick={() => setRole(m.account_id, "admin")}
-                      >
-                        <Crown className="h-4 w-4" />
-                        Promote
-                      </Button>
-                      {m.account_id === me?.id && isOnlyAdmin ? (
+                      {m.role === "member" ? (
+                        <Button
+                          variant="warn"
+                          size="sm"
+                          disabled={!canAdmin}
+                          onClick={() => setRole(m.account_id, "admin")}
+                        >
+                          <Crown className="h-4 w-4" />
+                          Make Admin
+                        </Button>
+                      ) : m.account_id === me?.id && isOnlyAdmin ? (
                         <div
                           className="relative"
                           title="You're the only admin. Promote another member before demoting yourself."
                         >
-                          <Button variant="secondary" size="sm" disabled>
-                            Demote
+                          <Button variant="warn" size="sm" disabled>
+                            Make Member
                           </Button>
                         </div>
                       ) : (
                         <Button
-                          variant="secondary"
+                          variant="warn"
                           size="sm"
-                          disabled={!canAdmin || m.role === "member"}
+                          disabled={!canAdmin}
                           onClick={() => setRole(m.account_id, "member")}
                         >
-                          Demote
+                          Make Member
                         </Button>
                       )}
                       {m.account_id === me?.id ? (

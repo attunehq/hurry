@@ -33,6 +33,12 @@
   --color-danger-border: var(--danger-border);
   --color-danger-text: var(--danger-text);
 
+  /* Warn colors */
+  --color-warn-bg: var(--warn-bg);
+  --color-warn-bg-hover: var(--warn-bg-hover);
+  --color-warn-border: var(--warn-border);
+  --color-warn-text: var(--warn-text);
+
   /* Attune brand colors */
   --color-attune-600: #2D9B7B;
   --color-attune-500: #5AC7A3;
@@ -105,6 +111,12 @@
   --danger-border: rgba(239, 68, 68, 0.3);
   --danger-text: #fecaca;
 
+  /* Warn (amber/yellow) */
+  --warn-bg: rgba(245, 158, 11, 0.1);
+  --warn-bg-hover: rgba(245, 158, 11, 0.15);
+  --warn-border: rgba(245, 158, 11, 0.3);
+  --warn-text: #fde68a;
+
   /* Misc */
   --backdrop-overlay: rgba(0, 0, 0, 0.6);
   --noise-opacity: 0.18;
@@ -167,6 +179,12 @@
   --danger-bg-hover: rgba(220, 38, 38, 0.15);
   --danger-border: rgba(220, 38, 38, 0.25);
   --danger-text: #b91c1c;
+
+  /* Warn (amber/yellow) - dark amber text on light amber bg */
+  --warn-bg: rgba(217, 119, 6, 0.1);
+  --warn-bg-hover: rgba(217, 119, 6, 0.15);
+  --warn-border: rgba(217, 119, 6, 0.25);
+  --warn-text: #b45309;
 
   /* Misc */
   --backdrop-overlay: rgba(0, 0, 0, 0.3);

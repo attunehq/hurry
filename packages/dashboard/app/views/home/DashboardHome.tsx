@@ -70,13 +70,13 @@ export function DashboardHome() {
       toast.push({ kind: "error", title: "Organization name required" });
       return;
     }
+    setCreateOpen(false);
     try {
       const created = await request<CreateOrganizationResponse>({
         path: "/api/v1/organizations",
         method: "POST",
         body: { name },
       });
-      setCreateOpen(false);
       setOrgName("");
       await refresh();
       nav(`/org/${created.id}`);

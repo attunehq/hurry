@@ -53,6 +53,7 @@ export function OrgBotsPage() {
       toast.push({ kind: "error", title: "Name and responsible email required" });
       return;
     }
+    setCreateOpen(false);
     try {
       const out = await request<CreateBotResponse>({
         path: `/api/v1/organizations/${orgId}/bots`,
@@ -62,7 +63,6 @@ export function OrgBotsPage() {
       setCreated(out);
       setBotName("");
       setResponsibleEmail("");
-      setCreateOpen(false);
       await load();
     } catch (err) {
       if (err && typeof err === "object" && "status" in err && (err as { status: number }).status === 401) return;
