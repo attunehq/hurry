@@ -22,9 +22,34 @@ env:
     COURIER_DATABASE_URL: postgres://postgres:postgres@localhost:5432/courier_test
 
 jobs:
-    rust:
-        name: Build, check, and test Rust
+    format:
+        name: Check format
         runs-on: ubuntu-latest
+
+        steps:
+            - name: Install Rust nightly
+              run: |
+                  rustup toolchain install nightly
+                  rustup component add --toolchain nightly rustfmt
+            - uses: actions/checkout@v4
+            - run: cargo +nightly fmt --all --check
+
+    clippy:
+        name: Check clippy
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Install Rust
+              run: rustup show
+            - uses: actions/checkout@v4
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: clippy
+            - run: cargo clippy -p hurry -p courier
+
+    test:
+        name: Run tests
+        runs-on: ubuntu-latest-l
 
         services:
             postgres:
@@ -42,32 +67,32 @@ jobs:
 
         steps:
             - name: Install Rust
-              run: |
-                  rustup toolchain install nightly
-                  rustup component add --toolchain nightly rustfmt
-                  rustup show
+              run: rustup show
             - uses: taiki-e/install-action@v2
               with:
                   tool: nextest,sqlx-cli
+                  checksum: true
             - uses: actions/checkout@v4
-
             - uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: test
             - run: cargo sqlx migrate run --source packages/courier/schema/migrations/ --database-url $COURIER_DATABASE_URL
+            - run: cargo nextest run -p hurry -p courier
 
-            - name: Check format
-              run: cargo +nightly fmt --all --check
+    build:
+        name: Run full build
+        runs-on: ubuntu-latest
 
-            - name: Check clippy
-              run: cargo clippy -p hurry -p courier
-
+        steps:
+            - name: Install Rust
+              run: rustup show
+            - uses: actions/checkout@v4
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: build
             - name: Setup hurry-dev
               uses: ./.github/actions/hurry-dev
-
-            - name: Run tests
-              run: cargo nextest run -p hurry -p courier
-
-            - name: Run full build
-              run: cargo build -p hurry -p courier --verbose
+            - run: cargo build -p hurry -p courier --verbose
 
     hurry-rust:
         name: Build with Hurry and check cache restores
