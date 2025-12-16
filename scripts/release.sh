@@ -421,12 +421,19 @@ if [[ "$DRY_RUN" != "true" ]] && ! git diff-index --quiet HEAD --; then
 fi
 
 # Check if tag already exists
+TAG_EXISTS=false
 if git rev-parse "$TAG" >/dev/null 2>&1; then
-    if [[ "$DRY_RUN" == "false" ]]; then
-        fail "Tag $TAG already exists. Use a different version or delete the existing tag."
-    else
-        warn "Tag $TAG already exists (continuing because this is a dry run)"
+    TAG_EXISTS=true
+    # Tag exists - verify it points to current HEAD
+    TAG_COMMIT="$(git rev-parse "$TAG^{commit}")"
+    HEAD_COMMIT="$(git rev-parse HEAD)"
+    if [[ "$TAG_COMMIT" != "$HEAD_COMMIT" ]]; then
+        fail "Tag $TAG already exists but points to a different commit.
+Tag points to:  $TAG_COMMIT
+HEAD is at:     $HEAD_COMMIT
+Either delete the existing tag or use a different version."
     fi
+    info "Tag $TAG already exists and points to HEAD - proceeding with existing tag"
 fi
 
 step "Releasing hurry version $VERSION (tag: $TAG)"
@@ -438,9 +445,13 @@ mkdir -p "$ARTIFACT_DIR"
 
 # Create git tag before building so git_version! picks it up
 if [[ "$DRY_RUN" == "false" ]]; then
-    step "Creating git tag $TAG (before build)"
-    git tag -a "$TAG" -m "Release $VERSION" || fail "Failed to create git tag"
-    info "✓ Created tag $TAG"
+    if [[ "$TAG_EXISTS" == "true" ]]; then
+        step "Using existing git tag $TAG"
+    else
+        step "Creating git tag $TAG (before build)"
+        git tag -a "$TAG" -m "Release $VERSION" || fail "Failed to create git tag"
+        info "✓ Created tag $TAG"
+    fi
 else
     step "Skipping git tag creation (dry run)"
 fi
