@@ -25,7 +25,10 @@ use crate::path::AbsDirPath;
 pub struct CrossConfig {
     /// The temp file containing the modified config.
     /// None if the original Cross.toml already has RUSTC_BOOTSTRAP configured.
-    temp_file: NamedTempFile,
+    ///
+    /// Mainly we interact with `path` but we need to keep this anyway so that
+    /// the actual temp file doesn't get cleaned up until we're done with it.
+    _temp_file: NamedTempFile,
 
     /// The stringified path to the temp file.
     ///
@@ -57,7 +60,10 @@ impl CrossConfig {
         if !config_path.exists() {
             debug!("creating temporary Cross.toml with RUSTC_BOOTSTRAP passthrough");
             let (temp_file, path) = Self::create_temp_config(CrossToml::default()).await?;
-            return Ok(Some(Self { temp_file, path }));
+            return Ok(Some(Self {
+                _temp_file: temp_file,
+                path,
+            }));
         }
 
         let contents = fs::read_to_string(&config_path)
@@ -72,7 +78,10 @@ impl CrossConfig {
 
         debug!("creating temporary Cross.toml with RUSTC_BOOTSTRAP added");
         let (temp_file, path) = Self::create_temp_config(config).await?;
-        Ok(Some(Self { temp_file, path }))
+        Ok(Some(Self {
+            _temp_file: temp_file,
+            path,
+        }))
     }
 
     /// Get the path to use for CROSS_CONFIG environment variable.
@@ -157,7 +166,7 @@ mod tests {
             .expect("create cross config temp file");
 
         // Should have a temp file
-        let temp_path = config.temp_file.path();
+        let temp_path = config._temp_file.path();
         assert!(
             temp_path.exists(),
             "Temp file should exist at {temp_path:?}"
@@ -231,7 +240,7 @@ mod tests {
             .expect("create cross config temp file");
 
         // Should have a temp file
-        let temp_path = config.temp_file.path();
+        let temp_path = config._temp_file.path();
         assert!(
             temp_path.exists(),
             "Temp file should exist at {temp_path:?}"
@@ -270,7 +279,7 @@ mod tests {
                 .expect("set up cross config")
                 .expect("create cross config temp file");
 
-            let path = config.temp_file.path().to_path_buf();
+            let path = config._temp_file.path().to_path_buf();
             assert!(path.exists(), "Temp file should exist at {path:?}");
             path
         };
