@@ -32,7 +32,7 @@ time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["compat", "io"] }
 tower = { workspace = true, features = ["buffer", "limit", "load-shed"] }
-tower-http = { workspace = true, features = ["trace", "limit", "timeout", "compression-full", "decompression-full", "cors"] }
+tower-http = { workspace = true, features = ["trace", "limit", "timeout", "compression-full", "decompression-full", "cors", "fs"] }
 tower_governor = { workspace = true }
 tracing = { workspace = true }
 tracing-error = { workspace = true }

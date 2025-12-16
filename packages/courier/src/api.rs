@@ -29,7 +29,10 @@
 //!
 //! [^2]: https://docs.rs/axum/latest/axum/response/trait.IntoResponse.html
 
-use std::time::{Duration, Instant};
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use aerosol::Aero;
 use axum::{
@@ -46,6 +49,7 @@ use tower_http::{
     cors::{AllowOrigin, Any, CorsLayer},
     decompression::RequestDecompressionLayer,
     limit::RequestBodyLimitLayer,
+    services::{ServeDir, ServeFile},
     timeout::TimeoutLayer,
 };
 use tracing::Instrument;
@@ -74,7 +78,11 @@ pub type State = Aero![
     Option<crate::oauth::GitHub>,
 ];
 
-pub fn router(state: State, allowed_origins: Vec<HeaderValue>) -> Router {
+pub fn router(
+    state: State,
+    allowed_origins: Vec<HeaderValue>,
+    console_dir: Option<&Path>,
+) -> Router {
     let middleware = ServiceBuilder::new()
         .layer(RequestDecompressionLayer::new())
         .layer(CompressionLayer::new())
@@ -98,8 +106,18 @@ pub fn router(state: State, allowed_origins: Vec<HeaderValue>) -> Router {
         ])
         .allow_headers(Any);
 
-    Router::new()
-        .nest("/api/v1", v1::router())
+    let mut router = Router::new().nest("/api/v1", v1::router());
+
+    // Serve the console SPA if a directory is configured.
+    // The fallback ensures client-side routing works (all non-API routes serve
+    // index.html).
+    if let Some(dir) = console_dir {
+        tracing::info!(?dir, "serving console from directory");
+        let index = dir.join("index.html");
+        router = router.fallback_service(ServeDir::new(dir).fallback(ServeFile::new(index)));
+    }
+
+    router
         .layer(DefaultBodyLimit::max(MAX_JSON_BODY_SIZE))
         .layer(middleware)
         .layer(cors)

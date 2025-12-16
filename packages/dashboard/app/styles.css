@@ -1,0 +1,218 @@
+@import "tailwindcss";
+
+@theme {
+  /* Semantic surface colors (theme-aware) */
+  --color-surface-base: var(--surface-base);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-surface-subtle: var(--surface-subtle);
+  --color-surface-subtle-hover: var(--surface-subtle-hover);
+
+  /* Semantic border colors - the bare "border" class needs --color-border */
+  --color-border: var(--border-default);
+  --color-border-default: var(--border-default);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-accent: var(--border-accent);
+  --color-border-accent-hover: var(--border-accent-hover);
+
+  /* Semantic text/content colors */
+  --color-content-primary: var(--text-primary);
+  --color-content-secondary: var(--text-secondary);
+  --color-content-tertiary: var(--text-tertiary);
+  --color-content-muted: var(--text-muted);
+
+  /* Accent colors */
+  --color-accent-bold: var(--accent-bold);
+  --color-accent-muted: var(--accent-muted);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-accent-text: var(--accent-text);
+
+  /* Danger colors */
+  --color-danger-bg: var(--danger-bg);
+  --color-danger-bg-hover: var(--danger-bg-hover);
+  --color-danger-border: var(--danger-border);
+  --color-danger-text: var(--danger-text);
+
+  /* Warn colors */
+  --color-warn-bg: var(--warn-bg);
+  --color-warn-bg-hover: var(--warn-bg-hover);
+  --color-warn-border: var(--warn-border);
+  --color-warn-text: var(--warn-text);
+
+  /* Attune brand colors */
+  --color-attune-600: #2D9B7B;
+  --color-attune-500: #5AC7A3;
+  --color-attune-400: #6AD4B0;
+  --color-attune-300: #8FE0C4;
+
+  /* Custom shadows */
+  --shadow-glow: 0 0 0 1px var(--border-accent), 0 10px 40px var(--glow-color);
+  --shadow-glow-soft: 0 0 0 1px var(--border-accent-soft), 0 8px 30px var(--glow-color-soft);
+
+  /* Background colors */
+  --color-backdrop: var(--backdrop-overlay);
+}
+
+/* Dark theme (default) */
+:root {
+  /* Surfaces */
+  --surface-base: #070a0c;
+  --surface-raised: rgba(10, 16, 15, 0.65);
+  --surface-overlay: rgba(10, 16, 15, 0.9);
+  --surface-subtle: rgba(255, 255, 255, 0.05);
+  --surface-subtle-hover: rgba(255, 255, 255, 0.08);
+
+  /* Borders */
+  --border-default: rgba(255, 255, 255, 0.1);
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --border-accent: rgba(90, 199, 163, 0.35);
+  --border-accent-hover: rgba(90, 199, 163, 0.5);
+
+  /* Text */
+  --text-primary: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-tertiary: #94a3b8;
+  --text-muted: #64748b;
+
+  /* Accent (teal/attune) */
+  --accent-bold: #5ac7a3;
+  --accent-muted: #3da88a;
+  --accent-subtle: rgba(90, 199, 163, 0.15);
+  --accent-text: #8fe0c4;
+
+  /* Glow effects */
+  --glow: 0 0 0 1px rgba(90, 199, 163, 0.35), 0 10px 40px rgba(90, 199, 163, 0.18);
+  --glow-soft: 0 0 0 1px rgba(90, 199, 163, 0.25), 0 8px 30px rgba(90, 199, 163, 0.12);
+  --border-accent-soft: rgba(90, 199, 163, 0.25);
+  --glow-color: rgba(90, 199, 163, 0.18);
+  --glow-color-soft: rgba(90, 199, 163, 0.12);
+
+  /* Gradients */
+  --gradient-bg: radial-gradient(
+      1000px 650px at 25% -10%,
+      rgba(90, 199, 163, 0.22),
+      transparent 60%
+    ),
+    radial-gradient(
+      900px 520px at 85% 0%,
+      rgba(45, 155, 123, 0.18),
+      transparent 60%
+    ),
+    radial-gradient(
+      800px 520px at 50% 110%,
+      rgba(106, 212, 176, 0.12),
+      transparent 55%
+    ),
+    linear-gradient(180deg, var(--surface-base) 0%, var(--surface-base) 100%);
+
+  /* Danger (red) */
+  --danger-bg: rgba(239, 68, 68, 0.1);
+  --danger-bg-hover: rgba(239, 68, 68, 0.15);
+  --danger-border: rgba(239, 68, 68, 0.3);
+  --danger-text: #fecaca;
+
+  /* Warn (amber/yellow) */
+  --warn-bg: rgba(245, 158, 11, 0.1);
+  --warn-bg-hover: rgba(245, 158, 11, 0.15);
+  --warn-border: rgba(245, 158, 11, 0.3);
+  --warn-text: #fde68a;
+
+  /* Misc */
+  --backdrop-overlay: rgba(0, 0, 0, 0.6);
+  --noise-opacity: 0.18;
+}
+
+/* Light theme */
+:root.light {
+  /* Surfaces */
+  --surface-base: #f8faf9;
+  --surface-raised: rgba(255, 255, 255, 0.85);
+  --surface-overlay: rgba(255, 255, 255, 0.95);
+  --surface-subtle: rgba(0, 0, 0, 0.04);
+  --surface-subtle-hover: rgba(0, 0, 0, 0.07);
+
+  /* Borders */
+  --border-default: rgba(0, 0, 0, 0.1);
+  --border-subtle: rgba(0, 0, 0, 0.05);
+  --border-accent: rgba(45, 155, 123, 0.4);
+  --border-accent-hover: rgba(45, 155, 123, 0.6);
+
+  /* Text */
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-tertiary: #475569;
+  --text-muted: #64748b;
+
+  /* Accent (teal/attune) - darker for light mode */
+  --accent-bold: #2d9b7b;
+  --accent-muted: #238567;
+  --accent-subtle: rgba(45, 155, 123, 0.12);
+  --accent-text: #1e7a5a;
+
+  /* Glow effects - softer for light mode */
+  --glow: 0 0 0 1px rgba(45, 155, 123, 0.3), 0 10px 40px rgba(45, 155, 123, 0.12);
+  --glow-soft: 0 0 0 1px rgba(45, 155, 123, 0.2), 0 8px 30px rgba(45, 155, 123, 0.08);
+  --border-accent-soft: rgba(45, 155, 123, 0.2);
+  --glow-color: rgba(45, 155, 123, 0.12);
+  --glow-color-soft: rgba(45, 155, 123, 0.08);
+
+  /* Gradients */
+  --gradient-bg: radial-gradient(
+      1000px 650px at 25% -10%,
+      rgba(90, 199, 163, 0.15),
+      transparent 60%
+    ),
+    radial-gradient(
+      900px 520px at 85% 0%,
+      rgba(45, 155, 123, 0.12),
+      transparent 60%
+    ),
+    radial-gradient(
+      800px 520px at 50% 110%,
+      rgba(106, 212, 176, 0.08),
+      transparent 55%
+    ),
+    linear-gradient(180deg, var(--surface-base) 0%, var(--surface-base) 100%);
+
+  /* Danger (red) - dark red text on light red bg */
+  --danger-bg: rgba(220, 38, 38, 0.1);
+  --danger-bg-hover: rgba(220, 38, 38, 0.15);
+  --danger-border: rgba(220, 38, 38, 0.25);
+  --danger-text: #b91c1c;
+
+  /* Warn (amber/yellow) - dark amber text on light amber bg */
+  --warn-bg: rgba(217, 119, 6, 0.1);
+  --warn-bg-hover: rgba(217, 119, 6, 0.15);
+  --warn-border: rgba(217, 119, 6, 0.25);
+  --warn-text: #b45309;
+
+  /* Misc */
+  --backdrop-overlay: rgba(0, 0, 0, 0.3);
+  --noise-opacity: 0.08;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--gradient-bg);
+  color: var(--text-secondary);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-bold);
+  outline-offset: 2px;
+}
+
+.noise::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)' opacity='.18'/%3E%3C/svg%3E");
+  mix-blend-mode: overlay;
+  opacity: var(--noise-opacity);
+}
+

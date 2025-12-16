@@ -43,6 +43,10 @@ struct ServeConfig {
     #[arg(long, env = "CAS_ROOT")]
     cas_root: PathBuf,
 
+    /// Directory containing the console static files (optional)
+    #[arg(long, env = "CONSOLE_DIR")]
+    console_dir: Option<PathBuf>,
+
     /// GitHub OAuth Client ID (optional, enables OAuth if provided)
     #[arg(long, env = "GITHUB_CLIENT_ID")]
     github_client_id: Option<String>,
@@ -158,6 +162,7 @@ async fn serve(config: ServeConfig) -> Result<()> {
     let router = courier::api::router(
         Aero::new().with(github).with(storage).with(db),
         cors_origins,
+        config.console_dir.as_deref(),
     );
 
     let addr = format!("{}:{}", config.host, config.port);
