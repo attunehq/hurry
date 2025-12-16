@@ -46,6 +46,8 @@ jobs:
               with:
                   shared-key: clippy
             - run: cargo clippy -p hurry -p courier
+              env:
+                  SQLX_OFFLINE: true
 
     test:
         name: Run tests
@@ -93,6 +95,8 @@ jobs:
             - name: Setup hurry-dev
               uses: ./.github/actions/hurry-dev
             - run: cargo build -p hurry -p courier --verbose
+              env:
+                  SQLX_OFFLINE: true
 
     hurry-rust:
         name: Build with Hurry and check cache restores
@@ -111,6 +115,7 @@ jobs:
             - name: Populate cache if needed
               env:
                   HURRY_API_TOKEN: ${{ secrets.HURRY_COURIER_TOKEN }}
+                  SQLX_OFFLINE: true
               run: hurry-dev cargo build --verbose
 
             - name: Check that cache restores are fresh
