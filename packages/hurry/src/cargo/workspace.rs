@@ -111,16 +111,16 @@ impl Workspace {
         .context("parse path as utf8")?;
 
         let host_arch = {
-            let mut cmd = tokio::process::Command::new("cargo");
-            cmd.args(["-Z", "unstable-options", "rustc", "--print", "host-tuple"]);
-            // This is apparently still unstable[^1] when invoked as `cargo
-            // rustc`.
-            //
-            // [^1]: https://github.com/rust-lang/cargo/issues/9357
-            cmd.env("RUSTC_BOOTSTRAP", "1");
-            let output = cmd.output().await.context("run rustc")?;
+            // Use `rustc -Vv` and parse the `host:` line for backwards
+            // compatibility. `--print host-tuple` was only added in rustc 1.84.
+            // See: https://github.com/rust-lang/rustup/issues/1663
+            let output = tokio::process::Command::new("rustc")
+                .args(["-Vv"])
+                .output()
+                .await
+                .context("run rustc -Vv")?;
             if !output.status.success() {
-                return Err(eyre!("invoke rustc"))
+                return Err(eyre!("invoke rustc -Vv"))
                     .with_section(|| {
                         String::from_utf8_lossy(&output.stdout)
                             .to_string()
@@ -133,10 +133,16 @@ impl Workspace {
                     });
             }
             let output = String::from_utf8(output.stdout)?;
-            let output = output.trim();
-            output
+            let host_line = output
+                .lines()
+                .find(|line| line.starts_with("host: "))
+                .ok_or_else(|| eyre!("rustc -Vv output missing 'host:' line"))?;
+            let host_tuple = host_line
+                .strip_prefix("host: ")
+                .expect("line starts with 'host: '");
+            host_tuple
                 .try_into()
-                .unwrap_or(RustcTargetPlatform::Unsupported(output.to_string()))
+                .unwrap_or(RustcTargetPlatform::Unsupported(host_tuple.to_string()))
         };
 
         let profile = args.profile().map(Profile::from).unwrap_or(Profile::Debug);
