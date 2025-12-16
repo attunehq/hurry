@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::{
     cargo::{BuildPlan, CargoBuildArguments, RustcTargetPlatform, UnitPlan, Workspace},
-    cross::{self, CrossConfigGuard},
+    cross::{self, CrossConfig},
     fs,
     path::TryJoinWith as _,
 };
@@ -208,8 +208,9 @@ impl Workspace {
         &self,
         args: impl AsRef<CargoBuildArguments> + Debug,
     ) -> Result<BuildPlan> {
-        // Guard cleans up Cross.toml modifications when dropped
-        let _config_guard = CrossConfigGuard::setup(&self.root)
+        // Set up temporary Cross.toml with RUSTC_BOOTSTRAP passthrough.
+        // The config is kept alive for the duration of the cross invocation.
+        let cross_config = CrossConfig::setup(&self.root)
             .await
             .context("set up Cross.toml configuration")?;
 
@@ -220,7 +221,16 @@ impl Workspace {
             String::from("unstable-options"),
         ]);
 
-        let output = cross::invoke_output("build", build_args, [("RUSTC_BOOTSTRAP", "1")])
+        // Build env vars: always need RUSTC_BOOTSTRAP, optionally CROSS_CONFIG
+        let mut env = vec![(String::from("RUSTC_BOOTSTRAP"), String::from("1"))];
+        if let Some(config_path) = cross_config.cross_config_path() {
+            env.push((
+                String::from("CROSS_CONFIG"),
+                config_path.to_string_lossy().into_owned(),
+            ));
+        }
+
+        let output = cross::invoke_output("build", build_args, env)
             .await
             .context("invoke cross")?;
 

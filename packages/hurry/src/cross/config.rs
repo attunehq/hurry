@@ -3,54 +3,56 @@
 //! This module provides utilities for managing Cross.toml configuration to
 //! ensure RUSTC_BOOTSTRAP environment variable is passed through to Docker
 //! containers, which is required for using unstable features like --build-plan.
+//!
+//! Instead of modifying the user's Cross.toml in-place, we create a temporary
+//! config file and use the CROSS_CONFIG environment variable to point cross
+//! to it. This is more robust because:
+//! - No risk of corrupting the user's Cross.toml if the process is killed
+//! - Temp files are automatically cleaned up
+//! - No backup/restore logic needed
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use color_eyre::{Result, eyre::Context};
 use serde::{Deserialize, Serialize};
+use tempfile::NamedTempFile;
 use tokio::fs;
 use tracing::debug;
 
 use crate::path::AbsDirPath;
 
-#[cfg(test)]
-use tempfile::TempDir;
-
-/// RAII guard that manages Cross.toml configuration for RUSTC_BOOTSTRAP
-/// passthrough.
+/// Configuration for cross invocation with RUSTC_BOOTSTRAP passthrough.
 ///
-/// This guard ensures that the Cross.toml file has the necessary configuration
-/// to pass through RUSTC_BOOTSTRAP to Docker containers. It handles three
-/// scenarios:
+/// This struct manages a temporary Cross.toml configuration file that ensures
+/// RUSTC_BOOTSTRAP is passed through to Docker containers. It uses the
+/// CROSS_CONFIG environment variable instead of modifying files in-place.
 ///
-/// 1. No Cross.toml exists: Creates a temporary config, removes it on drop
-/// 2. Cross.toml exists without RUSTC_BOOTSTRAP: Backs up, modifies, restores
-///    on drop
-/// 3. Cross.toml exists with RUSTC_BOOTSTRAP: No-op (doesn't touch the file)
+/// The temp file is automatically cleaned up when this struct is dropped.
 #[derive(Debug)]
-pub struct CrossConfigGuard {
-    config_path: PathBuf,
-    backup_path: Option<PathBuf>,
-    created: bool,
+pub struct CrossConfig {
+    /// The temp file containing the modified config.
+    /// None if the original Cross.toml already has RUSTC_BOOTSTRAP configured.
+    temp_file: Option<NamedTempFile>,
 }
 
-impl CrossConfigGuard {
+impl CrossConfig {
     /// Set up Cross.toml configuration for RUSTC_BOOTSTRAP passthrough.
     ///
-    /// This analyzes the existing Cross.toml (if any) and modifies or creates
-    /// it as needed to ensure RUSTC_BOOTSTRAP is passed through to the
-    /// container.
+    /// This analyzes the existing Cross.toml (if any) and creates a temporary
+    /// config file with RUSTC_BOOTSTRAP passthrough if needed.
+    ///
+    /// Returns a CrossConfig that should be kept alive for the duration of the
+    /// cross invocation. Use `cross_config_path()` to get the path to pass
+    /// via the CROSS_CONFIG environment variable.
     pub async fn setup(workspace_root: &AbsDirPath) -> Result<Self> {
         let config_path = workspace_root.as_std_path().join("Cross.toml");
 
         if !config_path.exists() {
-            // Scenario 1: create temporary config
+            // No existing config - create a minimal one with RUSTC_BOOTSTRAP
             debug!("creating temporary Cross.toml with RUSTC_BOOTSTRAP passthrough");
-            Self::create_temporary_config(&config_path).await?;
+            let temp_file = Self::create_temp_config(CrossToml::default()).await?;
             return Ok(Self {
-                config_path,
-                backup_path: None,
-                created: true,
+                temp_file: Some(temp_file),
             });
         }
 
@@ -58,62 +60,41 @@ impl CrossConfigGuard {
             .await
             .context("read Cross.toml")?;
 
-        let config = toml::from_str::<CrossConfig>(&contents).context("parse Cross.toml")?;
+        let config = toml::from_str::<CrossToml>(&contents).context("parse Cross.toml")?;
 
         if Self::has_rustc_bootstrap_passthrough(&config) {
-            // Scenario 3: already configured, no-op
+            // Already configured - no temp file needed, cross will use the original
             debug!("Cross.toml already has RUSTC_BOOTSTRAP passthrough");
-            return Ok(Self {
-                config_path,
-                backup_path: None,
-                created: false,
-            });
+            return Ok(Self { temp_file: None });
         }
 
-        // Scenario 2: backup and modify
-        debug!("modifying Cross.toml to add RUSTC_BOOTSTRAP passthrough");
-        let backup_path = Self::backup_and_modify(&config_path, config).await?;
+        // Create temp file with original config + RUSTC_BOOTSTRAP
+        debug!("creating temporary Cross.toml with RUSTC_BOOTSTRAP added");
+        let temp_file = Self::create_temp_config(config).await?;
         Ok(Self {
-            config_path,
-            backup_path: Some(backup_path),
-            created: false,
+            temp_file: Some(temp_file),
         })
     }
 
-    fn has_rustc_bootstrap_passthrough(config: &CrossConfig) -> bool {
+    /// Get the path to use for CROSS_CONFIG environment variable.
+    ///
+    /// Returns None if the original Cross.toml already has RUSTC_BOOTSTRAP
+    /// configured and no override is needed.
+    pub fn cross_config_path(&self) -> Option<PathBuf> {
+        self.temp_file.as_ref().map(|f| f.path().to_path_buf())
+    }
+
+    fn has_rustc_bootstrap_passthrough(config: &CrossToml) -> bool {
         config
             .build
             .as_ref()
             .and_then(|b| b.env.as_ref())
             .and_then(|e| e.passthrough.as_ref())
-            .map(|p| p.iter().any(|v| v == "RUSTC_BOOTSTRAP"))
-            .unwrap_or(false)
+            .is_some_and(|p| p.iter().any(|v| v == "RUSTC_BOOTSTRAP"))
     }
 
-    async fn create_temporary_config(path: &Path) -> Result<()> {
-        let config = CrossConfig {
-            build: Some(BuildConfig {
-                env: Some(EnvConfig {
-                    passthrough: Some(vec![String::from("RUSTC_BOOTSTRAP")]),
-                }),
-            }),
-        };
-
-        let contents = toml::to_string_pretty(&config).context("serialize Cross.toml")?;
-        fs::write(path, contents)
-            .await
-            .context("write temporary Cross.toml")?;
-
-        Ok(())
-    }
-
-    async fn backup_and_modify(path: &Path, mut config: CrossConfig) -> Result<PathBuf> {
-        let backup_path = path.with_extension("toml.hurry-backup");
-
-        fs::copy(path, &backup_path)
-            .await
-            .context("backup Cross.toml")?;
-
+    async fn create_temp_config(mut config: CrossToml) -> Result<NamedTempFile> {
+        // Add RUSTC_BOOTSTRAP to passthrough
         let build = config.build.get_or_insert_with(Default::default);
         let env = build.env.get_or_insert_with(Default::default);
         let passthrough = env.passthrough.get_or_insert_with(Vec::new);
@@ -122,61 +103,21 @@ impl CrossConfigGuard {
             passthrough.push(String::from("RUSTC_BOOTSTRAP"));
         }
 
-        let contents = toml::to_string_pretty(&config).context("serialize modified Cross.toml")?;
-        fs::write(path, contents)
+        let contents = toml::to_string_pretty(&config).context("serialize Cross.toml")?;
+
+        // Create temp file with .toml extension for clarity
+        let temp_file = NamedTempFile::with_suffix(".toml").context("create temp file")?;
+        fs::write(temp_file.path(), contents)
             .await
-            .context("write modified Cross.toml")?;
+            .context("write temp Cross.toml")?;
 
-        Ok(backup_path)
-    }
-
-    /// Clean up: restore or remove the config file.
-    ///
-    /// This is exposed for testing; normally cleanup happens automatically in
-    /// Drop.
-    #[cfg(test)]
-    async fn cleanup(&mut self) -> Result<()> {
-        if self.created {
-            debug!("removing temporary Cross.toml");
-            if self.config_path.exists() {
-                fs::remove_file(&self.config_path)
-                    .await
-                    .context("remove temporary Cross.toml")?;
-            }
-        } else if let Some(backup_path) = &self.backup_path {
-            debug!("restoring original Cross.toml from backup");
-            if backup_path.exists() {
-                fs::rename(backup_path, &self.config_path)
-                    .await
-                    .context("restore Cross.toml from backup")?;
-            }
-        }
-        Ok(())
-    }
-}
-
-impl Drop for CrossConfigGuard {
-    #[allow(clippy::disallowed_methods)]
-    fn drop(&mut self) {
-        // We use std::fs here because async code cannot run in Drop. This is a
-        // best-effort cleanup; errors are logged but don't prevent dropping.
-        if self.created {
-            debug!("removing temporary Cross.toml");
-            if let Err(e) = std::fs::remove_file(&self.config_path) {
-                debug!(?e, "remove temporary Cross.toml");
-            }
-        } else if let Some(backup_path) = &self.backup_path {
-            debug!("restoring original Cross.toml from backup");
-            if let Err(e) = std::fs::rename(backup_path, &self.config_path) {
-                debug!(?e, "restore Cross.toml from backup");
-            }
-        }
+        Ok(temp_file)
     }
 }
 
 /// Minimal Cross.toml configuration structure
 #[derive(Debug, Default, Deserialize, Serialize)]
-struct CrossConfig {
+struct CrossToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     build: Option<BuildConfig>,
 }
@@ -195,6 +136,8 @@ struct EnvConfig {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::TempDir;
+
     use super::*;
 
     async fn temp_workspace() -> (TempDir, AbsDirPath) {
@@ -204,98 +147,93 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn creates_config_when_missing() {
+    async fn creates_temp_config_when_missing() {
         let (_temp, workspace) = temp_workspace().await;
-        let config_path = workspace.as_std_path().join("Cross.toml");
+        let original_config_path = workspace.as_std_path().join("Cross.toml");
 
-        {
-            let _guard = CrossConfigGuard::setup(&workspace).await.unwrap();
-            assert!(config_path.exists());
+        let config = CrossConfig::setup(&workspace).await.unwrap();
 
-            let contents = fs::read_to_string(&config_path).await.unwrap();
-            assert!(contents.contains("RUSTC_BOOTSTRAP"));
-        }
+        // Should have a temp file
+        let temp_path = config.cross_config_path().expect("should have temp config");
+        assert!(temp_path.exists());
 
-        assert!(!config_path.exists());
+        // Temp file should have RUSTC_BOOTSTRAP
+        let contents = fs::read_to_string(&temp_path).await.unwrap();
+        assert!(contents.contains("RUSTC_BOOTSTRAP"));
+
+        // Original location should NOT have a file
+        assert!(!original_config_path.exists());
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn preserves_existing_config_with_bootstrap() {
+    async fn no_temp_file_when_already_configured() {
         let (_temp, workspace) = temp_workspace().await;
         let config_path = workspace.as_std_path().join("Cross.toml");
 
-        let config = CrossConfig {
+        // Create existing config with RUSTC_BOOTSTRAP
+        let existing = CrossToml {
             build: Some(BuildConfig {
                 env: Some(EnvConfig {
                     passthrough: Some(vec![String::from("RUSTC_BOOTSTRAP")]),
                 }),
             }),
         };
-        let original = toml::to_string_pretty(&config).unwrap();
-        fs::write(&config_path, &original).await.unwrap();
+        let contents = toml::to_string_pretty(&existing).unwrap();
+        fs::write(&config_path, &contents).await.unwrap();
 
-        {
-            let _guard = CrossConfigGuard::setup(&workspace).await.unwrap();
-            let contents = fs::read_to_string(&config_path).await.unwrap();
-            assert_eq!(contents, original);
-        }
+        let config = CrossConfig::setup(&workspace).await.unwrap();
 
-        let contents = fs::read_to_string(&config_path).await.unwrap();
-        assert_eq!(contents, original);
+        // Should NOT have a temp file - original is fine
+        assert!(config.cross_config_path().is_none());
+
+        // Original should be unchanged
+        let after = fs::read_to_string(&config_path).await.unwrap();
+        assert_eq!(after, contents);
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn adds_bootstrap_to_existing_config() {
+    async fn creates_temp_with_merged_config() {
         let (_temp, workspace) = temp_workspace().await;
         let config_path = workspace.as_std_path().join("Cross.toml");
 
-        let config = CrossConfig {
+        // Create existing config WITHOUT RUSTC_BOOTSTRAP
+        let existing = CrossToml {
             build: Some(BuildConfig {
                 env: Some(EnvConfig {
                     passthrough: Some(vec![String::from("OTHER_VAR")]),
                 }),
             }),
         };
-        let original = toml::to_string_pretty(&config).unwrap();
+        let original = toml::to_string_pretty(&existing).unwrap();
         fs::write(&config_path, &original).await.unwrap();
 
-        {
-            let _guard = CrossConfigGuard::setup(&workspace).await.unwrap();
-            let contents = fs::read_to_string(&config_path).await.unwrap();
-            assert!(contents.contains("RUSTC_BOOTSTRAP"));
-            assert!(contents.contains("OTHER_VAR"));
-        }
+        let config = CrossConfig::setup(&workspace).await.unwrap();
 
-        let contents = fs::read_to_string(&config_path).await.unwrap();
-        assert_eq!(contents, original);
+        // Should have a temp file
+        let temp_path = config.cross_config_path().expect("should have temp config");
+        let temp_contents = fs::read_to_string(&temp_path).await.unwrap();
+
+        // Temp should have both vars
+        assert!(temp_contents.contains("RUSTC_BOOTSTRAP"));
+        assert!(temp_contents.contains("OTHER_VAR"));
+
+        // Original should be unchanged
+        let after = fs::read_to_string(&config_path).await.unwrap();
+        assert_eq!(after, original);
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn cleanup_removes_temporary_config() {
+    async fn temp_file_cleaned_up_on_drop() {
         let (_temp, workspace) = temp_workspace().await;
-        let config_path = workspace.as_std_path().join("Cross.toml");
 
-        let mut guard = CrossConfigGuard::setup(&workspace).await.unwrap();
-        assert!(config_path.exists());
+        let temp_path = {
+            let config = CrossConfig::setup(&workspace).await.unwrap();
+            let path = config.cross_config_path().expect("should have temp config");
+            assert!(path.exists());
+            path
+        };
 
-        guard.cleanup().await.unwrap();
-        assert!(!config_path.exists());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn cleanup_restores_modified_config() {
-        let (_temp, workspace) = temp_workspace().await;
-        let config_path = workspace.as_std_path().join("Cross.toml");
-
-        let original = "[build]\n[build.env]\npassthrough = [\"OTHER_VAR\"]\n";
-        fs::write(&config_path, original).await.unwrap();
-
-        let mut guard = CrossConfigGuard::setup(&workspace).await.unwrap();
-        let modified = fs::read_to_string(&config_path).await.unwrap();
-        assert_ne!(modified, original);
-
-        guard.cleanup().await.unwrap();
-        let restored = fs::read_to_string(&config_path).await.unwrap();
-        assert_eq!(restored, original);
+        // After drop, temp file should be gone
+        assert!(!temp_path.exists());
     }
 }
