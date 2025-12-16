@@ -78,8 +78,8 @@ COURIER_DATABASE_URL=postgres://courier:courier@postgres:5432/courier
 PGPASSWORD=courier
 
 # Hurry API URLs
-HURRY_API_URL=https://courier.staging.corp.attunehq.com  # Default
-HURRY_API_URL_STAGING=https://courier.staging.corp.attunehq.com
+HURRY_API_URL=https://app.staging.corp.hurry.build  # Default
+HURRY_API_URL_STAGING=https://app.staging.corp.hurry.build
 HURRY_API_URL_DOCKER=http://courier:3000  # Container-to-container
 HURRY_API_URL_LOCAL=http://host.docker.internal:3000  # Container-to-host
 

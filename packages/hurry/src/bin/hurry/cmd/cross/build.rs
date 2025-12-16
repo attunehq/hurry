@@ -32,7 +32,7 @@ pub struct Options {
     #[arg(
         long = "hurry-api-url",
         env = "HURRY_API_URL",
-        default_value = "https://courier.staging.corp.attunehq.com"
+        default_value = "https://app.hurry.build"
     )]
     #[debug("{api_url}")]
     api_url: Url,
