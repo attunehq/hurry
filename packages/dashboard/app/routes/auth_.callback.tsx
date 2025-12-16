@@ -4,8 +4,6 @@ import { useNavigate, useSearchParams } from "react-router";
 import { exchangeAuthCode } from "../api/client";
 import { useSession } from "../auth/session";
 import { Button } from "../ui/primitives/Button";
-import { Card, CardBody } from "../ui/primitives/Card";
-import { PageLayout } from "../ui/shell/PageLayout";
 
 export default function AuthCallbackPage() {
   const nav = useNavigate();
@@ -48,28 +46,50 @@ export default function AuthCallbackPage() {
   }, [authCode, nav, setSessionToken]);
 
   return (
-    <PageLayout
-      title="Signing you in…"
-      subtitle="Exchanging OAuth callback code for a session token."
-    >
-      <Card>
-        <CardBody>
-          {status === "working" ? (
-            <div className="text-sm text-content-tertiary">Working…</div>
-          ) : null}
-          {status === "error" ? (
-            <div className="space-y-3">
-              <div className="text-sm text-red-600 dark:text-red-200">Sign-in failed.</div>
-              {detail ? <div className="text-xs text-content-tertiary">{detail}</div> : null}
-              <div className="flex gap-2">
+    <div className="noise fixed inset-0 flex items-center justify-center">
+      <div className="w-full max-w-md px-6">
+        {/* Brand */}
+        <div className="mb-8 flex items-center justify-center gap-3">
+          <div className="grid h-11 w-11 place-items-center rounded-xl border border-border bg-surface-subtle shadow-glow-soft">
+            <span className="text-2xl font-bold bg-linear-to-br from-attune-300 to-attune-500 bg-clip-text text-transparent">
+              A
+            </span>
+          </div>
+          <div className="text-xl font-semibold text-content-primary">Hurry</div>
+        </div>
+
+        {/* Status card */}
+        <div className="rounded-2xl border border-border bg-surface-raised shadow-glow-soft backdrop-blur">
+          <div className="border-b border-border px-6 py-4">
+            <div className="text-base font-semibold text-content-primary">
+              {status === "working" ? "Signing you in…" : status === "error" ? "Sign-in failed" : "Success"}
+            </div>
+            <div className="mt-1 text-sm text-content-tertiary">
+              {status === "working" && "Exchanging OAuth callback code."}
+              {status === "error" && "There was a problem signing you in."}
+              {status === "done" && "Redirecting to dashboard…"}
+            </div>
+          </div>
+
+          <div className="p-6">
+            {status === "working" && (
+              <div className="text-sm text-content-tertiary">Working…</div>
+            )}
+            {status === "error" && (
+              <div className="space-y-4">
+                {detail && (
+                  <div className="rounded-xl border border-border bg-surface-subtle p-4 text-sm text-content-tertiary">
+                    {detail}
+                  </div>
+                )}
                 <Button variant="secondary" onClick={() => nav("/auth")}>
-                  Back to auth
+                  Back to sign in
                 </Button>
               </div>
-            </div>
-          ) : null}
-        </CardBody>
-      </Card>
-    </PageLayout>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

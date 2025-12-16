@@ -5,8 +5,6 @@ import type { AcceptInvitationResponse, InvitationPreviewResponse } from "../api
 import { useApi } from "../api/useApi";
 import { Badge } from "../ui/primitives/Badge";
 import { Button } from "../ui/primitives/Button";
-import { Card, CardBody } from "../ui/primitives/Card";
-import { PageLayout } from "../ui/shell/PageLayout";
 import { useToast } from "../ui/toast/ToastProvider";
 
 export default function InvitePage() {
@@ -64,41 +62,61 @@ export default function InvitePage() {
   }, [load]);
 
   return (
-    <PageLayout
-      title="Invitation"
-      subtitle="Preview what you're joining before you accept."
-    >
-      <Card>
-        <CardBody>
-          {loading ? <div className="text-sm text-content-tertiary">Loading…</div> : null}
-          {preview ? (
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-border bg-surface-subtle p-4">
-                <div className="text-xs text-content-muted">Organization</div>
-                <div className="mt-1 text-sm font-semibold text-content-primary">
-                  {preview.organization_name}
-                </div>
-                <div className="mt-2 flex items-center gap-2">
-                  <Badge tone="muted">Role</Badge>
-                  <Badge tone={preview.role === "admin" ? "neon" : "muted"}>{preview.role}</Badge>
-                  {!preview.valid ? <Badge tone="warn">invalid</Badge> : null}
-                </div>
-              </div>
+    <div className="noise fixed inset-0 flex items-center justify-center">
+      <div className="w-full max-w-md px-6">
+        {/* Brand */}
+        <div className="mb-8 flex items-center justify-center gap-3">
+          <div className="grid h-11 w-11 place-items-center rounded-xl border border-border bg-surface-subtle shadow-glow-soft">
+            <span className="text-2xl font-bold bg-linear-to-br from-attune-300 to-attune-500 bg-clip-text text-transparent">
+              A
+            </span>
+          </div>
+          <div className="text-xl font-semibold text-content-primary">Hurry</div>
+        </div>
 
-              <div className="flex gap-2">
-                <Button onClick={accept} disabled={!preview.valid || accepting}>
-                  Accept invite
-                </Button>
-                <Button variant="secondary" onClick={() => nav("/")}>
-                  Back
-                </Button>
-              </div>
+        {/* Invite card */}
+        <div className="rounded-2xl border border-border bg-surface-raised shadow-glow-soft backdrop-blur">
+          <div className="border-b border-border px-6 py-4">
+            <div className="text-base font-semibold text-content-primary">Invitation</div>
+            <div className="mt-1 text-sm text-content-tertiary">
+              Preview what you're joining before you accept.
             </div>
-          ) : !loading ? (
-            <div className="text-sm text-content-tertiary">No preview available.</div>
-          ) : null}
-        </CardBody>
-      </Card>
-    </PageLayout>
+          </div>
+
+          <div className="p-6">
+            {loading && (
+              <div className="text-sm text-content-tertiary">Loading…</div>
+            )}
+            {preview && (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-border bg-surface-subtle p-4">
+                  <div className="text-xs text-content-muted">Organization</div>
+                  <div className="mt-1 text-sm font-semibold text-content-primary">
+                    {preview.organization_name}
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <Badge tone="muted">Role</Badge>
+                    <Badge tone={preview.role === "admin" ? "neon" : "muted"}>{preview.role}</Badge>
+                    {!preview.valid && <Badge tone="warn">invalid</Badge>}
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <Button onClick={accept} disabled={!preview.valid || accepting}>
+                    {signedIn ? "Accept invite" : "Sign in to accept"}
+                  </Button>
+                  <Button variant="secondary" onClick={() => nav("/")}>
+                    Back
+                  </Button>
+                </div>
+              </div>
+            )}
+            {!loading && !preview && (
+              <div className="text-sm text-content-tertiary">No preview available.</div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -1,5 +1,6 @@
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 
+import { AuthGate } from "./auth/AuthGate";
 import { SessionProvider } from "./auth/session";
 import { ThemeProvider } from "./ui/theme/ThemeProvider";
 import { ToastProvider } from "./ui/toast/ToastProvider";
@@ -31,9 +32,11 @@ export default function Root() {
     <ThemeProvider>
       <SessionProvider>
         <ToastProvider>
-          <AppShell>
+          <AuthGate
+            shell={(children) => <AppShell>{children}</AppShell>}
+          >
             <Outlet />
-          </AppShell>
+          </AuthGate>
         </ToastProvider>
       </SessionProvider>
     </ThemeProvider>
