@@ -80,7 +80,9 @@ export function LoginCard() {
                   Dev: Use a session token
                 </div>
                 <div className="mt-2 text-sm text-content-tertiary">
-                  Paste a session token for local development.
+                  Paste a session token for local development. You can get one
+                  by running <code className="rounded bg-surface-overlay px-1 py-0.5 font-mono text-xs">./scripts/api/login</code> from
+                  the repo root.
                 </div>
 
                 <div className="mt-4 space-y-2">
