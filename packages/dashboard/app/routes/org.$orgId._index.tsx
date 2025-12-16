@@ -1,4 +1,4 @@
-import { Copy, KeyRound, Rocket, Terminal, X } from "lucide-react";
+import { Copy, KeyRound, Rocket, Terminal } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
@@ -8,8 +8,6 @@ import { Button } from "../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../ui/primitives/Card";
 import { useToast } from "../ui/toast/ToastProvider";
 import { useOrgContext } from "./org.$orgId";
-
-const GETTING_STARTED_DISMISSED_KEY = "hurry.gettingStartedDismissed";
 
 type Platform = "unix" | "windows";
 
@@ -26,12 +24,6 @@ export default function OrgIndexPage() {
   const { request, signedIn } = useApi();
   const { orgId } = useOrgContext();
   const [apiKeys, setApiKeys] = useState<OrgApiKeyListResponse | null>(null);
-
-  // TODO: Move dismissed state to server-side user preferences
-  const [dismissed, setDismissed] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem(GETTING_STARTED_DISMISSED_KEY) === "true";
-  });
 
   const hasApiKeys = useMemo(() => (apiKeys?.api_keys.length ?? 0) > 0, [apiKeys]);
 
@@ -51,11 +43,6 @@ export default function OrgIndexPage() {
     void loadApiKeys();
   }, [loadApiKeys]);
 
-  function dismissGettingStarted() {
-    setDismissed(true);
-    localStorage.setItem(GETTING_STARTED_DISMISSED_KEY, "true");
-  }
-
   async function copyToClipboard(value: string) {
     try {
       await navigator.clipboard.writeText(value);
@@ -67,24 +54,13 @@ export default function OrgIndexPage() {
 
   return (
     <div className="space-y-4">
-      {!dismissed ? (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Rocket className="h-5 w-5 text-accent-text" />
-                <div className="text-sm font-semibold text-content-primary">Getting Started</div>
-              </div>
-              <button
-                type="button"
-                onClick={dismissGettingStarted}
-                className="rounded p-1 text-content-muted transition hover:bg-surface-subtle hover:text-content-secondary"
-                title="Dismiss"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </CardHeader>
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Rocket className="h-5 w-5 text-accent-text" />
+            <div className="text-sm font-semibold text-content-primary">Getting Started</div>
+          </div>
+        </CardHeader>
           <CardBody>
             <div className="space-y-4">
               <GettingStartedStep
@@ -153,7 +129,6 @@ export default function OrgIndexPage() {
             </div>
           </CardBody>
         </Card>
-      ) : null}
 
       <Card>
         <CardHeader>
