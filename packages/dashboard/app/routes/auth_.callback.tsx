@@ -2,11 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
 import { apiRequest, exchangeAuthCode } from "../api/client";
-import type {
-  CreateOrgApiKeyResponse,
-  MeResponse,
-  OrganizationListResponse,
-} from "../api/types";
+import type { CreateOrgApiKeyResponse, OrganizationListResponse } from "../api/types";
 import { useSession } from "../auth/session";
 import { Button } from "../ui/primitives/Button";
 
@@ -65,11 +61,11 @@ export default function AuthCallbackPage() {
 
     async function handleNewUserOnboarding(sessionToken: string) {
       try {
-        // Fetch user info and their organizations
-        const [me, orgsResponse] = await Promise.all([
-          apiRequest<MeResponse>({ path: "/api/v1/me", sessionToken }),
-          apiRequest<OrganizationListResponse>({ path: "/api/v1/me/organizations", sessionToken }),
-        ]);
+        // Fetch user's organizations
+        const orgsResponse = await apiRequest<OrganizationListResponse>({
+          path: "/api/v1/me/organizations",
+          sessionToken,
+        });
 
         const orgs = orgsResponse.organizations;
         if (orgs.length === 0) {
@@ -82,7 +78,7 @@ export default function AuthCallbackPage() {
         const org = orgs[0];
 
         // Create a default API key for onboarding
-        const keyName = `${me.name ?? me.github_username ?? "User"}'s default API key`;
+        const keyName = "Default";
         const apiKey = await apiRequest<CreateOrgApiKeyResponse>({
           path: `/api/v1/organizations/${org.id}/api-keys`,
           method: "POST",

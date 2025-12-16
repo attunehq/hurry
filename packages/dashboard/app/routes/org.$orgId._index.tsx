@@ -93,12 +93,17 @@ export default function OrgIndexPage() {
                 done={hasApiKeys}
               >
                 {hasApiKeys ? (
-                  <div className="text-xs text-content-tertiary">
-                    You have {apiKeys?.api_keys.length} API key{apiKeys?.api_keys.length === 1 ? "" : "s"}.{" "}
-                    <Link to="api-keys" className="text-accent-text hover:underline">
-                      View keys
-                    </Link>
-                  </div>
+                  (() => {
+                    const count = apiKeys?.api_keys.length ?? 0;
+                    return (
+                      <div className="text-xs text-content-tertiary">
+                        You have {count} API key{count === 1 ? "" : "s"}.{" "}
+                        <Link to="api-keys" className="text-accent-text hover:underline">
+                          View keys
+                        </Link>
+                      </div>
+                    );
+                  })()
                 ) : (
                   <div className="flex items-center gap-2">
                     <Button size="sm" onClick={() => nav("api-keys")}>
