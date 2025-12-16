@@ -1,5 +1,5 @@
 import { Copy, Plus, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { CreateInvitationResponse, InvitationListResponse, OrgRole } from "../../api/types";
 import { useApi } from "../../api/useApi";
@@ -27,7 +27,7 @@ export function OrgInvitationsPage() {
   const canAdmin = role === "admin";
   const invites = useMemo(() => data?.invitations ?? [], [data]);
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!signedIn) return;
     setLoading(true);
     try {
@@ -43,7 +43,7 @@ export function OrgInvitationsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [signedIn, orgId, request, toast]);
 
   async function createInvite() {
     if (!signedIn) return;
@@ -102,7 +102,7 @@ export function OrgInvitationsPage() {
 
   useEffect(() => {
     void load();
-  }, [signedIn, orgId]);
+  }, [load]);
 
   return (
     <div className="space-y-4">

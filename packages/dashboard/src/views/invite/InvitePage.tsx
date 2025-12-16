@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import type { AcceptInvitationResponse, InvitationPreviewResponse } from "../../api/types";
@@ -20,7 +20,7 @@ export function InvitePage() {
 
   const inviteToken = useMemo(() => token ?? "", [token]);
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!inviteToken) return;
     setLoading(true);
     try {
@@ -36,7 +36,7 @@ export function InvitePage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [inviteToken, request, toast]);
 
   async function accept() {
     if (!signedIn) {
@@ -61,7 +61,7 @@ export function InvitePage() {
 
   useEffect(() => {
     void load();
-  }, [inviteToken]);
+  }, [load]);
 
   return (
     <PageLayout

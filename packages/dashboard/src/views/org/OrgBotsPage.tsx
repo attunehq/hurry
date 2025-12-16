@@ -1,5 +1,5 @@
 import { Bot, Copy, Plus, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { BotListResponse, CreateBotResponse } from "../../api/types";
 import { useApi } from "../../api/useApi";
@@ -27,7 +27,7 @@ export function OrgBotsPage() {
   const bots = useMemo(() => data?.bots ?? [], [data]);
   const canAdmin = role === "admin";
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!signedIn) return;
     setLoading(true);
     try {
@@ -43,7 +43,7 @@ export function OrgBotsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [signedIn, orgId, request, toast]);
 
   async function createBot() {
     if (!signedIn) return;
@@ -100,7 +100,7 @@ export function OrgBotsPage() {
 
   useEffect(() => {
     void load();
-  }, [signedIn, orgId]);
+  }, [load]);
 
   return (
     <div className="space-y-4">

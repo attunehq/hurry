@@ -1,5 +1,5 @@
 import { Pencil } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 
 import type { OrganizationEntry, OrganizationListResponse } from "../../api/types";
@@ -24,7 +24,7 @@ export function OrgLayout() {
 
   const id = useMemo(() => Number(orgId ?? "0"), [orgId]);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     if (!signedIn || !id) return;
     try {
       const out = await request<OrganizationListResponse>({
@@ -38,7 +38,7 @@ export function OrgLayout() {
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Failed to load org", detail: msg });
     }
-  }
+  }, [signedIn, id, request, toast]);
 
   const canAdmin = org?.role === "admin";
 
@@ -72,7 +72,7 @@ export function OrgLayout() {
 
   useEffect(() => {
     void refresh();
-  }, [signedIn, id]);
+  }, [refresh]);
 
   if (!signedIn) {
     return (

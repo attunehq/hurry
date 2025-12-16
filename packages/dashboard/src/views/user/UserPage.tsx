@@ -1,5 +1,5 @@
 import { Calendar, Github, LogOut, Mail, Pencil } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import type { MeResponse } from "../../api/types";
@@ -20,7 +20,7 @@ export function UserPage() {
   const [renameOpen, setRenameOpen] = useState(false);
   const [newName, setNewName] = useState("");
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     if (!signedIn) {
       setMe(null);
       return;
@@ -34,7 +34,7 @@ export function UserPage() {
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Failed to load user", detail: msg });
     }
-  }
+  }, [signedIn, request, toast]);
 
   function openRename() {
     setNewName(me?.name ?? "");
@@ -66,7 +66,7 @@ export function UserPage() {
 
   useEffect(() => {
     void refresh();
-  }, [signedIn]);
+  }, [refresh]);
 
   return (
     <PageLayout

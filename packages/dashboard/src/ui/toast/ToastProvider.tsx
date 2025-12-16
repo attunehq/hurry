@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 
 type ToastKind = "info" | "success" | "error";
@@ -18,16 +18,35 @@ const ToastContext = createContext<ToastApi | null>(null);
 
 export function ToastProvider(props: { children: React.ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
+  const timeoutsRef = useRef<Map<string, number>>(new Map());
 
   const remove = useCallback((id: string) => {
     setItems((prev) => prev.filter((t) => t.id !== id));
+    const timeoutId = timeoutsRef.current.get(id);
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+      timeoutsRef.current.delete(id);
+    }
   }, []);
 
   const push = useCallback((toast: Omit<ToastItem, "id">) => {
     const id = crypto.randomUUID();
     setItems((prev) => [...prev, { ...toast, id }]);
-    window.setTimeout(() => remove(id), toast.kind === "error" ? 7000 : 4500);
+    const timeoutId = window.setTimeout(() => {
+      timeoutsRef.current.delete(id);
+      remove(id);
+    }, toast.kind === "error" ? 7000 : 4500);
+    timeoutsRef.current.set(id, timeoutId);
   }, [remove]);
+
+  // Cleanup all timeouts on unmount
+  useEffect(() => {
+    const timeouts = timeoutsRef.current;
+    return () => {
+      timeouts.forEach((timeoutId) => window.clearTimeout(timeoutId));
+      timeouts.clear();
+    };
+  }, []);
 
   const api = useMemo(() => ({ push }), [push]);
 

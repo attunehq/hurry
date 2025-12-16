@@ -1,5 +1,5 @@
 import { Building2, ExternalLink, Plus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import type {
@@ -38,7 +38,7 @@ export function DashboardHome() {
     return [...orgs].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   }, [orgs]);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     if (!signedIn) {
       setMe(null);
       setOrgs(null);
@@ -57,7 +57,7 @@ export function DashboardHome() {
       const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "";
       toast.push({ kind: "error", title: "Failed to load", detail: msg });
     }
-  }
+  }, [signedIn, request, toast]);
 
   async function createOrg() {
     if (!signedIn) {
@@ -89,7 +89,7 @@ export function DashboardHome() {
 
   useEffect(() => {
     void refresh();
-  }, [signedIn]);
+  }, [refresh]);
 
   return (
     <PageLayout

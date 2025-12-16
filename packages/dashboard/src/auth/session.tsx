@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 
-const STORAGE_KEY = "courier.sessionToken";
+const STORAGE_KEY = "hurry.sessionToken";
 
 type SessionState = {
   sessionToken: string | null;

@@ -1,5 +1,5 @@
 import { Bot, Crown, DoorOpen, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import type { MeResponse, MemberListResponse, OrgRole } from "../../api/types";
@@ -26,7 +26,7 @@ export function OrgMembersPage() {
   );
   const isOnlyAdmin = role === "admin" && adminCount === 1;
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!signedIn) return;
     setLoading(true);
     try {
@@ -46,7 +46,7 @@ export function OrgMembersPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [signedIn, orgId, request, toast]);
 
   async function setRole(accountId: number, newRole: OrgRole) {
     if (!signedIn) return;
@@ -103,7 +103,7 @@ export function OrgMembersPage() {
 
   useEffect(() => {
     void load();
-  }, [signedIn, orgId]);
+  }, [load]);
 
   return (
     <Card>

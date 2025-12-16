@@ -1,5 +1,5 @@
 import { Bot, Copy, KeyRound, Plus, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { CreateOrgApiKeyResponse, OrgApiKeyListResponse } from "../../api/types";
 import { useApi } from "../../api/useApi";
@@ -23,7 +23,7 @@ export function OrgApiKeysPage() {
 
   const keys = useMemo(() => data?.api_keys ?? [], [data]);
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!signedIn) return;
     setLoading(true);
     try {
@@ -39,7 +39,7 @@ export function OrgApiKeysPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [signedIn, orgId, request, toast]);
 
   async function createKey() {
     if (!signedIn) return;
@@ -91,7 +91,7 @@ export function OrgApiKeysPage() {
 
   useEffect(() => {
     void load();
-  }, [signedIn, orgId]);
+  }, [load]);
 
   return (
     <div className="space-y-4">
