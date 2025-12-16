@@ -21,7 +21,7 @@ use hurry::{
     ci::is_ci,
     cross,
     daemon::{CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse, DaemonPaths},
-    progress::TransferBar,
+    progress::{Spinner, TransferBar},
 };
 
 /// Options for `cross build`.
@@ -130,8 +130,11 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // Compute expected unit plans using cross build plan.
     // If this fails (unsupported target, etc.), fall back to passthrough.
-    println!("[hurry] Computing build plan inside Cross context");
-    let units = match workspace.cross_units(&args).await {
+    let units_result = {
+        let _spinner = Spinner::new("Computing build plan (Cross)");
+        workspace.cross_units(&args).await
+    };
+    let units = match units_result {
         Ok(units) => units,
         Err(error) => {
             warn!(
