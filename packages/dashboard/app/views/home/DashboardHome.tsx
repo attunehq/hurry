@@ -109,7 +109,7 @@ export function DashboardHome() {
               <div>
                 <div className="text-sm font-semibold text-content-primary">Sign in required</div>
                 <div className="mt-1 text-sm text-content-tertiary">
-                  Paste a session token or use GitHub OAuth to continue.
+                  Sign in with GitHub to continue.
                 </div>
               </div>
               <Button onClick={() => nav("/auth")}>Sign in</Button>
