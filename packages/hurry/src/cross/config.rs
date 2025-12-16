@@ -3,13 +3,6 @@
 //! This module provides utilities for managing Cross.toml configuration to
 //! ensure RUSTC_BOOTSTRAP environment variable is passed through to Docker
 //! containers, which is required for using unstable features like --build-plan.
-//!
-//! Instead of modifying the user's Cross.toml in-place, we create a temporary
-//! config file and use the CROSS_CONFIG environment variable to point cross
-//! to it. This is more robust because:
-//! - No risk of corrupting the user's Cross.toml if the process is killed
-//! - Temp files are automatically cleaned up
-//! - No backup/restore logic needed
 
 use std::path::PathBuf;
 
@@ -24,8 +17,7 @@ use crate::path::AbsDirPath;
 /// Configuration for cross invocation with RUSTC_BOOTSTRAP passthrough.
 ///
 /// This struct manages a temporary Cross.toml configuration file that ensures
-/// RUSTC_BOOTSTRAP is passed through to Docker containers. It uses the
-/// CROSS_CONFIG environment variable instead of modifying files in-place.
+/// RUSTC_BOOTSTRAP is passed through to Docker containers.
 ///
 /// The temp file is automatically cleaned up when this struct is dropped.
 #[derive(Debug)]
@@ -48,7 +40,6 @@ impl CrossConfig {
         let config_path = workspace_root.as_std_path().join("Cross.toml");
 
         if !config_path.exists() {
-            // No existing config - create a minimal one with RUSTC_BOOTSTRAP
             debug!("creating temporary Cross.toml with RUSTC_BOOTSTRAP passthrough");
             let temp_file = Self::create_temp_config(CrossToml::default()).await?;
             return Ok(Self {
@@ -63,12 +54,10 @@ impl CrossConfig {
         let config = toml::from_str::<CrossToml>(&contents).context("parse Cross.toml")?;
 
         if Self::has_rustc_bootstrap_passthrough(&config) {
-            // Already configured - no temp file needed, cross will use the original
             debug!("Cross.toml already has RUSTC_BOOTSTRAP passthrough");
             return Ok(Self { temp_file: None });
         }
 
-        // Create temp file with original config + RUSTC_BOOTSTRAP
         debug!("creating temporary Cross.toml with RUSTC_BOOTSTRAP added");
         let temp_file = Self::create_temp_config(config).await?;
         Ok(Self {
@@ -94,7 +83,6 @@ impl CrossConfig {
     }
 
     async fn create_temp_config(mut config: CrossToml) -> Result<NamedTempFile> {
-        // Add RUSTC_BOOTSTRAP to passthrough
         let build = config.build.get_or_insert_with(Default::default);
         let env = build.env.get_or_insert_with(Default::default);
         let passthrough = env.passthrough.get_or_insert_with(Vec::new);
@@ -104,8 +92,6 @@ impl CrossConfig {
         }
 
         let contents = toml::to_string_pretty(&config).context("serialize Cross.toml")?;
-
-        // Create temp file with .toml extension for clarity
         let temp_file = NamedTempFile::with_suffix(".toml").context("create temp file")?;
         fs::write(temp_file.path(), contents)
             .await
