@@ -79,6 +79,7 @@ testcontainers = { git = "https://github.com/testcontainers/testcontainers-rs.gi
 time = { version = "=0.3.41", features = ["serde"] }
 tokio = "1.47.1"
 tokio-util = "0.7"
+toml = "0.9.8"
 tower = "0.5"
 tower-http = "0.6"
 tower_governor = "0.8.0"
@@ -93,7 +94,6 @@ walkdir = "2.5.0"
 workspace_root = "0.2.0"
 xshell = "0.2.7"
 zstd = "0.13"
-toml = "0.9.8"
 
 [workspace.lints.clippy]
 redundant_pattern_matching = "allow"
