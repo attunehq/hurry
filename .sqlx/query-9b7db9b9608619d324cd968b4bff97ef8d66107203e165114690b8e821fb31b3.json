@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM oauth_state\n            WHERE state_token = $1 AND expires_at > NOW()\n            RETURNING id, state_token, pkce_verifier, redirect_uri, created_at, expires_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "state_token",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "pkce_verifier",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "redirect_uri",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9b7db9b9608619d324cd968b4bff97ef8d66107203e165114690b8e821fb31b3"
+}

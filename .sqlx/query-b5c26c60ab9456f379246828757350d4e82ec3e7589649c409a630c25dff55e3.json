@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO organization_member (organization_id, account_id, role_id)\n            VALUES ($1, $2, (SELECT id FROM organization_role WHERE name = $3))\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b5c26c60ab9456f379246828757350d4e82ec3e7589649c409a630c25dff55e3"
+}

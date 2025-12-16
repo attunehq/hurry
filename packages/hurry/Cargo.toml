@@ -78,6 +78,10 @@ xshell = { workspace = true }
 [[bench]]
 name = "cargo_copy_target"
 harness = false
+
 [[bench]]
 name = "walkdir"
 harness = false
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE account\n            SET disabled_at = NULL\n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "74fa3995d4ba1d2d3d45498b1af2aa915a955a74ab1de81c4dd613372f84858a"
+}

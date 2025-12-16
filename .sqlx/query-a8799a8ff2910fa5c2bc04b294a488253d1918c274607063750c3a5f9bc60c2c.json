@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT i.id, i.organization_id, r.name as role_name, i.expires_at,\n                   i.max_uses, i.use_count, i.revoked_at\n            FROM organization_invitation i\n            JOIN organization_role r ON i.role_id = r.id\n            WHERE i.token = $1\n            FOR UPDATE\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "organization_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "role_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "max_uses",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "use_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "revoked_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "a8799a8ff2910fa5c2bc04b294a488253d1918c274607063750c3a5f9bc60c2c"
+}

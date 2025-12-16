@@ -9,24 +9,31 @@ async-compression = { workspace = true, features = ["tokio", "zstd"] }
 async-tar = { workspace = true }
 async-tempfile = { workspace = true }
 axum = { workspace = true }
+base64 = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 clients = { workspace = true }
 color-eyre = { workspace = true }
 derive_more = { workspace = true, features = ["full"] }
 futures = { workspace = true }
+governor = { workspace = true }
 hex = { workspace = true }
+http = { workspace = true }
+oauth2 = { workspace = true }
 piper = { workspace = true }
 rand = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate", "bigdecimal", "time"] }
 tap = { workspace = true }
+time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["compat", "io"] }
 tower = { workspace = true, features = ["buffer", "limit", "load-shed"] }
-tower-http = { workspace = true, features = ["trace", "limit", "timeout", "compression-full", "decompression-full"] }
+tower-http = { workspace = true, features = ["trace", "limit", "timeout", "compression-full", "decompression-full", "cors", "fs"] }
+tower_governor = { workspace = true }
 tracing = { workspace = true }
 tracing-error = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
@@ -54,3 +61,6 @@ url = { workspace = true }
 [[bench]]
 name = "cas_transport"
 harness = false
+
+[lints]
+workspace = true

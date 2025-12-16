@@ -18,11 +18,12 @@ use clients::{
 use color_eyre::{Result, eyre::Context};
 use courier::{
     api,
-    auth::{AccountId, OrgId, RawToken},
-    db, storage,
+    auth::{AccountId, OrgId, OrgRole, RawToken, SessionToken},
+    db, oauth, storage,
 };
 use futures::{StreamExt, TryStreamExt, stream};
 use sqlx::PgPool;
+use time::{Duration, OffsetDateTime};
 use url::Url;
 
 const GLIBC_VERSION: GlibcVersion = GlibcVersion {
@@ -66,8 +67,11 @@ impl TestFixture {
         let (storage, _temp) = storage::Disk::new_temp()
             .await
             .context("create temp storage")?;
-        let state = Aero::new().with(storage).with(db.clone());
-        let router = api::router(state);
+        // In tests, we don't configure GitHub OAuth (tests use API keys)
+        let github = None::<oauth::GitHub>;
+        let state = Aero::new().with(github).with(storage).with(db.clone());
+        // Tests don't need CORS (not browser-based) or console serving
+        let router = api::router(state, vec![], None);
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -79,9 +83,14 @@ impl TestFixture {
         // end of the world (it's shut down when the process ends) but isn't
         // ideal.
         tokio::task::spawn(async move {
-            axum::serve(listener, router)
-                .await
-                .expect("test server failed");
+            // Use into_make_service_with_connect_info to enable rate limiting (needs peer
+            // IP)
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .expect("test server failed");
         });
 
         let client_alice = Client::new(base_url.clone(), auth.token_alice().expose().into())?;
@@ -113,6 +122,7 @@ pub struct TestAuth {
     pub account_ids: HashMap<String, AccountId>,
     pub tokens: HashMap<String, RawToken>,
     pub revoked_tokens: HashMap<String, RawToken>,
+    pub session_tokens: HashMap<String, SessionToken>,
 }
 
 impl TestAuth {
@@ -171,8 +181,48 @@ impl TestAuth {
             .expect("Charlie revoked token missing")
     }
 
+    pub fn session_alice(&self) -> &SessionToken {
+        self.session_tokens
+            .get(Self::ACCT_ALICE)
+            .expect("Alice session missing")
+    }
+
+    pub fn session_bob(&self) -> &SessionToken {
+        self.session_tokens
+            .get(Self::ACCT_BOB)
+            .expect("Bob session missing")
+    }
+
+    pub fn session_charlie(&self) -> &SessionToken {
+        self.session_tokens
+            .get(Self::ACCT_CHARLIE)
+            .expect("Charlie session missing")
+    }
+
+    pub fn account_id_alice(&self) -> AccountId {
+        self.account_ids
+            .get(Self::ACCT_ALICE)
+            .copied()
+            .expect("Alice account missing")
+    }
+
+    pub fn account_id_bob(&self) -> AccountId {
+        self.account_ids
+            .get(Self::ACCT_BOB)
+            .copied()
+            .expect("Bob account missing")
+    }
+
+    pub fn account_id_charlie(&self) -> AccountId {
+        self.account_ids
+            .get(Self::ACCT_CHARLIE)
+            .copied()
+            .expect("Charlie account missing")
+    }
+
     /// Seed the database with test authentication data.
     pub async fn seed(db: &db::Postgres) -> Result<Self> {
+        // Create organizations first
         let org_ids = sqlx::query!(
             r#"
             INSERT INTO organization (name, created_at) VALUES
@@ -190,12 +240,16 @@ impl TestAuth {
         .map(|row| (row.name, OrgId::from_i64(row.id)))
         .collect::<HashMap<_, _>>();
 
+        let org_acme = *org_ids.get(Self::ORG_ACME).expect("Acme org missing");
+        let org_widget = *org_ids.get(Self::ORG_WIDGET).expect("Widget org missing");
+
+        // Create accounts
         let account_ids = sqlx::query!(
             r#"
-            INSERT INTO account (organization_id, email, created_at) VALUES
-                (2, $1, now()),
-                (2, $2, now()),
-                (3, $3, now())
+            INSERT INTO account (email, created_at) VALUES
+                ($1, now()),
+                ($2, now()),
+                ($3, now())
             RETURNING id, email
             "#,
             Self::ACCT_ALICE,
@@ -209,10 +263,25 @@ impl TestAuth {
         .map(|row| (row.email, AccountId::from_i64(row.id)))
         .collect::<HashMap<_, _>>();
 
-        let tokens = stream::iter(&account_ids)
-            .then(|(account, &account_id)| async move {
+        let alice_id = *account_ids.get(Self::ACCT_ALICE).expect("Alice missing");
+        let bob_id = *account_ids.get(Self::ACCT_BOB).expect("Bob missing");
+        let charlie_id = *account_ids
+            .get(Self::ACCT_CHARLIE)
+            .expect("Charlie missing");
+
+        // Map accounts to their organizations
+        // Alice and Bob -> Acme, Charlie -> Widget
+        let account_orgs = [
+            (Self::ACCT_ALICE.to_string(), alice_id, org_acme),
+            (Self::ACCT_BOB.to_string(), bob_id, org_acme),
+            (Self::ACCT_CHARLIE.to_string(), charlie_id, org_widget),
+        ];
+
+        // Create API key tokens with org scope
+        let tokens = stream::iter(&account_orgs)
+            .then(|(account, account_id, org_id)| async move {
                 let hash = db
-                    .create_token(account_id, &format!("{account}-token"))
+                    .create_token(*account_id, *org_id, &format!("{account}-token"))
                     .await
                     .with_context(|| format!("set up {account}"))?;
                 Result::<_>::Ok((account.to_string(), hash))
@@ -220,10 +289,10 @@ impl TestAuth {
             .try_collect::<HashMap<_, _>>()
             .await?;
 
-        let revoked_tokens = stream::iter(&account_ids)
-            .then(|(account, &account_id)| async move {
+        let revoked_tokens = stream::iter(&account_orgs)
+            .then(|(account, account_id, org_id)| async move {
                 let hash = db
-                    .create_token(account_id, &format!("{account}-revoked"))
+                    .create_token(*account_id, *org_id, &format!("{account}-revoked"))
                     .await
                     .with_context(|| format!("set up {account}"))?;
                 db.revoke_token(&hash)
@@ -233,6 +302,44 @@ impl TestAuth {
             })
             .try_collect::<HashMap<_, _>>()
             .await?;
+
+        // Create session tokens for each account
+        let expires_at = OffsetDateTime::now_utc() + Duration::hours(24);
+        let session_tokens = stream::iter(&account_ids)
+            .then(|(account, &account_id)| async move {
+                let token = SessionToken::generate();
+                db.create_session(account_id, &token, expires_at)
+                    .await
+                    .with_context(|| format!("create session for {account}"))?;
+                Result::<_>::Ok((account.to_string(), token))
+            })
+            .try_collect::<HashMap<_, _>>()
+            .await?;
+
+        // Add organization memberships
+        // Alice and Bob are both members of Acme Corp (Alice is admin)
+        // Charlie is admin of Widget Inc
+        db.add_organization_member(org_acme, alice_id, OrgRole::Admin)
+            .await
+            .context("add Alice to Acme")?;
+        db.add_organization_member(org_acme, bob_id, OrgRole::Member)
+            .await
+            .context("add Bob to Acme")?;
+        db.add_organization_member(org_widget, charlie_id, OrgRole::Admin)
+            .await
+            .context("add Charlie to Widget")?;
+
+        // Link GitHub identities so these accounts are recognized as human (not bot)
+        // accounts
+        db.link_github_identity(alice_id, 1001, "alice-github")
+            .await
+            .context("link Alice GitHub")?;
+        db.link_github_identity(bob_id, 1002, "bob-github")
+            .await
+            .context("link Bob GitHub")?;
+        db.link_github_identity(charlie_id, 1003, "charlie-github")
+            .await
+            .context("link Charlie GitHub")?;
 
         sqlx::query!("SELECT setval('organization_id_seq', (SELECT MAX(id) FROM organization))")
             .fetch_one(&db.pool)
@@ -249,6 +356,7 @@ impl TestAuth {
             account_ids,
             tokens,
             revoked_tokens,
+            session_tokens,
         })
     }
 }

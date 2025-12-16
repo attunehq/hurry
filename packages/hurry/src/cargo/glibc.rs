@@ -1,7 +1,11 @@
+#[cfg(target_env = "gnu")]
 use std::ffi::CStr;
 
 use clients::courier::v1::GlibcVersion;
-use color_eyre::{Result, eyre::Context as _};
+use color_eyre::Result;
+#[cfg(target_env = "gnu")]
+use color_eyre::eyre::Context as _;
+#[cfg(target_env = "gnu")]
 use tap::Pipe as _;
 
 #[cfg(target_env = "gnu")]

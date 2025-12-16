@@ -1,19 +1,20 @@
 # Build and publish courier Docker image to ECR.
 #
 # Triggers:
-# - Push to main with changes to packages/courier or packages/clients
+# - Push to main with changes to packages/courier, packages/clients, or packages/dashboard
 # - Push of version tags (v*)
 name: Publish Courier
 
 on:
     # Path filtering only applies to branches, not tags.
-    # - Main branch: triggers only when courier/clients/docker paths change
+    # - Main branch: triggers only when courier/clients/dashboard/docker paths change
     # - Version tags: always trigger (paths filter is ignored)
     push:
         branches: [main]
         paths:
             - "packages/courier/**"
             - "packages/clients/**"
+            - "packages/dashboard/**"
             - "docker/courier/**"
         tags:
             - "v*"

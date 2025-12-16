@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COUNT(*) as count\n            FROM organization_member om\n            JOIN organization_role r ON om.role_id = r.id\n            JOIN github_identity gi ON gi.account_id = om.account_id\n            WHERE om.organization_id = $1 AND r.name = 'admin'\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "35681f132392d9e41db92b611677589a6c57e65c7797e13aeb91455e27dd6331"
+}

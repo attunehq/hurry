@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Create an invitation link for an organization.
+set -euo pipefail
+
+source "$(dirname "$0")/_common"
+
+check_deps
+check_url
+
+if [ $# -lt 1 ]; then
+  echo "Usage: $0 <org-id> [role] [max-uses]" >&2
+  echo "Create an invitation link for an organization" >&2
+  echo "" >&2
+  echo "Arguments:" >&2
+  echo "  org-id    Organization ID" >&2
+  echo "  role      Role to grant: 'admin' or 'member' (default: member)" >&2
+  echo "  max-uses  Maximum number of times the invite can be used (optional)" >&2
+  exit 1
+fi
+
+ORG_ID="$1"
+ROLE="${2:-member}"
+MAX_USES="${3:-}"
+
+if ! [[ "$ORG_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: Organization ID must be a number" >&2
+  exit 1
+fi
+
+if [[ "$ROLE" != "admin" && "$ROLE" != "member" ]]; then
+  echo "Error: Role must be 'admin' or 'member'" >&2
+  exit 1
+fi
+
+# Build JSON body
+if [ -n "$MAX_USES" ]; then
+  if ! [[ "$MAX_USES" =~ ^[0-9]+$ ]]; then
+    echo "Error: max-uses must be a number" >&2
+    exit 1
+  fi
+  BODY=$(jq -nc --arg role "$ROLE" --argjson max_uses "$MAX_USES" '{role: $role, max_uses: $max_uses}')
+else
+  BODY=$(jq -nc --arg role "$ROLE" '{role: $role}')
+fi
+
+response=$(api_post "/api/v1/organizations/${ORG_ID}/invitations" "$BODY")
+handle_response "$response"

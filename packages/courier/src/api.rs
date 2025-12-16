@@ -29,17 +29,28 @@
 //!
 //! [^2]: https://docs.rs/axum/latest/axum/response/trait.IntoResponse.html
 
-use std::time::{Duration, Instant};
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use aerosol::Aero;
 use axum::{
-    Router, extract::DefaultBodyLimit, extract::Request, http::HeaderValue, middleware::Next,
+    Router,
+    extract::DefaultBodyLimit,
+    extract::Request,
+    http::{HeaderValue, Method, StatusCode},
+    middleware::Next,
     response::Response,
 };
 use tower::ServiceBuilder;
 use tower_http::{
-    compression::CompressionLayer, decompression::RequestDecompressionLayer,
-    limit::RequestBodyLimitLayer, timeout::TimeoutLayer,
+    compression::CompressionLayer,
+    cors::{AllowOrigin, Any, CorsLayer},
+    decompression::RequestDecompressionLayer,
+    limit::RequestBodyLimitLayer,
+    services::{ServeDir, ServeFile},
+    timeout::TimeoutLayer,
 };
 use tracing::Instrument;
 use uuid::Uuid;
@@ -61,19 +72,55 @@ const MAX_BODY_SIZE: usize = 10 * 1024 * 1024 * 1024; // 10GB
 /// operations like bulk restore requests.
 const MAX_JSON_BODY_SIZE: usize = 100 * 1024 * 1024; // 100MB
 
-pub type State = Aero![crate::db::Postgres, crate::storage::Disk,];
+pub type State = Aero![
+    crate::db::Postgres,
+    crate::storage::Disk,
+    Option<crate::oauth::GitHub>,
+];
 
-pub fn router(state: State) -> Router {
+pub fn router(
+    state: State,
+    allowed_origins: Vec<HeaderValue>,
+    console_dir: Option<&Path>,
+) -> Router {
     let middleware = ServiceBuilder::new()
         .layer(RequestDecompressionLayer::new())
         .layer(CompressionLayer::new())
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
-        .layer(TimeoutLayer::new(REQUEST_TIMEOUT));
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            REQUEST_TIMEOUT,
+        ));
 
-    Router::new()
-        .nest("/api/v1", v1::router())
+    // CORS configuration: restrict origins to the OAuth redirect allowlist.
+    // This ensures only trusted frontends can make cross-origin requests.
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::list(allowed_origins))
+        .allow_methods([
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
+        .allow_headers(Any);
+
+    let mut router = Router::new().nest("/api/v1", v1::router());
+
+    // Serve the console SPA if a directory is configured.
+    // The fallback ensures client-side routing works (all non-API routes serve
+    // index.html).
+    if let Some(dir) = console_dir {
+        tracing::info!(?dir, "serving console from directory");
+        let index = dir.join("index.html");
+        router = router.fallback_service(ServeDir::new(dir).fallback(ServeFile::new(index)));
+    }
+
+    router
         .layer(DefaultBodyLimit::max(MAX_JSON_BODY_SIZE))
         .layer(middleware)
+        .layer(cors)
         .layer(axum::middleware::from_fn(trace_request))
         .with_state(state)
 }

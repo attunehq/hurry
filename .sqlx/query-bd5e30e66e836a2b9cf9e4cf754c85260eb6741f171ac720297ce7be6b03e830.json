@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT us.id, us.account_id\n            FROM user_session us\n            JOIN account a ON us.account_id = a.id\n            WHERE us.session_token = $1\n              AND us.expires_at > NOW()\n              AND a.disabled_at IS NULL\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "account_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "bd5e30e66e836a2b9cf9e4cf754c85260eb6741f171ac720297ce7be6b03e830"
+}

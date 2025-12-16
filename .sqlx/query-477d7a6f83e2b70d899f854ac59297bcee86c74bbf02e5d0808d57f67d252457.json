@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT o.id, o.name, o.created_at, r.name as role_name\n            FROM organization o\n            JOIN organization_member om ON o.id = om.organization_id\n            JOIN organization_role r ON om.role_id = r.id\n            WHERE om.account_id = $1\n            ORDER BY o.name\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "role_name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "477d7a6f83e2b70d899f854ac59297bcee86c74bbf02e5d0808d57f67d252457"
+}

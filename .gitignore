@@ -3,6 +3,10 @@
 .vscode
 .hurrydata
 target
+node_modules
+dist
+build
+.react-router
 
 # Un-ignore .claude directory to share commands with team
 !.claude

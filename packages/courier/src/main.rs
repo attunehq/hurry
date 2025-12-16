@@ -42,6 +42,23 @@ struct ServeConfig {
     /// Root path to store CAS blobs
     #[arg(long, env = "CAS_ROOT")]
     cas_root: PathBuf,
+
+    /// Directory containing the console static files (optional)
+    #[arg(long, env = "CONSOLE_DIR")]
+    console_dir: Option<PathBuf>,
+
+    /// GitHub OAuth Client ID (optional, enables OAuth if provided)
+    #[arg(long, env = "GITHUB_CLIENT_ID")]
+    github_client_id: Option<String>,
+
+    /// GitHub OAuth Client Secret
+    #[arg(long, env = "GITHUB_CLIENT_SECRET")]
+    #[debug(ignore)]
+    github_client_secret: Option<String>,
+
+    /// Allowed redirect URIs for OAuth (comma-separated)
+    #[arg(long, env = "OAUTH_REDIRECT_ALLOWLIST", value_delimiter = ',')]
+    oauth_redirect_allowlist: Vec<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -83,6 +100,9 @@ async fn main() -> Result<()> {
 }
 
 async fn serve(config: ServeConfig) -> Result<()> {
+    use axum::http::HeaderValue;
+    use oauth2::url::Url;
+
     tracing::info!("constructing application router...");
     let storage = courier::storage::Disk::new(&config.cas_root);
     let db = courier::db::Postgres::connect(&config.database_url)
@@ -96,7 +116,54 @@ async fn serve(config: ServeConfig) -> Result<()> {
         .await
         .context("validate database migrations")?;
 
-    let router = courier::api::router(Aero::new().with(storage).with(db));
+    // Extract CORS allowed origins from the OAuth redirect allowlist.
+    // We use the origin (scheme + host + port) of each allowed redirect URI.
+    let cors_origins = config
+        .oauth_redirect_allowlist
+        .iter()
+        .filter_map(|uri| {
+            Url::parse(uri)
+                .ok()
+                .map(|u| u.origin().ascii_serialization())
+        })
+        .filter_map(|origin| HeaderValue::from_str(&origin).ok())
+        .collect::<Vec<_>>();
+
+    // Construct GitHub OAuth client if configured
+    let github = match (config.github_client_id, config.github_client_secret) {
+        (Some(client_id), Some(client_secret)) => {
+            let github_config = courier::oauth::GitHubConfig {
+                client_id,
+                client_secret,
+                redirect_allowlist: config.oauth_redirect_allowlist.into_iter().collect(),
+            };
+            let client = courier::oauth::GitHub::new(github_config);
+            if client.is_some() {
+                tracing::info!("GitHub OAuth configured");
+            } else {
+                tracing::warn!(
+                    "GitHub OAuth config provided but client_id or client_secret was empty"
+                );
+            }
+            client
+        }
+        (None, None) => {
+            tracing::info!("GitHub OAuth not configured (no client_id or client_secret)");
+            None
+        }
+        _ => {
+            tracing::warn!(
+                "GitHub OAuth partially configured (need both client_id and client_secret)"
+            );
+            None
+        }
+    };
+
+    let router = courier::api::router(
+        Aero::new().with(github).with(storage).with(db),
+        cors_origins,
+        config.console_dir.as_deref(),
+    );
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;

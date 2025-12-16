@@ -12,6 +12,7 @@ services:
         environment:
             - COURIER_DATABASE_URL=postgres://courier:courier@postgres:5432/courier
             - CAS_ROOT=/data/cas
+            - CONSOLE_DIR=/courier/console
         command: ["serve"]
         depends_on:
             postgres:

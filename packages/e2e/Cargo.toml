@@ -30,3 +30,6 @@ reqwest = { workspace = true }
 simple_test_case = { workspace = true }
 test-log = { workspace = true }
 workspace_root = { workspace = true, features = ["tokio"] }
+
+[lints]
+workspace = true

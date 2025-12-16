@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE organization_invitation\n            SET revoked_at = NOW()\n            WHERE id = $1 AND revoked_at IS NULL\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a4b2f07979b6bbe1a78a394ff759a30bf7852fbe53d90e2b43b49a117ba0a41b"
+}
