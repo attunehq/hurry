@@ -37,7 +37,7 @@ npm run build
 Then start Courier with `CONSOLE_DIR` pointing to the build output:
 
 ```bash
-CONSOLE_DIR=packages/dashboard/dist cargo run -p courier -- serve \
+CONSOLE_DIR=packages/dashboard/build/client cargo run -p courier -- serve \
   --database-url postgres://localhost/courier \
   --cas-root /tmp/courier-cas
 ```

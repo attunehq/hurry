@@ -27,7 +27,7 @@ FROM debian:bookworm-slim AS runtime
 WORKDIR /courier
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /courier/target/release/courier /usr/local/bin
-COPY --from=console-builder /app/dist /courier/console
+COPY --from=console-builder /app/build/client /courier/console
 
 USER 1000:1000
 ENV RUST_LOG=courier=debug
