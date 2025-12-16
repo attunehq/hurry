@@ -5,9 +5,7 @@ const STORAGE_KEY = "hurry.sessionToken";
 type SessionState = {
   sessionToken: string | null;
   setSessionToken: (token: string | null) => void;
-  /** Called when an API request returns 401 - clears session and triggers redirect */
   handleUnauthorized: () => void;
-  /** Register a callback to be notified when session is invalidated due to 401 */
   onSessionInvalidated: (callback: () => void) => () => void;
 };
 
@@ -19,21 +17,17 @@ export function SessionProvider(props: { children: React.ReactNode }) {
     return raw && raw.trim().length > 0 ? raw : null;
   });
 
-  // Callbacks to notify when session is invalidated
   const invalidationCallbacksRef = useRef<Set<() => void>>(new Set());
-
   const clearSession = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
     setSessionTokenState(null);
   }, []);
 
   const handleUnauthorized = useCallback(() => {
-    // Only handle if we currently have a session token
-    // (avoids loops when already logged out)
+    // Avoids loops when already logged out
     if (!localStorage.getItem(STORAGE_KEY)) return;
 
     clearSession();
-    // Notify all registered callbacks
     invalidationCallbacksRef.current.forEach((cb) => cb());
   }, [clearSession]);
 

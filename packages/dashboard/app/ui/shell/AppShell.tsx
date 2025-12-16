@@ -10,7 +10,7 @@ function brand() {
   return (
     <div className="flex items-center gap-3">
       <div className="grid h-11 w-11 place-items-center rounded-xl border border-border bg-surface-subtle shadow-glow-soft">
-        <span className="text-2xl font-bold bg-gradient-to-br from-attune-300 to-attune-500 bg-clip-text text-transparent">
+        <span className="text-2xl font-bold bg-linear-to-br from-attune-300 to-attune-500 bg-clip-text text-transparent">
           A
         </span>
       </div>
@@ -24,7 +24,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const toast = useToast();
   const { onSessionInvalidated } = useSession();
 
-  // Handle session invalidation (401 from any API request)
   useEffect(() => {
     return onSessionInvalidated(() => {
       toast.push({

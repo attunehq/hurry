@@ -53,7 +53,7 @@ export function ToastProvider(props: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {props.children}
-      <div className="fixed right-4 top-4 z-50 flex w-[360px] max-w-[92vw] flex-col gap-2">
+      <div className="fixed right-4 top-4 z-50 flex w-90 max-w-[92vw] flex-col gap-2">
         {items.map((t) => (
           <div
             key={t.id}
@@ -67,7 +67,7 @@ export function ToastProvider(props: { children: React.ReactNode }) {
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-content-primary">{t.title}</div>
                 {t.detail ? (
-                  <div className="mt-1 break-words text-xs text-content-tertiary">{t.detail}</div>
+                  <div className="mt-1 wrap-break-word text-xs text-content-tertiary">{t.detail}</div>
                 ) : null}
               </div>
               <button

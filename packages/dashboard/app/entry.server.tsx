@@ -38,7 +38,6 @@ export default function handleRequest(
       }
     );
 
-    // Abort streaming render pass after timeout + 1s to flush rejected boundaries
     setTimeout(abort, streamTimeout + 1000);
   });
 }

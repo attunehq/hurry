@@ -45,7 +45,7 @@ export function Modal(props: {
   return (
     <dialog
       ref={ref}
-      className="fixed left-1/2 top-[20%] w-[640px] max-w-[92vw] -translate-x-1/2 rounded-2xl border border-border bg-surface-overlay p-0 text-content-primary shadow-glow-soft backdrop:bg-backdrop"
+      className="fixed left-1/2 top-[20%] w-160 max-w-[92vw] -translate-x-1/2 rounded-2xl border border-border bg-surface-overlay p-0 text-content-primary shadow-glow-soft backdrop:bg-backdrop"
       onClose={props.onClose}
       onKeyDown={handleKeyDown}
     >

@@ -1,3 +1,6 @@
+// The functions in this file are pretty cursed, but they do seem to work.
+// TODO: we might want to move to SWR or something for less cursed mechanics.
+
 import { useCallback } from "react";
 import { useNavigate } from "react-router";
 
