@@ -151,7 +151,7 @@ pub async fn handle(
             (account.id, false)
         }
         Ok(None) => {
-            let org_name = format!("{}'s Org", github_user.login);
+            let org_name = String::from("Personal");
             let signup_result = match db
                 .signup_with_github(
                     email,
