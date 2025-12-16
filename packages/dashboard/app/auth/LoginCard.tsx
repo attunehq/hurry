@@ -1,4 +1,4 @@
-import { ArrowRight, Github } from "lucide-react";
+import { Github } from "lucide-react";
 import { useState } from "react";
 
 import { apiUrl } from "../api/client";
@@ -34,7 +34,7 @@ export function LoginCard() {
   }
 
   return (
-    <div className="noise fixed inset-0 flex items-center justify-center">
+    <div className="noise fixed inset-0 flex items-start justify-center pt-[20vh]">
       <div className="w-full max-w-md px-6">
         {/* Brand */}
         <div className="mb-8 flex items-center justify-center gap-3">
@@ -49,29 +49,26 @@ export function LoginCard() {
         {/* Login card */}
         <div className="rounded-2xl border border-border bg-surface-raised shadow-glow-soft backdrop-blur">
           <div className="border-b border-border px-6 py-4">
-            <div className="text-base font-semibold text-content-primary">Sign in</div>
+            <div className="text-base font-semibold text-content-primary">Sign in to Hurry</div>
             <div className="mt-1 text-sm text-content-tertiary">
-              Sign in to manage orgs, invitations, API keys, and bots.
+              Manage orgs, invitations, API keys, and bots.
             </div>
           </div>
 
           <div className="p-6 space-y-4">
             {/* GitHub OAuth */}
-            <div className="rounded-xl border border-border bg-surface-subtle p-4">
-              <div className="flex items-center gap-2 text-sm font-semibold text-content-primary">
-                <Github className="h-4 w-4 text-content-secondary" />
-                Continue with GitHub
+            <button
+              type="button"
+              onClick={startOAuth}
+              className="w-full rounded-xl border border-border bg-surface-subtle p-4 text-left transition-colors hover:bg-surface-overlay"
+            >
+              <div className="flex items-center gap-3">
+                <Github className="h-5 w-5 text-content-secondary" />
+                <span className="text-sm font-semibold text-content-primary">
+                  Continue with GitHub
+                </span>
               </div>
-              <div className="mt-2 text-sm text-content-tertiary">
-                Sign in with your GitHub account.
-              </div>
-              <div className="mt-4">
-                <Button onClick={startOAuth}>
-                  Sign in with GitHub
-                  <ArrowRight className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
+            </button>
 
             {/* Dev mode token entry */}
             {import.meta.env.DEV && (
