@@ -16,7 +16,7 @@ use tokio::task::JoinSet;
 use tracing::{Instrument, debug, instrument, trace, warn};
 
 use crate::{
-    cargo::{self, QualifiedPath, UnitHash, UnitPlan, Workspace, host_glibc_version},
+    cargo::{self, Fingerprint, QualifiedPath, UnitHash, UnitPlan, Workspace, host_glibc_version},
     cas::CourierCas,
     fs,
     path::JoinWith as _,
@@ -254,16 +254,15 @@ pub async fn restore_units(
                 SavedUnit::LibraryCrate(saved_library_files, _),
                 UnitPlan::LibraryCrate(unit_plan),
             ) => {
-                // Parse the fingerprint from cached data.
-                let fingerprint = serde_json::from_str::<cargo::Fingerprint>(
-                    saved_library_files.fingerprint.as_str(),
-                )?;
+                let fingerprint = saved_library_files.fingerprint.as_str();
+                let fingerprint = serde_json::from_str::<Fingerprint>(fingerprint)?;
 
-                // Handle skipped units: record fingerprint mapping but don't restore files.
+                // Skipped fingerprints are already correct on disk; we just
+                // need to record the mapping and touch the unit mtime to
+                // maintain ordering invariants.
                 if units_to_skip.contains(unit_hash) {
-                    unit.record_fingerprint_mapping(&ws, &mut dep_fingerprints, fingerprint)
+                    unit.record_fingerprint(&ws, &mut dep_fingerprints, fingerprint)
                         .await?;
-                    // Touch mtimes to maintain ordering invariants.
                     if let Err(err) = unit.touch(&ws, mtime).await {
                         warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
                     }
@@ -357,16 +356,15 @@ pub async fn restore_units(
                 SavedUnit::BuildScriptCompilation(build_script_compiled_files, _),
                 UnitPlan::BuildScriptCompilation(unit_plan),
             ) => {
-                // Parse the fingerprint from cached data.
-                let fingerprint = serde_json::from_str::<cargo::Fingerprint>(
-                    build_script_compiled_files.fingerprint.as_str(),
-                )?;
+                let fingerprint = build_script_compiled_files.fingerprint.as_str();
+                let fingerprint = serde_json::from_str::<Fingerprint>(fingerprint)?;
 
-                // Handle skipped units: record fingerprint mapping but don't restore files.
+                // Skipped fingerprints are already correct on disk; we just
+                // need to record the mapping and touch the unit mtime to
+                // maintain ordering invariants.
                 if units_to_skip.contains(unit_hash) {
-                    unit.record_fingerprint_mapping(&ws, &mut dep_fingerprints, fingerprint)
+                    unit.record_fingerprint(&ws, &mut dep_fingerprints, fingerprint)
                         .await?;
-                    // Touch mtimes to maintain ordering invariants.
                     if let Err(err) = unit.touch(&ws, mtime).await {
                         warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
                     }
@@ -459,16 +457,15 @@ pub async fn restore_units(
                 SavedUnit::BuildScriptExecution(build_script_output_files, _),
                 UnitPlan::BuildScriptExecution(unit_plan),
             ) => {
-                // Parse the fingerprint from cached data.
-                let fingerprint = serde_json::from_str::<cargo::Fingerprint>(
-                    build_script_output_files.fingerprint.as_str(),
-                )?;
+                let fingerprint = build_script_output_files.fingerprint.as_str();
+                let fingerprint = serde_json::from_str::<Fingerprint>(fingerprint)?;
 
-                // Handle skipped units: record fingerprint mapping but don't restore files.
+                // Skipped fingerprints are already correct on disk; we just
+                // need to record the mapping and touch the unit mtime to
+                // maintain ordering invariants.
                 if units_to_skip.contains(unit_hash) {
-                    unit.record_fingerprint_mapping(&ws, &mut dep_fingerprints, fingerprint)
+                    unit.record_fingerprint(&ws, &mut dep_fingerprints, fingerprint)
                         .await?;
-                    // Touch mtimes to maintain ordering invariants.
                     if let Err(err) = unit.touch(&ws, mtime).await {
                         warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
                     }

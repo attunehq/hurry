@@ -811,31 +811,28 @@ impl UnitPlan {
     /// fingerprint references.
     ///
     /// Unlike `restore_fingerprint`, this function does NOT write anything to
-    /// disk - the fingerprint is already correct for this machine.
-    pub async fn record_fingerprint_mapping(
+    /// disk: the fingerprint is already correct for this machine.
+    pub async fn record_fingerprint(
         &self,
         ws: &Workspace,
-        dep_fingerprints: &mut HashMap<u64, Arc<Fingerprint>>,
-        cached_fingerprint: Fingerprint,
+        fingerprints: &mut HashMap<u64, Arc<Fingerprint>>,
+        cached: Fingerprint,
     ) -> Result<()> {
-        let profile_dir = ws.unit_profile_dir(self.info());
-        let old_fingerprint_hash = cached_fingerprint.hash_u64();
+        let profile = ws.unit_profile_dir(self.info());
+        let cached = cached.hash_u64();
 
-        // Read the local fingerprint from disk.
-        let fingerprint_json =
-            fs::must_read_buffered_utf8(&profile_dir.join(&self.fingerprint_json_file().await?))
-                .await?;
-        let local_fingerprint = serde_json::from_str::<Fingerprint>(&fingerprint_json)?;
+        let file = self.fingerprint_json_file().await?;
+        let file = profile.join(&file);
+        let json = fs::must_read_buffered_utf8(&file).await?;
+        let local = serde_json::from_str::<Fingerprint>(&json)?;
 
         debug!(
-            old_hash = ?old_fingerprint_hash,
-            local_hash = ?local_fingerprint.hash_u64(),
+            old_hash = ?cached,
+            local_hash = ?local.hash_u64(),
             "recorded fingerprint mapping for skipped unit"
         );
 
-        // Save unit fingerprint (for future dependents).
-        dep_fingerprints.insert(old_fingerprint_hash, Arc::new(local_fingerprint));
-
+        fingerprints.insert(cached, Arc::new(local));
         Ok(())
     }
 }
