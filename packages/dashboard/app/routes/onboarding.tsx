@@ -123,7 +123,7 @@ function OnboardingStep(props: {
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-accent-bg text-xs font-semibold text-accent-text">
+        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-accent-subtle text-xs font-semibold text-accent-text">
           {props.number}
         </div>
         <div className="text-sm font-semibold text-content-primary">{props.title}</div>

@@ -134,7 +134,7 @@ function GettingStartedStep(props: {
           "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
           props.done
             ? "bg-success-bg text-success-text"
-            : "bg-accent-bg text-accent-text",
+            : "bg-accent-subtle text-accent-text",
         )}
       >
         {props.done ? "\u2713" : props.number}
