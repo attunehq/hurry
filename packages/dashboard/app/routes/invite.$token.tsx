@@ -106,7 +106,7 @@ export default function InvitePage() {
                 </div>
 
                 {!signedIn && (
-                  <div className="rounded-xl border border-amber-400/25 bg-amber-400/10 p-4">
+                  <div className="rounded-xl border border-warn-border bg-warn-bg p-4">
                     <div className="text-sm font-medium text-content-primary">
                       New to Hurry?
                     </div>
