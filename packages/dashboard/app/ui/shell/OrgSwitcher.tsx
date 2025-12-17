@@ -2,6 +2,7 @@ import { Building2, Check, ChevronDown, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
+import { isUnauthorizedError } from "../../api/client";
 import type { CreateOrganizationResponse, OrganizationEntry } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { useOrgs } from "../../org/OrgContext";
@@ -65,7 +66,7 @@ export function OrgSwitcher() {
       setLastOrgId(created.id);
       nav(`/org/${created.id}`);
     } catch (e) {
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
+      if (isUnauthorizedError(e)) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
       toast.push({ kind: "error", title: "Create failed", detail: msg });
     }

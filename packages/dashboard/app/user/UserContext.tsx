@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
+import { isUnauthorizedError } from "../api/client";
 import type { MeResponse } from "../api/types";
 import { useApi } from "../api/useApi";
 
@@ -29,9 +30,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
       });
       setUser(out);
     } catch (e) {
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) {
-        return;
-      }
+      if (isUnauthorizedError(e)) return;
       setUser(null);
     } finally {
       setLoading(false);

@@ -6,6 +6,11 @@ export type ApiError = {
   bodyText?: string;
 };
 
+/** Type guard to check if an error is an ApiError with 401 status */
+export function isUnauthorizedError(e: unknown): e is ApiError {
+  return e != null && typeof e === "object" && "status" in e && (e as ApiError).status === 401;
+}
+
 function apiOrigin() {
   const origin = import.meta.env.VITE_API_ORIGIN as string | undefined;
   if (!origin) return "";

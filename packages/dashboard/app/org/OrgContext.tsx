@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
+import { isUnauthorizedError } from "../api/client";
 import type { OrganizationEntry, OrganizationListResponse } from "../api/types";
 import { useApi } from "../api/useApi";
 
@@ -51,9 +52,7 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       setOrgs(out.organizations);
     } catch (e) {
       // Don't clear orgs on 401 - session invalidation handles that
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) {
-        return;
-      }
+      if (isUnauthorizedError(e)) return;
       setOrgs(null);
     } finally {
       setLoading(false);

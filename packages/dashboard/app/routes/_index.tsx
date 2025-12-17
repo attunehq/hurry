@@ -2,6 +2,7 @@ import { Building2, ExternalLink, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
+import { isUnauthorizedError } from "../api/client";
 import type {
   CreateOrganizationResponse,
   MeResponse,
@@ -54,7 +55,7 @@ export default function DashboardHome() {
       setOrgs(orgsOut.organizations);
     } catch (e) {
       // Don't show error toast for 401 - handled by session invalidation
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
+      if (isUnauthorizedError(e)) return;
       setMe(null);
       setOrgs(null);
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
@@ -85,7 +86,7 @@ export default function DashboardHome() {
       setLastOrgId(created.id);
       nav(`/org/${created.id}`);
     } catch (e) {
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
+      if (isUnauthorizedError(e)) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
       toast.push({ kind: "error", title: "Create failed", detail: msg });
     }
@@ -101,9 +102,12 @@ export default function DashboardHome() {
     if (!signedIn || !contextOrgs || contextOrgs.length === 0) return;
 
     // Check if lastOrgId is valid (user still has access to it)
+    const fallbackOrgId = contextOrgs[0]?.id;
     const targetOrgId = lastOrgId && contextOrgs.some((o) => o.id === lastOrgId)
       ? lastOrgId
-      : contextOrgs[0].id;
+      : fallbackOrgId;
+
+    if (!targetOrgId) return;
 
     hasRedirected.current = true;
     nav(`/org/${targetOrgId}`, { replace: true });
