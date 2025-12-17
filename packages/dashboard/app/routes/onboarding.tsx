@@ -1,3 +1,4 @@
+import clsx from "clsx";
 import { AlertTriangle, Check } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
@@ -160,24 +161,24 @@ function InstallTabs() {
         <button
           type="button"
           onClick={() => setPlatform("unix")}
-          className={[
-            "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition",
+          className={clsx(
+            "flex-1 cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium transition",
             platform === "unix"
               ? "bg-surface-raised text-content-primary shadow-sm"
               : "text-content-tertiary hover:text-content-secondary",
-          ].join(" ")}
+          )}
         >
           macOS / Linux
         </button>
         <button
           type="button"
           onClick={() => setPlatform("windows")}
-          className={[
-            "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition",
+          className={clsx(
+            "flex-1 cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium transition",
             platform === "windows"
               ? "bg-surface-raised text-content-primary shadow-sm"
               : "text-content-tertiary hover:text-content-secondary",
-          ].join(" ")}
+          )}
         >
           Windows
         </button>

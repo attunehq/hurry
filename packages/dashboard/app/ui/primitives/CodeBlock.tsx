@@ -36,6 +36,7 @@ export function CodeBlock({ code, label, wrap }: CodeBlockProps) {
           onClick={copy}
           className="shrink-0 cursor-pointer rounded p-1 text-content-muted opacity-0 transition hover:bg-surface-raised hover:text-content-secondary group-hover:opacity-100"
           title="Copy"
+          aria-label="Copy to clipboard"
         >
           <Copy className="h-3.5 w-3.5" />
         </button>

@@ -178,7 +178,7 @@ export default function OrgInvitationsPage() {
               <Label htmlFor="role">Role</Label>
               <select
                 id="role"
-                className="h-10 w-full rounded-xl border border-border bg-surface-subtle px-3 text-sm text-content-primary"
+                className="h-10 w-full cursor-pointer rounded-xl border border-border bg-surface-subtle px-3 text-sm text-content-primary focus:border-border-accent-hover focus:bg-surface-subtle-hover focus:outline-none"
                 value={inviteRole}
                 onChange={(e) => setInviteRole(e.target.value as OrgRole)}
               >

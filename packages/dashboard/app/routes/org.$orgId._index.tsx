@@ -1,3 +1,4 @@
+import clsx from "clsx";
 import { KeyRound, Rocket } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
@@ -129,12 +130,12 @@ function GettingStartedStep(props: {
   return (
     <div className="flex gap-3">
       <div
-        className={[
+        className={clsx(
           "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
           props.done
             ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
             : "bg-accent-bg text-accent-text",
-        ].join(" ")}
+        )}
       >
         {props.done ? "\u2713" : props.number}
       </div>
@@ -160,24 +161,24 @@ function GettingStartedInstallTabs() {
         <button
           type="button"
           onClick={() => setPlatform("unix")}
-          className={[
-            "flex-1 rounded px-2 py-1 text-xs font-medium transition",
+          className={clsx(
+            "flex-1 cursor-pointer rounded px-2 py-1 text-xs font-medium transition",
             platform === "unix"
               ? "bg-surface-raised text-content-primary shadow-sm"
               : "text-content-tertiary hover:text-content-secondary",
-          ].join(" ")}
+          )}
         >
           macOS / Linux
         </button>
         <button
           type="button"
           onClick={() => setPlatform("windows")}
-          className={[
-            "flex-1 rounded px-2 py-1 text-xs font-medium transition",
+          className={clsx(
+            "flex-1 cursor-pointer rounded px-2 py-1 text-xs font-medium transition",
             platform === "windows"
               ? "bg-surface-raised text-content-primary shadow-sm"
               : "text-content-tertiary hover:text-content-secondary",
-          ].join(" ")}
+          )}
         >
           Windows
         </button>

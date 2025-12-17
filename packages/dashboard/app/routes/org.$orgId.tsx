@@ -1,3 +1,4 @@
+import clsx from "clsx";
 import { Pencil } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useNavigate, useOutletContext, useParams } from "react-router";
@@ -161,10 +162,10 @@ function Tab(props: { to: string; label: string; end?: boolean }) {
       to={props.to}
       end={props.end}
       className={({ isActive }) =>
-        [
-          "rounded-xl px-3 py-2 text-sm transition",
+        clsx(
+          "cursor-pointer rounded-xl px-3 py-2 text-sm transition",
           isActive ? "bg-surface-subtle text-content-primary" : "text-content-tertiary hover:bg-surface-subtle hover:text-content-primary",
-        ].join(" ")
+        )
       }
     >
       {props.label}
