@@ -101,6 +101,18 @@ export default function InvitePage() {
                   </div>
                 </div>
 
+                {!signedIn && (
+                  <div className="rounded-xl border border-amber-400/25 bg-amber-400/10 p-4">
+                    <div className="text-sm font-medium text-content-primary">
+                      New to Hurry?
+                    </div>
+                    <div className="mt-1 text-sm text-content-secondary">
+                      You'll need to sign in and complete the onboarding flow first.
+                      After that, come back to this invite link to accept it.
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex gap-2">
                   <Button onClick={accept} disabled={!preview.valid || accepting}>
                     {signedIn ? "Accept invite" : "Sign in to accept"}
