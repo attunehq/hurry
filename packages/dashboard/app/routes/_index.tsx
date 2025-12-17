@@ -1,5 +1,5 @@
 import { Building2, ExternalLink, Plus } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
 import type {
@@ -9,6 +9,7 @@ import type {
   OrganizationListResponse,
 } from "../api/types";
 import { useApi } from "../api/useApi";
+import { useOrgs } from "../org/OrgContext";
 import { Badge } from "../ui/primitives/Badge";
 import { Button } from "../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../ui/primitives/Card";
@@ -22,10 +23,12 @@ export default function DashboardHome() {
   const nav = useNavigate();
   const toast = useToast();
   const { request, signedIn } = useApi();
+  const { lastOrgId, orgs: contextOrgs, setLastOrgId } = useOrgs();
   const [me, setMe] = useState<MeResponse | null>(null);
   const [orgs, setOrgs] = useState<OrganizationEntry[] | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [orgName, setOrgName] = useState("");
+  const hasRedirected = useRef(false);
 
   const headerLine = useMemo(() => {
     if (!me) return "Hurry Console";
@@ -79,6 +82,7 @@ export default function DashboardHome() {
       });
       setOrgName("");
       await refresh();
+      setLastOrgId(created.id);
       nav(`/org/${created.id}`);
     } catch (e) {
       if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
@@ -90,6 +94,20 @@ export default function DashboardHome() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Redirect to last selected org if available and valid
+  useEffect(() => {
+    if (hasRedirected.current) return;
+    if (!signedIn || !contextOrgs || contextOrgs.length === 0) return;
+
+    // Check if lastOrgId is valid (user still has access to it)
+    const targetOrgId = lastOrgId && contextOrgs.some((o) => o.id === lastOrgId)
+      ? lastOrgId
+      : contextOrgs[0].id;
+
+    hasRedirected.current = true;
+    nav(`/org/${targetOrgId}`, { replace: true });
+  }, [signedIn, contextOrgs, lastOrgId, nav]);
 
   return (
     <PageLayout
@@ -140,6 +158,7 @@ export default function DashboardHome() {
                 <Link
                   key={o.id}
                   to={`/org/${o.id}`}
+                  onClick={() => setLastOrgId(o.id)}
                   className="group flex items-center justify-between rounded-2xl border border-border bg-surface-subtle p-5 transition hover:border-border-accent-hover hover:bg-surface-subtle-hover"
                 >
                   <div className="flex items-center gap-3">

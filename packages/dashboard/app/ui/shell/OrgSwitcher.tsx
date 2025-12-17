@@ -15,7 +15,7 @@ export function OrgSwitcher() {
   const nav = useNavigate();
   const toast = useToast();
   const { orgId } = useParams();
-  const { orgs, loading, refresh } = useOrgs();
+  const { orgs, loading, refresh, setLastOrgId } = useOrgs();
   const { request, signedIn } = useApi();
   const [open, setOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -62,6 +62,7 @@ export function OrgSwitcher() {
       });
       setOrgName("");
       await refresh();
+      setLastOrgId(created.id);
       nav(`/org/${created.id}`);
     } catch (e) {
       if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
@@ -92,7 +93,10 @@ export function OrgSwitcher() {
                 <Link
                   key={org.id}
                   to={`/org/${org.id}`}
-                  onClick={() => setOpen(false)}
+                  onClick={() => {
+                    setOpen(false);
+                    setLastOrgId(org.id);
+                  }}
                   className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-content-tertiary hover:bg-surface-subtle hover:text-content-primary"
                 >
                   <span className="flex-1 truncate">{org.name}</span>
