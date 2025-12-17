@@ -86,7 +86,7 @@ export function OrgSwitcher() {
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 min-w-48 rounded-xl border border-border bg-surface-overlay p-1 shadow-dropdown backdrop-blur-xl">
+        <div className="animate-dropdown absolute left-0 top-full z-50 mt-1 min-w-48 rounded-xl border border-border bg-surface-overlay p-1 shadow-dropdown backdrop-blur-xl">
           {sortedOrgs && sortedOrgs.length > 0 ? (
             <div className="max-h-64 overflow-y-auto">
               {sortedOrgs.map((org) => (

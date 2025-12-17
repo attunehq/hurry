@@ -41,7 +41,7 @@ export function UserMenu() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-1 min-w-48 rounded-xl border border-border bg-surface-overlay p-1 shadow-dropdown backdrop-blur-xl">
+        <div className="animate-dropdown absolute right-0 top-full z-50 mt-1 min-w-48 rounded-xl border border-border bg-surface-overlay p-1 shadow-dropdown backdrop-blur-xl">
           <Link
             to="/user"
             onClick={() => setOpen(false)}

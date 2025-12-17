@@ -241,3 +241,19 @@ body {
   opacity: var(--noise-opacity);
 }
 
+@keyframes dropdown-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-dropdown {
+  animation: dropdown-in 0.1s ease-out;
+  transform-origin: top;
+}
+
