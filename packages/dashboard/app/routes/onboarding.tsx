@@ -133,7 +133,7 @@ function OnboardingStep(props: {
           <div className="text-xs text-content-tertiary">{props.description}</div>
         ) : null}
         {props.warning ? (
-          <div className="flex items-center gap-1.5 text-xs text-amber-500">
+          <div className="flex items-center gap-1.5 text-xs text-warn-text">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             <span>{props.warning}</span>
           </div>

@@ -39,6 +39,12 @@
   --color-warn-border: var(--warn-border);
   --color-warn-text: var(--warn-text);
 
+  /* Success colors */
+  --color-success-bg: var(--success-bg);
+  --color-success-bg-hover: var(--success-bg-hover);
+  --color-success-border: var(--success-border);
+  --color-success-text: var(--success-text);
+
   /* Attune brand colors */
   --color-attune-600: #2D9B7B;
   --color-attune-500: #5AC7A3;
@@ -117,6 +123,12 @@
   --warn-border: rgba(245, 158, 11, 0.3);
   --warn-text: #fde68a;
 
+  /* Success (green) */
+  --success-bg: rgba(34, 197, 94, 0.1);
+  --success-bg-hover: rgba(34, 197, 94, 0.15);
+  --success-border: rgba(34, 197, 94, 0.3);
+  --success-text: #86efac;
+
   /* Misc */
   --backdrop-overlay: rgba(0, 0, 0, 0.6);
   --noise-opacity: 0.18;
@@ -185,6 +197,12 @@
   --warn-bg-hover: rgba(217, 119, 6, 0.15);
   --warn-border: rgba(217, 119, 6, 0.25);
   --warn-text: #b45309;
+
+  /* Success (green) - dark green text on light green bg */
+  --success-bg: rgba(22, 163, 74, 0.1);
+  --success-bg-hover: rgba(22, 163, 74, 0.15);
+  --success-border: rgba(22, 163, 74, 0.25);
+  --success-text: #15803d;
 
   /* Misc */
   --backdrop-overlay: rgba(0, 0, 0, 0.3);

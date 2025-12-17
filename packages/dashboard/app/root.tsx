@@ -62,8 +62,8 @@ export function ErrorBoundary({ error }: { error: Error }) {
   return (
     <div className="flex min-h-screen items-center justify-center">
       <div className="max-w-md p-6">
-        <h1 className="text-xl font-bold text-red-500">Application Error</h1>
-        <pre className="mt-4 overflow-auto text-sm text-red-400">
+        <h1 className="text-xl font-bold text-danger-text">Application Error</h1>
+        <pre className="mt-4 overflow-auto text-sm text-danger-text">
           {error.message}
           {"\n"}
           {error.stack}

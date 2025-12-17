@@ -133,7 +133,7 @@ function GettingStartedStep(props: {
         className={clsx(
           "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
           props.done
-            ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+            ? "bg-success-bg text-success-text"
             : "bg-accent-bg text-accent-text",
         )}
       >
