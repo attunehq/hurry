@@ -40,32 +40,33 @@ export function UserMenu() {
         <ChevronDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
-      {open && (
-        <div className="animate-dropdown absolute right-0 top-full z-50 mt-1 min-w-48 rounded-xl border border-border bg-surface-overlay p-1 shadow-dropdown backdrop-blur-xl">
-          <Link
-            to="/user"
-            onClick={() => setOpen(false)}
-            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-content-tertiary hover:bg-surface-subtle hover:text-content-primary"
-          >
-            <User className="h-4 w-4" />
-            Account details
-          </Link>
+      <div
+        data-open={open}
+        className="dropdown absolute right-0 top-full z-50 mt-1 min-w-48 rounded-xl border border-border bg-surface-overlay p-1 shadow-dropdown backdrop-blur-xl"
+      >
+        <Link
+          to="/user"
+          onClick={() => setOpen(false)}
+          className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-content-tertiary hover:bg-surface-subtle hover:text-content-primary"
+        >
+          <User className="h-4 w-4" />
+          Account details
+        </Link>
 
-          <div className="my-1 border-t border-border" />
+        <div className="my-1 border-t border-border" />
 
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              void logout();
-            }}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-content-tertiary hover:bg-surface-subtle hover:text-content-primary"
-          >
-            <LogOut className="h-4 w-4" />
-            Sign out
-          </button>
-        </div>
-      )}
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            void logout();
+          }}
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-content-tertiary hover:bg-surface-subtle hover:text-content-primary"
+        >
+          <LogOut className="h-4 w-4" />
+          Sign out
+        </button>
+      </div>
     </div>
   );
 }

@@ -85,46 +85,47 @@ export function OrgSwitcher() {
         <ChevronDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
-      {open && (
-        <div className="animate-dropdown absolute left-0 top-full z-50 mt-1 min-w-48 rounded-xl border border-border bg-surface-overlay p-1 shadow-dropdown backdrop-blur-xl">
-          {sortedOrgs && sortedOrgs.length > 0 ? (
-            <div className="max-h-64 overflow-y-auto">
-              {sortedOrgs.map((org) => (
-                <Link
-                  key={org.id}
-                  to={`/org/${org.id}`}
-                  onClick={() => {
-                    setOpen(false);
-                    setLastOrgId(org.id);
-                  }}
-                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-content-tertiary hover:bg-surface-subtle hover:text-content-primary"
-                >
-                  <span className="flex-1 truncate">{org.name}</span>
-                  {org.id === currentOrgId && <Check className="h-4 w-4 text-accent-text" />}
-                </Link>
-              ))}
-            </div>
-          ) : (
-            <div className="px-3 py-2 text-sm text-content-muted">
-              {loading ? "Loading…" : "No organizations"}
-            </div>
-          )}
-
-          <div className="mt-1 border-t border-border pt-1">
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                setCreateOpen(true);
-              }}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-content-tertiary hover:bg-surface-subtle hover:text-content-primary"
-            >
-              <Plus className="h-4 w-4" />
-              New organization
-            </button>
+      <div
+        data-open={open}
+        className="dropdown absolute left-0 top-full z-50 mt-1 min-w-48 rounded-xl border border-border bg-surface-overlay p-1 shadow-dropdown backdrop-blur-xl"
+      >
+        {sortedOrgs && sortedOrgs.length > 0 ? (
+          <div className="max-h-64 overflow-y-auto">
+            {sortedOrgs.map((org) => (
+              <Link
+                key={org.id}
+                to={`/org/${org.id}`}
+                onClick={() => {
+                  setOpen(false);
+                  setLastOrgId(org.id);
+                }}
+                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-content-tertiary hover:bg-surface-subtle hover:text-content-primary"
+              >
+                <span className="flex-1 truncate">{org.name}</span>
+                {org.id === currentOrgId && <Check className="h-4 w-4 text-accent-text" />}
+              </Link>
+            ))}
           </div>
+        ) : (
+          <div className="px-3 py-2 text-sm text-content-muted">
+            {loading ? "Loading…" : "No organizations"}
+          </div>
+        )}
+
+        <div className="mt-1 border-t border-border pt-1">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              setCreateOpen(true);
+            }}
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-content-tertiary hover:bg-surface-subtle hover:text-content-primary"
+          >
+            <Plus className="h-4 w-4" />
+            New organization
+          </button>
         </div>
-      )}
+      </div>
 
       <Modal
         open={createOpen}
