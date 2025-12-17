@@ -258,7 +258,30 @@ body {
   pointer-events: none;
 }
 
-/* Tab content view transitions */
+/* Default page view transitions (fade up) */
+::view-transition-old(root) {
+  animation: page-out 0.15s ease-out forwards;
+}
+
+::view-transition-new(root) {
+  animation: page-in 0.15s ease-out forwards;
+}
+
+@keyframes page-out {
+  to {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* Tab content view transitions (overrides default for tabs) */
 .tab-content {
   view-transition-name: tab-content;
 }

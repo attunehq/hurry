@@ -46,6 +46,7 @@ export function UserMenu() {
       >
         <Link
           to="/user"
+          viewTransition
           onClick={() => setOpen(false)}
           className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-content-tertiary hover:bg-surface-subtle hover:text-content-primary"
         >

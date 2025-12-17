@@ -50,7 +50,7 @@ export default function AuthCallbackPage() {
           // New user onboarding: create API key and redirect to onboarding flow
           await handleNewUserOnboarding(out.session_token);
         } else {
-          nav("/");
+          nav("/", { viewTransition: true });
         }
       } catch (e) {
         const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
@@ -70,7 +70,7 @@ export default function AuthCallbackPage() {
         const orgs = orgsResponse.organizations;
         if (orgs.length === 0) {
           // No org found, fall back to home
-          nav("/");
+          nav("/", { viewTransition: true });
           return;
         }
 
@@ -87,10 +87,10 @@ export default function AuthCallbackPage() {
         });
 
         // Redirect to onboarding page with token and org
-        nav(`/onboarding?token=${encodeURIComponent(apiKey.token)}&org=${org.id}`);
+        nav(`/onboarding?token=${encodeURIComponent(apiKey.token)}&org=${org.id}`, { viewTransition: true });
       } catch {
         // If onboarding setup fails, just go to home page
-        nav("/");
+        nav("/", { viewTransition: true });
       }
     }
 
