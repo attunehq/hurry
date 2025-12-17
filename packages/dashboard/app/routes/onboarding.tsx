@@ -100,7 +100,7 @@ export default function OnboardingPage() {
             </div>
 
             <div className="border-t border-border px-6 py-4">
-              <Button className="w-full" onClick={() => nav(`/org/${orgId}`, { viewTransition: true })}>
+              <Button className="w-full" onClick={() => nav(`/org/${orgId}`)}>
                 <Check className="h-4 w-4" />
                 Got it, take me to my organization
               </Button>

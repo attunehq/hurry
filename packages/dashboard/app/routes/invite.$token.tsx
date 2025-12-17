@@ -51,7 +51,7 @@ export default function InvitePage() {
       });
       setLastOrgId(out.organization_id);
       await refreshOrgs();
-      nav(`/org/${out.organization_id}`, { viewTransition: true });
+      nav(`/org/${out.organization_id}`);
     } catch (e) {
       if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";

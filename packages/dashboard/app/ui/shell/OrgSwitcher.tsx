@@ -95,7 +95,6 @@ export function OrgSwitcher() {
               <Link
                 key={org.id}
                 to={`/org/${org.id}`}
-                viewTransition
                 onClick={() => {
                   setOpen(false);
                   setLastOrgId(org.id);
