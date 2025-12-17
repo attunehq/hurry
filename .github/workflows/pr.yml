@@ -1,7 +1,5 @@
 # Workflows that run on pull requests. These are primarily CI checks for
 # linting, formatting, testing, etc.
-#
-# TODO: Swap to hurry for caching!
 name: PR
 
 on:
@@ -42,12 +40,11 @@ jobs:
             - name: Install Rust
               run: rustup show
             - uses: actions/checkout@v4
-            - uses: Swatinem/rust-cache@v2
-              with:
-                  shared-key: clippy
-            - run: cargo clippy -p hurry -p courier
+            - uses: ./.github/actions/hurry-install
+            - run: hurry cargo clippy -p hurry -p courier
               env:
                   SQLX_OFFLINE: true
+                  HURRY_API_TOKEN: ${{ secrets.HURRY_API_TOKEN }}
 
     test:
         name: Run tests
@@ -75,13 +72,13 @@ jobs:
                   tool: nextest,sqlx-cli
                   checksum: true
             - uses: actions/checkout@v4
-            - uses: Swatinem/rust-cache@v2
-              with:
-                  shared-key: test
+            - uses: ./.github/actions/hurry-install
             - run: cargo sqlx migrate run --source packages/courier/schema/migrations/ --database-url $COURIER_DATABASE_URL
             - name: Setup hurry-dev
               uses: ./.github/actions/hurry-dev
-            - run: cargo nextest run -p hurry -p courier
+            - run: hurry cargo nextest run -p hurry -p courier
+              env:
+                  HURRY_API_TOKEN: ${{ secrets.HURRY_API_TOKEN }}
 
     build:
         name: Run full build
@@ -91,14 +88,13 @@ jobs:
             - name: Install Rust
               run: rustup show
             - uses: actions/checkout@v4
-            - uses: Swatinem/rust-cache@v2
-              with:
-                  shared-key: build
+            - uses: ./.github/actions/hurry-install
             - name: Setup hurry-dev
               uses: ./.github/actions/hurry-dev
-            - run: cargo build -p hurry -p courier --verbose
+            - run: hurry cargo build -p hurry -p courier --verbose
               env:
                   SQLX_OFFLINE: true
+                  HURRY_API_TOKEN: ${{ secrets.HURRY_API_TOKEN }}
 
     hurry-rust:
         name: Build with Hurry and check cache restores

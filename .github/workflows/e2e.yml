@@ -49,9 +49,10 @@ jobs:
               with:
                   tool: nextest
 
-            - uses: Swatinem/rust-cache@v2
+            - uses: ./.github/actions/hurry-install
 
             - name: Run e2e tests
-              run: cargo nextest run -p e2e
+              run: hurry cargo nextest run -p e2e
               env:
                   GITHUB_TOKEN: ${{ secrets.ATTUNE_REPOSITORY_TOKEN }}
+                  HURRY_API_TOKEN: ${{ secrets.HURRY_API_TOKEN }}
