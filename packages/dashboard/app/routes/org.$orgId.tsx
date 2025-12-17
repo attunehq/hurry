@@ -1,7 +1,7 @@
 import clsx from "clsx";
 import { Pencil } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { NavLink, Outlet, useNavigate, useOutletContext, useParams } from "react-router";
+import { NavLink, Outlet, useLocation, useNavigate, useOutletContext, useParams } from "react-router";
 
 import type { OrganizationEntry, OrganizationListResponse, OrgRole } from "../api/types";
 import { useApi } from "../api/useApi";
@@ -118,16 +118,7 @@ export default function OrgLayout() {
         </span>
       }
     >
-      <div className="mt-6 rounded-2xl border border-border bg-surface-raised p-2 shadow-glow-soft backdrop-blur">
-        <div className="flex flex-wrap gap-1">
-          <Tab to="" label="Overview" end />
-          <Tab to="members" label="Members" />
-          <Tab to="api-keys" label="API Keys" />
-          <Tab to="invitations" label="Invitations" />
-          <Tab to="bots" label="Bots" />
-          <Tab to="billing" label="Billing" />
-        </div>
-      </div>
+      <OrgTabs />
 
       <div className="tab-content">
         <Outlet context={{ orgId: id, role: org?.role ?? null }} />
@@ -158,20 +149,51 @@ export default function OrgLayout() {
   );
 }
 
-function Tab(props: { to: string; label: string; end?: boolean }) {
+const TABS = [
+  { to: "", label: "Overview", end: true },
+  { to: "members", label: "Members" },
+  { to: "api-keys", label: "API Keys" },
+  { to: "invitations", label: "Invitations" },
+  { to: "bots", label: "Bots" },
+  { to: "billing", label: "Billing" },
+];
+
+function OrgTabs() {
+  const { pathname } = useLocation();
+
+  function getTabIndex(path: string) {
+    const segment = path.split("/").pop() ?? "";
+    return TABS.findIndex((t) => t.to === segment || (t.end && segment.match(/^\d+$/)));
+  }
+
+  const currentIndex = getTabIndex(pathname);
+
+  function handleClick(targetIndex: number) {
+    const direction = targetIndex > currentIndex ? "right" : "left";
+    document.documentElement.dataset.tabDirection = direction;
+  }
+
   return (
-    <NavLink
-      to={props.to}
-      end={props.end}
-      viewTransition
-      className={({ isActive }) =>
-        clsx(
-          "cursor-pointer rounded-xl px-3 py-2 text-sm transition",
-          isActive ? "bg-surface-subtle text-content-primary" : "text-content-tertiary hover:bg-surface-subtle hover:text-content-primary",
-        )
-      }
-    >
-      {props.label}
-    </NavLink>
+    <div className="mt-6 rounded-2xl border border-border bg-surface-raised p-2 shadow-glow-soft backdrop-blur">
+      <div className="flex flex-wrap gap-1">
+        {TABS.map((tab, index) => (
+          <NavLink
+            key={tab.to}
+            to={tab.to}
+            end={tab.end}
+            viewTransition
+            onClick={() => handleClick(index)}
+            className={({ isActive }) =>
+              clsx(
+                "cursor-pointer rounded-xl px-3 py-2 text-sm transition",
+                isActive ? "bg-surface-subtle text-content-primary" : "text-content-tertiary hover:bg-surface-subtle hover:text-content-primary",
+              )
+            }
+          >
+            {tab.label}
+          </NavLink>
+        ))}
+      </div>
+    </div>
   );
 }

@@ -263,25 +263,49 @@ body {
   view-transition-name: tab-content;
 }
 
-::view-transition-old(tab-content) {
-  animation: tab-out 0.15s ease-out forwards;
+/* Sliding right (going to a tab further right) */
+:root[data-tab-direction="right"]::view-transition-old(tab-content) {
+  animation: tab-slide-out-left 0.15s ease-out forwards;
 }
 
-::view-transition-new(tab-content) {
-  animation: tab-in 0.15s ease-out forwards;
+:root[data-tab-direction="right"]::view-transition-new(tab-content) {
+  animation: tab-slide-in-right 0.15s ease-out forwards;
 }
 
-@keyframes tab-out {
+/* Sliding left (going to a tab further left) */
+:root[data-tab-direction="left"]::view-transition-old(tab-content) {
+  animation: tab-slide-out-right 0.15s ease-out forwards;
+}
+
+:root[data-tab-direction="left"]::view-transition-new(tab-content) {
+  animation: tab-slide-in-left 0.15s ease-out forwards;
+}
+
+@keyframes tab-slide-out-left {
   to {
     opacity: 0;
-    transform: translateY(-8px);
+    transform: translateX(-20px);
   }
 }
 
-@keyframes tab-in {
+@keyframes tab-slide-in-right {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateX(20px);
+  }
+}
+
+@keyframes tab-slide-out-right {
+  to {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+
+@keyframes tab-slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
   }
 }
 
