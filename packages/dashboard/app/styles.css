@@ -258,3 +258,30 @@ body {
   pointer-events: none;
 }
 
+/* Tab content view transitions */
+.tab-content {
+  view-transition-name: tab-content;
+}
+
+::view-transition-old(tab-content) {
+  animation: tab-out 0.15s ease-out forwards;
+}
+
+::view-transition-new(tab-content) {
+  animation: tab-in 0.15s ease-out forwards;
+}
+
+@keyframes tab-out {
+  to {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+

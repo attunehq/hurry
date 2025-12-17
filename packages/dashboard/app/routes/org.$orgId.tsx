@@ -129,7 +129,9 @@ export default function OrgLayout() {
         </div>
       </div>
 
-      <Outlet context={{ orgId: id, role: org?.role ?? null }} />
+      <div className="tab-content">
+        <Outlet context={{ orgId: id, role: org?.role ?? null }} />
+      </div>
 
       <Modal open={renameOpen} title="Rename organization" onClose={() => setRenameOpen(false)} onSubmit={rename}>
         <div className="space-y-4">
@@ -161,6 +163,7 @@ function Tab(props: { to: string; label: string; end?: boolean }) {
     <NavLink
       to={props.to}
       end={props.end}
+      viewTransition
       className={({ isActive }) =>
         clsx(
           "cursor-pointer rounded-xl px-3 py-2 text-sm transition",
