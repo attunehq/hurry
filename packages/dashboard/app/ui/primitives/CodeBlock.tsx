@@ -1,3 +1,4 @@
+import clsx from "clsx";
 import { Copy } from "lucide-react";
 
 import { useToast } from "../toast/ToastProvider";
@@ -28,7 +29,7 @@ export function CodeBlock({ code, label, wrap }: CodeBlockProps) {
         </div>
       )}
       <div className="group flex items-center justify-between gap-2 px-3 py-2">
-        <code className={`flex-1 overflow-x-auto font-mono text-xs text-content-primary ${wrap ? "break-all" : "whitespace-nowrap"}`}>
+        <code className={clsx("flex-1 overflow-x-auto font-mono text-xs text-content-primary", wrap ? "break-all" : "whitespace-nowrap")}>
           {code}
         </code>
         <button

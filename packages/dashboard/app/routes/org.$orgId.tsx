@@ -3,6 +3,7 @@ import { Pencil } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useOutletContext, useParams } from "react-router";
 
+import { isUnauthorizedError } from "../api/client";
 import type { OrganizationEntry, OrganizationListResponse, OrgRole } from "../api/types";
 import { useApi } from "../api/useApi";
 import { Button } from "../ui/primitives/Button";
@@ -43,7 +44,7 @@ export default function OrgLayout() {
       setOrg(found);
       if (!found) toast.push({ kind: "error", title: "Org not found (or no access)" });
     } catch (e) {
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
+      if (isUnauthorizedError(e)) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
       toast.push({ kind: "error", title: "Failed to load org", detail: msg });
     }
@@ -73,7 +74,7 @@ export default function OrgLayout() {
       toast.push({ kind: "success", title: "Organization renamed" });
       await refresh();
     } catch (e) {
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
+      if (isUnauthorizedError(e)) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
       toast.push({ kind: "error", title: "Rename failed", detail: msg });
     }
@@ -162,8 +163,12 @@ function OrgTabs() {
   const { pathname } = useLocation();
 
   function getTabIndex(path: string) {
-    const segment = path.split("/").pop() ?? "";
-    return TABS.findIndex((t) => t.to === segment || (t.end && segment.match(/^\d+$/)));
+    // Expect structure: /org/:orgId/:tab?
+    const segments = path.split("/").filter(Boolean);
+    const orgIndex = segments.indexOf("org");
+    // Tab segment is two positions after "org" (orgId is one after)
+    const segment = orgIndex >= 0 ? segments[orgIndex + 2] ?? "" : "";
+    return TABS.findIndex((t) => t.to === segment);
   }
 
   const currentIndex = getTabIndex(pathname);
