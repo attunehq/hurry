@@ -76,7 +76,7 @@ export function OrgSwitcher() {
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex cursor-pointer items-center gap-2 rounded-xl border border-border bg-surface-raised px-3 py-2 text-sm text-content-secondary hover:border-border-accent-hover hover:text-content-primary"
+        className={`flex cursor-pointer items-center gap-2 rounded-xl border border-border bg-surface-raised px-3 py-2 text-sm text-content-secondary transition hover:border-border-accent-hover hover:text-content-primary ${open ? "shadow-dropdown" : ""}`}
       >
         <Building2 className="h-4 w-4" />
         <span className="max-w-48 truncate">
