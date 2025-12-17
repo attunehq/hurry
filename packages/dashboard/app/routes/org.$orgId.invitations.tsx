@@ -1,6 +1,7 @@
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Ticket, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { isUnauthorizedError } from "../api/client";
 import type { CreateInvitationResponse, InvitationListResponse, OrgRole } from "../api/types";
 import { useApi } from "../api/useApi";
 import { Badge } from "../ui/primitives/Badge";
@@ -37,7 +38,11 @@ export default function OrgInvitationsPage() {
       });
       setData(out);
     } catch (e) {
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
+      if (isUnauthorizedError(e)) return;
+      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 403) {
+        setData(null);
+        return;
+      }
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
       toast.push({ kind: "error", title: "Failed to load invitations", detail: msg });
       setData(null);
@@ -65,7 +70,7 @@ export default function OrgInvitationsPage() {
       setMaxUses("");
       await load();
     } catch (e) {
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
+      if (isUnauthorizedError(e)) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
       toast.push({ kind: "error", title: "Create failed", detail: msg });
     }
@@ -81,7 +86,7 @@ export default function OrgInvitationsPage() {
       });
       await load();
     } catch (e) {
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
+      if (isUnauthorizedError(e)) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
       toast.push({ kind: "error", title: "Revoke failed", detail: msg });
     }
@@ -94,6 +99,22 @@ export default function OrgInvitationsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  if (!canAdmin) {
+    return (
+      <Card>
+        <CardBody>
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <Ticket className="mb-4 h-12 w-12 text-content-muted" />
+            <div className="text-sm font-medium text-content-primary">Admin access required</div>
+            <div className="mt-1 text-sm text-content-tertiary">
+              Only organization admins can manage invitations.
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-4">

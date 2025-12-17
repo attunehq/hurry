@@ -119,7 +119,7 @@ export default function OrgLayout() {
         </span>
       }
     >
-      <OrgTabs />
+      <OrgTabs isAdmin={canAdmin} />
 
       <div className="tab-content">
         <Outlet context={{ orgId: id, role: org?.role ?? null }} />
@@ -150,17 +150,30 @@ export default function OrgLayout() {
   );
 }
 
-const TABS = [
+type Tab = { to: string; label: string; end?: boolean };
+
+const BASE_TABS: Tab[] = [
   { to: "", label: "Overview", end: true },
   { to: "members", label: "Members" },
   { to: "api-keys", label: "API Keys" },
+];
+
+const ADMIN_TABS: Tab[] = [
   { to: "invitations", label: "Invitations" },
   { to: "bots", label: "Bots" },
+  { to: "audit-log", label: "Audit Log" },
+];
+
+const OTHER_TABS: Tab[] = [
   { to: "billing", label: "Billing" },
 ];
 
-function OrgTabs() {
+function OrgTabs({ isAdmin }: { isAdmin: boolean }) {
   const { pathname } = useLocation();
+
+  const tabs = useMemo(() => {
+    return isAdmin ? [...BASE_TABS, ...ADMIN_TABS, ...OTHER_TABS] : [...BASE_TABS, ...OTHER_TABS];
+  }, [isAdmin]);
 
   function getTabIndex(path: string) {
     // Expect structure: /org/:orgId/:tab?
@@ -168,7 +181,7 @@ function OrgTabs() {
     const orgIndex = segments.indexOf("org");
     // Tab segment is two positions after "org" (orgId is one after)
     const segment = orgIndex >= 0 ? segments[orgIndex + 2] ?? "" : "";
-    return TABS.findIndex((t) => t.to === segment);
+    return tabs.findIndex((t) => t.to === segment);
   }
 
   const currentIndex = getTabIndex(pathname);
@@ -181,7 +194,7 @@ function OrgTabs() {
   return (
     <div className="mt-6 rounded-2xl border border-border bg-surface-raised p-2 shadow-glow-soft backdrop-blur">
       <div className="flex flex-wrap gap-1">
-        {TABS.map((tab, index) => (
+        {tabs.map((tab, index) => (
           <NavLink
             key={tab.to}
             to={tab.to}

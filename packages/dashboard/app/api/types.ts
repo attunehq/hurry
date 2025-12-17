@@ -113,3 +113,18 @@ export type CreateBotResponse = {
 export type ExchangeResponse = {
   session_token: string;
 };
+
+export type AuditLogEntry = {
+  id: number;
+  account_id?: number | null;
+  account_email?: string | null;
+  account_name?: string | null;
+  action: string;
+  details?: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type AuditLogListResponse = {
+  entries: AuditLogEntry[];
+  has_more: boolean;
+};

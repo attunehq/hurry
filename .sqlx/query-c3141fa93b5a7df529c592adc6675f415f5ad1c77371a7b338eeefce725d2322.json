@@ -1,0 +1,61 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT\n                        al.id,\n                        al.account_id,\n                        al.action,\n                        al.details,\n                        al.created_at,\n                        a.email AS \"account_email?\",\n                        a.name AS \"account_name?\"\n                    FROM audit_log al\n                    LEFT JOIN account a ON al.account_id = a.id\n                    WHERE al.organization_id = $1\n                      AND (al.created_at, al.id) < ($2, $3)\n                    ORDER BY al.created_at DESC, al.id DESC\n                    LIMIT $4\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "account_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "action",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "details",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "account_email?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "account_name?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamptz",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "c3141fa93b5a7df529c592adc6675f415f5ad1c77371a7b338eeefce725d2322"
+}
