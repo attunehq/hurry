@@ -27,18 +27,18 @@ export function CodeBlock({ code, label, wrap }: CodeBlockProps) {
           {label}
         </div>
       )}
-      <div className="group flex items-start justify-between gap-2 px-3 py-2">
+      <div className="group flex items-center justify-between gap-2 px-3 py-2">
         <code className={`flex-1 overflow-x-auto font-mono text-xs text-content-primary ${wrap ? "break-all" : "whitespace-nowrap"}`}>
           {code}
         </code>
         <button
           type="button"
           onClick={copy}
-          className="shrink-0 cursor-pointer rounded p-1 text-content-muted opacity-0 transition hover:bg-surface-raised hover:text-content-secondary group-hover:opacity-100"
+          className="shrink-0 cursor-pointer text-content-muted opacity-0 transition hover:text-content-secondary group-hover:opacity-100"
           title="Copy"
           aria-label="Copy to clipboard"
         >
-          <Copy className="h-3.5 w-3.5" />
+          <Copy className="h-3 w-3" />
         </button>
       </div>
     </div>
