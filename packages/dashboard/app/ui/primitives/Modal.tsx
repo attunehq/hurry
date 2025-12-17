@@ -52,7 +52,8 @@ export function Modal(props: {
       <div className="flex items-center justify-between border-b border-border px-5 py-4">
         <div className="text-sm font-semibold">{props.title}</div>
         <button
-          className="rounded-md p-1 text-content-muted hover:bg-surface-subtle hover:text-content-secondary"
+          type="button"
+          className="cursor-pointer rounded-md p-1 text-content-muted hover:bg-surface-subtle hover:text-content-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-text"
           onClick={props.onClose}
           aria-label="Close"
         >

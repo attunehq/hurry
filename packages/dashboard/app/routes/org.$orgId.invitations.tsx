@@ -1,4 +1,4 @@
-import { Copy, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { CreateInvitationResponse, InvitationListResponse, OrgRole } from "../api/types";
@@ -6,6 +6,7 @@ import { useApi } from "../api/useApi";
 import { Badge } from "../ui/primitives/Badge";
 import { Button } from "../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../ui/primitives/Card";
+import { CodeBlock } from "../ui/primitives/CodeBlock";
 import { Input } from "../ui/primitives/Input";
 import { Label } from "../ui/primitives/Label";
 import { Modal } from "../ui/primitives/Modal";
@@ -83,15 +84,6 @@ export default function OrgInvitationsPage() {
       if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
       toast.push({ kind: "error", title: "Revoke failed", detail: msg });
-    }
-  }
-
-  async function copy(value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.push({ kind: "success", title: "Copied" });
-    } catch {
-      toast.push({ kind: "error", title: "Copy failed" });
     }
   }
 
@@ -182,11 +174,11 @@ export default function OrgInvitationsPage() {
       <Modal open={createOpen} title="Create invitation" onClose={() => setCreateOpen(false)} onSubmit={createInvite}>
         <div className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
+            <div>
               <Label htmlFor="role">Role</Label>
               <select
                 id="role"
-                className="h-10 w-full rounded-xl border border-border bg-surface-subtle px-3 text-sm text-content-primary"
+                className="h-10 w-full cursor-pointer rounded-xl border border-border bg-surface-subtle px-3 text-sm text-content-primary focus:border-border-accent-hover focus:bg-surface-subtle-hover focus:outline-none"
                 value={inviteRole}
                 onChange={(e) => setInviteRole(e.target.value as OrgRole)}
               >
@@ -194,7 +186,7 @@ export default function OrgInvitationsPage() {
                 <option value="admin">admin</option>
               </select>
             </div>
-            <div className="space-y-2">
+            <div>
               <Label htmlFor="maxUses">Max uses (optional)</Label>
               <Input
                 id="maxUses"
@@ -225,17 +217,8 @@ export default function OrgInvitationsPage() {
             <div className="text-sm text-content-tertiary">
               Share this link to invite someone. The token is embedded.
             </div>
-            <div className="rounded-2xl border border-border bg-surface-subtle p-4">
-              <div className="text-xs text-content-muted">Invite link</div>
-              <div className="mt-1 break-all font-mono text-xs text-content-primary">
-                {inviteLink(created.token)}
-              </div>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => copy(inviteLink(created.token))}>
-                <Copy className="h-4 w-4" />
-                Copy
-              </Button>
+            <CodeBlock code={inviteLink(created.token)} label="Invite link" />
+            <div className="flex justify-end">
               <Button onClick={() => setCreated(null)}>Done</Button>
             </div>
           </div>
