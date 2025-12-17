@@ -125,11 +125,13 @@ pub async fn restore_units(
 
     // Load unit information from remote cache. Note that this does NOT download
     // the actual files, which are loaded as CAS keys.
+    //
+    // We request ALL units (including skipped ones) because we need their
+    // fingerprint data to populate `dep_fingerprints`. When a unit is skipped
+    // (already on disk), we still need to know its cached fingerprint hash so
+    // that dependent units can rewrite their fingerprint references correctly.
     let bulk_req = CargoRestoreRequest::new(
-        units
-            .iter()
-            .filter(|unit| !units_to_skip.contains(&unit.info().unit_hash))
-            .map(|unit| unit.info().unit_hash.clone()),
+        units.iter().map(|unit| unit.info().unit_hash.clone()),
         host_glibc_symbol_version,
     );
     let mut saved_units = courier.cargo_cache_restore(bulk_req).await?;
@@ -252,10 +254,29 @@ pub async fn restore_units(
                 SavedUnit::LibraryCrate(saved_library_files, _),
                 UnitPlan::LibraryCrate(unit_plan),
             ) => {
-                // Restore the fingerprint directly, because fingerprint
-                // rewriting needs to occur in dependency order.
+                // Parse the fingerprint from cached data.
                 let fingerprint: cargo::Fingerprint =
                     serde_json::from_str(saved_library_files.fingerprint.as_str())?;
+
+                // Handle skipped units: record fingerprint mapping but don't restore files.
+                if units_to_skip.contains(unit_hash) {
+                    cargo::LibraryFiles::record_fingerprint_mapping(
+                        &ws,
+                        &mut dep_fingerprints,
+                        fingerprint,
+                        unit_plan,
+                    )
+                    .await?;
+                    // Touch mtimes to maintain ordering invariants.
+                    if let Err(err) = unit.touch(&ws, mtime).await {
+                        warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
+                    }
+                    progress.dec_length(1);
+                    continue;
+                }
+
+                // Restore the fingerprint directly, because fingerprint
+                // rewriting needs to occur in dependency order.
                 cargo::LibraryFiles::restore_fingerprint(
                     &ws,
                     &mut dep_fingerprints,
@@ -340,10 +361,29 @@ pub async fn restore_units(
                 SavedUnit::BuildScriptCompilation(build_script_compiled_files, _),
                 UnitPlan::BuildScriptCompilation(unit_plan),
             ) => {
-                // Restore the fingerprint directly, because fingerprint
-                // rewriting needs to occur in dependency order.
+                // Parse the fingerprint from cached data.
                 let fingerprint: cargo::Fingerprint =
                     serde_json::from_str(build_script_compiled_files.fingerprint.as_str())?;
+
+                // Handle skipped units: record fingerprint mapping but don't restore files.
+                if units_to_skip.contains(unit_hash) {
+                    cargo::BuildScriptCompiledFiles::record_fingerprint_mapping(
+                        &ws,
+                        &mut dep_fingerprints,
+                        fingerprint,
+                        unit_plan,
+                    )
+                    .await?;
+                    // Touch mtimes to maintain ordering invariants.
+                    if let Err(err) = unit.touch(&ws, mtime).await {
+                        warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
+                    }
+                    progress.dec_length(1);
+                    continue;
+                }
+
+                // Restore the fingerprint directly, because fingerprint
+                // rewriting needs to occur in dependency order.
                 cargo::BuildScriptCompiledFiles::restore_fingerprint(
                     &ws,
                     &mut dep_fingerprints,
@@ -427,10 +467,29 @@ pub async fn restore_units(
                 SavedUnit::BuildScriptExecution(build_script_output_files, _),
                 UnitPlan::BuildScriptExecution(unit_plan),
             ) => {
-                // Restore the fingerprint directly, because fingerprint
-                // rewriting needs to occur in dependency order.
+                // Parse the fingerprint from cached data.
                 let fingerprint: cargo::Fingerprint =
                     serde_json::from_str(build_script_output_files.fingerprint.as_str())?;
+
+                // Handle skipped units: record fingerprint mapping but don't restore files.
+                if units_to_skip.contains(unit_hash) {
+                    cargo::BuildScriptOutputFiles::record_fingerprint_mapping(
+                        &ws,
+                        &mut dep_fingerprints,
+                        fingerprint,
+                        unit_plan,
+                    )
+                    .await?;
+                    // Touch mtimes to maintain ordering invariants.
+                    if let Err(err) = unit.touch(&ws, mtime).await {
+                        warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
+                    }
+                    progress.dec_length(1);
+                    continue;
+                }
+
+                // Restore the fingerprint directly, because fingerprint
+                // rewriting needs to occur in dependency order.
                 cargo::BuildScriptOutputFiles::restore_fingerprint(
                     &ws,
                     &mut dep_fingerprints,

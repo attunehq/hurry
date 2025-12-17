@@ -292,4 +292,40 @@ impl LibraryFiles {
 
         Ok(())
     }
+
+    /// Record the fingerprint mapping for a skipped unit (already on disk).
+    ///
+    /// When a unit is skipped because it already exists on disk, we still need
+    /// to record the mapping from its cached fingerprint hash to its local
+    /// fingerprint. This allows dependent units to properly rewrite their
+    /// fingerprint references.
+    ///
+    /// Unlike `restore_fingerprint`, this function does NOT write anything to
+    /// disk - the fingerprint is already correct for this machine.
+    pub async fn record_fingerprint_mapping(
+        ws: &Workspace,
+        dep_fingerprints: &mut HashMap<u64, Arc<Fingerprint>>,
+        cached_fingerprint: Fingerprint,
+        unit_plan: &LibraryCrateUnitPlan,
+    ) -> Result<()> {
+        let profile_dir = ws.unit_profile_dir(&unit_plan.info);
+        let old_fingerprint_hash = cached_fingerprint.hash_u64();
+
+        // Read the local fingerprint from disk.
+        let fingerprint_json =
+            fs::must_read_buffered_utf8(&profile_dir.join(&unit_plan.fingerprint_json_file()?))
+                .await?;
+        let local_fingerprint: Fingerprint = serde_json::from_str(&fingerprint_json)?;
+
+        debug!(
+            old_hash = ?old_fingerprint_hash,
+            local_hash = ?local_fingerprint.hash_u64(),
+            "recorded fingerprint mapping for skipped unit"
+        );
+
+        // Save unit fingerprint (for future dependents).
+        dep_fingerprints.insert(old_fingerprint_hash, Arc::new(local_fingerprint));
+
+        Ok(())
+    }
 }
