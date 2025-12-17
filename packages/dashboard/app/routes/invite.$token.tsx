@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router";
 
 import type { AcceptInvitationResponse, InvitationPreviewResponse } from "../api/types";
 import { useApi } from "../api/useApi";
+import { useOrgs } from "../org/OrgContext";
 import { Badge } from "../ui/primitives/Badge";
 import { Button } from "../ui/primitives/Button";
 import { useToast } from "../ui/toast/ToastProvider";
@@ -12,6 +13,7 @@ export default function InvitePage() {
   const toast = useToast();
   const { token } = useParams();
   const { request, signedIn } = useApi();
+  const { setLastOrgId, refresh: refreshOrgs } = useOrgs();
   const [preview, setPreview] = useState<InvitationPreviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [accepting, setAccepting] = useState(false);
@@ -47,6 +49,8 @@ export default function InvitePage() {
         path: `/api/v1/invitations/${encodeURIComponent(inviteToken)}/accept`,
         method: "POST",
       });
+      setLastOrgId(out.organization_id);
+      await refreshOrgs();
       nav(`/org/${out.organization_id}`);
     } catch (e) {
       if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
