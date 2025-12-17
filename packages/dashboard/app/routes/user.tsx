@@ -1,4 +1,4 @@
-import { Calendar, Github, LogOut, Mail, Pencil } from "lucide-react";
+import { Calendar, Github, Mail, Pencil } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 
@@ -15,7 +15,7 @@ import { useToast } from "../ui/toast/ToastProvider";
 export default function UserPage() {
   const nav = useNavigate();
   const toast = useToast();
-  const { request, logout, signedIn } = useApi();
+  const { request, signedIn } = useApi();
   const [me, setMe] = useState<MeResponse | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -69,24 +69,9 @@ export default function UserPage() {
   }, [refresh]);
 
   return (
-    <PageLayout
-      title="Account"
-      subtitle="View your account information."
-      actions={
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={openRename} disabled={!signedIn || !me}>
-            <Pencil className="h-4 w-4" />
-            Rename
-          </Button>
-          <Button variant="danger" onClick={logout} disabled={!signedIn}>
-            <LogOut className="h-4 w-4" />
-            Sign out
-          </Button>
-        </div>
-      }
-    >
+    <PageLayout title="Account">
       {!signedIn ? (
-        <Card>
+        <Card className="mt-6">
           <CardBody>
             <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
               <div>
@@ -102,21 +87,29 @@ export default function UserPage() {
       ) : null}
 
       {signedIn && me ? (
-        <Card>
+        <Card className="mt-6">
           <CardHeader>
             <div className="text-sm font-semibold text-content-primary">Account Details</div>
           </CardHeader>
           <CardBody>
             <div className="space-y-4">
-              {me.name ? (
-                <div className="flex items-start gap-3">
-                  <div className="mt-0.5 h-4 w-4 text-center text-accent-text text-xs font-bold">N</div>
-                  <div>
-                    <div className="text-xs font-medium text-content-muted">Name</div>
-                    <div className="mt-0.5 text-sm text-content-primary">{me.name}</div>
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 h-4 w-4 text-center text-accent-text text-xs font-bold">N</div>
+                <div>
+                  <div className="text-xs font-medium text-content-muted">Name</div>
+                  <div className="mt-0.5 flex items-center gap-2 text-sm text-content-primary">
+                    {me.name || <span className="text-content-muted">Not set</span>}
+                    <button
+                      type="button"
+                      onClick={openRename}
+                      className="cursor-pointer text-content-muted hover:text-content-primary"
+                      title="Edit name"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 </div>
-              ) : null}
+              </div>
 
               <div className="flex items-start gap-3">
                 <Mail className="mt-0.5 h-4 w-4 text-accent-text" />
@@ -154,7 +147,7 @@ export default function UserPage() {
           </CardBody>
         </Card>
       ) : signedIn ? (
-        <Card>
+        <Card className="mt-6">
           <CardBody>
             <div className="text-sm text-content-tertiary">Loading...</div>
           </CardBody>
@@ -163,7 +156,7 @@ export default function UserPage() {
 
       <Modal open={renameOpen} title="Update account name" onClose={() => setRenameOpen(false)} onSubmit={rename}>
         <div className="space-y-4">
-          <div className="space-y-2">
+          <div>
             <Label htmlFor="account-name">Name</Label>
             <Input
               id="account-name"

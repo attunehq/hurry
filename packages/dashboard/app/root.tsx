@@ -2,6 +2,8 @@ import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 
 import { AuthGate } from "./auth/AuthGate";
 import { SessionProvider } from "./auth/session";
+import { OrgProvider } from "./org/OrgContext";
+import { UserProvider } from "./user/UserContext";
 import { ThemeProvider } from "./ui/theme/ThemeProvider";
 import { ToastProvider } from "./ui/toast/ToastProvider";
 import { AppShell } from "./ui/shell/AppShell";
@@ -31,13 +33,17 @@ export default function Root() {
   return (
     <ThemeProvider>
       <SessionProvider>
-        <ToastProvider>
-          <AuthGate
-            shell={(children) => <AppShell>{children}</AppShell>}
-          >
-            <Outlet />
-          </AuthGate>
-        </ToastProvider>
+        <OrgProvider>
+          <UserProvider>
+            <ToastProvider>
+              <AuthGate
+                shell={(children) => <AppShell>{children}</AppShell>}
+              >
+                <Outlet />
+              </AuthGate>
+            </ToastProvider>
+          </UserProvider>
+        </OrgProvider>
       </SessionProvider>
     </ThemeProvider>
   );

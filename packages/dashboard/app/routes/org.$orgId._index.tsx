@@ -1,4 +1,4 @@
-import { Copy, KeyRound, Rocket, Terminal } from "lucide-react";
+import { KeyRound, Rocket } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
@@ -6,7 +6,7 @@ import type { OrgApiKeyListResponse } from "../api/types";
 import { useApi } from "../api/useApi";
 import { Button } from "../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../ui/primitives/Card";
-import { useToast } from "../ui/toast/ToastProvider";
+import { CodeBlock } from "../ui/primitives/CodeBlock";
 import { useOrgContext } from "./org.$orgId";
 
 type Platform = "unix" | "windows";
@@ -20,7 +20,6 @@ function detectPlatform(): Platform {
 
 export default function OrgIndexPage() {
   const nav = useNavigate();
-  const toast = useToast();
   const { request, signedIn } = useApi();
   const { orgId } = useOrgContext();
   const [apiKeys, setApiKeys] = useState<OrgApiKeyListResponse | null>(null);
@@ -42,15 +41,6 @@ export default function OrgIndexPage() {
   useEffect(() => {
     void loadApiKeys();
   }, [loadApiKeys]);
-
-  async function copyToClipboard(value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.push({ kind: "success", title: "Copied" });
-    } catch {
-      toast.push({ kind: "error", title: "Copy failed" });
-    }
-  }
 
   return (
     <div className="space-y-4">
@@ -96,10 +86,7 @@ export default function OrgIndexPage() {
               >
                 <div className="space-y-2 text-xs text-content-tertiary">
                   <div>Add your API token to your shell config.</div>
-                  <GettingStartedCodeBlock
-                    code='export HURRY_API_TOKEN="your-token-here"'
-                    onCopy={copyToClipboard}
-                  />
+                  <CodeBlock code='export HURRY_API_TOKEN="your-token-here"' />
                 </div>
               </GettingStartedStep>
 
@@ -109,7 +96,7 @@ export default function OrgIndexPage() {
               >
                 <div className="space-y-2 text-xs text-content-tertiary">
                   <div>Run this in your terminal to install the hurry CLI.</div>
-                  <GettingStartedInstallTabs onCopy={copyToClipboard} />
+                  <GettingStartedInstallTabs />
                 </div>
               </GettingStartedStep>
 
@@ -120,37 +107,15 @@ export default function OrgIndexPage() {
                 <div className="space-y-2 text-xs text-content-tertiary">
                   <div>Replace your cargo commands with hurry.</div>
                   <div className="space-y-1.5">
-                    <GettingStartedCodeBlock code="hurry cargo build" onCopy={copyToClipboard} />
-                    <GettingStartedCodeBlock code="hurry cargo test" onCopy={copyToClipboard} />
-                    <GettingStartedCodeBlock code="hurry cargo check" onCopy={copyToClipboard} />
+                    <CodeBlock code="hurry cargo build" />
+                    <CodeBlock code="hurry cargo test" />
+                    <CodeBlock code="hurry cargo check" />
                   </div>
                 </div>
               </GettingStartedStep>
             </div>
           </CardBody>
         </Card>
-
-      <Card>
-        <CardHeader>
-          <div className="text-sm font-semibold text-content-primary">Quick Links</div>
-        </CardHeader>
-        <CardBody>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <QuickLinkCard
-              to="api-keys"
-              icon={<KeyRound className="h-5 w-5" />}
-              title="API Keys"
-              description="Manage authentication tokens"
-            />
-            <QuickLinkCard
-              to="members"
-              icon={<Terminal className="h-5 w-5" />}
-              title="Members"
-              description="View and manage team members"
-            />
-          </div>
-        </CardBody>
-      </Card>
     </div>
   );
 }
@@ -181,25 +146,7 @@ function GettingStartedStep(props: {
   );
 }
 
-function GettingStartedCodeBlock(props: { code: string; onCopy: (value: string) => void }) {
-  return (
-    <div className="group flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-subtle px-3 py-2">
-      <code className="flex-1 overflow-x-auto whitespace-nowrap font-mono text-xs text-content-primary">
-        {props.code}
-      </code>
-      <button
-        type="button"
-        onClick={() => props.onCopy(props.code)}
-        className="shrink-0 rounded p-1 text-content-muted opacity-0 transition hover:bg-surface-raised hover:text-content-secondary group-hover:opacity-100"
-        title="Copy"
-      >
-        <Copy className="h-3.5 w-3.5" />
-      </button>
-    </div>
-  );
-}
-
-function GettingStartedInstallTabs(props: { onCopy: (value: string) => void }) {
+function GettingStartedInstallTabs() {
   const [platform, setPlatform] = useState<Platform>(detectPlatform);
 
   const commands = {
@@ -235,27 +182,8 @@ function GettingStartedInstallTabs(props: { onCopy: (value: string) => void }) {
           Windows
         </button>
       </div>
-      <GettingStartedCodeBlock code={commands[platform]} onCopy={props.onCopy} />
+      <CodeBlock code={commands[platform]} />
     </div>
   );
 }
 
-function QuickLinkCard(props: {
-  to: string;
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-}) {
-  return (
-    <Link
-      to={props.to}
-      className="flex items-center gap-3 rounded-xl border border-border bg-surface-subtle p-4 transition hover:border-border-accent-hover hover:bg-surface-subtle-hover"
-    >
-      <div className="text-accent-text">{props.icon}</div>
-      <div>
-        <div className="text-sm font-medium text-content-primary">{props.title}</div>
-        <div className="text-xs text-content-muted">{props.description}</div>
-      </div>
-    </Link>
-  );
-}

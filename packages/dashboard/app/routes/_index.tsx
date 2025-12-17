@@ -166,7 +166,7 @@ export default function DashboardHome() {
 
       <Modal open={createOpen} title="Create organization" onClose={() => setCreateOpen(false)} onSubmit={createOrg}>
         <div className="space-y-4">
-          <div className="space-y-2">
+          <div>
             <Label htmlFor="orgName">Name</Label>
             <Input
               id="orgName"

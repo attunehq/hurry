@@ -4,7 +4,6 @@ import { NavLink, Outlet, useNavigate, useOutletContext, useParams } from "react
 
 import type { OrganizationEntry, OrganizationListResponse, OrgRole } from "../api/types";
 import { useApi } from "../api/useApi";
-import { Badge } from "../ui/primitives/Badge";
 import { Button } from "../ui/primitives/Button";
 import { Card, CardBody } from "../ui/primitives/Card";
 import { Input } from "../ui/primitives/Input";
@@ -103,27 +102,29 @@ export default function OrgLayout() {
   return (
     <PageLayout
       title={
-        <span className="flex items-center gap-3">
+        <span className="flex items-center gap-2">
           {org ? org.name : "Organization"}
-          {org ? (
-            <Badge tone={org.role === "admin" ? "neon" : "muted"}>{org.role}</Badge>
-          ) : null}
+          {canAdmin && (
+            <button
+              type="button"
+              onClick={openRename}
+              className="cursor-pointer text-content-muted hover:text-content-primary"
+              title="Rename organization"
+            >
+              <Pencil className="h-4 w-4" />
+            </button>
+          )}
         </span>
       }
-      actions={
-        <Button variant="secondary" onClick={openRename} disabled={!canAdmin}>
-          <Pencil className="h-4 w-4" />
-          Rename
-        </Button>
-      }
     >
-      <div className="rounded-2xl border border-border bg-surface-raised p-2 shadow-glow-soft backdrop-blur">
+      <div className="mt-6 rounded-2xl border border-border bg-surface-raised p-2 shadow-glow-soft backdrop-blur">
         <div className="flex flex-wrap gap-1">
           <Tab to="" label="Overview" end />
           <Tab to="members" label="Members" />
           <Tab to="api-keys" label="API Keys" />
           <Tab to="invitations" label="Invitations" />
           <Tab to="bots" label="Bots" />
+          <Tab to="billing" label="Billing" />
         </div>
       </div>
 
@@ -131,7 +132,7 @@ export default function OrgLayout() {
 
       <Modal open={renameOpen} title="Rename organization" onClose={() => setRenameOpen(false)} onSubmit={rename}>
         <div className="space-y-4">
-          <div className="space-y-2">
+          <div>
             <Label htmlFor="org-name">Organization name</Label>
             <Input
               id="org-name"

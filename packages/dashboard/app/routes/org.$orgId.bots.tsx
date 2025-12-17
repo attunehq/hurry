@@ -1,4 +1,4 @@
-import { Bot, Copy, Plus, Trash2 } from "lucide-react";
+import { Bot, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { BotListResponse, CreateBotResponse } from "../api/types";
@@ -6,6 +6,7 @@ import { useApi } from "../api/useApi";
 import { Badge } from "../ui/primitives/Badge";
 import { Button } from "../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../ui/primitives/Card";
+import { CodeBlock } from "../ui/primitives/CodeBlock";
 import { Input } from "../ui/primitives/Input";
 import { Label } from "../ui/primitives/Label";
 import { Modal } from "../ui/primitives/Modal";
@@ -89,15 +90,6 @@ export default function OrgBotsPage() {
     }
   }
 
-  async function copy(value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.push({ kind: "success", title: "Copied" });
-    } catch {
-      toast.push({ kind: "error", title: "Copy failed" });
-    }
-  }
-
   useEffect(() => {
     void load();
   }, [load]);
@@ -175,7 +167,7 @@ export default function OrgBotsPage() {
       <Modal open={createOpen} title="Create bot" onClose={() => setCreateOpen(false)} onSubmit={createBot}>
         <div className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
+            <div>
               <Label htmlFor="botName">Name</Label>
               <Input
                 id="botName"
@@ -184,7 +176,7 @@ export default function OrgBotsPage() {
                 placeholder="CI Bot"
               />
             </div>
-            <div className="space-y-2">
+            <div>
               <Label htmlFor="email">Responsible email</Label>
               <Input
                 id="email"
@@ -219,17 +211,8 @@ export default function OrgBotsPage() {
             <div className="text-sm text-content-tertiary">
               This API key is shown once. Copy it somewhere safe.
             </div>
-            <div className="rounded-2xl border border-border bg-surface-subtle p-4">
-              <div className="text-xs text-content-muted">API key</div>
-              <div className="mt-1 break-all font-mono text-xs text-content-primary">
-                {created.api_key}
-              </div>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => copy(created.api_key)}>
-                <Copy className="h-4 w-4" />
-                Copy
-              </Button>
+            <CodeBlock code={created.api_key} label="API key" />
+            <div className="flex justify-end">
               <Button onClick={() => setCreated(null)}>Done</Button>
             </div>
           </div>
