@@ -225,20 +225,22 @@ function formatTimestamp(iso: string): string {
   });
 }
 
+const MAX_VISIBLE_DETAILS = 3;
+
 function DetailsDisplay({ details }: { details: Record<string, unknown> }) {
   const items = Object.entries(details).filter(([, v]) => v != null);
   if (items.length === 0) return <span className="text-content-muted">-</span>;
 
   return (
     <div className="flex flex-wrap gap-1">
-      {items.slice(0, 3).map(([key, value]) => (
+      {items.slice(0, MAX_VISIBLE_DETAILS).map(([key, value]) => (
         <span key={key} className="rounded bg-surface-subtle px-1.5 py-0.5 text-xs">
           <span className="text-content-muted">{key}:</span>{" "}
           <span className="text-content-secondary">{String(value)}</span>
         </span>
       ))}
-      {items.length > 3 ? (
-        <span className="text-xs text-content-muted">+{items.length - 3} more</span>
+      {items.length > MAX_VISIBLE_DETAILS ? (
+        <span className="text-xs text-content-muted">+{items.length - MAX_VISIBLE_DETAILS} more</span>
       ) : null}
     </div>
   );
