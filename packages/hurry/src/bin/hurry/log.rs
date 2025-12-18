@@ -44,7 +44,7 @@ where
                 .with_target(true)
                 .with_thread_ids(true)
                 .with_thread_names(true)
-                .with_span_events(FmtSpan::NONE)
+                .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
                 .with_writer(writer)
                 .pretty();
             match color {

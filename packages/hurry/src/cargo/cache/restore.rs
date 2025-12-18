@@ -240,7 +240,7 @@ pub async fn restore_units(
 
         // Load the saved file info from the response.
         let Some(saved) = saved_units.take(&unit_hash.into()) else {
-            info!(
+            debug!(
                 ?unit_hash,
                 unit_type = %unit_type_name(unit),
                 pkg_name = %unit.info().package_name,
@@ -382,7 +382,7 @@ pub async fn restore_units(
             ) => {
                 // Log detailed information about the build script compilation unit
                 // to help debug cache restore issues.
-                info!(
+                debug!(
                     pkg_name = %unit_plan.info.package_name,
                     unit_hash = %unit_plan.info.unit_hash,
                     fingerprint_dir = %unit_plan.info.fingerprint_dir()?,
@@ -494,7 +494,7 @@ pub async fn restore_units(
 
                 // Log detailed information about the build script execution unit
                 // to help debug cache restore issues (e.g., unit hash mismatches).
-                info!(
+                debug!(
                     pkg_name = %unit_plan.info.package_name,
                     unit_hash = %unit_plan.info.unit_hash,
                     out_dir = %out_dir,
