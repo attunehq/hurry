@@ -34,7 +34,7 @@ step() { echo -e "${BLUE}==>${NC} $1" >&2; }
 
 # Get repository root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 cd "$REPO_ROOT"
 
 # Output directory for logs
@@ -77,7 +77,7 @@ info "Built hurry binary: $HURRY_BINARY"
 
 # Step 2: Use debug Dockerfile from repro folder
 step "Using debug Dockerfile"
-DEBUG_DOCKERFILE="$SCRIPT_DIR/Dockerfile.debug"
+DEBUG_DOCKERFILE="$SCRIPT_DIR/Dockerfile"
 if [[ ! -f "$DEBUG_DOCKERFILE" ]]; then
     fail "Debug Dockerfile not found at $DEBUG_DOCKERFILE"
 fi
@@ -89,6 +89,16 @@ echo "Logs will be saved to: $OUTPUT_DIR/2_docker_build.log"
 
 # Use --progress=plain to get full output
 # Use --platform linux/amd64 to match CI environment
+#
+# Note: if you don't get the full log output, you may need to create a `buildx`
+# context that does not truncate logs:
+# ```
+# docker buildx create --use --name limitless-logging --driver-opt env.BUILDKIT_STEP_LOG_MAX_SIZE=-1
+# ```
+# To go back to the default context, run:
+# ```
+# docker buildx use default --default
+# ```
 set +e  # Don't exit on error - we want to capture the failure
 docker buildx build \
     -t courier-debug \

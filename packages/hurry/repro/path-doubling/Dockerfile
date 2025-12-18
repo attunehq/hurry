@@ -4,9 +4,7 @@
 #
 # Prerequisites:
 #   1. Build hurry locally for linux:
-#      cargo build --release --target x86_64-unknown-linux-gnu -p hurry
-#      # Or use cross:
-#      cross build --release --target x86_64-unknown-linux-gnu -p hurry
+#      cargo cross build --release --target x86_64-unknown-linux-gnu -p hurry
 #
 # To build (from repo root):
 #   HURRY_API_TOKEN=xxx docker build -t courier-debug \
