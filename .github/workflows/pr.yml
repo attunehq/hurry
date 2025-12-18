@@ -40,11 +40,13 @@ jobs:
             - name: Install Rust
               run: rustup show
             - uses: actions/checkout@v4
-            - uses: ./.github/actions/hurry-install
-            - run: hurry cargo clippy -p hurry -p courier
+            # TODO: Replace Swatinem with hurry when hurry supports `cargo clippy`
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: clippy
+            - run: cargo clippy -p hurry -p courier
               env:
                   SQLX_OFFLINE: true
-                  HURRY_API_TOKEN: ${{ secrets.HURRY_API_TOKEN }}
 
     test:
         name: Run tests
@@ -72,15 +74,12 @@ jobs:
                   tool: nextest,sqlx-cli
                   checksum: true
             - uses: actions/checkout@v4
-            - uses: ./.github/actions/hurry-install
-            - run: cargo sqlx migrate run --source packages/courier/schema/migrations/ --database-url $COURIER_DATABASE_URL
-            - name: Setup hurry-dev
-              uses: ./.github/actions/hurry-dev
+            # TODO: Replace Swatinem with hurry when hurry supports `cargo nextest`
+            - uses: Swatinem/rust-cache@v2
               with:
-                  hurry-api-token: ${{ secrets.HURRY_API_TOKEN }}
-            - run: hurry cargo nextest run -p hurry -p courier
-              env:
-                  HURRY_API_TOKEN: ${{ secrets.HURRY_API_TOKEN }}
+                  shared-key: test
+            - run: cargo sqlx migrate run --source packages/courier/schema/migrations/ --database-url $COURIER_DATABASE_URL
+            - run: cargo nextest run -p hurry -p courier
 
     build:
         name: Run full build

@@ -49,10 +49,12 @@ jobs:
               with:
                   tool: nextest
 
-            - uses: ./.github/actions/hurry-install
+            # TODO: Replace Swatinem with hurry when hurry supports `cargo nextest`
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: e2e
 
             - name: Run e2e tests
-              run: hurry cargo nextest run -p e2e
+              run: cargo nextest run -p e2e
               env:
                   GITHUB_TOKEN: ${{ secrets.ATTUNE_REPOSITORY_TOKEN }}
-                  HURRY_API_TOKEN: ${{ secrets.HURRY_API_TOKEN }}
