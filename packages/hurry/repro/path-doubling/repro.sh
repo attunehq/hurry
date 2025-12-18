@@ -75,11 +75,11 @@ if [[ ! -f "$HURRY_BINARY" ]]; then
 fi
 info "Built hurry binary: $HURRY_BINARY"
 
-# Step 2: Verify debug Dockerfile exists
+# Step 2: Use debug Dockerfile from repro folder
 step "Using debug Dockerfile"
-DEBUG_DOCKERFILE="$REPO_ROOT/docker/courier/Dockerfile.debug"
+DEBUG_DOCKERFILE="$SCRIPT_DIR/Dockerfile.debug"
 if [[ ! -f "$DEBUG_DOCKERFILE" ]]; then
-    fail "Debug Dockerfile not found at $DEBUG_DOCKERFILE. Please create it first."
+    fail "Debug Dockerfile not found at $DEBUG_DOCKERFILE"
 fi
 info "Using $DEBUG_DOCKERFILE"
 

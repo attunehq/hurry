@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1.4
+#
+# Debug variant of the courier Dockerfile for investigating cache restore issues.
+#
+# Prerequisites:
+#   1. Build hurry locally for linux:
+#      cargo build --release --target x86_64-unknown-linux-gnu -p hurry
+#      # Or use cross:
+#      cross build --release --target x86_64-unknown-linux-gnu -p hurry
+#
+# To build (from repo root):
+#   HURRY_API_TOKEN=xxx docker build -t courier-debug \
+#     -f packages/hurry/repro/path-doubling/Dockerfile.debug \
+#     --platform linux/amd64 \
+#     --secret id=HURRY_API_TOKEN,env=HURRY_API_TOKEN \
+#     --build-arg HURRY_API_URL="https://app.hurry.build/" \
+#     --progress=plain .
+#
+# To extract the build log after a failed build:
+#   docker build ... 2>&1 | tee courier-debug-build.log
+
+# Stage 1: Build the console (React SPA)
+FROM node:20-alpine AS console-builder
+WORKDIR /app
+COPY packages/dashboard/package.json packages/dashboard/package-lock.json ./
+RUN npm ci
+COPY packages/dashboard/ ./
+RUN npm run build
+
+# Stage 2: Build courier with hurry caching (DEBUG VERSION)
+FROM rust:1 AS builder
+WORKDIR /courier
+
+# Copy locally-built hurry binary instead of downloading release
+# The binary should be at target/x86_64-unknown-linux-gnu/release/hurry
+# (built with: cargo cross build --release --target x86_64-unknown-linux-gnu -p hurry)
+COPY target/x86_64-unknown-linux-gnu/release/hurry /root/.local/bin/hurry
+RUN chmod +x /root/.local/bin/hurry
+RUN ~/.local/bin/hurry --version
+
+# Hurry config
+ARG HURRY_API_URL
+ENV HURRY_API_URL=${HURRY_API_URL:-}
+ENV HURRY_WAIT_FOR_UPLOAD=true
+
+# Enable additional debug logging for both hurry and cargo.
+# - HURRY_LOG=debug: Shows hurry's restore operations and OUT_DIR file details
+# - CARGO_LOG=...fingerprint=info: Shows dirty/stale decisions without verbose trace output
+ENV HURRY_LOG=debug
+ENV CARGO_LOG=cargo::core::compiler::fingerprint=info
+
+COPY . .
+
+# Step 1: Restore cache only (skip build and backup).
+# This captures the state of target/ after cache restore but before cargo runs.
+RUN --mount=type=secret,id=HURRY_API_TOKEN \
+    HURRY_API_TOKEN=$(cat /run/secrets/HURRY_API_TOKEN) \
+    ~/.local/bin/hurry cargo build --hurry-skip-build --hurry-skip-backup --release --bin courier -v
+
+# Step 2: Emit target directory metadata for debugging cache restore issues.
+RUN echo "=== HURRY DEBUG METADATA (after restore, before build) ===" && \
+    ~/.local/bin/hurry debug metadata ./target
+
+# Step 3: Run the build (skip backup since we already restored).
+# Use `docker build ... 2>&1 | tee build.log` to capture the full output.
+# The -v flag shows Running/Fresh/Compiling messages from cargo.
+RUN --mount=type=secret,id=HURRY_API_TOKEN \
+    HURRY_API_TOKEN=$(cat /run/secrets/HURRY_API_TOKEN) \
+    ~/.local/bin/hurry cargo build --hurry-skip-backup --release --bin courier -v
+
+# Stage 3: Runtime
+FROM debian:bookworm-slim AS runtime
+WORKDIR /courier
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /courier/target/release/courier /usr/local/bin
+COPY --from=console-builder /app/build/client /courier/console
+
+USER 1000:1000
+ENV RUST_LOG=courier=debug
+ENV CONSOLE_DIR=/courier/console
+HEALTHCHECK --interval=1s --timeout=5s CMD curl -f http://localhost:3000/api/v1/health
+
+ENTRYPOINT ["/usr/local/bin/courier"]
