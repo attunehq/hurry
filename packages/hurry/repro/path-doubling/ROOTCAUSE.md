@@ -141,9 +141,18 @@ We cannot determine why the library crate was not in the cache with available in
 - `packages/hurry/src/cargo/cache/restore.rs`
   - Lines 594-600 write `root-output`
 
-### PR-294 repro logs
+### Reproduction logs
+
+The logs are compressed in `logs.tar.gz`. To extract and view them:
+
+```bash
+cd packages/hurry/repro/path-doubling
+tar -xzf logs.tar.gz
+```
+
+This will extract the following directories:
 - `run-local-repro/` - Logs from reproducing the issue
   - `2_docker_build.log` - Shows the doubled path in rustc invocation (search for `-L native=`)
   - `6_errors.log` - Filtered error messages including the link failure
 - `run-local-fixed/` - Logs after applying the fix (path doubling resolved)
-- `run-ci-1/`, `run-ci-2/` - Original CI failure logs
+- `run-ci-1/`, `run-ci-2/` - Original CI failure logs from PR #294

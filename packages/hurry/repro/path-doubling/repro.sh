@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# PR-294 Reproduction Script
-# ==========================
+# Path Doubling Reproduction Script
+# ==================================
 # Reproduces the "could not find native static library ring_core_0_17_14_" error
 # that occurs when hurry restores cached build artifacts in Docker.
 #
@@ -19,7 +19,7 @@ set -euo pipefail
 #
 # Usage:
 #   export HURRY_API_TOKEN="your-token"
-#   ./packages/hurry/repro/pr-294/repro.sh
+#   ./packages/hurry/repro/path-doubling/repro.sh
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
