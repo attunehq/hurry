@@ -75,10 +75,16 @@ jobs:
                   checksum: true
             - uses: actions/checkout@v4
             # TODO: Replace Swatinem with hurry when hurry supports `cargo nextest`
+            # Swatinem caches the test compilation; hurry-dev is needed because
+            # tests invoke hurry-dev binary to validate behavior.
             - uses: Swatinem/rust-cache@v2
               with:
                   shared-key: test
             - run: cargo sqlx migrate run --source packages/courier/schema/migrations/ --database-url $COURIER_DATABASE_URL
+            - name: Setup hurry-dev
+              uses: ./.github/actions/hurry-dev
+              with:
+                  hurry-api-token: ${{ secrets.HURRY_API_TOKEN }}
             - run: cargo nextest run -p hurry -p courier
 
     build:
