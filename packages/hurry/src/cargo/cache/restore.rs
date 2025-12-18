@@ -13,7 +13,7 @@ use derive_more::Debug;
 use futures::{StreamExt, future::BoxFuture};
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinSet;
-use tracing::{Instrument, debug, instrument, trace, warn};
+use tracing::{Instrument, debug, info, instrument, trace, warn};
 
 use crate::{
     cargo::{self, QualifiedPath, UnitHash, UnitPlan, Workspace, host_glibc_version},
@@ -22,6 +22,14 @@ use crate::{
     path::JoinWith as _,
     progress::TransferBar,
 };
+
+fn unit_type_name(unit: &UnitPlan) -> &'static str {
+    match unit {
+        UnitPlan::LibraryCrate(_) => "LibraryCrate",
+        UnitPlan::BuildScriptCompilation(_) => "BuildScriptCompilation",
+        UnitPlan::BuildScriptExecution(_) => "BuildScriptExecution",
+    }
+}
 use clients::{
     Courier,
     courier::v1::{Key, SavedUnit, cache::CargoRestoreRequest},
@@ -115,6 +123,11 @@ pub async fn restore_units(
             // 3. Iterate through all units in the unit plan, restoring it only if it is not
             //    present, and marking it for upload if it is not stored.
             units_to_skip.insert(info.unit_hash.clone());
+            debug!(
+                unit_hash = ?info.unit_hash,
+                pkg_name = %info.package_name,
+                "skipping unit: already fresh locally"
+            );
             restored.units.insert(info.unit_hash.clone());
         }
     }
@@ -122,6 +135,10 @@ pub async fn restore_units(
     // If this build is against glibc, we need to know the glibc version so we
     // don't restore objects that link to missing symbols.
     let host_glibc_symbol_version = host_glibc_version()?;
+    debug!(
+        ?host_glibc_symbol_version,
+        "restore starting with host glibc"
+    );
 
     // Load unit information from remote cache. Note that this does NOT download
     // the actual files, which are loaded as CAS keys.
@@ -132,7 +149,14 @@ pub async fn restore_units(
             .map(|unit| unit.info().unit_hash.clone()),
         host_glibc_symbol_version,
     );
+    let requested_count = bulk_req.units.len();
+    info!(requested_count, "requesting units from cache");
     let mut saved_units = courier.cargo_cache_restore(bulk_req).await?;
+    info!(
+        requested_count,
+        returned_count = saved_units.len(),
+        "cache restore response"
+    );
 
     // Track restore progress.
     let restore_progress = RestoreProgress::default();
@@ -216,7 +240,12 @@ pub async fn restore_units(
 
         // Load the saved file info from the response.
         let Some(saved) = saved_units.take(&unit_hash.into()) else {
-            debug!(?unit_hash, "unit missing from cache");
+            info!(
+                ?unit_hash,
+                unit_type = %unit_type_name(unit),
+                pkg_name = %unit.info().package_name,
+                "unit missing from cache"
+            );
             // Even when skipped, unit mtimes must be updated to maintain the
             // invariant that dependencies always have older mtimes than their
             // dependents. Otherwise, units that are skipped may have mtimes
@@ -252,6 +281,17 @@ pub async fn restore_units(
                 SavedUnit::LibraryCrate(saved_library_files, _),
                 UnitPlan::LibraryCrate(unit_plan),
             ) => {
+                // Log detailed information about the library crate unit
+                // to help debug cache restore issues (e.g., unit hash mismatches).
+                trace!(
+                    pkg_name = %unit_plan.info.package_name,
+                    unit_hash = %unit_plan.info.unit_hash,
+                    deps_dir = %unit_plan.info.deps_dir()?,
+                    fingerprint_dir = %unit_plan.info.fingerprint_dir()?,
+                    num_output_files = saved_library_files.output_files.len(),
+                    "restoring library crate unit"
+                );
+
                 // Restore the fingerprint directly, because fingerprint
                 // rewriting needs to occur in dependency order.
                 let fingerprint: cargo::Fingerprint =
@@ -340,6 +380,15 @@ pub async fn restore_units(
                 SavedUnit::BuildScriptCompilation(build_script_compiled_files, _),
                 UnitPlan::BuildScriptCompilation(unit_plan),
             ) => {
+                // Log detailed information about the build script compilation unit
+                // to help debug cache restore issues.
+                info!(
+                    pkg_name = %unit_plan.info.package_name,
+                    unit_hash = %unit_plan.info.unit_hash,
+                    fingerprint_dir = %unit_plan.info.fingerprint_dir()?,
+                    "restoring build script compilation unit"
+                );
+
                 // Restore the fingerprint directly, because fingerprint
                 // rewriting needs to occur in dependency order.
                 let fingerprint: cargo::Fingerprint =
@@ -440,17 +489,42 @@ pub async fn restore_units(
                 .await?;
 
                 let profile_dir = ws.unit_profile_dir(&unit_plan.info);
+                let out_dir = unit_plan.out_dir()?;
+                let out_dir_absolute = profile_dir.join(&out_dir);
+
+                // Log detailed information about the build script execution unit
+                // to help debug cache restore issues (e.g., unit hash mismatches).
+                info!(
+                    pkg_name = %unit_plan.info.package_name,
+                    unit_hash = %unit_plan.info.unit_hash,
+                    out_dir = %out_dir,
+                    out_dir_absolute = %AsRef::<std::path::Path>::as_ref(&out_dir_absolute).display(),
+                    build_dir = %unit_plan.info.build_dir()?,
+                    fingerprint_dir = %unit_plan.info.fingerprint_dir()?,
+                    num_out_dir_files = build_script_output_files.out_dir_files.len(),
+                    "restoring build script execution unit"
+                );
 
                 // Create the OUT_DIR directory explicitly. This way, build
                 // script execution units that have no OUT_DIR files will still
                 // correctly have an empty OUT_DIR folder.
-                fs::create_dir_all(&profile_dir.join(unit_plan.out_dir()?)).await?;
+                fs::create_dir_all(&out_dir_absolute).await?;
 
                 // Queue all OUT_DIR files with executable flag handling.
                 for file in build_script_output_files.out_dir_files {
                     let path: QualifiedPath = serde_json::from_str(file.path.as_str())?;
                     let path = path.reconstruct(&ws, &unit_plan.info).try_into()?;
                     let executable = file.executable;
+
+                    // Log each OUT_DIR file being restored (helpful for debugging
+                    // native library issues like ring's libring_core_*.a).
+                    debug!(
+                        pkg_name = %unit_plan.info.package_name,
+                        unit_hash = %unit_plan.info.unit_hash,
+                        file_path = %AsRef::<std::path::Path>::as_ref(&path).display(),
+                        executable = executable,
+                        "restoring build script OUT_DIR file"
+                    );
 
                     restore_progress
                         .units
@@ -518,10 +592,14 @@ pub async fn restore_units(
                 });
 
                 // Generate root-output file (not from CAS - synthesized from unit_plan).
+                // The root-output file must contain an absolute path because Cargo uses it
+                // to rewrite paths in the build script output file. If we write a relative
+                // path, Cargo's string replacement will match a substring of absolute paths
+                // and cause path doubling (e.g., `/foo/target/release//foo/target/release/...`).
                 let root_output_path = profile_dir.join(&unit_plan.root_output_file()?);
                 fs::write(
                     &root_output_path,
-                    unit_plan.out_dir()?.as_os_str().as_encoded_bytes(),
+                    out_dir_absolute.as_os_str().as_encoded_bytes(),
                 )
                 .await?;
                 fs::set_mtime(&root_output_path, mtime).await?;

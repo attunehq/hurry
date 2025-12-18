@@ -90,7 +90,7 @@ impl Workspace {
             })
             .await
             .context("join task")?
-            .tap_ok(|metadata| debug!(?metadata, "cargo metadata"))
+            .tap_ok(|metadata| trace!(?metadata, "cargo metadata"))
             .context("get cargo metadata")?;
             (
                 AbsDirPath::try_from(&metadata.workspace_root)

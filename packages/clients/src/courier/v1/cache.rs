@@ -127,6 +127,11 @@ impl CargoRestoreResponse {
         self.units.is_empty()
     }
 
+    /// Get the number of units in the response.
+    pub fn len(&self) -> usize {
+        self.units.len()
+    }
+
     /// Get a unit by its cache key.
     pub fn get(&self, key: &SavedUnitHash) -> Option<&SavedUnit> {
         self.units.get(key)
