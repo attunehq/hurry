@@ -595,7 +595,8 @@ pub async fn restore_units(
                 // The root-output file must contain an absolute path because Cargo uses it
                 // to rewrite paths in the build script output file. If we write a relative
                 // path, Cargo's string replacement will match a substring of absolute paths
-                // and cause path doubling (e.g., `/foo/target/release//foo/target/release/...`).
+                // and cause path doubling (e.g.,
+                // `/foo/target/release//foo/target/release/...`).
                 let root_output_path = profile_dir.join(&unit_plan.root_output_file()?);
                 fs::write(
                     &root_output_path,
