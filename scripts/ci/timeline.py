@@ -26,6 +26,8 @@ Usage:
 
     # Show history of multiple runs
     ./timeline.py --history <run1> <run2> <run3> --repo owner/repo
+    ./timeline.py --history --branch <branch_name> --repo owner/repo
+    ./timeline.py --history --pr <pr_number> --repo owner/repo
 
 Example:
     # Find run IDs for a PR, then compare two of them
@@ -609,12 +611,31 @@ def main():
             print(list_runs(runs_data, repo))
         sys.exit(0)
 
-    # Handle --history mode (can have its own run IDs)
+    # Handle --history mode
     if args.history is not None:
         history_ids = args.history
+
+        # If no run IDs provided, try to get them from --branch or --pr
         if not history_ids:
-            print("No run IDs provided for --history", file=sys.stderr)
-            sys.exit(1)
+            if args.branch:
+                runs_data = get_runs_for_branch(args.branch, repo, args.limit)
+                if not runs_data:
+                    print(f"No workflow runs found for branch {args.branch}", file=sys.stderr)
+                    sys.exit(1)
+                history_ids = [r["id"] for r in runs_data]
+            elif args.pr:
+                pr_data = run_gh_api(f"pulls/{args.pr}", repo)
+                head_sha = pr_data["head"]["sha"]
+                runs_data = run_gh_api(f"actions/runs?head_sha={head_sha}", repo)
+                workflow_runs = runs_data.get("workflow_runs", [])
+                if not workflow_runs:
+                    print(f"No workflow runs found for PR #{args.pr}", file=sys.stderr)
+                    sys.exit(1)
+                history_ids = [r["id"] for r in workflow_runs]
+            else:
+                print("No run IDs provided for --history. Use with --branch or --pr, or provide run IDs.", file=sys.stderr)
+                sys.exit(1)
+
         history_runs = []
         for rid in history_ids:
             print(f"Fetching run #{rid}...", file=sys.stderr)

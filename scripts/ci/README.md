@@ -35,6 +35,8 @@ gh auth status
 
 # View history of multiple runs
 ./timeline.py --history <run1> <run2> <run3> --repo owner/repo
+./timeline.py --history --branch main --repo owner/repo
+./timeline.py --history --pr 123 --repo owner/repo
 ```
 
 ## Understanding the Output

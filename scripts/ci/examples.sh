@@ -48,14 +48,20 @@
 # HISTORY VIEW (MULTIPLE RUNS)
 # =============================================================================
 
-# Track performance across multiple runs
+# Track performance across multiple runs (by run IDs)
 ./timeline.py --history 20359275612 20360289566 20361281298 --repo owner/repo
 
-# Output format:
-# Run ID       | Wall Clock | Build Time | Queue Time | Max Queue | Timeline
-# 20359275612  |     40m28s |       4h0m |        17s |        3s | [################    ]
-# 20360289566  |      37m7s |      3h55m |        20s |        5s | [###############     ]
-# 20361281298  |     56m55s |      3h44m |     44m40s |    22m16s | [....############    ]
+# Track performance for recent runs on a branch (uses --limit, default 10)
+./timeline.py --history --branch main --repo owner/repo
+
+# Track performance for runs on a PR
+./timeline.py --history --pr 123 --repo owner/repo
+
+# Output shows sparklines indicating parallelism over time:
+# Run ID       |    Wall |   Build |   Queue | Activity
+# 20359275612  |  40m28s |    4h0m |     17s | ████████████████████████▇▇▆▅▄▄▄▄▄▄▄▄▃▂▂▂
+# 20360289566  |   37m7s |   3h55m |     20s | ████████████████████████▇▇▆▅▄▄▄▄▄▄▄▄▃▂▂▂
+# 20361281298  |  56m55s |   3h44m |  44m40s | ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆██▆▅▄▄▄▄▄▃▃▂▂▂▂▂▂▁▁▁▁▁▁▁▁
 
 
 # =============================================================================
