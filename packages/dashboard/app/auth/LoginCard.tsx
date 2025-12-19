@@ -82,7 +82,7 @@ export function LoginCard() {
                   the repo root.
                 </div>
 
-                <div className="mt-4 space-y-2">
+                <div className="mt-4">
                   <Label htmlFor="dev-token">Session token</Label>
                   <Input
                     id="dev-token"
@@ -92,7 +92,7 @@ export function LoginCard() {
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <div className="flex gap-2">
+                  <div className="mt-2 flex gap-2">
                     <Button variant="secondary" onClick={() => setToken("")}>
                       Clear
                     </Button>

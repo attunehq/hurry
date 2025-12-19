@@ -1,9 +1,10 @@
-import { AlertTriangle, Check, Copy } from "lucide-react";
+import clsx from "clsx";
+import { AlertTriangle, Check } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
 import { Button } from "../ui/primitives/Button";
-import { useToast } from "../ui/toast/ToastProvider";
+import { CodeBlock } from "../ui/primitives/CodeBlock";
 
 type Platform = "unix" | "windows";
 
@@ -16,19 +17,9 @@ function detectPlatform(): Platform {
 
 export default function OnboardingPage() {
   const nav = useNavigate();
-  const toast = useToast();
   const [searchParams] = useSearchParams();
   const token = searchParams.get("token");
   const orgId = searchParams.get("org");
-
-  async function copy(value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.push({ kind: "success", title: "Copied" });
-    } catch {
-      toast.push({ kind: "error", title: "Copy failed" });
-    }
-  }
 
   if (!token || !orgId) {
     return (
@@ -76,7 +67,7 @@ export default function OnboardingPage() {
                 warning="This token is only shown once. Save it somewhere safe."
                 subdescription="You can create more tokens later on your API Keys page."
               >
-                <CodeBlock code={token} onCopy={copy} wrap />
+                <CodeBlock code={token} wrap />
               </OnboardingStep>
 
               <OnboardingStep
@@ -84,7 +75,7 @@ export default function OnboardingPage() {
                 title="Set up your environment"
                 description="You may want to add this to your shell config for persistence."
               >
-                <CodeBlock code={`export HURRY_API_TOKEN="${token}"`} onCopy={copy} />
+                <CodeBlock code={`export HURRY_API_TOKEN="${token}"`} />
               </OnboardingStep>
 
               <OnboardingStep
@@ -92,7 +83,7 @@ export default function OnboardingPage() {
                 title="Install Hurry"
                 description="Run this in your terminal to install the hurry CLI."
               >
-                <InstallTabs onCopy={copy} />
+                <InstallTabs />
               </OnboardingStep>
 
               <OnboardingStep
@@ -101,9 +92,9 @@ export default function OnboardingPage() {
                 description="Replace your cargo commands with hurry."
               >
                 <div className="space-y-2">
-                  <CodeBlock code="hurry cargo build" onCopy={copy} />
-                  <CodeBlock code="hurry cargo test" onCopy={copy} />
-                  <CodeBlock code="hurry cargo check" onCopy={copy} />
+                  <CodeBlock code="hurry cargo build" />
+                  <CodeBlock code="hurry cargo test" />
+                  <CodeBlock code="hurry cargo check" />
                 </div>
               </OnboardingStep>
             </div>
@@ -132,7 +123,7 @@ function OnboardingStep(props: {
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-accent-bg text-xs font-semibold text-accent-text">
+        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-accent-subtle text-xs font-semibold text-accent-text">
           {props.number}
         </div>
         <div className="text-sm font-semibold text-content-primary">{props.title}</div>
@@ -142,7 +133,7 @@ function OnboardingStep(props: {
           <div className="text-xs text-content-tertiary">{props.description}</div>
         ) : null}
         {props.warning ? (
-          <div className="flex items-center gap-1.5 text-xs text-amber-500">
+          <div className="flex items-center gap-1.5 text-xs text-warn-text">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             <span>{props.warning}</span>
           </div>
@@ -156,28 +147,7 @@ function OnboardingStep(props: {
   );
 }
 
-function CodeBlock(props: { code: string; onCopy: (value: string) => void; label?: string; wrap?: boolean }) {
-  return (
-    <div className="group flex items-start justify-between gap-2 rounded-xl border border-border bg-surface-subtle px-3 py-2">
-      <div className="flex-1 overflow-x-auto">
-        <code className={`font-mono text-xs text-content-primary ${props.wrap ? "break-all" : "whitespace-nowrap"}`}>
-          {props.code}
-        </code>
-        {props.label ? <span className="ml-2 text-xs text-content-muted">{props.label}</span> : null}
-      </div>
-      <button
-        type="button"
-        onClick={() => props.onCopy(props.code)}
-        className="shrink-0 cursor-pointer rounded p-1 text-content-muted opacity-0 transition hover:bg-surface-raised hover:text-content-secondary group-hover:opacity-100"
-        title="Copy"
-      >
-        <Copy className="h-3.5 w-3.5" />
-      </button>
-    </div>
-  );
-}
-
-function InstallTabs(props: { onCopy: (value: string) => void }) {
+function InstallTabs() {
   const [platform, setPlatform] = useState<Platform>(detectPlatform);
 
   const commands = {
@@ -191,29 +161,29 @@ function InstallTabs(props: { onCopy: (value: string) => void }) {
         <button
           type="button"
           onClick={() => setPlatform("unix")}
-          className={[
-            "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition",
+          className={clsx(
+            "flex-1 cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium transition",
             platform === "unix"
               ? "bg-surface-raised text-content-primary shadow-sm"
               : "text-content-tertiary hover:text-content-secondary",
-          ].join(" ")}
+          )}
         >
           macOS / Linux
         </button>
         <button
           type="button"
           onClick={() => setPlatform("windows")}
-          className={[
-            "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition",
+          className={clsx(
+            "flex-1 cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium transition",
             platform === "windows"
               ? "bg-surface-raised text-content-primary shadow-sm"
               : "text-content-tertiary hover:text-content-secondary",
-          ].join(" ")}
+          )}
         >
           Windows
         </button>
       </div>
-      <CodeBlock code={commands[platform]} onCopy={props.onCopy} />
+      <CodeBlock code={commands[platform]} />
     </div>
   );
 }

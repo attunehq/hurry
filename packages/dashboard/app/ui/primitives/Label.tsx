@@ -5,7 +5,7 @@ export function Label(props: React.LabelHTMLAttributes<HTMLLabelElement>) {
   return (
     <label
       {...props}
-      className={clsx("text-xs font-medium text-content-tertiary", props.className)}
+      className={clsx("mb-2 block text-xs font-medium text-content-tertiary", props.className)}
     />
   );
 }
