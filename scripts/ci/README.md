@@ -22,8 +22,13 @@ gh auth status
 ## Quick Start
 
 ```bash
+# List runs to find run IDs
+./timeline.py --list --pr 123 --repo owner/repo
+./timeline.py --list --branch main --repo owner/repo
+
 # View a single workflow run
 ./timeline.py <run_id> --repo owner/repo
+./timeline.py --branch main --repo owner/repo  # most recent run
 
 # Compare two runs (before/after)
 ./timeline.py <baseline_run> --diff <comparison_run> --repo owner/repo
@@ -134,10 +139,13 @@ Activity: Height shows parallel job count over time
 | Option | Description |
 |--------|-------------|
 | `--repo OWNER/REPO` | GitHub repository (auto-detected if in a git repo) |
-| `--diff RUN_ID` | Compare with another run |
-| `--history RUN_ID...` | Show history view for multiple runs |
+| `--list` | List runs instead of visualizing (combine with `--pr` or `--branch`) |
+| `--branch NAME` | Find runs for a branch |
 | `--pr PR_NUMBER` | Find runs for a pull request |
 | `--commit SHA` | Find runs for a commit |
+| `--diff RUN_ID` | Compare with another run |
+| `--history RUN_ID...` | Show history view for multiple runs |
+| `--limit N` | Number of runs to list (default: 10) |
 | `--width N` | Terminal width (default: 120) |
 
 ## Tips

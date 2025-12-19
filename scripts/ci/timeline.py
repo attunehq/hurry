@@ -8,8 +8,14 @@ Visualizes GitHub Actions workflow runs, showing:
 - Unified diff view for comparing two runs
 
 Usage:
+    # List runs to find run IDs
+    ./timeline.py --list --pr <pr_number> [--repo owner/repo]
+    ./timeline.py --list --branch <branch_name> [--repo owner/repo]
+    ./timeline.py --list [--repo owner/repo]  # lists recent runs on main
+
     # View a single run
     ./timeline.py <run_id> [--repo owner/repo]
+    ./timeline.py --branch <branch_name> [--repo owner/repo]  # most recent run
 
     # View runs for a PR or commit
     ./timeline.py --pr <pr_number> [--repo owner/repo]
@@ -22,8 +28,9 @@ Usage:
     ./timeline.py --history <run1> <run2> <run3> --repo owner/repo
 
 Example:
-    # Compare a "cold cache" run vs "warm cache" run to see queue vs build time
-    ./timeline.py <run_id_1> --diff <run_id_2> --repo owner/repo
+    # Find run IDs for a PR, then compare two of them
+    ./timeline.py --list --pr 123 --repo owner/repo
+    ./timeline.py 111111 --diff 222222 --repo owner/repo
 
 Legend:
     █ = Job running
@@ -154,6 +161,38 @@ def get_runs_for_commit(sha: str, repo: str) -> List[int]:
     """Get all workflow run IDs for a commit."""
     runs_data = run_gh_api(f"actions/runs?head_sha={sha}", repo)
     return [r["id"] for r in runs_data.get("workflow_runs", [])]
+
+
+def get_runs_for_branch(branch: str, repo: str, limit: int = 10) -> List[dict]:
+    """Get recent workflow runs for a branch."""
+    runs_data = run_gh_api(f"actions/runs?branch={branch}&per_page={limit}", repo)
+    return runs_data.get("workflow_runs", [])
+
+
+def list_runs(runs_data: List[dict], repo: str) -> str:
+    """Format a list of runs for display."""
+    if not runs_data:
+        return "No runs found"
+
+    lines = []
+    lines.append(f"{'Run ID':<12} {'Workflow':<40} {'Status':<12} {'Created':<20}")
+    lines.append("-" * 90)
+
+    for run in runs_data:
+        run_id = run["id"]
+        workflow = run["name"][:38]
+        status = run.get("conclusion") or run["status"]
+        created = run["created_at"][:19].replace("T", " ")
+        lines.append(f"{run_id:<12} {workflow:<40} {status:<12} {created:<20}")
+
+    lines.append("-" * 90)
+    lines.append("")
+    lines.append("Use these run IDs with:")
+    lines.append(f"  ./timeline.py <run_id> --repo {repo}")
+    lines.append(f"  ./timeline.py <run1> --diff <run2> --repo {repo}")
+    lines.append(f"  ./timeline.py --history <run1> <run2> ... --repo {repo}")
+
+    return "\n".join(lines)
 
 
 def format_duration(seconds: float) -> str:
@@ -523,12 +562,15 @@ def main():
     parser = argparse.ArgumentParser(description="Visualize GitHub Actions workflow runs")
     parser.add_argument("run_id", nargs="?", type=int, help="Workflow run ID")
     parser.add_argument("--pr", type=int, help="PR number to find runs for")
+    parser.add_argument("--branch", type=str, help="Branch name to find runs for")
     parser.add_argument("--commit", type=str, help="Commit SHA to find runs for")
     parser.add_argument("--repo", type=str, help="Repository (owner/repo)")
     parser.add_argument("--width", type=int, default=120, help="Terminal width")
     parser.add_argument("--compare", action="store_true", help="Show comparison view for multiple runs")
     parser.add_argument("--diff", type=int, help="Compare with another run ID")
     parser.add_argument("--history", type=int, nargs="*", help="Show history view for multiple run IDs")
+    parser.add_argument("--list", action="store_true", help="List runs instead of visualizing")
+    parser.add_argument("--limit", type=int, default=10, help="Number of runs to list (default: 10)")
 
     args = parser.parse_args()
 
@@ -545,6 +587,27 @@ def main():
         else:
             print("Could not determine repository. Use --repo owner/repo", file=sys.stderr)
             sys.exit(1)
+
+    # Handle --list mode (list runs for a PR or branch)
+    if args.list:
+        if args.branch:
+            runs_data = get_runs_for_branch(args.branch, repo, args.limit)
+            print(f"Recent runs for branch '{args.branch}':\n")
+            print(list_runs(runs_data, repo))
+        elif args.pr:
+            pr_data = run_gh_api(f"pulls/{args.pr}", repo)
+            head_sha = pr_data["head"]["sha"]
+            runs_data = run_gh_api(f"actions/runs?head_sha={head_sha}", repo)
+            print(f"Runs for PR #{args.pr} (head: {head_sha[:8]}):\n")
+            print(list_runs(runs_data.get("workflow_runs", []), repo))
+        else:
+            # List recent runs for the default branch
+            runs_data = get_runs_for_branch("main", repo, args.limit)
+            if not runs_data:
+                runs_data = get_runs_for_branch("master", repo, args.limit)
+            print(f"Recent runs:\n")
+            print(list_runs(runs_data, repo))
+        sys.exit(0)
 
     # Handle --history mode (can have its own run IDs)
     if args.history is not None:
@@ -568,6 +631,12 @@ def main():
         if not run_ids:
             print(f"No workflow runs found for PR #{args.pr}", file=sys.stderr)
             sys.exit(1)
+    elif args.branch:
+        runs_data = get_runs_for_branch(args.branch, repo, 1)
+        if not runs_data:
+            print(f"No workflow runs found for branch {args.branch}", file=sys.stderr)
+            sys.exit(1)
+        run_ids = [runs_data[0]["id"]]
     elif args.commit:
         run_ids = get_runs_for_commit(args.commit, repo)
         if not run_ids:

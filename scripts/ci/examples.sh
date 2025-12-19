@@ -3,11 +3,28 @@
 # These are meant to be copy-pasted, not run as a script
 
 # =============================================================================
+# LISTING RUNS (to find run IDs)
+# =============================================================================
+
+# List runs for a PR
+./timeline.py --list --pr 123 --repo owner/repo
+
+# List runs for a branch
+./timeline.py --list --branch main --repo owner/repo
+
+# List more runs (default is 10)
+./timeline.py --list --branch main --limit 20 --repo owner/repo
+
+
+# =============================================================================
 # SINGLE RUN VISUALIZATION
 # =============================================================================
 
-# View a specific workflow run
+# View a specific workflow run by ID
 ./timeline.py 20361281298 --repo owner/repo
+
+# View most recent run on a branch
+./timeline.py --branch main --repo owner/repo
 
 # Wider output for large monitors
 ./timeline.py 20361281298 --repo owner/repo --width 160
