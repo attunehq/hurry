@@ -18,7 +18,7 @@ Note the `//` in the middle - the path `/courier/target/release/` appears twice.
 
 ## Root Cause
 
-The bug is in `packages/hurry/src/cargo/cache/restore.rs` at lines 594-600.
+In the buggy version (before this fix), the issue was located in `packages/hurry/src/cargo/cache/restore.rs` around lines 594-600.
 
 Hurry writes a **relative** path to the `root-output` file, but Cargo expects an **absolute** path.
 
