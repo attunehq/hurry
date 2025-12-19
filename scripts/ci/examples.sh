@@ -9,11 +9,8 @@
 # View a specific workflow run
 ./timeline.py 20361281298 --repo owner/repo
 
-# Shorter timeline (25 rows instead of default 50)
-./timeline.py 20361281298 --repo owner/repo --height 25
-
 # Wider output for large monitors
-./timeline.py 20361281298 --repo owner/repo --width 180
+./timeline.py 20361281298 --repo owner/repo --width 160
 
 
 # =============================================================================
@@ -64,7 +61,7 @@ cd /path/to/repo
 # =============================================================================
 
 # Scenario 1: "Why was this PR's CI so slow?"
-./timeline.py --pr 456 --repo owner/repo --height 30
+./timeline.py --pr 456 --repo owner/repo
 
 # Scenario 2: "Did enabling hurry caching help?"
 # Run 1: before hurry (cold cache)

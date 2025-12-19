@@ -2,35 +2,33 @@
 """
 CI Timeline Visualizer
 
-Visualizes GitHub Actions workflow runs as ASCII art, showing:
-- Parallel jobs on X axis
-- Time on Y axis
-- Queue wait time (dots) vs actual execution time (hashes)
-- Side-by-side comparison of two runs
+Visualizes GitHub Actions workflow runs, showing:
+- Job timelines with queue vs run time
+- Sparklines showing parallelism over time
+- Unified diff view for comparing two runs
 
 Usage:
     # View a single run
-    ./ci-timeline.py <run_id> [--repo owner/repo]
+    ./timeline.py <run_id> [--repo owner/repo]
 
     # View runs for a PR or commit
-    ./ci-timeline.py --pr <pr_number> [--repo owner/repo]
-    ./ci-timeline.py --commit <sha> [--repo owner/repo]
+    ./timeline.py --pr <pr_number> [--repo owner/repo]
+    ./timeline.py --commit <sha> [--repo owner/repo]
 
-    # Compare two runs side-by-side (great for before/after comparisons)
-    ./ci-timeline.py <baseline_run_id> --diff <comparison_run_id> --repo owner/repo
+    # Compare two runs (great for before/after comparisons)
+    ./timeline.py <baseline_run_id> --diff <comparison_run_id> --repo owner/repo
 
     # Show history of multiple runs
-    ./ci-timeline.py --history <run1> <run2> <run3> --repo owner/repo
+    ./timeline.py --history <run1> <run2> <run3> --repo owner/repo
 
 Example:
     # Compare a "cold cache" run vs "warm cache" run to see queue vs build time
-    ./ci-timeline.py <run_id_1> --diff <run_id_2> --repo owner/repo
+    ./timeline.py <run_id_1> --diff <run_id_2> --repo owner/repo
 
 Legend:
-    ... (dots)   = Job queued, waiting for runner
-    ### (hashes) = Job running
-    XXX          = Job failed
-    --- (dashes) = Job cancelled
+    █ = Job running
+    ░ = Job queued (waiting for runner)
+    ▁▂▃▄▅▆▇█ = Sparkline showing parallel job activity
 """
 
 import argparse
@@ -172,17 +170,95 @@ def format_duration(seconds: float) -> str:
         return f"{hours}h{mins}m"
 
 
-def render_timeline(run: WorkflowRun, width: int = 120, height: int = 40) -> str:
-    """Render a workflow run as ASCII timeline."""
+# Unicode block characters for sparklines (lowest to highest)
+SPARK_BLOCKS = " ▁▂▃▄▅▆▇█"
+
+
+def render_sparkline(jobs: List[Job], width: int = 40) -> str:
+    """Render job activity over time as a Unicode sparkline.
+
+    Each character represents a time bucket. Height indicates how many
+    jobs were running (not queued, not finished) during that bucket.
+    """
+    if not jobs:
+        return " " * width
+
+    completed_jobs = [j for j in jobs if j.started_at and j.completed_at]
+    if not completed_jobs:
+        return " " * width
+
+    min_time = min(j.created_at for j in completed_jobs)
+    max_time = max(j.completed_at for j in completed_jobs)
+    total_seconds = (max_time - min_time).total_seconds()
+
+    if total_seconds == 0:
+        return "█" * width
+
+    bucket_seconds = total_seconds / width
+    max_parallelism = len(completed_jobs)
+
+    result = []
+    for i in range(width):
+        bucket_start = min_time.timestamp() + (i * bucket_seconds)
+        bucket_end = bucket_start + bucket_seconds
+
+        # Count jobs running during this bucket
+        running_count = 0
+        for j in completed_jobs:
+            started_ts = j.started_at.timestamp()
+            completed_ts = j.completed_at.timestamp()
+            # Job is running if it started before bucket ends and completed after bucket starts
+            if started_ts < bucket_end and completed_ts > bucket_start:
+                running_count += 1
+
+        # Map count to block character
+        if running_count == 0:
+            result.append(SPARK_BLOCKS[0])
+        else:
+            # Scale to 1-8 range
+            level = min(8, max(1, int((running_count / max_parallelism) * 8)))
+            result.append(SPARK_BLOCKS[level])
+
+    return "".join(result)
+
+
+def render_job_bar(queue_secs: float, run_secs: float, max_secs: float, width: int = 16) -> str:
+    """Render a job's timeline as a horizontal bar.
+
+    Returns a string like: ░░░████████ (queue then run)
+    """
+    if max_secs == 0:
+        return " " * width
+
+    total = queue_secs + run_secs
+    total_chars = int((total / max_secs) * width)
+    queue_chars = int((queue_secs / max_secs) * width)
+    run_chars = total_chars - queue_chars
+
+    bar = "░" * queue_chars + "█" * run_chars
+    return bar.ljust(width)
+
+
+def normalize_job_name(name: str) -> str:
+    """Extract a short, normalized job name for matching and display."""
+    short = name.split("/")[-1].strip()
+    # Remove common wrapper patterns
+    short = short.replace("build (", "").replace(")", "")
+    short = short.replace("ubuntu-22.04, ", "").replace("ubuntu-24.04, ", "")
+    short = short.replace("macos-14, ", "").replace("macos-15, ", "")
+    short = short.replace("windows-2022, ", "").replace("windows-2025, ", "")
+    return short
+
+
+def render_single_run(run: WorkflowRun, width: int = 120) -> str:
+    """Render a compact view of a single workflow run."""
     if not run.jobs:
         return "No jobs found"
 
-    # Filter to jobs that have timing info
     jobs = [j for j in run.jobs if j.started_at and j.completed_at]
     if not jobs:
         return "No completed jobs with timing info"
 
-    # Find time bounds
     min_time = min(j.created_at for j in jobs)
     max_time = max(j.completed_at for j in jobs)
     total_seconds = (max_time - min_time).total_seconds()
@@ -190,131 +266,36 @@ def render_timeline(run: WorkflowRun, width: int = 120, height: int = 40) -> str
     if total_seconds == 0:
         return "All jobs completed instantly"
 
-    # Calculate column widths
-    # Reserve space for time labels on left
-    time_label_width = 10
-    # Each job gets a column
-    num_jobs = len(jobs)
-    job_col_width = max(3, (width - time_label_width - num_jobs - 1) // num_jobs)
+    # Sort jobs by total duration (longest first)
+    jobs = sorted(jobs, key=lambda j: j.total_duration_seconds, reverse=True)
 
-    # Truncate job names to fit
-    def truncate(s: str, max_len: int) -> str:
-        if len(s) <= max_len:
-            return s
-        return s[:max_len-2] + ".."
-
-    # Sort jobs by start time
-    jobs = sorted(jobs, key=lambda j: j.started_at)
-
-    # Build the visualization
     lines = []
 
-    # Header with workflow info
-    lines.append(f"{'=' * width}")
+    # Header
+    lines.append("=" * width)
     lines.append(f"Workflow: {run.name} (Run #{run.id})")
     lines.append(f"Status: {run.status} / {run.conclusion or 'in progress'}")
-    lines.append(f"Total duration: {format_duration(total_seconds)}")
-    lines.append(f"{'=' * width}")
+    lines.append("=" * width)
     lines.append("")
 
-    # Job name header
-    header = " " * time_label_width + "|"
-    for j in jobs:
-        # Extract short name (last part after /)
-        short_name = j.name.split("/")[-1].strip()
-        # Further shorten common patterns
-        short_name = short_name.replace("build (", "").replace(")", "")
-        short_name = short_name.replace("ubuntu-22.04, ", "").replace("macos-14, ", "mac:")
-        short_name = short_name.replace("windows-2022, ", "win:")
-        short_name = short_name.replace("-unknown-linux-", "-linux-")
-        short_name = short_name.replace("-apple-darwin", "-darwin")
-        short_name = short_name.replace("-pc-windows-msvc", "-win")
-        header += truncate(short_name, job_col_width - 1).center(job_col_width) + "|"
-    lines.append(header)
-    lines.append("-" * len(header))
+    # Find max duration for scaling bars
+    max_duration = max(j.total_duration_seconds for j in jobs)
+    bar_width = 20
+    name_width = 40
 
-    # Create time grid
-    seconds_per_row = total_seconds / height
-
-    for row in range(height):
-        row_time = min_time.timestamp() + (row * seconds_per_row)
-        row_end_time = row_time + seconds_per_row
-
-        # Time label (show every 5 rows)
-        if row % 5 == 0:
-            elapsed = row * seconds_per_row
-            time_label = format_duration(elapsed).rjust(time_label_width - 1) + " "
-        else:
-            time_label = " " * time_label_width
-
-        line = time_label + "|"
-
-        for j in jobs:
-            created_ts = j.created_at.timestamp()
-            started_ts = j.started_at.timestamp() if j.started_at else created_ts
-            completed_ts = j.completed_at.timestamp() if j.completed_at else started_ts
-
-            # Determine what to show in this cell
-            cell = " " * (job_col_width - 1)
-
-            # Check if this row intersects with the job's timeline
-            if row_time < completed_ts and row_end_time > created_ts:
-                if row_end_time <= started_ts:
-                    # Queue time (waiting for runner)
-                    cell = ("." * (job_col_width - 1))
-                elif row_time >= started_ts:
-                    # Running
-                    if j.conclusion == "success":
-                        cell = ("#" * (job_col_width - 1))
-                    elif j.conclusion == "failure":
-                        cell = ("X" * (job_col_width - 1))
-                    elif j.conclusion == "cancelled":
-                        cell = ("-" * (job_col_width - 1))
-                    else:
-                        cell = ("?" * (job_col_width - 1))
-                else:
-                    # Transition from queue to running
-                    # Show partial
-                    queue_portion = (started_ts - row_time) / seconds_per_row
-                    run_portion = 1 - queue_portion
-                    queue_chars = int(queue_portion * (job_col_width - 1))
-                    run_chars = job_col_width - 1 - queue_chars
-                    char = "#" if j.conclusion == "success" else "X" if j.conclusion == "failure" else "?"
-                    cell = "." * queue_chars + char * run_chars
-
-            line += cell + "|"
-
-        lines.append(line)
-
-    # Footer with end time
-    footer_time = format_duration(total_seconds).rjust(time_label_width - 1) + " "
-    lines.append("-" * len(header))
-    lines.append(footer_time + "|" + " " * (len(header) - time_label_width - 2) + "|")
-
-    # Legend
-    lines.append("")
-    lines.append("Legend:")
-    lines.append("  ... = Queued (waiting for runner)")
-    lines.append("  ### = Running (success)")
-    lines.append("  XXX = Running (failed)")
-    lines.append("  --- = Cancelled")
-    lines.append("")
-
-    # Job summary table
-    lines.append("Job Details:")
-    lines.append("-" * 80)
-    lines.append(f"{'Job':<40} {'Queue':>8} {'Run':>8} {'Total':>8} {'Status':>10}")
-    lines.append("-" * 80)
+    # Job table with bars
+    lines.append(f"{'Job':<{name_width}} {'Timeline':<{bar_width + 2}} {'Queue':>7} {'Run':>7} {'Total':>7}")
+    lines.append("-" * width)
 
     for j in jobs:
-        short_name = j.name.split("/")[-1].strip()[:38]
+        short_name = normalize_job_name(j.name)[:name_width - 2]
+        bar = render_job_bar(j.queue_duration_seconds, j.run_duration_seconds, max_duration, bar_width)
         queue = format_duration(j.queue_duration_seconds)
-        run = format_duration(j.run_duration_seconds)
+        run_time = format_duration(j.run_duration_seconds)
         total = format_duration(j.total_duration_seconds)
-        status = j.conclusion or j.status
-        lines.append(f"{short_name:<40} {queue:>8} {run:>8} {total:>8} {status:>10}")
+        lines.append(f"{short_name:<{name_width}} {bar}  {queue:>7} {run_time:>7} {total:>7}")
 
-    lines.append("-" * 80)
+    lines.append("-" * width)
 
     # Summary stats
     total_queue = sum(j.queue_duration_seconds for j in jobs)
@@ -322,19 +303,23 @@ def render_timeline(run: WorkflowRun, width: int = 120, height: int = 40) -> str
     max_queue = max(j.queue_duration_seconds for j in jobs)
 
     lines.append("")
-    lines.append(f"Total queue time across all jobs: {format_duration(total_queue)}")
-    lines.append(f"Total run time across all jobs: {format_duration(total_run)}")
-    lines.append(f"Max queue wait (single job): {format_duration(max_queue)}")
-    lines.append(f"Wall clock time: {format_duration(total_seconds)}")
+    lines.append(f"Wall clock: {format_duration(total_seconds):>10}    Sum of run times: {format_duration(total_run):>10}")
+    lines.append(f"Max queue:  {format_duration(max_queue):>10}    Sum of queue times: {format_duration(total_queue):>10}")
 
-    # Critical path analysis
+    # Sparkline showing parallelism over time
+    sparkline = render_sparkline(jobs, width=50)
     lines.append("")
-    lines.append("Critical Path Analysis:")
-    # Find the job that finished last
+    lines.append(f"Activity:   {sparkline}")
+    lines.append(f"            {'0':^10}{format_duration(total_seconds/2):^30}{format_duration(total_seconds):>10}")
+
+    # Critical path
     last_job = max(jobs, key=lambda j: j.completed_at)
-    lines.append(f"  Last job to complete: {last_job.name.split('/')[-1].strip()}")
-    lines.append(f"    Queue wait: {format_duration(last_job.queue_duration_seconds)}")
-    lines.append(f"    Run time: {format_duration(last_job.run_duration_seconds)}")
+    lines.append("")
+    lines.append(f"Critical path: {normalize_job_name(last_job.name)} (queue {format_duration(last_job.queue_duration_seconds)}, run {format_duration(last_job.run_duration_seconds)})")
+
+    # Legend
+    lines.append("")
+    lines.append("Legend: █ running  ░ queued")
 
     return "\n".join(lines)
 
@@ -351,13 +336,9 @@ def render_history(runs: List[WorkflowRun], width: int = 120) -> str:
     runs = sorted(runs, key=lambda r: r.created_at)
 
     # Header
-    lines.append(f"{'Run ID':<12} | {'Wall Clock':>10} | {'Build Time':>10} | {'Queue Time':>10} | {'Max Queue':>10} | Timeline")
+    sparkline_width = 40
+    lines.append(f"{'Run ID':<12} | {'Wall':>7} | {'Build':>7} | {'Queue':>7} | Activity")
     lines.append("-" * width)
-
-    max_wall = max((
-        (max(j.completed_at for j in r.jobs if j.completed_at) - min(j.created_at for j in r.jobs if j.completed_at)).total_seconds()
-        for r in runs if r.jobs
-    ), default=1)
 
     for run in runs:
         if not run.jobs:
@@ -372,24 +353,16 @@ def render_history(runs: List[WorkflowRun], width: int = 120) -> str:
 
         build_time = sum(j.run_duration_seconds for j in jobs)
         queue_time = sum(j.queue_duration_seconds for j in jobs)
-        max_queue = max(j.queue_duration_seconds for j in jobs)
 
-        # Mini timeline bar
-        bar_width = 40
-        build_chars = int((build_time / 8 / max_wall) * bar_width) if max_wall > 0 else 0  # /8 for 8 parallel jobs
-        queue_chars = int((max_queue / max_wall) * bar_width) if max_wall > 0 else 0
+        # Sparkline showing job activity over time
+        sparkline = render_sparkline(jobs, width=sparkline_width)
 
-        bar = "." * min(queue_chars, bar_width)
-        remaining = bar_width - len(bar)
-        bar += "#" * min(build_chars, remaining)
-        bar = bar[:bar_width].ljust(bar_width)
-
-        lines.append(f"{run.id:<12} | {format_duration(wall_time):>10} | {format_duration(build_time):>10} | {format_duration(queue_time):>10} | {format_duration(max_queue):>10} | [{bar}]")
+        lines.append(f"{run.id:<12} | {format_duration(wall_time):>7} | {format_duration(build_time):>7} | {format_duration(queue_time):>7} | {sparkline}")
 
     lines.append("-" * width)
     lines.append("")
-    lines.append("Legend: [....######] = queue time (dots) + build time (hashes)")
-    lines.append("        Build time is sum across all jobs; queue time is max single job wait")
+    lines.append("Activity: Height shows parallel job count over time (▁▂▃▄▅▆▇█)")
+    lines.append("          Low blocks at start = queue delay; sustained height = good parallelism")
 
     return "\n".join(lines)
 
@@ -429,48 +402,52 @@ def render_comparison(runs: List[WorkflowRun], width: int = 120) -> str:
     return "\n".join(lines)
 
 
-def render_side_by_side(run1: WorkflowRun, run2: WorkflowRun, width: int = 140) -> str:
-    """Render two runs side by side for comparison."""
+def render_unified_diff(run1: WorkflowRun, run2: WorkflowRun, width: int = 140) -> str:
+    """Render a compact unified comparison of two runs."""
     lines = []
     lines.append("=" * width)
-    lines.append("SIDE-BY-SIDE COMPARISON")
+    lines.append(f"COMPARING: Run #{run1.id} vs #{run2.id}")
     lines.append("=" * width)
     lines.append("")
 
-    # Match jobs by name (normalize names for comparison)
-    def normalize_name(name: str) -> str:
-        return name.split("/")[-1].strip()
-
-    jobs1 = {normalize_name(j.name): j for j in run1.jobs if j.completed_at}
-    jobs2 = {normalize_name(j.name): j for j in run2.jobs if j.completed_at}
-
+    # Match jobs by normalized name
+    jobs1 = {normalize_job_name(j.name): j for j in run1.jobs if j.completed_at}
+    jobs2 = {normalize_job_name(j.name): j for j in run2.jobs if j.completed_at}
     all_job_names = sorted(set(jobs1.keys()) | set(jobs2.keys()))
 
-    lines.append(f"{'Job':<45} | {'Run 1':^25} | {'Run 2':^25} | {'Delta':^15}")
-    lines.append(f"{'':45} | {'#' + str(run1.id):^25} | {'#' + str(run2.id):^25} |")
+    # Find max duration across both runs for consistent bar scaling
+    all_durations = []
+    for name in all_job_names:
+        if name in jobs1:
+            all_durations.append(jobs1[name].total_duration_seconds)
+        if name in jobs2:
+            all_durations.append(jobs2[name].total_duration_seconds)
+    max_duration = max(all_durations) if all_durations else 1
+
+    bar_width = 16
+    name_width = 28
+
+    # Header
+    lines.append(f"{'Job':<{name_width}} {'Run 1':<{bar_width + 8}} {'Run 2':<{bar_width + 8}} {'Delta':>10}")
     lines.append("-" * width)
 
-    total_queue_delta = 0
     total_run_delta = 0
+    total_queue_delta = 0
 
     for name in all_job_names:
         j1 = jobs1.get(name)
         j2 = jobs2.get(name)
-
-        short_name = name[:43]
+        short_name = name[:name_width - 2]
 
         if j1 and j2:
-            q1 = j1.queue_duration_seconds
-            r1 = j1.run_duration_seconds
-            q2 = j2.queue_duration_seconds
-            r2 = j2.run_duration_seconds
+            bar1 = render_job_bar(j1.queue_duration_seconds, j1.run_duration_seconds, max_duration, bar_width)
+            bar2 = render_job_bar(j2.queue_duration_seconds, j2.run_duration_seconds, max_duration, bar_width)
+            time1 = format_duration(j1.total_duration_seconds)
+            time2 = format_duration(j2.total_duration_seconds)
 
-            run1_str = f"Q:{format_duration(q1):>6} R:{format_duration(r1):>6}"
-            run2_str = f"Q:{format_duration(q2):>6} R:{format_duration(r2):>6}"
-
-            run_delta = r2 - r1
+            run_delta = j2.run_duration_seconds - j1.run_duration_seconds
             total_run_delta += run_delta
-            total_queue_delta += (q2 - q1)
+            total_queue_delta += (j2.queue_duration_seconds - j1.queue_duration_seconds)
 
             if abs(run_delta) < 60:
                 delta_str = "~same"
@@ -479,39 +456,38 @@ def render_side_by_side(run1: WorkflowRun, run2: WorkflowRun, width: int = 140) 
             else:
                 delta_str = f"-{format_duration(-run_delta)}"
 
-            lines.append(f"{short_name:<45} | {run1_str:^25} | {run2_str:^25} | {delta_str:^15}")
+            lines.append(f"{short_name:<{name_width}} {bar1} {time1:>6}  {bar2} {time2:>6}  {delta_str:>10}")
         elif j1:
-            q1 = j1.queue_duration_seconds
-            r1 = j1.run_duration_seconds
-            run1_str = f"Q:{format_duration(q1):>6} R:{format_duration(r1):>6}"
-            lines.append(f"{short_name:<45} | {run1_str:^25} | {'(missing)':^25} |")
+            bar1 = render_job_bar(j1.queue_duration_seconds, j1.run_duration_seconds, max_duration, bar_width)
+            time1 = format_duration(j1.total_duration_seconds)
+            lines.append(f"{short_name:<{name_width}} {bar1} {time1:>6}  {'(missing)':<{bar_width + 7}}")
         elif j2:
-            q2 = j2.queue_duration_seconds
-            r2 = j2.run_duration_seconds
-            run2_str = f"Q:{format_duration(q2):>6} R:{format_duration(r2):>6}"
-            lines.append(f"{short_name:<45} | {'(missing)':^25} | {run2_str:^25} |")
+            bar2 = render_job_bar(j2.queue_duration_seconds, j2.run_duration_seconds, max_duration, bar_width)
+            time2 = format_duration(j2.total_duration_seconds)
+            lines.append(f"{short_name:<{name_width}} {'(missing)':<{bar_width + 7}}  {bar2} {time2:>6}")
 
     lines.append("-" * width)
 
-    # Overall timing
+    # Wall clock times
     def get_wall_time(run: WorkflowRun) -> float:
         jobs = [j for j in run.jobs if j.completed_at]
         if not jobs:
             return 0
-        min_t = min(j.created_at for j in jobs)
-        max_t = max(j.completed_at for j in jobs)
-        return (max_t - min_t).total_seconds()
+        return (max(j.completed_at for j in jobs) - min(j.created_at for j in jobs)).total_seconds()
 
     wall1 = get_wall_time(run1)
     wall2 = get_wall_time(run2)
     wall_delta = wall2 - wall1
 
+    sum_run1 = sum(j.run_duration_seconds for j in jobs1.values())
+    sum_run2 = sum(j.run_duration_seconds for j in jobs2.values())
+    sum_queue1 = sum(j.queue_duration_seconds for j in jobs1.values())
+    sum_queue2 = sum(j.queue_duration_seconds for j in jobs2.values())
+
     lines.append("")
-    lines.append(f"{'TOTALS':<45} | {'Run 1':^25} | {'Run 2':^25} | {'Delta':^15}")
-    lines.append("-" * width)
-    lines.append(f"{'Wall clock time':<45} | {format_duration(wall1):^25} | {format_duration(wall2):^25} | {'+' if wall_delta > 0 else ''}{format_duration(abs(wall_delta)):^14}")
-    lines.append(f"{'Sum of run times':<45} | {format_duration(sum(j.run_duration_seconds for j in jobs1.values())):^25} | {format_duration(sum(j.run_duration_seconds for j in jobs2.values())):^25} | {'+' if total_run_delta > 0 else ''}{format_duration(abs(total_run_delta)):^14}")
-    lines.append(f"{'Sum of queue times':<45} | {format_duration(sum(j.queue_duration_seconds for j in jobs1.values())):^25} | {format_duration(sum(j.queue_duration_seconds for j in jobs2.values())):^25} | {'+' if total_queue_delta > 0 else ''}{format_duration(abs(total_queue_delta)):^14}")
+    lines.append(f"{'Wall clock:':<{name_width}} {format_duration(wall1):>{bar_width + 7}}  {format_duration(wall2):>{bar_width + 7}}  {'+' if wall_delta > 0 else ''}{format_duration(abs(wall_delta)):>10}")
+    lines.append(f"{'Sum of run times:':<{name_width}} {format_duration(sum_run1):>{bar_width + 7}}  {format_duration(sum_run2):>{bar_width + 7}}  {'+' if total_run_delta > 0 else ''}{format_duration(abs(total_run_delta)):>10}")
+    lines.append(f"{'Sum of queue times:':<{name_width}} {format_duration(sum_queue1):>{bar_width + 7}}  {format_duration(sum_queue2):>{bar_width + 7}}  {'+' if total_queue_delta > 0 else ''}{format_duration(abs(total_queue_delta)):>10}")
 
     # Key insight
     lines.append("")
@@ -530,13 +506,15 @@ def render_side_by_side(run1: WorkflowRun, run2: WorkflowRun, width: int = 140) 
         lines.append(f"  AND Run 2 had {format_duration(-total_queue_delta)} LESS queue wait time.")
 
     if wall_delta > 0 and total_run_delta < 0:
-        lines.append(f"")
+        lines.append("")
         lines.append(f"  Despite faster builds, wall clock time increased due to runner queue delays!")
     elif wall_delta < 0 and total_run_delta < 0:
-        lines.append(f"")
+        lines.append("")
         lines.append(f"  Build time savings translated to faster wall clock time.")
 
     lines.append("=" * width)
+    lines.append("")
+    lines.append("Legend: █ running  ░ queued")
 
     return "\n".join(lines)
 
@@ -547,8 +525,7 @@ def main():
     parser.add_argument("--pr", type=int, help="PR number to find runs for")
     parser.add_argument("--commit", type=str, help="Commit SHA to find runs for")
     parser.add_argument("--repo", type=str, help="Repository (owner/repo)")
-    parser.add_argument("--width", type=int, default=140, help="Terminal width")
-    parser.add_argument("--height", type=int, default=50, help="Timeline height in rows")
+    parser.add_argument("--width", type=int, default=120, help="Terminal width")
     parser.add_argument("--compare", action="store_true", help="Show comparison view for multiple runs")
     parser.add_argument("--diff", type=int, help="Compare with another run ID")
     parser.add_argument("--history", type=int, nargs="*", help="Show history view for multiple run IDs")
@@ -610,25 +587,15 @@ def main():
     if args.diff:
         print(f"Fetching comparison run #{args.diff}...", file=sys.stderr)
         diff_run = get_run_details(args.diff, repo)
-        print(render_side_by_side(runs[0], diff_run, args.width))
-        print()
-        print("=" * args.width)
-        print("TIMELINE: Run 1 (baseline)")
-        print("=" * args.width)
-        print(render_timeline(runs[0], args.width, args.height))
-        print()
-        print("=" * args.width)
-        print("TIMELINE: Run 2 (comparison)")
-        print("=" * args.width)
-        print(render_timeline(diff_run, args.width, args.height))
+        print(render_unified_diff(runs[0], diff_run, args.width))
     elif args.compare or len(runs) > 1:
         print(render_comparison(runs, args.width))
         print()
         for run in runs:
-            print(render_timeline(run, args.width, args.height))
-            print("\n" + "=" * args.width + "\n")
+            print(render_single_run(run, args.width))
+            print()
     else:
-        print(render_timeline(runs[0], args.width, args.height))
+        print(render_single_run(runs[0], args.width))
 
 
 if __name__ == "__main__":
