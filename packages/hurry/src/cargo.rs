@@ -6,8 +6,8 @@ use std::{
 };
 
 use color_eyre::{
-    Result,
-    eyre::{Context, bail},
+    Result, Section as _, SectionExt as _,
+    eyre::{Context, bail, eyre},
 };
 use serde::Deserialize;
 use tokio::process::Child;
@@ -132,7 +132,17 @@ pub async fn invoke_output(
     if output.status.success() {
         Ok(output)
     } else {
-        bail!("cargo exited with status: {}", output.status);
+        Err(eyre!("cargo exited with status: {}", output.status))
+            .with_section(move || {
+                String::from_utf8_lossy(&output.stdout)
+                    .to_string()
+                    .header("Stdout:")
+            })
+            .with_section(move || {
+                String::from_utf8_lossy(&output.stderr)
+                    .to_string()
+                    .header("Stderr:")
+            })
     }
 }
 

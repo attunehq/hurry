@@ -152,11 +152,16 @@ Options:
   -h, --help           Show this help message
 
 Examples:
-  $0 1.0.0                    # Release stable version 1.0.0
-  $0 1.0.0-beta.1             # Release prerelease version 1.0.0-beta.1
+  $0 1.0.0                    # Release stable version 1.0.0 (must be on main)
+  $0 1.0.0-beta.1             # Release prerelease (can be on any branch)
+  $0 1.0.0-alpha.1            # Another prerelease example
   $0 1.0.0 --dry-run          # Test the release process without uploading
   $0 1.0.0 --skip-build       # Upload existing artifacts without rebuilding
   $0 --generate-changelog     # Preview changelog without releasing
+
+Notes:
+  - Stable releases (X.Y.Z) must be created from the main branch
+  - Prereleases (X.Y.Z-<anything>) can be created from any branch
 
 Environment:
   AWS_PROFILE      AWS profile to use (default: $AWS_PROFILE)
@@ -363,8 +368,16 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 # Check if version matches semantic versioning
-if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-z]+\.[0-9]+)?$ ]]; then
-    fail "Invalid version format: $VERSION. Expected format: X.Y.Z or X.Y.Z-prerelease.N"
+# Allows X.Y.Z or X.Y.Z-<prerelease> where prerelease is any alphanumeric string with dots/dashes
+if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-.+)?$ ]]; then
+    fail "Invalid version format: $VERSION. Expected format: X.Y.Z or X.Y.Z-<prerelease>"
+fi
+
+# Determine if this is a prerelease (has dash followed by arbitrary text after X.Y.Z)
+PRERELEASE=false
+if [[ "$VERSION" =~ -.+ ]]; then
+    PRERELEASE=true
+    info "Detected prerelease version"
 fi
 
 # Check for required commands
@@ -373,46 +386,63 @@ check_requirements
 # Check AWS authentication early
 check_aws_auth
 
-# Determine if this is a prerelease
-PRERELEASE=false
-if [[ "$VERSION" =~ -[a-z]+\.[0-9]+ ]]; then
-    PRERELEASE=true
-    info "Detected prerelease version"
-fi
-
 TAG="v$VERSION"
 
 # Get repository root
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Check that we're on main branch (skip in dry run mode)
+# Check that we're on main branch for stable releases (prereleases can be on any branch)
 CURRENT_BRANCH="$(git branch --show-current)"
-if [[ "$DRY_RUN" != "true" ]] && [[ "$CURRENT_BRANCH" != "main" ]]; then
-    fail "Releases must be created from the 'main' branch. Currently on: $CURRENT_BRANCH"
+if [[ "$DRY_RUN" != "true" ]] && [[ "$CURRENT_BRANCH" != "main" ]] && [[ "$PRERELEASE" != "true" ]]; then
+    fail "Stable releases must be created from the 'main' branch. Currently on: $CURRENT_BRANCH
+Use a prerelease version (e.g., $VERSION-alpha.1) to release from other branches."
 fi
 
-# Check that main is up-to-date with remote (skip in dry run mode)
+# Check that branch is up-to-date with remote (skip in dry run mode)
 if [[ "$DRY_RUN" != "true" ]]; then
-    step "Checking that main is up-to-date with origin"
-    git fetch origin main || fail "Failed to fetch from origin"
+    if [[ "$CURRENT_BRANCH" == "main" ]]; then
+        # For main branch, check it's synced with origin/main
+        step "Checking that main is up-to-date with origin"
+        git fetch origin main || fail "Failed to fetch from origin"
 
-    LOCAL_REV="$(git rev-parse main)"
-    REMOTE_REV="$(git rev-parse origin/main)"
+        LOCAL_REV="$(git rev-parse main)"
+        REMOTE_REV="$(git rev-parse origin/main)"
 
-    if [[ "$LOCAL_REV" != "$REMOTE_REV" ]]; then
-        # Check if local is ahead, behind, or diverged
-        MERGE_BASE="$(git merge-base main origin/main)"
-        if [[ "$LOCAL_REV" == "$MERGE_BASE" ]]; then
-            fail "Your local main branch is behind origin/main. Please pull the latest changes: git pull origin main"
-        elif [[ "$REMOTE_REV" == "$MERGE_BASE" ]]; then
-            fail "Your local main branch is ahead of origin/main. Please push your changes: git push origin main"
+        if [[ "$LOCAL_REV" != "$REMOTE_REV" ]]; then
+            # Check if local is ahead, behind, or diverged
+            MERGE_BASE="$(git merge-base main origin/main)"
+            if [[ "$LOCAL_REV" == "$MERGE_BASE" ]]; then
+                fail "Your local main branch is behind origin/main. Please pull the latest changes: git pull origin main"
+            elif [[ "$REMOTE_REV" == "$MERGE_BASE" ]]; then
+                fail "Your local main branch is ahead of origin/main. Please push your changes: git push origin main"
+            else
+                fail "Your local main branch has diverged from origin/main. Please sync your branches."
+            fi
+        fi
+
+        info "✓ main is up-to-date with origin/main"
+    else
+        # For prereleases on non-main branches, just fetch and warn if behind upstream
+        step "Checking branch status for prerelease"
+        git fetch origin || fail "Failed to fetch from origin"
+
+        # Check if this branch has an upstream
+        if UPSTREAM=$(git rev-parse --abbrev-ref "@{upstream}" 2>/dev/null); then
+            LOCAL_REV="$(git rev-parse HEAD)"
+            REMOTE_REV="$(git rev-parse "$UPSTREAM")"
+
+            if [[ "$LOCAL_REV" != "$REMOTE_REV" ]]; then
+                MERGE_BASE="$(git merge-base HEAD "$UPSTREAM")"
+                if [[ "$LOCAL_REV" == "$MERGE_BASE" ]]; then
+                    warn "Your branch is behind $UPSTREAM. Consider pulling latest changes."
+                fi
+            fi
+            info "✓ Branch $CURRENT_BRANCH checked against $UPSTREAM"
         else
-            fail "Your local main branch has diverged from origin/main. Please sync your branches."
+            info "✓ Branch $CURRENT_BRANCH has no upstream tracking branch (OK for prerelease)"
         fi
     fi
-
-    info "✓ main is up-to-date with origin/main"
 fi
 
 # Check for uncommitted changes (skip in dry run mode)
