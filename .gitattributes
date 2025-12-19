@@ -1,0 +1,15 @@
+# Git LFS tracking for large files in repros
+packages/e2e/repros/**/*.tar.gz filter=lfs diff=lfs merge=lfs -text
+packages/e2e/repros/**/*.tar.bz2 filter=lfs diff=lfs merge=lfs -text
+packages/e2e/repros/**/*.tar.xz filter=lfs diff=lfs merge=lfs -text
+packages/e2e/repros/**/*.tar.zst filter=lfs diff=lfs merge=lfs -text
+packages/e2e/repros/**/*.tgz filter=lfs diff=lfs merge=lfs -text
+packages/e2e/repros/**/*.tbz2 filter=lfs diff=lfs merge=lfs -text
+packages/e2e/repros/**/*.txz filter=lfs diff=lfs merge=lfs -text
+packages/e2e/repros/**/*.zip filter=lfs diff=lfs merge=lfs -text
+packages/e2e/repros/**/*.7z filter=lfs diff=lfs merge=lfs -text
+packages/e2e/repros/**/*.rar filter=lfs diff=lfs merge=lfs -text
+packages/e2e/repros/**/*.gz filter=lfs diff=lfs merge=lfs -text
+packages/e2e/repros/**/*.bz2 filter=lfs diff=lfs merge=lfs -text
+packages/e2e/repros/**/*.xz filter=lfs diff=lfs merge=lfs -text
+packages/e2e/repros/**/*.zst filter=lfs diff=lfs merge=lfs -text

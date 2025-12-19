@@ -19,7 +19,7 @@ set -euo pipefail
 #
 # Usage:
 #   export HURRY_API_TOKEN="your-token"
-#   ./packages/hurry/repro/path-doubling/repro.sh
+#   ./packages/e2e/repros/295/repro.sh
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
