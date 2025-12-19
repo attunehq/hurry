@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Example commands for ci/timeline.py
+# These are meant to be copy-pasted, not run as a script
+
+# =============================================================================
+# SINGLE RUN VISUALIZATION
+# =============================================================================
+
+# View a specific workflow run
+./timeline.py 20361281298 --repo owner/repo
+
+# Shorter timeline (25 rows instead of default 50)
+./timeline.py 20361281298 --repo owner/repo --height 25
+
+# Wider output for large monitors
+./timeline.py 20361281298 --repo owner/repo --width 180
+
+
+# =============================================================================
+# COMPARING TWO RUNS (BEFORE/AFTER)
+# =============================================================================
+
+# Compare baseline vs comparison run
+# Great for: "Did my caching changes help?"
+./timeline.py 20359275612 --diff 20361281298 --repo owner/repo
+
+# The output shows:
+# - Side-by-side job timings with deltas
+# - Whether queue time or build time changed
+# - A KEY INSIGHT explaining the results
+
+
+# =============================================================================
+# HISTORY VIEW (MULTIPLE RUNS)
+# =============================================================================
+
+# Track performance across multiple runs
+./timeline.py --history 20359275612 20360289566 20361281298 --repo owner/repo
+
+# Output format:
+# Run ID       | Wall Clock | Build Time | Queue Time | Max Queue | Timeline
+# 20359275612  |     40m28s |       4h0m |        17s |        3s | [################    ]
+# 20360289566  |      37m7s |      3h55m |        20s |        5s | [###############     ]
+# 20361281298  |     56m55s |      3h44m |     44m40s |    22m16s | [....############    ]
+
+
+# =============================================================================
+# FINDING RUNS
+# =============================================================================
+
+# Find runs for a PR
+./timeline.py --pr 123 --repo owner/repo
+
+# Find runs for a commit
+./timeline.py --commit abc123def --repo owner/repo
+
+# If you're in a git repo, --repo can be omitted
+cd /path/to/repo
+./timeline.py 20361281298
+
+
+# =============================================================================
+# REAL-WORLD SCENARIOS
+# =============================================================================
+
+# Scenario 1: "Why was this PR's CI so slow?"
+./timeline.py --pr 456 --repo owner/repo --height 30
+
+# Scenario 2: "Did enabling hurry caching help?"
+# Run 1: before hurry (cold cache)
+# Run 2: after hurry (warm cache)
+./timeline.py <before_run_id> --diff <after_run_id> --repo owner/repo
+
+# Scenario 3: "Show me the last 5 runs for this workflow"
+# First, list recent runs:
+gh run list --repo owner/repo --workflow "build.yml" --limit 5
+# Then visualize them:
+./timeline.py --history <id1> <id2> <id3> <id4> <id5> --repo owner/repo
