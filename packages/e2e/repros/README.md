@@ -42,7 +42,7 @@ If you want to clone the repository without the e2e package (to reduce checkout 
 ```bash
 # Clone with sparse checkout
 git clone --filter=blob:none --sparse <repo-url>
-cd bilbao
+cd <repo folder>
 
 # Exclude the e2e package
 git sparse-checkout set '/*' '!/packages/e2e'
