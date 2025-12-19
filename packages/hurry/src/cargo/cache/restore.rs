@@ -16,7 +16,7 @@ use tokio::task::JoinSet;
 use tracing::{Instrument, debug, instrument, trace, warn};
 
 use crate::{
-    cargo::{self, QualifiedPath, UnitHash, UnitPlan, Workspace, host_glibc_version},
+    cargo::{self, Fingerprint, QualifiedPath, UnitHash, UnitPlan, Workspace, host_glibc_version},
     cas::CourierCas,
     fs,
     path::JoinWith as _,
@@ -125,11 +125,18 @@ pub async fn restore_units(
 
     // Load unit information from remote cache. Note that this does NOT download
     // the actual files, which are loaded as CAS keys.
+    //
+    // We request ALL units (including skipped ones) because we need their
+    // fingerprint data to populate `dep_fingerprints`. When a unit is skipped
+    // (already on disk), we still need to know its cached fingerprint hash so
+    // that dependent units can rewrite their fingerprint references correctly.
+    //
+    // TODO(#297): Ideally, we would load the fingerprints from units that exist
+    // on disk from the disk, which would avoid making the network request
+    // larger. This would require reading the fingerprint JSON files for skipped
+    // units and merging them with the network response.
     let bulk_req = CargoRestoreRequest::new(
-        units
-            .iter()
-            .filter(|unit| !units_to_skip.contains(&unit.info().unit_hash))
-            .map(|unit| unit.info().unit_hash.clone()),
+        units.iter().map(|unit| unit.info().unit_hash.clone()),
         host_glibc_symbol_version,
     );
     let mut saved_units = courier.cargo_cache_restore(bulk_req).await?;
@@ -216,19 +223,62 @@ pub async fn restore_units(
 
         // Load the saved file info from the response.
         let Some(saved) = saved_units.take(&unit_hash.into()) else {
-            debug!(?unit_hash, "unit missing from cache");
+            // Units may be missing from the cache response for various reasons:
+            // - The unit was never uploaded (cache miss)
+            // - The unit was evicted from the cache
+            // - The unit was filtered out (e.g., glibc version incompatibility)
+            // This is normal cache behavior - the unit will just be rebuilt.
+            debug!(?unit_hash, "unit missing from cache response");
+
             // Even when skipped, unit mtimes must be updated to maintain the
             // invariant that dependencies always have older mtimes than their
             // dependents. Otherwise, units that are skipped may have mtimes
             // that are out of sync with units that are restored.
-            if units_to_skip.contains(unit_hash)
-                && let Err(err) = unit.touch(&ws, starting_mtime).await
-            {
-                warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
-            };
+            if units_to_skip.contains(unit_hash) {
+                if let Err(err) = unit.touch(&ws, starting_mtime).await {
+                    warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
+                }
+            }
             progress.dec_length(1);
             continue;
         };
+
+        // Parse the cached fingerprint from the saved unit. This is needed for
+        // both skipped units (to record the mapping) and restored units (to
+        // rewrite dependencies).
+        let cached_fingerprint = saved.fingerprint().as_str();
+        let cached_fingerprint = serde_json::from_str::<Fingerprint>(cached_fingerprint)?;
+
+        // Handle skipped units before branching into type-specific logic.
+        // Skipped fingerprints are already correct on disk; we just need to
+        // record the mapping and touch the unit mtime to maintain ordering
+        // invariants.
+        if units_to_skip.contains(unit_hash) {
+            // Read the local fingerprint from disk and record the mapping from
+            // cached hash to local fingerprint. This allows dependent units to
+            // properly rewrite their fingerprint references.
+            let profile = ws.unit_profile_dir(unit.info());
+            let cached_hash = cached_fingerprint.hash_u64();
+
+            let file = unit.fingerprint_json_file().await?;
+            let file = profile.join(&file);
+            let json = fs::must_read_buffered_utf8(&file).await?;
+            let local = serde_json::from_str::<Fingerprint>(&json)?;
+
+            debug!(
+                old_hash = ?cached_hash,
+                local_hash = ?local.hash_u64(),
+                "recorded fingerprint mapping for skipped unit"
+            );
+
+            dep_fingerprints.insert(cached_hash, Arc::new(local));
+
+            if let Err(err) = unit.touch(&ws, mtime).await {
+                warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
+            }
+            progress.dec_length(1);
+            continue;
+        }
 
         // Mark the unit's restore as pending.
         restore_progress
@@ -254,12 +304,10 @@ pub async fn restore_units(
             ) => {
                 // Restore the fingerprint directly, because fingerprint
                 // rewriting needs to occur in dependency order.
-                let fingerprint: cargo::Fingerprint =
-                    serde_json::from_str(saved_library_files.fingerprint.as_str())?;
                 cargo::LibraryFiles::restore_fingerprint(
                     &ws,
                     &mut dep_fingerprints,
-                    fingerprint,
+                    cached_fingerprint,
                     unit_plan,
                 )
                 .await?;
@@ -342,12 +390,10 @@ pub async fn restore_units(
             ) => {
                 // Restore the fingerprint directly, because fingerprint
                 // rewriting needs to occur in dependency order.
-                let fingerprint: cargo::Fingerprint =
-                    serde_json::from_str(build_script_compiled_files.fingerprint.as_str())?;
                 cargo::BuildScriptCompiledFiles::restore_fingerprint(
                     &ws,
                     &mut dep_fingerprints,
-                    fingerprint,
+                    cached_fingerprint,
                     unit_plan,
                 )
                 .await?;
@@ -429,12 +475,10 @@ pub async fn restore_units(
             ) => {
                 // Restore the fingerprint directly, because fingerprint
                 // rewriting needs to occur in dependency order.
-                let fingerprint: cargo::Fingerprint =
-                    serde_json::from_str(build_script_output_files.fingerprint.as_str())?;
                 cargo::BuildScriptOutputFiles::restore_fingerprint(
                     &ws,
                     &mut dep_fingerprints,
-                    fingerprint,
+                    cached_fingerprint,
                     unit_plan,
                 )
                 .await?;
