@@ -359,6 +359,15 @@ impl SavedUnit {
             SavedUnit::BuildScriptExecution(_, plan) => &plan.info.unit_hash,
         }
     }
+
+    /// Read the fingerprint from this saved unit.
+    pub fn fingerprint(&self) -> &Fingerprint {
+        match self {
+            SavedUnit::LibraryCrate(files, _) => &files.fingerprint,
+            SavedUnit::BuildScriptCompilation(files, _) => &files.fingerprint,
+            SavedUnit::BuildScriptExecution(files, _) => &files.fingerprint,
+        }
+    }
 }
 
 impl From<&SavedUnit> for SavedUnit {

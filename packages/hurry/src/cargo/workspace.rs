@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug, sync::Arc, time::SystemTime};
+use std::{fmt::Debug, time::SystemTime};
 
 use cargo_metadata::TargetKind;
 use color_eyre::{
@@ -16,14 +16,11 @@ use uuid::Uuid;
 use crate::{
     cargo::{
         self, BuildPlan, BuildScriptCompilationUnitPlan, BuildScriptExecutionUnitPlan,
-        CargoBuildArguments, CargoCompileMode, Fingerprint, LibraryCrateUnitPlan, Profile,
-        RustcArguments, RustcTarget, RustcTargetPlatform,
+        CargoBuildArguments, CargoCompileMode, LibraryCrateUnitPlan, Profile, RustcArguments,
+        RustcTarget, RustcTargetPlatform,
     },
     fs, mk_rel_dir,
-    path::{
-        AbsDirPath, AbsFilePath, JoinWith as _, RelDirPath, RelFilePath, RelativeTo as _,
-        TryJoinWith as _,
-    },
+    path::{AbsDirPath, AbsFilePath, RelDirPath, RelFilePath, RelativeTo as _, TryJoinWith as _},
 };
 use clients::courier::v1 as courier;
 
@@ -801,39 +798,6 @@ impl UnitPlan {
             UnitPlan::BuildScriptCompilation(plan) => plan.fingerprint_json_file(),
             UnitPlan::BuildScriptExecution(plan) => plan.fingerprint_json_file(),
         }
-    }
-
-    /// Record the fingerprint mapping for a skipped unit (already on disk).
-    ///
-    /// When a unit is skipped because it already exists on disk, we still need
-    /// to record the mapping from its cached fingerprint hash to its local
-    /// fingerprint. This allows dependent units to properly rewrite their
-    /// fingerprint references.
-    ///
-    /// Unlike `restore_fingerprint`, this function does NOT write anything to
-    /// disk: the fingerprint is already correct for this machine.
-    pub async fn record_fingerprint(
-        &self,
-        ws: &Workspace,
-        fingerprints: &mut HashMap<u64, Arc<Fingerprint>>,
-        cached: Fingerprint,
-    ) -> Result<()> {
-        let profile = ws.unit_profile_dir(self.info());
-        let cached = cached.hash_u64();
-
-        let file = self.fingerprint_json_file().await?;
-        let file = profile.join(&file);
-        let json = fs::must_read_buffered_utf8(&file).await?;
-        let local = serde_json::from_str::<Fingerprint>(&json)?;
-
-        debug!(
-            old_hash = ?cached,
-            local_hash = ?local.hash_u64(),
-            "recorded fingerprint mapping for skipped unit"
-        );
-
-        fingerprints.insert(cached, Arc::new(local));
-        Ok(())
     }
 }
 
