@@ -223,16 +223,22 @@ pub async fn restore_units(
 
         // Load the saved file info from the response.
         let Some(saved) = saved_units.take(&unit_hash.into()) else {
-            debug!(?unit_hash, "unit missing from cache");
+            // Units may be missing from the cache response for various reasons:
+            // - The unit was never uploaded (cache miss)
+            // - The unit was evicted from the cache
+            // - The unit was filtered out (e.g., glibc version incompatibility)
+            // This is normal cache behavior - the unit will just be rebuilt.
+            debug!(?unit_hash, "unit missing from cache response");
+
             // Even when skipped, unit mtimes must be updated to maintain the
             // invariant that dependencies always have older mtimes than their
             // dependents. Otherwise, units that are skipped may have mtimes
             // that are out of sync with units that are restored.
-            if units_to_skip.contains(unit_hash)
-                && let Err(err) = unit.touch(&ws, starting_mtime).await
-            {
-                warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
-            };
+            if units_to_skip.contains(unit_hash) {
+                if let Err(err) = unit.touch(&ws, starting_mtime).await {
+                    warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
+                }
+            }
             progress.dec_length(1);
             continue;
         };
