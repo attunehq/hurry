@@ -234,10 +234,10 @@ pub async fn restore_units(
             // invariant that dependencies always have older mtimes than their
             // dependents. Otherwise, units that are skipped may have mtimes
             // that are out of sync with units that are restored.
-            if units_to_skip.contains(unit_hash) {
-                if let Err(err) = unit.touch(&ws, starting_mtime).await {
-                    warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
-                }
+            if units_to_skip.contains(unit_hash)
+                && let Err(err) = unit.touch(&ws, starting_mtime).await
+            {
+                warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
             }
             progress.dec_length(1);
             continue;
@@ -264,10 +264,16 @@ pub async fn restore_units(
             let file = profile.join(&file);
             let json = fs::must_read_buffered_utf8(&file).await?;
             let local = serde_json::from_str::<Fingerprint>(&json)?;
+            // local_hash is only ever used in the debug!() call but cannot be
+            // inlined because hash_u64 calls Fingerprint::hash which has its
+            // own debug!() call and event generation cannot be nested[^1].
+            //
+            // [^1]: https://github.com/tokio-rs/tracing/issues/2448
+            let local_hash = local.hash_u64();
 
             debug!(
-                old_hash = ?cached_hash,
-                local_hash = ?local.hash_u64(),
+                ?cached_hash,
+                ?local_hash,
                 "recorded fingerprint mapping for skipped unit"
             );
 
