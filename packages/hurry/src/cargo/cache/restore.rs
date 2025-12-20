@@ -22,14 +22,6 @@ use crate::{
     path::JoinWith as _,
     progress::TransferBar,
 };
-
-fn unit_type_name(unit: &UnitPlan) -> &'static str {
-    match unit {
-        UnitPlan::LibraryCrate(_) => "LibraryCrate",
-        UnitPlan::BuildScriptCompilation(_) => "BuildScriptCompilation",
-        UnitPlan::BuildScriptExecution(_) => "BuildScriptExecution",
-    }
-}
 use clients::{
     Courier,
     courier::v1::{Key, SavedUnit, cache::CargoRestoreRequest},
@@ -152,11 +144,11 @@ pub async fn restore_units(
     // on disk from the disk, which would avoid making the network request
     // larger. This would require reading the fingerprint JSON files for skipped
     // units and merging them with the network response.
+    let requested_count = units.len();
     let bulk_req = CargoRestoreRequest::new(
         units.iter().map(|unit| unit.info().unit_hash.clone()),
         host_glibc_symbol_version,
     );
-    let requested_count = bulk_req.units.len();
     info!(requested_count, "requesting units from cache");
     let mut saved_units = courier.cargo_cache_restore(bulk_req).await?;
     info!(
@@ -795,4 +787,12 @@ async fn restore_batch(
     debug!("done streaming response from CAS");
 
     Ok(())
+}
+
+fn unit_type_name(unit: &UnitPlan) -> &'static str {
+    match unit {
+        UnitPlan::LibraryCrate(_) => "LibraryCrate",
+        UnitPlan::BuildScriptCompilation(_) => "BuildScriptCompilation",
+        UnitPlan::BuildScriptExecution(_) => "BuildScriptExecution",
+    }
 }
