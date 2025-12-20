@@ -234,10 +234,10 @@ pub async fn restore_units(
             // invariant that dependencies always have older mtimes than their
             // dependents. Otherwise, units that are skipped may have mtimes
             // that are out of sync with units that are restored.
-            if units_to_skip.contains(unit_hash) {
-                if let Err(err) = unit.touch(&ws, starting_mtime).await {
-                    warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
-                }
+            if units_to_skip.contains(unit_hash)
+                && let Err(err) = unit.touch(&ws, starting_mtime).await
+            {
+                warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
             }
             progress.dec_length(1);
             continue;
