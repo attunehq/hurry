@@ -1,5 +1,22 @@
 # Root Cause Analysis: Ring Build Failure (Path Doubling)
 
+## Reproduction
+
+The `Dockerfile` in this directory reproduces the bug with a minimal setup:
+
+1. **Build hurry locally** with the buggy code (before this fix)
+2. **Run `docker build`** which:
+   - Copies the hurry binary into a fresh Rust container
+   - Copies the courier source code
+   - Runs `hurry cargo build --release --bin courier`
+3. **Hurry restores cached artifacts** including build script outputs for crates like `ring`
+4. **Cargo reads the restored `root-output` file** which contains a relative path (the bug)
+5. **Cargo's path rewriting corrupts the `-L` flags** causing link failures
+
+The reproduction requires cached build artifacts in Courier that include build script outputs. The bug manifests when restoring these artifacts in a different build environment (Docker container) where Cargo attempts to rewrite paths.
+
+The reproduction script at `./repro.sh` automates these steps for you.
+
 ## Symptom
 
 When building courier in Docker with hurry cache restore, the ring crate fails to link:
@@ -106,7 +123,7 @@ This ensures that when Cargo performs its path replacement:
 - If paths match (same machine/directory): replacement is a no-op
 - If paths differ (moved target dir): replacement correctly updates the old absolute path to the new one
 
-## Why Wasn't the Library Restored?
+## Appendix: Why Wasn't the Library Restored?
 
 The logs show that the build script compilation and execution were restored from cache, but the library crate (`ring`) was missing:
 
@@ -116,6 +133,8 @@ restoring build script OUT_DIR file, pkg_name: ring, unit_hash: e7f88aa1fb4f9250
 ...
 unit missing from cache, unit_hash: UnitHash("f490a77d7d289d1d"), unit_type: LibraryCrate, pkg_name: ring
 ```
+
+A natural follow-up question arises after investigating this bug: if we restored the build script outputs for `ring`, why wasn't the library itself restored? This section addresses that question.
 
 ### The build script restoration was correct
 

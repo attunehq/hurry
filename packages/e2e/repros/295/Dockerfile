@@ -1,42 +1,37 @@
 # syntax=docker/dockerfile:1.4
 #
-# Debug variant of the courier Dockerfile for investigating cache restore issues.
+# Minimal reproduction for issue #295: path doubling in build script output files.
+#
+# This Dockerfile reproduces the bug by:
+#   1. Restoring cached build artifacts (including build script outputs) from Courier
+#   2. Running cargo build, which reads the restored `root-output` file
+#   3. The bug causes Cargo's path rewriting to double paths, breaking native library links
 #
 # Prerequisites:
 #   1. Build hurry locally for linux:
 #      cargo cross build --release --target x86_64-unknown-linux-gnu -p hurry
 #
 # To build (from repo root):
-#   HURRY_API_TOKEN=xxx docker build -t courier-debug \
-#     -f packages/hurry/repro/path-doubling/Dockerfile.debug \
+#   HURRY_API_TOKEN=xxx docker build -t repro-295 \
+#     -f packages/e2e/repros/295/Dockerfile \
 #     --platform linux/amd64 \
 #     --secret id=HURRY_API_TOKEN,env=HURRY_API_TOKEN \
 #     --build-arg HURRY_API_URL="https://app.hurry.build/" \
 #     --progress=plain .
 #
-# To extract the build log after a failed build:
-#   docker build ... 2>&1 | tee courier-debug-build.log
+# Expected failure (before fix):
+#   error: could not find native static library `ring_core_0_17_14_`
+#   with doubled path: -L native=/courier/target/release//courier/target/release/...
 
-# Stage 1: Build the console (React SPA)
-FROM node:20-alpine AS console-builder
-WORKDIR /app
-COPY packages/dashboard/package.json packages/dashboard/package-lock.json ./
-RUN npm ci
-COPY packages/dashboard/ ./
-RUN npm run build
-
-# Stage 2: Build courier with hurry caching (DEBUG VERSION)
 FROM rust:1 AS builder
 WORKDIR /courier
 
-# Copy locally-built hurry binary instead of downloading release
-# The binary should be at target/x86_64-unknown-linux-gnu/release/hurry
-# (built with: cargo cross build --release --target x86_64-unknown-linux-gnu -p hurry)
+# Copy locally-built hurry binary. We do this instead of building hurry inside
+# this container to reduce noise and confusion in the log messages.
 COPY target/x86_64-unknown-linux-gnu/release/hurry /root/.local/bin/hurry
 RUN chmod +x /root/.local/bin/hurry
-RUN ~/.local/bin/hurry --version
 
-# Hurry config
+# Config to connect to production Hurry.
 ARG HURRY_API_URL
 ENV HURRY_API_URL=${HURRY_API_URL:-}
 ENV HURRY_WAIT_FOR_UPLOAD=true
@@ -49,33 +44,7 @@ ENV CARGO_LOG=cargo::core::compiler::fingerprint=info
 
 COPY . .
 
-# Step 1: Restore cache only (skip build and backup).
-# This captures the state of target/ after cache restore but before cargo runs.
-RUN --mount=type=secret,id=HURRY_API_TOKEN \
-    HURRY_API_TOKEN=$(cat /run/secrets/HURRY_API_TOKEN) \
-    ~/.local/bin/hurry cargo build --hurry-skip-build --hurry-skip-backup --release --bin courier -v
-
-# Step 2: Emit target directory metadata for debugging cache restore issues.
-RUN echo "=== HURRY DEBUG METADATA (after restore, before build) ===" && \
-    ~/.local/bin/hurry debug metadata ./target
-
-# Step 3: Run the build (skip backup since we already restored).
-# Use `docker build ... 2>&1 | tee build.log` to capture the full output.
-# The -v flag shows Running/Fresh/Compiling messages from cargo.
+# Restore cache and build - this triggers the path doubling bug
 RUN --mount=type=secret,id=HURRY_API_TOKEN \
     HURRY_API_TOKEN=$(cat /run/secrets/HURRY_API_TOKEN) \
     ~/.local/bin/hurry cargo build --hurry-skip-backup --release --bin courier -v
-
-# Stage 3: Runtime
-FROM debian:bookworm-slim AS runtime
-WORKDIR /courier
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /courier/target/release/courier /usr/local/bin
-COPY --from=console-builder /app/build/client /courier/console
-
-USER 1000:1000
-ENV RUST_LOG=courier=debug
-ENV CONSOLE_DIR=/courier/console
-HEALTHCHECK --interval=1s --timeout=5s CMD curl -f http://localhost:3000/api/v1/health
-
-ENTRYPOINT ["/usr/local/bin/courier"]

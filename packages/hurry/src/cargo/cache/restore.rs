@@ -641,6 +641,9 @@ pub async fn restore_units(
                 // path, Cargo's string replacement will match a substring of absolute paths
                 // and cause path doubling (e.g.,
                 // `/foo/target/release//foo/target/release/...`).
+                //
+                // See Cargo's `prev_build_output()` which reads this file (custom_build.rs:1356-1361)
+                // and `BuildOutput::parse()` which performs the replacement (custom_build.rs:925-928).
                 let root_output_path = profile_dir.join(&unit_plan.root_output_file()?);
                 fs::write(
                     &root_output_path,
