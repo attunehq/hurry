@@ -123,7 +123,7 @@ This ensures that when Cargo performs its path replacement:
 - If paths match (same machine/directory): replacement is a no-op
 - If paths differ (moved target dir): replacement correctly updates the old absolute path to the new one
 
-## Appendix: Why Wasn't the Library Restored?
+## Appendix: Why wasn't the `ring` rlib restored?
 
 The logs show that the build script compilation and execution were restored from cache, but the library crate (`ring`) was missing:
 
@@ -134,13 +134,13 @@ restoring build script OUT_DIR file, pkg_name: ring, unit_hash: e7f88aa1fb4f9250
 unit missing from cache, unit_hash: UnitHash("f490a77d7d289d1d"), unit_type: LibraryCrate, pkg_name: ring
 ```
 
-A natural follow-up question arises after investigating this bug: if we restored the build script outputs for `ring`, why wasn't the library itself restored? This section addresses that question.
+A natural follow-up question arises after investigating this bug: if we restored the build script outputs for `ring`, why wasn't the `ring` rlib itself restored? This section addresses that question.
 
 ### The build script restoration was correct
 
 Hurry caches units by their `unit_id` hash, which Cargo computes in `compute_metadata()` (see `cargo/src/cargo/core/compiler/build_runner/compilation_files.rs:679-826`). This hash includes features, profile, and target architecture for *all* unit types, including build script execution. So the restored build script output was the correct one for this build configuration, not a "promiscuous" match from a different feature set.
 
-### Why the library was missing: unknown
+### Why the rlib was missing: unknown
 
 We cannot determine why the library crate was not in the cache with available information. Plausible explanations include:
 
