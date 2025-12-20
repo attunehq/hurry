@@ -1,10 +1,11 @@
+import clsx from "clsx";
 import { Pencil } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { NavLink, Outlet, useNavigate, useOutletContext, useParams } from "react-router";
+import { NavLink, Outlet, useLocation, useNavigate, useOutletContext, useParams } from "react-router";
 
+import { isUnauthorizedError } from "../api/client";
 import type { OrganizationEntry, OrganizationListResponse, OrgRole } from "../api/types";
 import { useApi } from "../api/useApi";
-import { Badge } from "../ui/primitives/Badge";
 import { Button } from "../ui/primitives/Button";
 import { Card, CardBody } from "../ui/primitives/Card";
 import { Input } from "../ui/primitives/Input";
@@ -43,7 +44,7 @@ export default function OrgLayout() {
       setOrg(found);
       if (!found) toast.push({ kind: "error", title: "Org not found (or no access)" });
     } catch (e) {
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
+      if (isUnauthorizedError(e)) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
       toast.push({ kind: "error", title: "Failed to load org", detail: msg });
     }
@@ -73,7 +74,7 @@ export default function OrgLayout() {
       toast.push({ kind: "success", title: "Organization renamed" });
       await refresh();
     } catch (e) {
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
+      if (isUnauthorizedError(e)) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
       toast.push({ kind: "error", title: "Rename failed", detail: msg });
     }
@@ -103,35 +104,30 @@ export default function OrgLayout() {
   return (
     <PageLayout
       title={
-        <span className="flex items-center gap-3">
+        <span className="flex items-center gap-2">
           {org ? org.name : "Organization"}
-          {org ? (
-            <Badge tone={org.role === "admin" ? "neon" : "muted"}>{org.role}</Badge>
-          ) : null}
+          {canAdmin && (
+            <button
+              type="button"
+              onClick={openRename}
+              className="cursor-pointer text-content-muted hover:text-content-primary"
+              title="Rename organization"
+            >
+              <Pencil className="h-4 w-4" />
+            </button>
+          )}
         </span>
       }
-      actions={
-        <Button variant="secondary" onClick={openRename} disabled={!canAdmin}>
-          <Pencil className="h-4 w-4" />
-          Rename
-        </Button>
-      }
     >
-      <div className="rounded-2xl border border-border bg-surface-raised p-2 shadow-glow-soft backdrop-blur">
-        <div className="flex flex-wrap gap-1">
-          <Tab to="" label="Overview" end />
-          <Tab to="members" label="Members" />
-          <Tab to="api-keys" label="API Keys" />
-          <Tab to="invitations" label="Invitations" />
-          <Tab to="bots" label="Bots" />
-        </div>
-      </div>
+      <OrgTabs isAdmin={canAdmin} />
 
-      <Outlet context={{ orgId: id, role: org?.role ?? null }} />
+      <div className="tab-content">
+        <Outlet context={{ orgId: id, role: org?.role ?? null }} />
+      </div>
 
       <Modal open={renameOpen} title="Rename organization" onClose={() => setRenameOpen(false)} onSubmit={rename}>
         <div className="space-y-4">
-          <div className="space-y-2">
+          <div>
             <Label htmlFor="org-name">Organization name</Label>
             <Input
               id="org-name"
@@ -154,19 +150,68 @@ export default function OrgLayout() {
   );
 }
 
-function Tab(props: { to: string; label: string; end?: boolean }) {
+type Tab = { to: string; label: string; end?: boolean };
+
+const BASE_TABS: Tab[] = [
+  { to: "", label: "Overview", end: true },
+  { to: "members", label: "Members" },
+  { to: "api-keys", label: "API Keys" },
+];
+
+const ADMIN_TABS: Tab[] = [
+  { to: "invitations", label: "Invitations" },
+  { to: "bots", label: "Bots" },
+  { to: "audit-log", label: "Audit Log" },
+];
+
+const OTHER_TABS: Tab[] = [
+  { to: "billing", label: "Billing" },
+];
+
+function OrgTabs({ isAdmin }: { isAdmin: boolean }) {
+  const { pathname } = useLocation();
+
+  const tabs = useMemo(() => {
+    return isAdmin ? [...BASE_TABS, ...ADMIN_TABS, ...OTHER_TABS] : [...BASE_TABS, ...OTHER_TABS];
+  }, [isAdmin]);
+
+  function getTabIndex(path: string) {
+    // Expect structure: /org/:orgId/:tab?
+    const segments = path.split("/").filter(Boolean);
+    const orgIndex = segments.indexOf("org");
+    // Tab segment is two positions after "org" (orgId is one after)
+    const segment = orgIndex >= 0 ? segments[orgIndex + 2] ?? "" : "";
+    return tabs.findIndex((t) => t.to === segment);
+  }
+
+  const currentIndex = getTabIndex(pathname);
+
+  function handleClick(targetIndex: number) {
+    const direction = targetIndex > currentIndex ? "right" : "left";
+    document.documentElement.dataset.tabDirection = direction;
+  }
+
   return (
-    <NavLink
-      to={props.to}
-      end={props.end}
-      className={({ isActive }) =>
-        [
-          "rounded-xl px-3 py-2 text-sm transition",
-          isActive ? "bg-surface-subtle text-content-primary" : "text-content-tertiary hover:bg-surface-subtle hover:text-content-primary",
-        ].join(" ")
-      }
-    >
-      {props.label}
-    </NavLink>
+    <div className="mt-6 rounded-2xl border border-border bg-surface-raised p-2 shadow-glow-soft backdrop-blur">
+      <div className="flex flex-wrap gap-1">
+        {tabs.map((tab, index) => (
+          <NavLink
+            key={tab.to}
+            to={tab.to}
+            end={tab.end}
+            viewTransition
+            onClick={() => handleClick(index)}
+            className={({ isActive }) =>
+              clsx(
+                "cursor-pointer rounded-xl px-3 py-2 text-sm transition",
+                isActive ? "bg-surface-subtle text-content-primary" : "text-content-tertiary hover:bg-surface-subtle hover:text-content-primary",
+              )
+            }
+          >
+            {tab.label}
+          </NavLink>
+        ))}
+      </div>
+    </div>
   );
 }

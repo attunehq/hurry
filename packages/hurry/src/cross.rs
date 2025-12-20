@@ -12,8 +12,8 @@ use std::{
 };
 
 use color_eyre::{
-    Result,
-    eyre::{Context, bail},
+    Result, Section, SectionExt,
+    eyre::{Context, eyre},
 };
 use tokio::process::Child;
 use tracing::{instrument, trace};
@@ -44,7 +44,7 @@ pub async fn invoke_plain(
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::inherit());
 
-    let status = cmd
+    let output = cmd
         .spawn()
         .with_context(|| {
             "could not spawn cross\n\n\
@@ -53,13 +53,23 @@ pub async fn invoke_plain(
              \tcargo install cross\n\n\
              For more information, see: https://github.com/cross-rs/cross"
         })?
-        .wait()
+        .wait_with_output()
         .await
         .context("could not complete cross execution")?;
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
-        bail!("cross exited with status: {}", status);
+        Err(eyre!("cross exited with status: {}", output.status))
+            .with_section(move || {
+                String::from_utf8_lossy(&output.stdout)
+                    .to_string()
+                    .header("Stdout:")
+            })
+            .with_section(move || {
+                String::from_utf8_lossy(&output.stderr)
+                    .to_string()
+                    .header("Stderr:")
+            })
     }
 }
 
@@ -69,7 +79,7 @@ pub async fn invoke(
     subcommand: impl AsRef<str> + fmt::Debug,
     args: impl IntoIterator<Item = impl AsRef<str>> + fmt::Debug,
 ) -> Result<()> {
-    let status = invoke_with(
+    let output = invoke_with(
         subcommand,
         args,
         [] as [(&OsStr, &OsStr); 0],
@@ -79,13 +89,23 @@ pub async fn invoke(
         },
     )
     .await?
-    .wait()
+    .wait_with_output()
     .await
     .context("could not complete cross execution")?;
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
-        bail!("cross exited with status: {}", status);
+        Err(eyre!("cross exited with status: {}", output.status))
+            .with_section(move || {
+                String::from_utf8_lossy(&output.stdout)
+                    .to_string()
+                    .header("Stdout:")
+            })
+            .with_section(move || {
+                String::from_utf8_lossy(&output.stderr)
+                    .to_string()
+                    .header("Stderr:")
+            })
     }
 }
 
@@ -96,7 +116,7 @@ pub async fn invoke_output(
     args: impl IntoIterator<Item = impl AsRef<str>> + fmt::Debug,
     env: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)> + fmt::Debug,
 ) -> Result<Output> {
-    let child = invoke_with(
+    let output = invoke_with(
         subcommand,
         args,
         env,
@@ -105,12 +125,24 @@ pub async fn invoke_output(
             stderr: Stdio::piped(),
         },
     )
-    .await?;
-    let output = child.wait_with_output().await?;
+    .await?
+    .wait_with_output()
+    .await
+    .context("could not complete cross execution")?;
     if output.status.success() {
         Ok(output)
     } else {
-        bail!("cross exited with status: {}", output.status);
+        Err(eyre!("cross exited with status: {}", output.status))
+            .with_section(move || {
+                String::from_utf8_lossy(&output.stdout)
+                    .to_string()
+                    .header("Stdout:")
+            })
+            .with_section(move || {
+                String::from_utf8_lossy(&output.stderr)
+                    .to_string()
+                    .header("Stderr:")
+            })
     }
 }
 

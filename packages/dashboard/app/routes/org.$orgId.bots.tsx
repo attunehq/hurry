@@ -1,11 +1,13 @@
-import { Bot, Copy, Plus, Trash2 } from "lucide-react";
+import { Bot, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { isUnauthorizedError } from "../api/client";
 import type { BotListResponse, CreateBotResponse } from "../api/types";
 import { useApi } from "../api/useApi";
 import { Badge } from "../ui/primitives/Badge";
 import { Button } from "../ui/primitives/Button";
 import { Card, CardBody, CardHeader } from "../ui/primitives/Card";
+import { CodeBlock } from "../ui/primitives/CodeBlock";
 import { Input } from "../ui/primitives/Input";
 import { Label } from "../ui/primitives/Label";
 import { Modal } from "../ui/primitives/Modal";
@@ -36,7 +38,11 @@ export default function OrgBotsPage() {
       });
       setData(out);
     } catch (e) {
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
+      if (isUnauthorizedError(e)) return;
+      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 403) {
+        setData(null);
+        return;
+      }
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
       toast.push({ kind: "error", title: "Failed to load bots", detail: msg });
       setData(null);
@@ -65,7 +71,7 @@ export default function OrgBotsPage() {
       setResponsibleEmail("");
       await load();
     } catch (err) {
-      if (err && typeof err === "object" && "status" in err && (err as { status: number }).status === 401) return;
+      if (isUnauthorizedError(err)) return;
       const msg =
         err && typeof err === "object" && "message" in err ? String((err as { message: unknown }).message) : "";
       toast.push({ kind: "error", title: "Create failed", detail: msg });
@@ -83,24 +89,31 @@ export default function OrgBotsPage() {
       });
       await load();
     } catch (e) {
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
+      if (isUnauthorizedError(e)) return;
       const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
       toast.push({ kind: "error", title: "Revoke failed", detail: msg });
-    }
-  }
-
-  async function copy(value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.push({ kind: "success", title: "Copied" });
-    } catch {
-      toast.push({ kind: "error", title: "Copy failed" });
     }
   }
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  if (!canAdmin) {
+    return (
+      <Card>
+        <CardBody>
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <Bot className="mb-4 h-12 w-12 text-content-muted" />
+            <div className="text-sm font-medium text-content-primary">Admin access required</div>
+            <div className="mt-1 text-sm text-content-tertiary">
+              Only organization admins can manage bots.
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -175,7 +188,7 @@ export default function OrgBotsPage() {
       <Modal open={createOpen} title="Create bot" onClose={() => setCreateOpen(false)} onSubmit={createBot}>
         <div className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
+            <div>
               <Label htmlFor="botName">Name</Label>
               <Input
                 id="botName"
@@ -184,7 +197,7 @@ export default function OrgBotsPage() {
                 placeholder="CI Bot"
               />
             </div>
-            <div className="space-y-2">
+            <div>
               <Label htmlFor="email">Responsible email</Label>
               <Input
                 id="email"
@@ -219,17 +232,8 @@ export default function OrgBotsPage() {
             <div className="text-sm text-content-tertiary">
               This API key is shown once. Copy it somewhere safe.
             </div>
-            <div className="rounded-2xl border border-border bg-surface-subtle p-4">
-              <div className="text-xs text-content-muted">API key</div>
-              <div className="mt-1 break-all font-mono text-xs text-content-primary">
-                {created.api_key}
-              </div>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => copy(created.api_key)}>
-                <Copy className="h-4 w-4" />
-                Copy
-              </Button>
+            <CodeBlock code={created.api_key} label="API key" />
+            <div className="flex justify-end">
               <Button onClick={() => setCreated(null)}>Done</Button>
             </div>
           </div>

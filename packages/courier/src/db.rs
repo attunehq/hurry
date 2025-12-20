@@ -9,7 +9,7 @@
 
 mod account;
 mod api_key;
-mod audit;
+pub mod audit;
 mod bot_account;
 mod cargo_cache;
 mod github_identity;

@@ -2,6 +2,8 @@ import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 
 import { AuthGate } from "./auth/AuthGate";
 import { SessionProvider } from "./auth/session";
+import { OrgProvider } from "./org/OrgContext";
+import { UserProvider } from "./user/UserContext";
 import { ThemeProvider } from "./ui/theme/ThemeProvider";
 import { ToastProvider } from "./ui/toast/ToastProvider";
 import { AppShell } from "./ui/shell/AppShell";
@@ -31,13 +33,17 @@ export default function Root() {
   return (
     <ThemeProvider>
       <SessionProvider>
-        <ToastProvider>
-          <AuthGate
-            shell={(children) => <AppShell>{children}</AppShell>}
-          >
-            <Outlet />
-          </AuthGate>
-        </ToastProvider>
+        <OrgProvider>
+          <UserProvider>
+            <ToastProvider>
+              <AuthGate
+                shell={(children) => <AppShell>{children}</AppShell>}
+              >
+                <Outlet />
+              </AuthGate>
+            </ToastProvider>
+          </UserProvider>
+        </OrgProvider>
       </SessionProvider>
     </ThemeProvider>
   );
@@ -56,8 +62,8 @@ export function ErrorBoundary({ error }: { error: Error }) {
   return (
     <div className="flex min-h-screen items-center justify-center">
       <div className="max-w-md p-6">
-        <h1 className="text-xl font-bold text-red-500">Application Error</h1>
-        <pre className="mt-4 overflow-auto text-sm text-red-400">
+        <h1 className="text-xl font-bold text-danger-text">Application Error</h1>
+        <pre className="mt-4 overflow-auto text-sm text-danger-text">
           {error.message}
           {"\n"}
           {error.stack}

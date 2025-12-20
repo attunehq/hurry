@@ -8,6 +8,7 @@ use axum::{
 use crate::{api::State, api::v1::invitations, rate_limit};
 
 pub mod api_keys;
+pub mod audit_log;
 pub mod bots;
 pub mod create;
 pub mod leave;
@@ -39,6 +40,7 @@ pub fn router() -> Router<State> {
             delete(api_keys::delete::handle),
         )
         .route("/{org_id}/bots", get(bots::list::handle))
+        .route("/{org_id}/audit-log", get(audit_log::list::handle))
         .merge(invitations::organization_router())
         .merge(sensitive)
 }
