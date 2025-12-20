@@ -83,15 +83,15 @@ jobs:
                       runner: macos-latest
                       cross: false
 
-                    # Linux GNU builds using cross
+                    # Linux GNU builds
                     - target: x86_64-unknown-linux-gnu
                       runner: ubuntu-latest
-                      cross: true
+                      cross: false
                     - target: aarch64-unknown-linux-gnu
                       runner: ubuntu-latest
                       cross: true
 
-                    # Linux musl builds using cross
+                    # Linux musl builds
                     - target: x86_64-unknown-linux-musl
                       runner: ubuntu-latest
                       cross: true
@@ -99,7 +99,7 @@ jobs:
                       runner: ubuntu-latest
                       cross: true
 
-                    # Windows build using cross (GNU toolchain)
+                    # Windows build using cross (simpler than native MinGW setup)
                     - target: x86_64-pc-windows-gnu
                       runner: ubuntu-latest
                       cross: true
