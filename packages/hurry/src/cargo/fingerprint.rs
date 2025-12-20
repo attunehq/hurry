@@ -193,7 +193,7 @@ pub struct DepFingerprint {
     pub public: bool,
     /// The dependency's fingerprint we recursively point to, containing all the
     /// other hash information we'd otherwise need.
-    pub fingerprint: Arc<Fingerprint>,
+    pub fingerprint: Fingerprint,
 }
 
 impl Serialize for DepFingerprint {
@@ -221,10 +221,10 @@ impl<'de> Deserialize<'de> for DepFingerprint {
             pkg_id,
             name,
             public,
-            fingerprint: Arc::new(Fingerprint {
+            fingerprint: Fingerprint {
                 memoized_hash: Mutex::new(Some(hash)).into(),
                 ..Fingerprint::new()
-            }),
+            },
         })
     }
 }

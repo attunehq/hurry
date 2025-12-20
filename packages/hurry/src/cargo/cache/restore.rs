@@ -221,6 +221,7 @@ pub async fn restore_units(
     let ws = Arc::new(ws.clone());
 
     for (i, unit) in units.iter().enumerate() {
+        debug!(?unit, "queuing unit restore");
         let unit_hash = &unit.info().unit_hash;
 
         // Calculate the mtime for files to be restored. All output file mtimes
@@ -298,7 +299,7 @@ pub async fn restore_units(
                 "recorded fingerprint mapping for skipped unit"
             );
 
-            dep_fingerprints.insert(cached_hash, Arc::new(local));
+            dep_fingerprints.insert(cached_hash, local);
 
             if let Err(err) = unit.touch(&ws, mtime).await {
                 warn!(?unit_hash, ?err, "could not set mtime for skipped unit");

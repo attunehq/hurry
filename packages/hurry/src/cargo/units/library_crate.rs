@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::SystemTime};
+use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 
 use clients::courier::v1 as courier;
 use color_eyre::{
@@ -9,7 +9,7 @@ use derive_more::Debug;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use tap::Pipe as _;
-use tracing::debug;
+use tracing::{debug, instrument, trace};
 
 use crate::{
     cargo::{DepInfo, Fingerprint, QualifiedPath, SavedFile, UnitPlanInfo, Workspace, fingerprint},
@@ -197,7 +197,7 @@ impl LibraryFiles {
     pub async fn restore(
         self,
         ws: &Workspace,
-        dep_fingerprints: &mut HashMap<u64, Arc<Fingerprint>>,
+        dep_fingerprints: &mut HashMap<u64, Fingerprint>,
         unit_plan: &LibraryCrateUnitPlan,
     ) -> Result<()> {
         let profile_dir = ws.unit_profile_dir(&unit_plan.info);
@@ -232,9 +232,10 @@ impl LibraryFiles {
         Ok(())
     }
 
+    #[instrument(skip(ws, dep_fingerprints, fingerprint))]
     pub async fn restore_fingerprint(
         ws: &Workspace,
-        dep_fingerprints: &mut HashMap<u64, Arc<Fingerprint>>,
+        dep_fingerprints: &mut HashMap<u64, Fingerprint>,
         mut fingerprint: Fingerprint,
         unit_plan: &LibraryCrateUnitPlan,
     ) -> Result<()> {
@@ -263,6 +264,11 @@ impl LibraryFiles {
         for dep in fingerprint.deps.iter_mut() {
             debug!(?dep, "rewriting fingerprint dep");
             let old_dep_fingerprint = dep.fingerprint.hash_u64();
+            trace!(
+                ?old_dep_fingerprint,
+                ?dep_fingerprints,
+                "searching for dependency fingerprint hash"
+            );
             dep.fingerprint = dep_fingerprints
                 .get(&old_dep_fingerprint)
                 .ok_or_eyre("dependency fingerprint hash not found")?
@@ -288,7 +294,7 @@ impl LibraryFiles {
         .await?;
 
         // Save unit fingerprint (for future dependents).
-        dep_fingerprints.insert(old_fingerprint_hash, Arc::new(fingerprint));
+        dep_fingerprints.insert(old_fingerprint_hash, fingerprint);
 
         Ok(())
     }
