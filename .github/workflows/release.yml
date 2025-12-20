@@ -112,6 +112,11 @@ jobs:
                   rustup toolchain install stable
                   rustup target add ${{ matrix.target }}
 
+            - name: Install hurry
+              if: ${{ !matrix.cross }}
+              shell: bash
+              run: curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash
+
             - name: Install cargo-cross
               if: matrix.cross
               uses: taiki-e/install-action@v2
@@ -119,13 +124,21 @@ jobs:
                   tool: cargo-cross
                   checksum: true
 
+            - name: Setup Swatinem cache (for cross builds)
+              if: matrix.cross
+              uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: release-${{ matrix.target }}
+
             - name: Build with cargo cross
               if: matrix.cross
               run: cargo cross build --target ${{ matrix.target }} --package hurry --release
 
-            - name: Build native
+            - name: Build native with hurry
               if: ${{ !matrix.cross }}
-              run: cargo build --target ${{ matrix.target }} --package hurry --release
+              env:
+                  HURRY_API_TOKEN: ${{ secrets.HURRY_API_TOKEN }}
+              run: ~/.local/bin/hurry cargo build --target ${{ matrix.target }} --package hurry --release
 
             - name: Package binary
               id: package
