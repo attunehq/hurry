@@ -217,6 +217,11 @@ body {
   min-height: 100%;
 }
 
+/* Always reserve space for scrollbar to prevent layout shift */
+html {
+  overflow-y: scroll;
+}
+
 html {
   background: var(--surface-base);
 }
@@ -258,54 +263,4 @@ body {
   pointer-events: none;
 }
 
-/* Tab content view transitions */
-.tab-content {
-  view-transition-name: tab-content;
-}
-
-/* Sliding right (going to a tab further right) */
-:root[data-tab-direction="right"]::view-transition-old(tab-content) {
-  animation: tab-slide-out-left 0.15s ease-out forwards;
-}
-
-:root[data-tab-direction="right"]::view-transition-new(tab-content) {
-  animation: tab-slide-in-right 0.15s ease-out forwards;
-}
-
-/* Sliding left (going to a tab further left) */
-:root[data-tab-direction="left"]::view-transition-old(tab-content) {
-  animation: tab-slide-out-right 0.15s ease-out forwards;
-}
-
-:root[data-tab-direction="left"]::view-transition-new(tab-content) {
-  animation: tab-slide-in-left 0.15s ease-out forwards;
-}
-
-@keyframes tab-slide-out-left {
-  to {
-    opacity: 0;
-    transform: translateX(-20px);
-  }
-}
-
-@keyframes tab-slide-in-right {
-  from {
-    opacity: 0;
-    transform: translateX(20px);
-  }
-}
-
-@keyframes tab-slide-out-right {
-  to {
-    opacity: 0;
-    transform: translateX(20px);
-  }
-}
-
-@keyframes tab-slide-in-left {
-  from {
-    opacity: 0;
-    transform: translateX(-20px);
-  }
-}
 

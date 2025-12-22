@@ -121,9 +121,7 @@ export default function OrgLayout() {
     >
       <OrgTabs isAdmin={canAdmin} />
 
-      <div className="tab-content">
-        <Outlet context={{ orgId: id, role: org?.role ?? null }} />
-      </div>
+      <Outlet context={{ orgId: id, role: org?.role ?? null }} />
 
       <Modal open={renameOpen} title="Rename organization" onClose={() => setRenameOpen(false)} onSubmit={rename}>
         <div className="space-y-4">
