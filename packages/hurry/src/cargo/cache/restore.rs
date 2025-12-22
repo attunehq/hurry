@@ -327,8 +327,7 @@ pub async fn restore_units(
         let info = unit.info();
         let src_path = unit.src_path().map(|p| p.into());
         let rewritten_fingerprint = cached_fingerprint
-            .rewrite(src_path, &mut dep_fingerprints)
-            .await?;
+            .rewrite(src_path, &mut dep_fingerprints)?;
         let fingerprint_hash = rewritten_fingerprint.fingerprint_hash();
 
         // Write the rewritten fingerprint.

@@ -133,7 +133,7 @@ impl Fingerprint {
 
     /// Create a new Fingerprint with rewritten path and dependencies.
     #[instrument(skip(self, dep_fingerprints))]
-    pub async fn rewrite(
+    pub fn rewrite(
         mut self,
         path: Option<PathBuf>,
         dep_fingerprints: &mut HashMap<u64, Fingerprint>,

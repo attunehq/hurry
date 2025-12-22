@@ -177,6 +177,9 @@ impl TryFrom<BuildScriptCompilationUnitPlan> for courier::BuildScriptCompilation
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BuildScriptCompiledFiles {
+    /// This fingerprint is stored in `.fingerprint`, and is used to derive the
+    /// timestamp, fingerprint hash file, and fingerprint JSON file.
+    pub fingerprint: Fingerprint,
     /// This field contains the contents of the compiled build script program at
     /// `build_script_{build_script_entrypoint}-{build_script_compilation_unit_hash}`
     /// and hard linked at `build-script-{build_script_entrypoint}`.
@@ -187,9 +190,6 @@ pub struct BuildScriptCompiledFiles {
     pub compiled_program: Vec<u8>,
     /// This is the path to the rustc dep-info file in the build directory.
     pub dep_info_file: DepInfo,
-    /// This fingerprint is stored in `.fingerprint`, and is used to derive the
-    /// timestamp, fingerprint hash file, and fingerprint JSON file.
-    pub fingerprint: Fingerprint,
     /// This `EncodedDepInfo` (i.e. Cargo dep-info) file is stored in
     /// `.fingerprint`, and is directly saved and restored.
     pub encoded_dep_info_file: Vec<u8>,
@@ -243,9 +243,8 @@ impl BuildScriptCompiledFiles {
         unit_plan: &BuildScriptCompilationUnitPlan,
     ) -> Result<()> {
         // Rewrite the fingerprint.
-        let rewritten = fingerprint
-            .rewrite(Some(PathBuf::from(&unit_plan.src_path)), dep_fingerprints)
-            .await?;
+        let rewritten =
+            fingerprint.rewrite(Some(PathBuf::from(&unit_plan.src_path)), dep_fingerprints)?;
         let fingerprint_hash = rewritten.fingerprint_hash();
 
         // Write the reconstructed fingerprint.

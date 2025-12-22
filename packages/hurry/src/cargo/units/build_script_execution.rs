@@ -79,7 +79,7 @@ impl BuildScriptExecutionUnitPlan {
                 .await?;
             let mut out_dir_files = Vec::new();
             for file in files {
-                let path = QualifiedPath::parse(ws, &self.info.target_arch, file.as_ref()).await?;
+                let path = QualifiedPath::parse_abs(ws, &self.info.target_arch, file.as_ref());
                 let executable = fs::is_executable(&file).await;
                 let contents = fs::must_read_buffered(&file).await?;
                 out_dir_files.push(SavedFile {
@@ -167,10 +167,10 @@ impl TryFrom<BuildScriptExecutionUnitPlan> for courier::BuildScriptExecutionUnit
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BuildScriptOutputFiles {
+    pub fingerprint: Fingerprint,
     pub out_dir_files: Vec<SavedFile>,
     pub stdout: BuildScriptOutput,
     pub stderr: Vec<u8>,
-    pub fingerprint: Fingerprint,
 }
 
 impl BuildScriptOutputFiles {
@@ -224,7 +224,7 @@ impl BuildScriptOutputFiles {
         unit_plan: &BuildScriptExecutionUnitPlan,
     ) -> Result<()> {
         // Rewrite the fingerprint.
-        let rewritten = fingerprint.rewrite(None, dep_fingerprints).await?;
+        let rewritten = fingerprint.rewrite(None, dep_fingerprints)?;
         let fingerprint_hash = rewritten.fingerprint_hash();
 
         // Write the reconstructed fingerprint.

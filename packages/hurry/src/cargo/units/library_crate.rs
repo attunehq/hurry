@@ -58,8 +58,7 @@ impl LibraryCrateUnitPlan {
             let mut output_files = Vec::new();
             for output_file_path in &self.outputs {
                 let path =
-                    QualifiedPath::parse(ws, &self.info.target_arch, output_file_path.as_ref())
-                        .await?;
+                    QualifiedPath::parse_abs(ws, &self.info.target_arch, output_file_path.as_ref());
                 let contents = fs::must_read_buffered(output_file_path).await?;
                 let executable = fs::is_executable(output_file_path.as_std_path()).await;
                 output_files.push(SavedFile {
@@ -168,6 +167,10 @@ impl TryFrom<LibraryCrateUnitPlan> for courier::LibraryCrateUnitPlan {
 /// restoration.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LibraryFiles {
+    /// This information is parsed from the initial fingerprint created after
+    /// the build, and is used to dynamically reconstruct fingerprints on
+    /// restoration.
+    pub fingerprint: Fingerprint,
     /// These files come from the build plan's `outputs` field.
     // TODO: Can we specify this even more narrowly (e.g. with an `rmeta` and
     // `rlib` field)? I know there are other possible output files (e.g. `.so`
@@ -177,10 +180,6 @@ pub struct LibraryFiles {
     /// This file is always at a known path in
     /// `deps/{package_name}-{unit_hash}.d`.
     pub dep_info_file: DepInfo,
-    /// This information is parsed from the initial fingerprint created after
-    /// the build, and is used to dynamically reconstruct fingerprints on
-    /// restoration.
-    pub fingerprint: Fingerprint,
     /// This file is always at a known path in
     /// `.fingerprint/{package_name}-{unit_hash}/dep-lib-{crate_name}`. It can
     /// be safely relocatably copied because the `EncodedDepInfo` struct only
@@ -240,9 +239,8 @@ impl LibraryFiles {
         unit_plan: &LibraryCrateUnitPlan,
     ) -> Result<()> {
         // Rewrite the fingerprint.
-        let rewritten = fingerprint
-            .rewrite(Some(PathBuf::from(&unit_plan.src_path)), dep_fingerprints)
-            .await?;
+        let rewritten =
+            fingerprint.rewrite(Some(PathBuf::from(&unit_plan.src_path)), dep_fingerprints)?;
         let fingerprint_hash = rewritten.fingerprint_hash();
 
         // Write the reconstructed fingerprint.
