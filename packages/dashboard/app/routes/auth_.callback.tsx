@@ -48,7 +48,6 @@ export default function AuthCallbackPage() {
         setStatus("done");
 
         if (inviteToken) {
-          // User came from an invitation - accept it and redirect to that org
           await handleInvitationFlow(out.session_token, inviteToken);
         } else if (isNewUser) {
           // New user onboarding: create API key and redirect to onboarding flow
@@ -65,14 +64,12 @@ export default function AuthCallbackPage() {
 
     async function handleInvitationFlow(sessionToken: string, token: string) {
       try {
-        // Accept the invitation
         const invitation = await apiRequest<AcceptInvitationResponse>({
           path: `/api/v1/invitations/${encodeURIComponent(token)}/accept`,
           method: "POST",
           sessionToken,
         });
 
-        // Create a default API key for the invited org
         const apiKey = await apiRequest<CreateOrgApiKeyResponse>({
           path: `/api/v1/organizations/${invitation.organization_id}/api-keys`,
           method: "POST",
@@ -80,7 +77,6 @@ export default function AuthCallbackPage() {
           body: { name: "Default" },
         });
 
-        // Redirect to onboarding for the invited org
         nav(`/onboarding?token=${encodeURIComponent(apiKey.token)}&org=${invitation.organization_id}`);
       } catch {
         // If invitation acceptance fails (expired, already used, etc.), fall back to normal flow
