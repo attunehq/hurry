@@ -1,14 +1,20 @@
 use std::{
+    collections::HashMap,
     hash::{Hash, Hasher},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 
-use color_eyre::Result;
+use color_eyre::{
+    Result,
+    eyre::{OptionExt as _, bail},
+};
 use derive_more::Debug;
 use rustc_stable_hash::StableSipHasher128;
 use serde::{Deserialize, Serialize, de, ser};
-use tracing::debug;
+use tracing::{debug, instrument, trace};
+
+use crate::{fs, path::AbsFilePath};
 
 /// A Cargo fingerprint. This struct is vendored and modified from the Cargo
 /// source code. In particular, some `serde(skip)`ed fields are elided. For
@@ -115,8 +121,122 @@ impl Fingerprint {
         ret
     }
 
+    /// Render the fingerprint hash as a string for comparison, using Cargo's
+    /// rendering logic.
     pub fn fingerprint_hash(&self) -> String {
+        // Cargo uses `util::to_hex` to write[^1] and compare[^2] fingerprint hashes,
+        // which serializes using `to_le_bytes`[^3].
+        //
+        // [^1]: https://github.com/attunehq/cargo/blob/d59205e6303b011e2c7b1fcd92946a5e783b77bb/src/cargo/core/compiler/fingerprint/mod.rs#L1946
+        // [^2]: https://github.com/attunehq/cargo/blob/d59205e6303b011e2c7b1fcd92946a5e783b77bb/src/cargo/core/compiler/fingerprint/mod.rs#L2034
+        // [^3]: https://github.com/attunehq/cargo/blob/d59205e6303b011e2c7b1fcd92946a5e783b77bb/src/cargo/util/hex.rs#L7
         hex::encode(self.hash_u64().to_le_bytes())
+    }
+
+    pub async fn read(
+        fingerprint_json_path: AbsFilePath,
+        fingerprint_hash_path: AbsFilePath,
+    ) -> Result<Fingerprint> {
+        let fingerprint_json = fs::must_read_buffered_utf8(&fingerprint_json_path).await?;
+        let fingerprint: Fingerprint = serde_json::from_str(&fingerprint_json)?;
+
+        let fingerprint_hash = fs::must_read_buffered_utf8(&fingerprint_hash_path).await?;
+        // Sanity check that the fingerprint hashes match.
+        if fingerprint.fingerprint_hash() != fingerprint_hash {
+            bail!("fingerprint hash mismatch");
+        }
+
+        Ok(fingerprint)
+    }
+
+    /// Create a new Fingerprint with rewritten path and dependencies.
+    #[instrument(skip(self, dep_fingerprints))]
+    pub fn rewrite(
+        mut self,
+        path: Option<PathBuf>,
+        dep_fingerprints: &mut HashMap<u64, Fingerprint>,
+    ) -> Result<Fingerprint> {
+        let old = self.hash_u64();
+
+        // First, rewrite the `path` field.
+        //
+        // Note that certain unit types (in particular build script
+        // executions[^1]), never set the `path` field, and therefore should not
+        // have it rewritten. We sanity check this case by checking whether
+        // `path` is zero in the original fingerprint.
+        //
+        // [^1]: https://github.com/attunehq/cargo/blob/21f1bfe23aa3fafd6205b8e3368a499466336bb9/src/cargo/core/compiler/fingerprint/mod.rs#L1696
+        if let Some(path) = path.clone() {
+            if self.path == 0 {
+                bail!("tried to rewrite unset fingerprint path");
+            }
+            // WARNING: Even though this method accepts any hashable, this MUST
+            // be a `PathBuf`! Other types representing the same value will hash
+            // to a different value, which will break fingerprint calculation!
+            self.path = util_hash_u64(path);
+        }
+        debug!(?path, path_hash = ?self.path.clone(), "rewritten fingerprint path");
+
+        // Then, rewrite the `deps` field.
+        //
+        // We don't actually have enough information to synthesize our own
+        // DepFingerprints (in particular, it would be very annoying to derive
+        // the config fields independently). But the old fingerprint hashes are
+        // unique and uniquely identify each unit hash[^1], and we know our old
+        // fingerprint hash! So we save a map of the old fingerprint hashes to
+        // the replacement fingerprint hashes, and use that to look up the
+        // correct replacement fingerprint hash in future DepFingerprints,
+        // leaving all other fields untouched.
+        //
+        // This works because we know the units are in dependency order, so
+        // previous replacement fingerprint hashes will always have already been
+        // calculated when we need them.
+        //
+        // [^1]: This is actually only true under certain conditions! In
+        //     particular, the old fingerprint must have been for a unit
+        //     compiled with the same src_path and against dependencies with the
+        //     same src_path[^2]. To ensure this invariant, we must rewrite
+        //     fingerprints to have the same synthetic `src_path` (rooted at
+        //     `CARGO_HOME`) before saving them to the database.
+        // [^2]: We know this to be true from comparing how fingerprint hashes
+        //     are calculated[^3][^4] with how unit hashes are calculated[^5].
+        //     Note that the only fields used in the fingerprint hash that vary
+        //     separately from those used in the unit hash are the `path` and
+        //     `deps` fields (note in particular that the local fingerprints do
+        //     not vary between host machines).
+        // [^3]: https://github.com/attunehq/cargo/blob/d59205e6303b011e2c7b1fcd92946a5e783b77bb/src/cargo/core/compiler/fingerprint/mod.rs#L1506
+        // [^4]: https://github.com/attunehq/cargo/blob/d59205e6303b011e2c7b1fcd92946a5e783b77bb/src/cargo/core/compiler/fingerprint/mod.rs#L1349
+        // [^5]: https://github.com/attunehq/cargo/blob/d59205e6303b011e2c7b1fcd92946a5e783b77bb/src/cargo/core/compiler/build_runner/compilation_files.rs#L765
+        debug!("rewrite fingerprint deps: start");
+        for dep in self.deps.iter_mut() {
+            debug!(?dep, "rewriting fingerprint dep");
+            let old_dep_fingerprint = dep.fingerprint.hash_u64();
+            trace!(
+                ?old_dep_fingerprint,
+                ?dep_fingerprints,
+                "searching for dependency fingerprint hash"
+            );
+            dep.fingerprint = dep_fingerprints
+                .get(&old_dep_fingerprint)
+                .ok_or_eyre("dependency fingerprint hash not found")?
+                .clone();
+        }
+        debug!("rewrite fingerprint deps: done");
+
+        // Clear and recalculate fingerprint hash.
+        self.clear_memoized();
+        // `new` is only ever used in the debug!() call but cannot be inlined
+        // because hash_u64 calls Fingerprint::hash which has its own debug!()
+        // call and event generation cannot be nested[^1].
+        //
+        // [^1]: https://github.com/tokio-rs/tracing/issues/2448
+        let new = self.hash_u64();
+        debug!(?old, ?new, "rewritten fingerprint hash");
+
+        // Save unit fingerprint (for future dependents).
+        dep_fingerprints.insert(old, self.clone());
+
+        Ok(self)
     }
 }
 
@@ -193,7 +313,7 @@ pub struct DepFingerprint {
     pub public: bool,
     /// The dependency's fingerprint we recursively point to, containing all the
     /// other hash information we'd otherwise need.
-    pub fingerprint: Arc<Fingerprint>,
+    pub fingerprint: Fingerprint,
 }
 
 impl Serialize for DepFingerprint {
@@ -221,10 +341,10 @@ impl<'de> Deserialize<'de> for DepFingerprint {
             pkg_id,
             name,
             public,
-            fingerprint: Arc::new(Fingerprint {
+            fingerprint: Fingerprint {
                 memoized_hash: Mutex::new(Some(hash)).into(),
                 ..Fingerprint::new()
-            }),
+            },
         })
     }
 }
