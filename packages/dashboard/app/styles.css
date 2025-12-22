@@ -217,11 +217,6 @@ body {
   min-height: 100%;
 }
 
-/* Always reserve space for scrollbar to prevent layout shift */
-html {
-  overflow-y: scroll;
-}
-
 html {
   background: var(--surface-base);
 }
