@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
 import { apiRequest, exchangeAuthCode } from "../api/client";
-import type { CreateOrgApiKeyResponse, OrganizationListResponse } from "../api/types";
+import type { AcceptInvitationResponse, CreateOrgApiKeyResponse, OrganizationListResponse } from "../api/types";
 import { useSession } from "../auth/session";
 import { Button } from "../ui/primitives/Button";
 
@@ -27,6 +27,7 @@ export default function AuthCallbackPage() {
 
   const authCode = useMemo(() => params.get("auth_code"), [params]);
   const isNewUser = useMemo(() => params.get("new_user") === "true", [params]);
+  const inviteToken = useMemo(() => params.get("invite"), [params]);
 
   useEffect(() => {
     // Prevent double-exchange in StrictMode.
@@ -46,7 +47,9 @@ export default function AuthCallbackPage() {
         setSessionToken(out.session_token);
         setStatus("done");
 
-        if (isNewUser) {
+        if (inviteToken) {
+          await handleInvitationFlow(out.session_token, inviteToken);
+        } else if (isNewUser) {
           // New user onboarding: create API key and redirect to onboarding flow
           await handleNewUserOnboarding(out.session_token);
         } else {
@@ -56,6 +59,32 @@ export default function AuthCallbackPage() {
         const msg = e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : "";
         setStatus("error");
         setDetail(msg || "Failed to exchange auth code.");
+      }
+    }
+
+    async function handleInvitationFlow(sessionToken: string, token: string) {
+      try {
+        const invitation = await apiRequest<AcceptInvitationResponse>({
+          path: `/api/v1/invitations/${encodeURIComponent(token)}/accept`,
+          method: "POST",
+          sessionToken,
+        });
+
+        const apiKey = await apiRequest<CreateOrgApiKeyResponse>({
+          path: `/api/v1/organizations/${invitation.organization_id}/api-keys`,
+          method: "POST",
+          sessionToken,
+          body: { name: "Default" },
+        });
+
+        nav(`/onboarding?token=${encodeURIComponent(apiKey.token)}&org=${invitation.organization_id}`);
+      } catch {
+        // If invitation acceptance fails (expired, already used, etc.), fall back to normal flow
+        if (isNewUser) {
+          await handleNewUserOnboarding(sessionToken);
+        } else {
+          nav("/");
+        }
       }
     }
 
@@ -95,7 +124,7 @@ export default function AuthCallbackPage() {
     }
 
     void run();
-  }, [authCode, isNewUser, nav, setSessionToken]);
+  }, [authCode, isNewUser, inviteToken, nav, setSessionToken]);
 
   return (
     <div className="noise fixed inset-0 flex items-center justify-center">

@@ -1,8 +1,9 @@
 import clsx from "clsx";
 import { AlertTriangle, Check } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
+import { useOrgs } from "../org/OrgContext";
 import { Button } from "../ui/primitives/Button";
 import { CodeBlock } from "../ui/primitives/CodeBlock";
 
@@ -18,8 +19,16 @@ function detectPlatform(): Platform {
 export default function OnboardingPage() {
   const nav = useNavigate();
   const [searchParams] = useSearchParams();
+  const { refresh: refreshOrgs } = useOrgs();
   const token = searchParams.get("token");
   const orgId = searchParams.get("org");
+
+  // When users arrive here, they might have just accepted an invitation for a
+  // new organization. In order to handle the org dropdown properly, we refresh
+  // the orgs list pre-emptively.
+  useEffect(() => {
+    void refreshOrgs();
+  }, [refreshOrgs]);
 
   if (!token || !orgId) {
     return (

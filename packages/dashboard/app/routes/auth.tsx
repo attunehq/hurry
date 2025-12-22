@@ -1,8 +1,12 @@
 import { useEffect } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 
 import { LoginCard } from "../auth/LoginCard";
 import { useSession } from "../auth/session";
+
+interface LocationState {
+  inviteToken?: string;
+}
 
 /**
  * Auth page route. Shows the login card for unauthenticated users.
@@ -10,7 +14,11 @@ import { useSession } from "../auth/session";
  */
 export default function AuthPage() {
   const nav = useNavigate();
+  const location = useLocation();
   const { sessionToken } = useSession();
+
+  const state = location.state as LocationState | null;
+  const inviteToken = state?.inviteToken;
 
   useEffect(() => {
     if (sessionToken) {
@@ -23,5 +31,5 @@ export default function AuthPage() {
     return null;
   }
 
-  return <LoginCard />;
+  return <LoginCard inviteToken={inviteToken} />;
 }
