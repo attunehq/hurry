@@ -40,7 +40,7 @@ export default function InvitePage() {
 
   async function accept() {
     if (!signedIn) {
-      nav("/auth", { state: { from: `/invite/${inviteToken}` } });
+      nav("/auth", { state: { inviteToken } });
       return;
     }
     setAccepting(true);
@@ -104,18 +104,6 @@ export default function InvitePage() {
                     {!preview.valid && <Badge tone="warn">invalid</Badge>}
                   </div>
                 </div>
-
-                {!signedIn && (
-                  <div className="rounded-xl border border-warn-border bg-warn-bg p-4">
-                    <div className="text-sm font-medium text-content-primary">
-                      New to Hurry?
-                    </div>
-                    <div className="mt-1 text-sm text-content-secondary">
-                      You'll need to sign in and complete the onboarding flow first.
-                      After that, come back to this invite link to accept it.
-                    </div>
-                  </div>
-                )}
 
                 <div className="flex gap-2">
                   <Button onClick={accept} disabled={!preview.valid || accepting}>

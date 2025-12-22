@@ -8,19 +8,26 @@ import { Label } from "../ui/primitives/Label";
 import { useToast } from "../ui/toast/ToastProvider";
 import { useSession } from "./session";
 
+interface LoginCardProps {
+  inviteToken?: string;
+}
+
 /**
  * Centered, modal-style login card shown to unauthenticated users.
  * This is the main authentication UI for the app.
  */
-export function LoginCard() {
+export function LoginCard({ inviteToken }: LoginCardProps) {
   const toast = useToast();
   const { setSessionToken } = useSession();
   const [token, setToken] = useState("");
 
   function startOAuth() {
-    const redirectUri = `${window.location.origin}/auth/callback`;
+    const callbackUrl = new URL("/auth/callback", window.location.origin);
+    if (inviteToken) {
+      callbackUrl.searchParams.set("invite", inviteToken);
+    }
     const url = apiUrl(
-      `/api/v1/oauth/github/start?redirect_uri=${encodeURIComponent(redirectUri)}`,
+      `/api/v1/oauth/github/start?redirect_uri=${encodeURIComponent(callbackUrl.toString())}`,
     );
     window.location.assign(url);
   }
