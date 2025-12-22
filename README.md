@@ -109,16 +109,23 @@ These platforms have full support for build acceleration and distributed caching
 
 ### Tier 2 support
 
-Hurry also provides Tier 2 support for 4 platforms:
+Hurry provides Tier 2 support for 3 platforms:
 
 - `aarch64-unknown-linux-gnu`
 - `x86_64-unknown-linux-musl`
 - `aarch64-unknown-linux-musl`
+
+Platforms in Tier 2 have unstable support for build acceleration and distributed caching. We intend to support build acceleration on these platforms, and we have automate testing coverage over them, but we do not exercise their hot paths as extensively as Tier 1 platforms, so their support may be less stable.
+
+### Tier 3 support
+
+Hurry provides Tier 3 support for 1 platform:
+
 - `x86_64-pc-windows-gnu`
 
-Platforms in Tier 2 have automated testing and precompiled binaries, but their subcommands may not be accelerated. For example, `hurry cargo build` on Windows will directly pass through to `cargo build`, and does not implement any distributed caching.
+Platforms in Tier 3 have automated testing and precompiled binaries, but their subcommands may not be accelerated. For example, `hurry cargo build` on Windows will directly pass through to `cargo build`, and does not implement any distributed caching.
 
-The intent of Tier 2 platforms is to help your team migrate your build processes to `hurry` more easily. Even in platforms where `hurry` does not yet support build acceleration, you can still replace all instances of `cargo build` with `hurry cargo build`, and your build should still behave the same as before.
+The intent of Tier 3 platforms is to help your team migrate your build processes to `hurry` more easily. Even in platforms where `hurry` does not yet support build acceleration, you can still replace all instances of `cargo build` with `hurry cargo build`, and your build should still behave the same as before.
 
 ## License
 
