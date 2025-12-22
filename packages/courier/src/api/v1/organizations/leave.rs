@@ -57,18 +57,34 @@ pub async fn handle(
         .await
     {
         Ok(true) => {
+            // Revoke all API keys for this account in this org
+            let keys_revoked = match db
+                .revoke_account_org_api_keys(session.account_id, org_id)
+                .await
+            {
+                Ok(count) => count,
+                Err(error) => {
+                    error!(?error, "organizations.leave.revoke_keys_error");
+                    // Continue with removal even if key revocation fails
+                    0
+                }
+            };
+
             let _ = db
                 .log_audit_event(
                     Some(session.account_id),
                     Some(org_id),
                     "organization.member.left",
-                    None,
+                    Some(serde_json::json!({
+                        "api_keys_revoked": keys_revoked,
+                    })),
                 )
                 .await;
 
             info!(
                 account_id = %session.account_id,
                 org_id = %org_id,
+                keys_revoked = %keys_revoked,
                 "organizations.leave.success"
             );
             Response::Success

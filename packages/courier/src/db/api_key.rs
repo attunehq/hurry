@@ -231,6 +231,31 @@ impl Postgres {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Revoke all API keys for an account in a specific organization.
+    ///
+    /// Returns the number of keys revoked.
+    #[tracing::instrument(name = "Postgres::revoke_account_org_api_keys")]
+    pub async fn revoke_account_org_api_keys(
+        &self,
+        account_id: AccountId,
+        org_id: OrgId,
+    ) -> Result<u64> {
+        let result = sqlx::query!(
+            r#"
+            UPDATE api_key
+            SET revoked_at = NOW()
+            WHERE account_id = $1 AND organization_id = $2 AND revoked_at IS NULL
+            "#,
+            account_id.as_i64(),
+            org_id.as_i64(),
+        )
+        .execute(&self.pool)
+        .await
+        .context("revoke account org api keys")?;
+
+        Ok(result.rows_affected())
+    }
+
     /// Get an API key by ID.
     #[tracing::instrument(name = "Postgres::get_api_key")]
     pub async fn get_api_key(&self, key_id: ApiKeyId) -> Result<Option<ApiKey>> {

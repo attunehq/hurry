@@ -81,6 +81,19 @@ pub async fn handle(
         .await
     {
         Ok(true) => {
+            // Revoke all API keys for this account in this org
+            let keys_revoked = match db
+                .revoke_account_org_api_keys(target_account_id, org_id)
+                .await
+            {
+                Ok(count) => count,
+                Err(error) => {
+                    error!(?error, "organizations.remove_member.revoke_keys_error");
+                    // Continue with removal even if key revocation fails
+                    0
+                }
+            };
+
             let _ = db
                 .log_audit_event(
                     Some(session.account_id),
@@ -88,6 +101,7 @@ pub async fn handle(
                     "organization.member.removed",
                     Some(json!({
                         "removed_account_id": target_account_id.as_i64(),
+                        "api_keys_revoked": keys_revoked,
                     })),
                 )
                 .await;
@@ -95,6 +109,7 @@ pub async fn handle(
             info!(
                 org_id = %org_id,
                 target_account_id = %target_account_id,
+                keys_revoked = %keys_revoked,
                 "organizations.remove_member.success"
             );
             Response::Success
