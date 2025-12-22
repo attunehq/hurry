@@ -101,7 +101,7 @@ pub async fn restore_units(
         // restored but the large libraries did not.
         if fs::exists(
             &ws.unit_profile_dir(info)
-                .join(unit.fingerprint_json_file().await?),
+                .join(unit.fingerprint_json_file()?),
         )
         .await
         {
@@ -271,10 +271,13 @@ pub async fn restore_units(
         let cached_fingerprint = saved.fingerprint().as_str();
         let cached_fingerprint = serde_json::from_str::<Fingerprint>(cached_fingerprint)?;
 
-        // Handle skipped units before branching into type-specific logic.
-        // Skipped fingerprints are already correct on disk; we just need to
-        // record the mapping and touch the unit mtime to maintain ordering
-        // invariants.
+        // Handle skipped units. Skipped fingerprints are already correct on
+        // disk; we just need to record the mapping and touch the unit mtime to
+        // maintain ordering invariants.
+        //
+        // FIXME: Is this actually true? If any other units are restored, won't
+        // the existing fingerprints need to be updated with new dep fingerprint
+        // hashes?
         if units_to_skip.contains(unit_hash) {
             // Read the local fingerprint from disk and record the mapping from
             // cached hash to local fingerprint. This allows dependent units to
@@ -282,7 +285,7 @@ pub async fn restore_units(
             let profile = ws.unit_profile_dir(unit.info());
             let cached_hash = cached_fingerprint.hash_u64();
 
-            let file = unit.fingerprint_json_file().await?;
+            let file = unit.fingerprint_json_file()?;
             let file = profile.join(&file);
             let json = fs::must_read_buffered_utf8(&file).await?;
             let local = serde_json::from_str::<Fingerprint>(&json)?;
@@ -308,14 +311,10 @@ pub async fn restore_units(
             continue;
         }
 
-        // Mark the unit's restore as pending.
-        restore_progress
-            .units
-            .insert(unit_hash.clone(), DashSet::new());
-        // Write the fingerprint and queue other files to be restored. Writing
-        // fingerprints happens during this loop because fingerprint rewriting
-        // must occur in dependency order because a unit's fingerprint depends
-        // on its dependencies' fingerprints.
+        // Handle restored unit fingerprints. These are written synchronously
+        // during the loop because they need to be processed in dependency
+        // order, since a unit's fingerprint depends on its dependencies'
+        // fingerprints.
         //
         // TODO: Ideally, we would only write fingerprints _after_ all the files
         // for the unit are restored, to be maximally correct. This requires
@@ -325,6 +324,32 @@ pub async fn restore_units(
         // TODO: Maybe instead of this whole fingerprint-rewriting song and
         // dance, we should just fork and/or upstream relocatable fingerprints
         // into Cargo.
+        let info = unit.info();
+        let src_path = unit.src_path().map(|p| p.into());
+        let rewritten_fingerprint = cached_fingerprint
+            .rewrite(src_path, &mut dep_fingerprints)
+            .await?;
+        let fingerprint_hash = rewritten_fingerprint.fingerprint_hash();
+
+        // Write the rewritten fingerprint.
+        let profile_dir = ws.unit_profile_dir(info);
+        fs::write(
+            &profile_dir.join(&unit.fingerprint_hash_file()?),
+            fingerprint_hash,
+        )
+        .await?;
+        fs::write(
+            &profile_dir.join(&unit.fingerprint_json_file()?),
+            serde_json::to_vec(&rewritten_fingerprint)?,
+        )
+        .await?;
+
+        // Mark the unit's restore as pending.
+        restore_progress
+            .units
+            .insert(unit_hash.clone(), DashSet::new());
+
+        // Queue all other files to be bulk-restored from CAS.
         match (saved, unit) {
             (
                 SavedUnit::LibraryCrate(saved_library_files, _),
@@ -340,19 +365,6 @@ pub async fn restore_units(
                     num_output_files = saved_library_files.output_files.len(),
                     "restoring library crate unit"
                 );
-
-                // Restore the fingerprint directly, because fingerprint
-                // rewriting needs to occur in dependency order.
-                //
-                // TODO: Is there enough in common in all the fingerprint
-                // restoration methods that we can factor them all out?
-                cargo::LibraryFiles::restore_fingerprint(
-                    &ws,
-                    &mut dep_fingerprints,
-                    cached_fingerprint,
-                    unit_plan,
-                )
-                .await?;
 
                 // Queue the output files.
                 for file in saved_library_files.output_files {
@@ -439,16 +451,6 @@ pub async fn restore_units(
                     "restoring build script compilation unit"
                 );
 
-                // Restore the fingerprint directly, because fingerprint
-                // rewriting needs to occur in dependency order.
-                cargo::BuildScriptCompiledFiles::restore_fingerprint(
-                    &ws,
-                    &mut dep_fingerprints,
-                    cached_fingerprint,
-                    unit_plan,
-                )
-                .await?;
-
                 let profile_dir = ws.unit_profile_dir(&unit_plan.info);
 
                 // Queue compiled program with hard link creation.
@@ -524,16 +526,6 @@ pub async fn restore_units(
                 SavedUnit::BuildScriptExecution(build_script_output_files, _),
                 UnitPlan::BuildScriptExecution(unit_plan),
             ) => {
-                // Restore the fingerprint directly, because fingerprint
-                // rewriting needs to occur in dependency order.
-                cargo::BuildScriptOutputFiles::restore_fingerprint(
-                    &ws,
-                    &mut dep_fingerprints,
-                    cached_fingerprint,
-                    unit_plan,
-                )
-                .await?;
-
                 let profile_dir = ws.unit_profile_dir(&unit_plan.info);
                 let out_dir = unit_plan.out_dir()?;
                 let out_dir_absolute = profile_dir.join(&out_dir);
