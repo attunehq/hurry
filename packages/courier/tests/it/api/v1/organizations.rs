@@ -350,6 +350,80 @@ async fn removed_member_api_key_no_longer_works(pool: PgPool) -> Result<()> {
 }
 
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn removed_member_session_still_works_for_account(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let bob_id = fixture.auth.account_id_bob().as_i64();
+
+    // Verify Bob's session works for the /me endpoint (account-level)
+    let me_url = fixture.base_url.join("api/v1/me")?;
+    let me_response = reqwest::Client::new()
+        .get(me_url.clone())
+        .bearer_auth(fixture.auth.session_bob().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(
+        me_response.status(),
+        StatusCode::OK,
+        "Bob's session should work before removal"
+    );
+
+    // Verify Bob can access org members list (org-level)
+    let members_url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/members"))?;
+    let members_response = reqwest::Client::new()
+        .get(members_url.clone())
+        .bearer_auth(fixture.auth.session_bob().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(
+        members_response.status(),
+        StatusCode::OK,
+        "Bob should be able to list org members before removal"
+    );
+
+    // Alice (admin) removes Bob from the org
+    let remove_url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/members/{bob_id}"))?;
+    let remove_response = reqwest::Client::new()
+        .delete(remove_url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(remove_response.status(), StatusCode::NO_CONTENT);
+
+    // Sessions are account-wide, not org-scoped. Removing a user from an org
+    // should NOT invalidate their session - they can still log in to view
+    // their account, join other orgs, accept invites, etc.
+    let me_response_after = reqwest::Client::new()
+        .get(me_url)
+        .bearer_auth(fixture.auth.session_bob().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(
+        me_response_after.status(),
+        StatusCode::OK,
+        "Bob's session should still work for account-level operations"
+    );
+
+    // BUT Bob should no longer be able to access org resources
+    let members_response_after = reqwest::Client::new()
+        .get(members_url)
+        .bearer_auth(fixture.auth.session_bob().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(
+        members_response_after.status(),
+        StatusCode::FORBIDDEN,
+        "Bob's session should NOT work for org-level operations after removal"
+    );
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn removed_member_api_key_not_in_list(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
     let org_id = fixture.auth.org_acme().as_i64();
