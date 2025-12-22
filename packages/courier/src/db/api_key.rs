@@ -37,6 +37,9 @@ pub struct OrgApiKey {
 
 impl Postgres {
     /// Lookup account and org for a raw token by direct hash comparison.
+    ///
+    /// Returns `None` if the token is invalid, revoked, or the owning account
+    /// is disabled.
     #[tracing::instrument(name = "Postgres::token_lookup", skip(token))]
     async fn token_lookup(
         &self,
@@ -49,7 +52,10 @@ impl Postgres {
                 api_key.account_id,
                 api_key.organization_id
             FROM api_key
-            WHERE api_key.hash = $1 AND api_key.revoked_at IS NULL
+            JOIN account ON api_key.account_id = account.id
+            WHERE api_key.hash = $1
+              AND api_key.revoked_at IS NULL
+              AND account.disabled_at IS NULL
             "#,
             hash.as_bytes(),
         )
