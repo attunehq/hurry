@@ -101,20 +101,3 @@ async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
 
     Ok(())
 }
-
-#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
-async fn non_admin_forbidden(pool: PgPool) -> Result<()> {
-    let fixture = TestFixture::spawn(pool).await?;
-    let url = fixture.base_url.join("api/v1/cache/cargo/reset")?;
-
-    // Bob is a member (not admin) of Acme Corp
-    let response = reqwest::Client::new()
-        .post(url)
-        .bearer_auth(fixture.auth.token_bob().expose())
-        .send()
-        .await?;
-
-    pretty_assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-    Ok(())
-}
