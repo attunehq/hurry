@@ -275,6 +275,64 @@ async fn remove_member_success(pool: PgPool) -> Result<()> {
 }
 
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn removed_member_api_key_no_longer_works(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let bob_id = fixture.auth.account_id_bob().as_i64();
+
+    // Use a test key for CAS operations
+    let test_content = b"test blob content for bob";
+    let test_key = crate::helpers::test_blob(test_content);
+
+    // Verify Bob's API key works for an authenticated endpoint (CAS write)
+    let cas_url = fixture
+        .base_url
+        .join(&format!("api/v1/cas/{}", test_key))?;
+    let write_response = reqwest::Client::new()
+        .put(cas_url)
+        .bearer_auth(fixture.auth.token_bob().expose())
+        .body(test_content.to_vec())
+        .send()
+        .await?;
+    pretty_assert_eq!(
+        write_response.status(),
+        StatusCode::CREATED,
+        "Bob's API key should work before removal"
+    );
+
+    // Alice (admin) removes Bob from the org
+    let remove_url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/members/{bob_id}"))?;
+    let remove_response = reqwest::Client::new()
+        .delete(remove_url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(remove_response.status(), StatusCode::NO_CONTENT);
+
+    // Verify Bob's API key no longer works - try to write a different blob
+    let test_content_2 = b"another test blob for bob";
+    let test_key_2 = crate::helpers::test_blob(test_content_2);
+    let cas_url_2 = fixture
+        .base_url
+        .join(&format!("api/v1/cas/{}", test_key_2))?;
+    let write_response_after = reqwest::Client::new()
+        .put(cas_url_2)
+        .bearer_auth(fixture.auth.token_bob().expose())
+        .body(test_content_2.to_vec())
+        .send()
+        .await?;
+    pretty_assert_eq!(
+        write_response_after.status(),
+        StatusCode::UNAUTHORIZED,
+        "Bob's API key should be revoked after removal from org"
+    );
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn remove_member_non_admin_forbidden(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
     let org_id = fixture.auth.org_acme().as_i64();
@@ -668,6 +726,81 @@ async fn bot_api_key_works_for_org_operations(pool: PgPool) -> Result<()> {
     // Health endpoint should work (it doesn't require auth, but the key should be
     // valid)
     pretty_assert_eq!(health_response.status(), StatusCode::OK);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn revoked_bot_api_key_no_longer_works(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+
+    // Create a bot
+    let create_url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/bots"))?;
+    let create_response = reqwest::Client::new()
+        .post(create_url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .json(&serde_json::json!({
+            "name": "CI Bot",
+            "responsible_email": "devops@acme.com"
+        }))
+        .send()
+        .await?;
+    pretty_assert_eq!(create_response.status(), StatusCode::CREATED);
+
+    let bot = create_response.json::<CreateBotResponse>().await?;
+
+    // Use a test key for CAS operations
+    let test_content = b"test blob content";
+    let test_key = crate::helpers::test_blob(test_content);
+
+    // Verify the bot's API key works for an authenticated endpoint (CAS write)
+    let cas_url = fixture
+        .base_url
+        .join(&format!("api/v1/cas/{}", test_key))?;
+    let write_response = reqwest::Client::new()
+        .put(cas_url.clone())
+        .bearer_auth(&bot.api_key)
+        .body(test_content.to_vec())
+        .send()
+        .await?;
+    pretty_assert_eq!(
+        write_response.status(),
+        StatusCode::CREATED,
+        "Bot API key should work before revocation"
+    );
+
+    // Revoke the bot (remove from organization)
+    let revoke_url = fixture.base_url.join(&format!(
+        "api/v1/organizations/{org_id}/members/{}",
+        bot.account_id
+    ))?;
+    let revoke_response = reqwest::Client::new()
+        .delete(revoke_url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(revoke_response.status(), StatusCode::NO_CONTENT);
+
+    // Verify the bot's API key no longer works - try to write a different blob
+    let test_content_2 = b"another test blob";
+    let test_key_2 = crate::helpers::test_blob(test_content_2);
+    let cas_url_2 = fixture
+        .base_url
+        .join(&format!("api/v1/cas/{}", test_key_2))?;
+    let write_response_after = reqwest::Client::new()
+        .put(cas_url_2)
+        .bearer_auth(&bot.api_key)
+        .body(test_content_2.to_vec())
+        .send()
+        .await?;
+    pretty_assert_eq!(
+        write_response_after.status(),
+        StatusCode::UNAUTHORIZED,
+        "Bot API key should be revoked after bot is removed from org"
+    );
 
     Ok(())
 }
