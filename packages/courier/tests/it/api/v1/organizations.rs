@@ -35,6 +35,23 @@ struct UpdateRoleRequest {
     role: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct ApiKeyListResponse {
+    api_keys: Vec<ApiKeyEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct ApiKeyEntry {
+    id: i64,
+    name: String,
+    account_id: i64,
+    account_email: String,
+    bot: bool,
+    created_at: String,
+    accessed_at: String,
+}
+
 #[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
 async fn create_organization_success(pool: PgPool) -> Result<()> {
     let fixture = TestFixture::spawn(pool).await?;
@@ -327,6 +344,75 @@ async fn removed_member_api_key_no_longer_works(pool: PgPool) -> Result<()> {
         write_response_after.status(),
         StatusCode::UNAUTHORIZED,
         "Bob's API key should be revoked after removal from org"
+    );
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn removed_member_api_key_not_in_list(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let bob_id = fixture.auth.account_id_bob().as_i64();
+
+    // Get initial API key count
+    let list_url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/api-keys"))?;
+    let list_response = reqwest::Client::new()
+        .get(list_url.clone())
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(list_response.status(), StatusCode::OK);
+    let initial_list = list_response.json::<ApiKeyListResponse>().await?;
+    let initial_count = initial_list.api_keys.len();
+
+    // Verify Bob has at least one key in the list
+    let bob_keys_before = initial_list
+        .api_keys
+        .iter()
+        .filter(|k| k.account_id == bob_id)
+        .count();
+    assert!(
+        bob_keys_before > 0,
+        "Bob should have at least one API key before removal"
+    );
+
+    // Alice (admin) removes Bob from the org
+    let remove_url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/members/{bob_id}"))?;
+    let remove_response = reqwest::Client::new()
+        .delete(remove_url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(remove_response.status(), StatusCode::NO_CONTENT);
+
+    // Verify Bob's API keys no longer appear in the list
+    let list_response_after = reqwest::Client::new()
+        .get(list_url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(list_response_after.status(), StatusCode::OK);
+    let final_list = list_response_after.json::<ApiKeyListResponse>().await?;
+
+    let bob_keys_after = final_list
+        .api_keys
+        .iter()
+        .filter(|k| k.account_id == bob_id)
+        .count();
+    pretty_assert_eq!(
+        bob_keys_after, 0,
+        "Bob's API keys should not appear in the list after removal"
+    );
+
+    pretty_assert_eq!(
+        final_list.api_keys.len(),
+        initial_count - bob_keys_before,
+        "Total API key count should decrease by Bob's key count"
     );
 
     Ok(())
@@ -800,6 +886,105 @@ async fn revoked_bot_api_key_no_longer_works(pool: PgPool) -> Result<()> {
         write_response_after.status(),
         StatusCode::UNAUTHORIZED,
         "Bot API key should be revoked after bot is removed from org"
+    );
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn revoked_bot_api_key_not_in_list(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+
+    // Get initial API key count
+    let list_url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/api-keys"))?;
+    let list_response = reqwest::Client::new()
+        .get(list_url.clone())
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(list_response.status(), StatusCode::OK);
+    let initial_list = list_response.json::<ApiKeyListResponse>().await?;
+    let initial_count = initial_list.api_keys.len();
+
+    // Create a bot
+    let create_url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}/bots"))?;
+    let create_response = reqwest::Client::new()
+        .post(create_url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .json(&serde_json::json!({
+            "name": "CI Bot",
+            "responsible_email": "devops@acme.com"
+        }))
+        .send()
+        .await?;
+    pretty_assert_eq!(create_response.status(), StatusCode::CREATED);
+
+    let bot = create_response.json::<CreateBotResponse>().await?;
+
+    // Verify the bot's API key appears in the list
+    let list_response_with_bot = reqwest::Client::new()
+        .get(list_url.clone())
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(list_response_with_bot.status(), StatusCode::OK);
+    let list_with_bot = list_response_with_bot.json::<ApiKeyListResponse>().await?;
+
+    let bot_keys_before = list_with_bot
+        .api_keys
+        .iter()
+        .filter(|k| k.account_id == bot.account_id)
+        .count();
+    pretty_assert_eq!(
+        bot_keys_before, 1,
+        "Bot should have exactly one API key after creation"
+    );
+    pretty_assert_eq!(
+        list_with_bot.api_keys.len(),
+        initial_count + 1,
+        "Total API key count should increase by 1 after bot creation"
+    );
+
+    // Revoke the bot (remove from organization)
+    let revoke_url = fixture.base_url.join(&format!(
+        "api/v1/organizations/{org_id}/members/{}",
+        bot.account_id
+    ))?;
+    let revoke_response = reqwest::Client::new()
+        .delete(revoke_url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(revoke_response.status(), StatusCode::NO_CONTENT);
+
+    // Verify the bot's API key no longer appears in the list
+    let list_response_after = reqwest::Client::new()
+        .get(list_url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .send()
+        .await?;
+    pretty_assert_eq!(list_response_after.status(), StatusCode::OK);
+    let final_list = list_response_after.json::<ApiKeyListResponse>().await?;
+
+    let bot_keys_after = final_list
+        .api_keys
+        .iter()
+        .filter(|k| k.account_id == bot.account_id)
+        .count();
+    pretty_assert_eq!(
+        bot_keys_after, 0,
+        "Bot's API key should not appear in the list after revocation"
+    );
+
+    pretty_assert_eq!(
+        final_list.api_keys.len(),
+        initial_count,
+        "Total API key count should return to initial count after bot revocation"
     );
 
     Ok(())
