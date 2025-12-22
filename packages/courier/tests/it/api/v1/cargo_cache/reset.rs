@@ -5,6 +5,8 @@ use clients::courier::v1::{
     cache::{CargoRestoreRequest, CargoSaveRequest, CargoSaveUnitRequest},
 };
 use color_eyre::Result;
+use pretty_assertions::assert_eq as pretty_assert_eq;
+use reqwest::StatusCode;
 use sqlx::PgPool;
 
 use crate::helpers::{TestFixture, test_saved_unit};
@@ -96,6 +98,23 @@ async fn org_reset_only_deletes_own_data(pool: PgPool) -> Result<()> {
         !response_charlie.is_empty(),
         "org B's cache should still exist"
     );
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn non_admin_forbidden(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let url = fixture.base_url.join("api/v1/cache/cargo/reset")?;
+
+    // Bob is a member (not admin) of Acme Corp
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(fixture.auth.token_bob().expose())
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     Ok(())
 }
