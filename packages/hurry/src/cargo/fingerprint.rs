@@ -14,6 +14,8 @@ use rustc_stable_hash::StableSipHasher128;
 use serde::{Deserialize, Serialize, de, ser};
 use tracing::{debug, instrument, trace};
 
+use crate::{fs, path::AbsFilePath};
+
 /// A Cargo fingerprint. This struct is vendored and modified from the Cargo
 /// source code. In particular, some `serde(skip)`ed fields are elided. For
 /// details, see the module documentation[^1] and the struct definition[^2].
@@ -129,6 +131,22 @@ impl Fingerprint {
         // [^2]: https://github.com/attunehq/cargo/blob/d59205e6303b011e2c7b1fcd92946a5e783b77bb/src/cargo/core/compiler/fingerprint/mod.rs#L2034
         // [^3]: https://github.com/attunehq/cargo/blob/d59205e6303b011e2c7b1fcd92946a5e783b77bb/src/cargo/util/hex.rs#L7
         hex::encode(self.hash_u64().to_le_bytes())
+    }
+
+    pub async fn read(
+        fingerprint_json_path: AbsFilePath,
+        fingerprint_hash_path: AbsFilePath,
+    ) -> Result<Fingerprint> {
+        let fingerprint_json = fs::must_read_buffered_utf8(&fingerprint_json_path).await?;
+        let fingerprint: Fingerprint = serde_json::from_str(&fingerprint_json)?;
+
+        let fingerprint_hash = fs::must_read_buffered_utf8(&fingerprint_hash_path).await?;
+        // Sanity check that the fingerprint hashes match.
+        if fingerprint.fingerprint_hash() != fingerprint_hash {
+            bail!("fingerprint hash mismatch");
+        }
+
+        Ok(fingerprint)
     }
 
     /// Create a new Fingerprint with rewritten path and dependencies.

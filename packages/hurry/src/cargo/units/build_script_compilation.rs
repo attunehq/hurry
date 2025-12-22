@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 use clients::courier::v1 as courier;
 use color_eyre::{
     Result,
-    eyre::{self, OptionExt as _, bail},
+    eyre::{self, OptionExt as _},
 };
 use derive_more::Debug;
 use serde::{Deserialize, Serialize};
@@ -114,23 +114,7 @@ impl BuildScriptCompilationUnitPlan {
         let encoded_dep_info_file =
             fs::must_read_buffered(&profile_dir.join(&self.encoded_dep_info_file()?)).await?;
 
-        let fingerprint = {
-            let fingerprint_json =
-                fs::must_read_buffered_utf8(&profile_dir.join(&self.fingerprint_json_file()?))
-                    .await?;
-            let fingerprint: Fingerprint = serde_json::from_str(&fingerprint_json)?;
-
-            let fingerprint_hash =
-                fs::must_read_buffered_utf8(&profile_dir.join(&self.fingerprint_hash_file()?))
-                    .await?;
-
-            // Sanity check that the fingerprint hashes match.
-            if fingerprint.fingerprint_hash() != fingerprint_hash {
-                bail!("fingerprint hash mismatch");
-            }
-
-            fingerprint
-        };
+        let fingerprint = self.read_fingerprint(ws).await?;
 
         Ok(BuildScriptCompiledFiles {
             compiled_program,
@@ -138,6 +122,15 @@ impl BuildScriptCompilationUnitPlan {
             fingerprint,
             encoded_dep_info_file,
         })
+    }
+
+    pub async fn read_fingerprint(&self, ws: &Workspace) -> Result<Fingerprint> {
+        let profile_dir = ws.unit_profile_dir(&self.info);
+        Fingerprint::read(
+            profile_dir.join(&self.fingerprint_json_file()?),
+            profile_dir.join(&self.fingerprint_hash_file()?),
+        )
+        .await
     }
 
     /// Set the mtime for all output files of this unit. This function assumes

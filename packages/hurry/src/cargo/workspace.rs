@@ -16,8 +16,8 @@ use uuid::Uuid;
 use crate::{
     cargo::{
         self, BuildPlan, BuildScriptCompilationUnitPlan, BuildScriptExecutionUnitPlan,
-        CargoBuildArguments, CargoCompileMode, LibraryCrateUnitPlan, Profile, RustcArguments,
-        RustcTarget, RustcTargetPlatform,
+        CargoBuildArguments, CargoCompileMode, Fingerprint, LibraryCrateUnitPlan, Profile,
+        RustcArguments, RustcTarget, RustcTargetPlatform,
     },
     fs, mk_rel_dir,
     path::{AbsDirPath, AbsFilePath, RelDirPath, RelFilePath, RelativeTo as _, TryJoinWith as _},
@@ -813,6 +813,14 @@ impl UnitPlan {
             UnitPlan::LibraryCrate(plan) => Some(plan.src_path.clone()),
             UnitPlan::BuildScriptCompilation(plan) => Some(plan.src_path.clone()),
             UnitPlan::BuildScriptExecution(_) => None,
+        }
+    }
+
+    pub async fn read_fingerprint(&self, ws: &Workspace) -> Result<Fingerprint> {
+        match self {
+            UnitPlan::LibraryCrate(plan) => plan.read_fingerprint(ws).await,
+            UnitPlan::BuildScriptCompilation(plan) => plan.read_fingerprint(ws).await,
+            UnitPlan::BuildScriptExecution(plan) => plan.read_fingerprint(ws).await,
         }
     }
 }

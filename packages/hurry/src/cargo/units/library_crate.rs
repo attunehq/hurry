@@ -1,10 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 
 use clients::courier::v1 as courier;
-use color_eyre::{
-    Result,
-    eyre::{self, bail},
-};
+use color_eyre::{Result, eyre};
 use derive_more::Debug;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
@@ -57,8 +54,7 @@ impl LibraryCrateUnitPlan {
         let output_files = {
             let mut output_files = Vec::new();
             for output_file_path in &self.outputs {
-                let path =
-                    QualifiedPath::parse_abs(ws, &self.info.target_arch, output_file_path.as_ref());
+                let path = QualifiedPath::parse_abs(ws, &self.info.target_arch, output_file_path);
                 let contents = fs::must_read_buffered(output_file_path).await?;
                 let executable = fs::is_executable(output_file_path.as_std_path()).await;
                 output_files.push(SavedFile {
@@ -80,23 +76,7 @@ impl LibraryCrateUnitPlan {
         let encoded_dep_info_file =
             fs::must_read_buffered(&profile_dir.join(&self.encoded_dep_info_file()?)).await?;
 
-        let fingerprint = {
-            let fingerprint_json =
-                fs::must_read_buffered_utf8(&profile_dir.join(&self.fingerprint_json_file()?))
-                    .await?;
-            let fingerprint: Fingerprint = serde_json::from_str(&fingerprint_json)?;
-
-            let fingerprint_hash =
-                fs::must_read_buffered_utf8(&profile_dir.join(&self.fingerprint_hash_file()?))
-                    .await?;
-
-            // Sanity check that the fingerprint hashes match.
-            if fingerprint.fingerprint_hash() != fingerprint_hash {
-                bail!("fingerprint hash mismatch");
-            }
-
-            fingerprint
-        };
+        let fingerprint = self.read_fingerprint(ws).await?;
 
         Ok(LibraryFiles {
             output_files,
@@ -104,6 +84,15 @@ impl LibraryCrateUnitPlan {
             fingerprint,
             encoded_dep_info_file,
         })
+    }
+
+    pub async fn read_fingerprint(&self, ws: &Workspace) -> Result<Fingerprint> {
+        let profile_dir = ws.unit_profile_dir(&self.info);
+        Fingerprint::read(
+            profile_dir.join(&self.fingerprint_json_file()?),
+            profile_dir.join(&self.fingerprint_hash_file()?),
+        )
+        .await
     }
 
     /// Set the mtime for all output files of this unit. This function assumes

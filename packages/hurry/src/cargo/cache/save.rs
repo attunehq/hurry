@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 use color_eyre::{Result, eyre::bail};
 use futures::stream;
 use serde::{Deserialize, Serialize};
 use tap::{Conv as _, Pipe as _};
-use tracing::{error, instrument, trace};
+use tracing::{debug, error, instrument, trace};
 
 use crate::{
     cargo::{
@@ -38,7 +38,7 @@ pub async fn save_units(
     skip: Restored,
     mut on_progress: impl FnMut(&SaveProgress),
 ) -> Result<()> {
-    trace!(?units, "units");
+    trace!(?units, ?skip, "saving units");
 
     let mut progress = SaveProgress {
         uploaded_units: 0,
@@ -55,10 +55,24 @@ pub async fn save_units(
     let mut save_requests = Vec::new();
     let mut dep_fingerprints = HashMap::new();
     for unit in units {
+        debug!(?unit, "saving unit");
         if skip.units.contains(&unit.info().unit_hash) {
-            trace!(?unit, "skipping unit backup: unit was restored from cache");
+            debug!(?unit, "skipping unit backup: unit was restored from cache");
             progress.total_units -= 1;
             on_progress(&progress);
+
+            // Even skipped units need to have their rewritten fingerprints
+            // calculated, so that we have those values ready in case these
+            // units are `dep`s of a downstream unit that is not skipped.
+            rewrite_fingerprint(
+                &ws,
+                &unit.info().target_arch,
+                unit.src_path(),
+                &mut dep_fingerprints,
+                unit.read_fingerprint(&ws).await?,
+            )
+            .await?;
+
             continue;
         }
 
@@ -157,7 +171,7 @@ pub async fn save_units(
                 let fingerprint = rewrite_fingerprint(
                     &ws,
                     &plan.info.target_arch,
-                    &plan.src_path,
+                    Some(plan.src_path.clone()),
                     &mut dep_fingerprints,
                     files.fingerprint,
                 )
@@ -216,7 +230,7 @@ pub async fn save_units(
                 let fingerprint = rewrite_fingerprint(
                     &ws,
                     &plan.info.target_arch,
-                    &plan.src_path,
+                    Some(plan.src_path.clone()),
                     &mut dep_fingerprints,
                     files.fingerprint,
                 )
@@ -283,8 +297,14 @@ pub async fn save_units(
                 }
 
                 // Prepare save request.
-                let fingerprint =
-                    serde_json::to_string(&files.fingerprint)?.conv::<courier::Fingerprint>();
+                let fingerprint = rewrite_fingerprint(
+                    &ws,
+                    &plan.info.target_arch,
+                    None,
+                    &mut dep_fingerprints,
+                    files.fingerprint,
+                )
+                .await?;
                 let save_request = CargoSaveUnitRequest::builder()
                     .unit(courier::SavedUnit::BuildScriptExecution(
                         courier::BuildScriptOutputFiles::builder()
@@ -320,21 +340,34 @@ pub async fn save_units(
 /// `$CARGO_HOME`s still have the same `src_path` and therefore still have the
 /// same fingerprint hash, so that our rewrite/restore algorithm (that depends
 /// on being able to know old fingerprint hashes) works properly.
+#[instrument(skip_all)]
 async fn rewrite_fingerprint(
     ws: &Workspace,
     target: &RustcTarget,
-    src_path: &AbsFilePath,
+    src_path: Option<AbsFilePath>,
     dep_fingerprints: &mut HashMap<u64, Fingerprint>,
     fingerprint: Fingerprint,
 ) -> Result<courier::Fingerprint> {
-    let qualified = QualifiedPath::parse_abs(&ws, &target, src_path);
-    let src_path = match qualified {
-        QualifiedPath::Rootless(p) => bail!("impossible: fingerprint path is not absolute: {}", p),
-        QualifiedPath::RelativeTargetProfile(p) => bail!("unexpected fingerprint path root: {}", p),
-        QualifiedPath::Absolute(p) => bail!("unexpected fingerprint path root: {}", p),
-        QualifiedPath::RelativeCargoHome(p) => AbsDirPath::try_from("/cargo_home")?.join(p),
+    let src_path = match src_path {
+        Some(ref src_path) => {
+            let qualified = QualifiedPath::parse_abs(ws, target, src_path);
+            match qualified {
+                QualifiedPath::Rootless(p) => {
+                    bail!("impossible: fingerprint path is not absolute: {}", p)
+                }
+                QualifiedPath::RelativeTargetProfile(p) => {
+                    bail!("unexpected fingerprint path root: {}", p)
+                }
+                QualifiedPath::Absolute(p) => bail!("unexpected fingerprint path root: {}", p),
+                QualifiedPath::RelativeCargoHome(p) => AbsDirPath::try_from("/cargo_home")?
+                    .join(p)
+                    .conv::<PathBuf>()
+                    .pipe(Some),
+            }
+        }
+        None => None,
     };
-    let rewritten_fingerprint = fingerprint.rewrite(Some(src_path.into()), dep_fingerprints)?;
+    let rewritten_fingerprint = fingerprint.rewrite(src_path, dep_fingerprints)?;
     serde_json::to_string(&rewritten_fingerprint)?
         .conv::<courier::Fingerprint>()
         .pipe(Ok)
