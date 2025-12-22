@@ -138,7 +138,7 @@ impl Fingerprint {
         path: Option<PathBuf>,
         dep_fingerprints: &mut HashMap<u64, Fingerprint>,
     ) -> Result<Fingerprint> {
-        let old_fingerprint_hash = self.hash_u64();
+        let old = self.hash_u64();
 
         // First, rewrite the `path` field.
         //
@@ -207,10 +207,16 @@ impl Fingerprint {
 
         // Clear and recalculate fingerprint hash.
         self.clear_memoized();
-        debug!(old = ?old_fingerprint_hash, new = ?self.hash_u64(), "rewritten fingerprint hash");
+        // `new` is only ever used in the debug!() call but cannot be inlined
+        // because hash_u64 calls Fingerprint::hash which has its own debug!()
+        // call and event generation cannot be nested[^1].
+        //
+        // [^1]: https://github.com/tokio-rs/tracing/issues/2448
+        let new = self.hash_u64();
+        debug!(?old, ?new, "rewritten fingerprint hash");
 
         // Save unit fingerprint (for future dependents).
-        dep_fingerprints.insert(old_fingerprint_hash, self.clone());
+        dep_fingerprints.insert(old, self.clone());
 
         Ok(self)
     }
