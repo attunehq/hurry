@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router";
 
 import { useSession } from "../../auth/session";
+import { Noise } from "../primitives/Noise";
 import { useToast } from "../toast/ToastProvider";
 import { OrgSwitcher } from "./OrgSwitcher";
 import { UserMenu } from "./UserMenu";
@@ -37,7 +38,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [nav, toast, onSessionInvalidated]);
 
   return (
-    <div className="noise min-h-screen">
+    <Noise className="min-h-screen">
       <div className="mx-auto max-w-6xl px-6 pb-12 pt-10">
         {/* Header: brand, org switcher, user menu */}
         <header className="mb-8 flex items-center gap-4">
@@ -51,6 +52,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         {/* Page content */}
         {children}
       </div>
-    </div>
+    </Noise>
   );
 }

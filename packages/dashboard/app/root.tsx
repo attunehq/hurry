@@ -9,9 +9,16 @@ import { ToastProvider } from "./ui/toast/ToastProvider";
 import { AppShell } from "./ui/shell/AppShell";
 import "./styles.css";
 
+const GLOBAL_STYLES = `
+:focus-visible {
+  outline: 2px solid var(--accent-bold);
+  outline-offset: 2px;
+}
+`;
+
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" style={{ minHeight: "100%", background: "var(--surface-base)" }}>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -19,8 +26,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <title>Hurry Console</title>
         <Meta />
         <Links />
+        <style>{GLOBAL_STYLES}</style>
       </head>
-      <body>
+      <body style={{ minHeight: "100%", background: "var(--gradient-bg)", color: "var(--text-secondary)" }}>
         {children}
         <ScrollRestoration />
         <Scripts />

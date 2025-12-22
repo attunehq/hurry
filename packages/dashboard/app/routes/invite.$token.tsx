@@ -6,6 +6,7 @@ import { useApi } from "../api/useApi";
 import { useOrgs } from "../org/OrgContext";
 import { Badge } from "../ui/primitives/Badge";
 import { Button } from "../ui/primitives/Button";
+import { Noise } from "../ui/primitives/Noise";
 import { useToast } from "../ui/toast/ToastProvider";
 
 export default function InvitePage() {
@@ -66,7 +67,7 @@ export default function InvitePage() {
   }, [load]);
 
   return (
-    <div className="noise fixed inset-0 flex items-center justify-center">
+    <Noise className="fixed inset-0 flex items-center justify-center">
       <div className="w-full max-w-md px-6">
         {/* Brand */}
         <div className="mb-8 flex items-center justify-center gap-3">
@@ -133,6 +134,6 @@ export default function InvitePage() {
           </div>
         </div>
       </div>
-    </div>
+    </Noise>
   );
 }

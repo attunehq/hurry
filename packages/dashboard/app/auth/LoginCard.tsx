@@ -5,6 +5,7 @@ import { apiUrl } from "../api/client";
 import { Button } from "../ui/primitives/Button";
 import { Input } from "../ui/primitives/Input";
 import { Label } from "../ui/primitives/Label";
+import { Noise } from "../ui/primitives/Noise";
 import { useToast } from "../ui/toast/ToastProvider";
 import { useSession } from "./session";
 
@@ -34,7 +35,7 @@ export function LoginCard() {
   }
 
   return (
-    <div className="noise fixed inset-0 flex items-start justify-center pt-[20vh]">
+    <Noise className="fixed inset-0 flex items-start justify-center pt-[20vh]">
       <div className="w-full max-w-md px-6">
         {/* Brand */}
         <div className="mb-8 flex items-center justify-center gap-3">
@@ -104,6 +105,6 @@ export function LoginCard() {
           </div>
         </div>
       </div>
-    </div>
+    </Noise>
   );
 }
