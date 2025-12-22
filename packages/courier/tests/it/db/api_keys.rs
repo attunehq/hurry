@@ -112,7 +112,10 @@ async fn disabled_account_api_key_invalid(pool: sqlx::PgPool) {
     // Verify token works before disabling
     let raw_token = RawToken::new(token.expose());
     let auth = db.validate(&raw_token).await.unwrap();
-    assert!(auth.is_some(), "API key should be valid before account disabled");
+    assert!(
+        auth.is_some(),
+        "API key should be valid before account disabled"
+    );
 
     // Disable the account
     db.disable_account(account_id).await.unwrap();

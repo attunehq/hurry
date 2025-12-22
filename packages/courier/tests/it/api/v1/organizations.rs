@@ -302,9 +302,7 @@ async fn removed_member_api_key_no_longer_works(pool: PgPool) -> Result<()> {
     let test_key = crate::helpers::test_blob(test_content);
 
     // Verify Bob's API key works for an authenticated endpoint (CAS write)
-    let cas_url = fixture
-        .base_url
-        .join(&format!("api/v1/cas/{}", test_key))?;
+    let cas_url = fixture.base_url.join(&format!("api/v1/cas/{}", test_key))?;
     let write_response = reqwest::Client::new()
         .put(cas_url)
         .bearer_auth(fixture.auth.token_bob().expose())
@@ -479,7 +477,8 @@ async fn removed_member_api_key_not_in_list(pool: PgPool) -> Result<()> {
         .filter(|k| k.account_id == bob_id)
         .count();
     pretty_assert_eq!(
-        bob_keys_after, 0,
+        bob_keys_after,
+        0,
         "Bob's API keys should not appear in the list after removal"
     );
 
@@ -917,9 +916,7 @@ async fn revoked_bot_api_key_no_longer_works(pool: PgPool) -> Result<()> {
     let test_key = crate::helpers::test_blob(test_content);
 
     // Verify the bot's API key works for an authenticated endpoint (CAS write)
-    let cas_url = fixture
-        .base_url
-        .join(&format!("api/v1/cas/{}", test_key))?;
+    let cas_url = fixture.base_url.join(&format!("api/v1/cas/{}", test_key))?;
     let write_response = reqwest::Client::new()
         .put(cas_url.clone())
         .bearer_auth(&bot.api_key)
@@ -1015,7 +1012,8 @@ async fn revoked_bot_api_key_not_in_list(pool: PgPool) -> Result<()> {
         .filter(|k| k.account_id == bot.account_id)
         .count();
     pretty_assert_eq!(
-        bot_keys_before, 1,
+        bot_keys_before,
+        1,
         "Bot should have exactly one API key after creation"
     );
     pretty_assert_eq!(
@@ -1051,7 +1049,8 @@ async fn revoked_bot_api_key_not_in_list(pool: PgPool) -> Result<()> {
         .filter(|k| k.account_id == bot.account_id)
         .count();
     pretty_assert_eq!(
-        bot_keys_after, 0,
+        bot_keys_after,
+        0,
         "Bot's API key should not appear in the list after revocation"
     );
 
