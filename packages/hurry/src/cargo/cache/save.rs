@@ -146,8 +146,18 @@ pub async fn save_units(
                     cas.store_bulk(stream::iter(cas_uploads)).await?;
                 }
 
+                // Prepare fingerprint for saving.
+                let fingerprint = files.fingerprint;
+                // FIXME: We need to make the `path` field static by making the
+                // path relative to $CARGO_HOME. But actually what we really
+                // want is to make the _DepFingerprint_ old hash values static
+                // in a way that will avoid collisions (i.e. is static and
+                // unique). Does this mean we have to rewrite all the
+                // fingerprints like we do on save? Or can we do something
+                // simpler here to regenerate values?
+                let fingerprint = serde_json::to_string(&fingerprint)?;
+
                 // Prepare save request.
-                let fingerprint = serde_json::to_string(&files.fingerprint)?;
                 let save_request = CargoSaveUnitRequest::builder()
                     .unit(courier::SavedUnit::LibraryCrate(
                         courier::LibraryFiles::builder()

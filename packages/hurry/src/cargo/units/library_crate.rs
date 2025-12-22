@@ -3,16 +3,16 @@ use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 use clients::courier::v1 as courier;
 use color_eyre::{
     Result,
-    eyre::{self, OptionExt as _, bail},
+    eyre::{self, bail},
 };
 use derive_more::Debug;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use tap::Pipe as _;
-use tracing::{debug, instrument, trace};
+use tracing::instrument;
 
 use crate::{
-    cargo::{DepInfo, Fingerprint, QualifiedPath, SavedFile, UnitPlanInfo, Workspace, fingerprint},
+    cargo::{DepInfo, Fingerprint, QualifiedPath, SavedFile, UnitPlanInfo, Workspace},
     fs,
     path::{AbsFilePath, JoinWith as _, RelFilePath, TryJoinWith as _},
 };
@@ -236,52 +236,17 @@ impl LibraryFiles {
     pub async fn restore_fingerprint(
         ws: &Workspace,
         dep_fingerprints: &mut HashMap<u64, Fingerprint>,
-        mut fingerprint: Fingerprint,
+        fingerprint: Fingerprint,
         unit_plan: &LibraryCrateUnitPlan,
     ) -> Result<()> {
+        // Rewrite the fingerprint.
+        let rewritten = fingerprint
+            .rewrite(Some(PathBuf::from(&unit_plan.src_path)), dep_fingerprints)
+            .await?;
+        let fingerprint_hash = rewritten.fingerprint_hash();
+
+        // Write the reconstructed fingerprint.
         let profile_dir = ws.unit_profile_dir(&unit_plan.info);
-        let old_fingerprint_hash = fingerprint.hash_u64();
-
-        // First, rewrite the `path` field.
-        fingerprint.path = fingerprint::util_hash_u64(PathBuf::from(&unit_plan.src_path));
-        debug!(path = ?PathBuf::from(&unit_plan.src_path), path_hash = ?fingerprint.path, "rewritten fingerprint");
-
-        // Then, rewrite the `deps` field.
-        //
-        // We don't actually have enough information to synthesize our
-        // own DepFingerprints (in particular, it would be very annoying
-        // to derive `only_requires_rmeta` independently). But the old
-        // fingerprint hashes are unique, and we know our old
-        // fingerprint hash! So we save a map of the old fingerprint
-        // hashes to the replacement fingerprint hashes, and use that to
-        // look up the correct replacement fingerprint hash in future
-        // DepFingerprints, leaving all other fields untouched.
-        //
-        // This works because we know the units are in dependency order,
-        // so previous replacement fingerprint hashes will always have
-        // already been calculated when we need them.
-        debug!("rewrite fingerprint deps: start");
-        for dep in fingerprint.deps.iter_mut() {
-            debug!(?dep, "rewriting fingerprint dep");
-            let old_dep_fingerprint = dep.fingerprint.hash_u64();
-            trace!(
-                ?old_dep_fingerprint,
-                ?dep_fingerprints,
-                "searching for dependency fingerprint hash"
-            );
-            dep.fingerprint = dep_fingerprints
-                .get(&old_dep_fingerprint)
-                .ok_or_eyre("dependency fingerprint hash not found")?
-                .clone();
-        }
-        debug!("rewrite fingerprint deps: done");
-
-        // Clear and recalculate fingerprint hash.
-        fingerprint.clear_memoized();
-        let fingerprint_hash = fingerprint.fingerprint_hash();
-        debug!(old = ?old_fingerprint_hash, new = ?fingerprint.hash_u64(), "rewritten fingerprint hash");
-
-        // Finally, write the reconstructed fingerprint.
         fs::write(
             &profile_dir.join(&unit_plan.fingerprint_hash_file()?),
             fingerprint_hash,
@@ -289,12 +254,9 @@ impl LibraryFiles {
         .await?;
         fs::write(
             &profile_dir.join(&unit_plan.fingerprint_json_file()?),
-            serde_json::to_vec(&fingerprint)?,
+            serde_json::to_vec(&rewritten)?,
         )
         .await?;
-
-        // Save unit fingerprint (for future dependents).
-        dep_fingerprints.insert(old_fingerprint_hash, fingerprint);
 
         Ok(())
     }

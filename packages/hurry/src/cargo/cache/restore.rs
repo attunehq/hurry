@@ -343,6 +343,9 @@ pub async fn restore_units(
 
                 // Restore the fingerprint directly, because fingerprint
                 // rewriting needs to occur in dependency order.
+                //
+                // TODO: Is there enough in common in all the fingerprint
+                // restoration methods that we can factor them all out?
                 cargo::LibraryFiles::restore_fingerprint(
                     &ws,
                     &mut dep_fingerprints,
