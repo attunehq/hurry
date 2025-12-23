@@ -66,6 +66,8 @@ hurry cargo build
 
 ### Hurry
 
+These recommendations are mainly driven by Rust compilation needs, although Hurry also does compression and decompression in parallel which benefits from multiple cores.
+
 | Component  | Minimum | Recommended |
 |------------|---------|-------------|
 | CPU        | 2 core  | 10+ core    |
