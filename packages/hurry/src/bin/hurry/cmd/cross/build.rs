@@ -55,7 +55,8 @@ pub struct Options {
     /// Upload artifacts asynchronously in the background instead of waiting.
     ///
     /// By default, hurry waits for uploads to complete before exiting.
-    /// Use this flag to upload in the background and exit immediately after the build.
+    /// Use this flag to upload in the background and exit immediately after the
+    /// build.
     #[arg(
         long = "hurry-async-upload",
         env = "HURRY_ASYNC_UPLOAD",
