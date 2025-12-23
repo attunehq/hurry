@@ -71,7 +71,7 @@ pub struct Options {
     #[arg(
         long = "hurry-async-upload",
         env = "HURRY_ASYNC_UPLOAD",
-        default_value_t = false,
+        default_value_t = false
     )]
     async_upload: bool,
 
@@ -302,4 +302,3 @@ async fn wait_for_upload(request_id: Uuid, progress: &TransferBar) -> Result<()>
 
     Ok(())
 }
-
