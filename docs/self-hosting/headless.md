@@ -259,7 +259,7 @@ docker compose logs courier
 Your API token may have been revoked. Create a new one:
 
 ```bash
-export COURIER_TOKEN=$(./scripts/api/login "admin@example.com")
+export COURIER_TOKEN=$(./scripts/api/login "admin@example.com" "admin" "Admin User")
 ./scripts/api/key-create <org-id> "new-key"
 ```
 

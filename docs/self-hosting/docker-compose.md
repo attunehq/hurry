@@ -108,7 +108,7 @@ For CI/automation, create a bot account:
 
 ```bash
 export HURRY_API_URL=http://localhost:3000
-export HURRY_API_TOKEN=their-api-token
+export HURRY_API_TOKEN=your-api-token
 ```
 
 And then run Hurry:
@@ -171,7 +171,7 @@ Team members configure their clients with the public URL:
 
 ```bash
 export HURRY_API_URL=https://hurry.internal.example.com
-export HURRY_API_TOKEN=their-api-token
+export HURRY_API_TOKEN=your-api-token
 ```
 
 ## Team Management
