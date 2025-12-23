@@ -126,10 +126,6 @@ impl Build {
             cmd = cmd.env("HURRY_API_TOKEN", token);
         }
 
-        // Always wait for uploads in tests to ensure artifacts are available for
-        // subsequent builds.
-        cmd = cmd.env("HURRY_WAIT_FOR_UPLOAD", "true");
-
         cmd.pwd(&self.pwd).finish()
     }
 

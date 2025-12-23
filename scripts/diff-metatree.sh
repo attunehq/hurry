@@ -28,7 +28,7 @@ cargo build
 hurry debug metadata ./target/debug/ > $HURRY_DIR/.scratch/trees/$RUN_ID/cargo-tree.txt
 
 # Upload artifacts to Hurry.
-hurry cargo build --hurry-wait-for-upload "$@"
+hurry cargo build "$@"
 
 # Do a restore and take a snapshot.
 cargo clean
