@@ -37,6 +37,9 @@ pub struct OrgApiKey {
 
 impl Postgres {
     /// Lookup account and org for a raw token by direct hash comparison.
+    ///
+    /// Returns `None` if the token is invalid, revoked, or the owning account
+    /// is disabled.
     #[tracing::instrument(name = "Postgres::token_lookup", skip(token))]
     async fn token_lookup(
         &self,
@@ -49,7 +52,10 @@ impl Postgres {
                 api_key.account_id,
                 api_key.organization_id
             FROM api_key
-            WHERE api_key.hash = $1 AND api_key.revoked_at IS NULL
+            JOIN account ON api_key.account_id = account.id
+            WHERE api_key.hash = $1
+              AND api_key.revoked_at IS NULL
+              AND account.disabled_at IS NULL
             "#,
             hash.as_bytes(),
         )
@@ -229,6 +235,31 @@ impl Postgres {
         .context("revoke api key")?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Revoke all API keys for an account in a specific organization.
+    ///
+    /// Returns the number of keys revoked.
+    #[tracing::instrument(name = "Postgres::revoke_account_org_api_keys")]
+    pub async fn revoke_account_org_api_keys(
+        &self,
+        account_id: AccountId,
+        org_id: OrgId,
+    ) -> Result<u64> {
+        let result = sqlx::query!(
+            r#"
+            UPDATE api_key
+            SET revoked_at = NOW()
+            WHERE account_id = $1 AND organization_id = $2 AND revoked_at IS NULL
+            "#,
+            account_id.as_i64(),
+            org_id.as_i64(),
+        )
+        .execute(&self.pool)
+        .await
+        .context("revoke account org api keys")?;
+
+        Ok(result.rows_affected())
     }
 
     /// Get an API key by ID.

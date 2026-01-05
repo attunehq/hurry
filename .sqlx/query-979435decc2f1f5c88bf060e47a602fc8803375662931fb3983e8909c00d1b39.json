@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE api_key\n            SET revoked_at = NOW()\n            WHERE account_id = $1 AND organization_id = $2 AND revoked_at IS NULL\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "979435decc2f1f5c88bf060e47a602fc8803375662931fb3983e8909c00d1b39"
+}

@@ -86,6 +86,22 @@ impl QualifiedPath {
         })
     }
 
+    /// Parse absolute paths into qualified paths.
+    ///
+    /// This is separate from `QualifiedPath::parse` because absolute paths do
+    /// not need to be parsed asynchronously or fallibly.
+    #[instrument(name = "QualifiedPath::parse_abs")]
+    pub fn parse_abs(ws: &Workspace, target: &RustcTarget, path: &AbsFilePath) -> Self {
+        let profile_dir = ws.arch_profile_dir(target);
+        if let Ok(rel) = path.relative_to(&profile_dir) {
+            Self::RelativeTargetProfile(rel)
+        } else if let Ok(rel) = path.relative_to(&ws.cargo_home) {
+            Self::RelativeCargoHome(rel)
+        } else {
+            Self::Absolute(path.clone())
+        }
+    }
+
     #[instrument(name = "QualifiedPath::reconstruct_string")]
     pub fn reconstruct_string(self, ws: &Workspace, target: &RustcTarget) -> String {
         self.reconstruct_inner(ws, target).to_string()

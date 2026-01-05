@@ -18,7 +18,7 @@ const GLOBAL_STYLES = `
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" style={{ minHeight: "100%", background: "var(--surface-base)" }}>
+    <html lang="en" style={{ minHeight: "100%", background: "var(--surface-base)", overflowY: "scroll" }}>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />

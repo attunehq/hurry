@@ -3,7 +3,7 @@ use std::{process::Stdio, time::Duration};
 use color_eyre::{Result, Section, SectionExt, eyre::Context as _};
 use derive_more::Debug;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, instrument, trace};
+use tracing::{instrument, trace};
 use url::Url;
 use uuid::Uuid;
 

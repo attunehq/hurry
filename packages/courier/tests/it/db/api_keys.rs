@@ -94,3 +94,36 @@ async fn get_nonexistent_api_key(pool: sqlx::PgPool) {
 
     assert!(key.is_none());
 }
+
+#[sqlx::test(migrator = "Postgres::MIGRATOR")]
+async fn disabled_account_api_key_invalid(pool: sqlx::PgPool) {
+    use courier::auth::RawToken;
+
+    let db = Postgres { pool };
+
+    let org_id = db.create_organization("Test Org").await.unwrap();
+    let account_id = db.create_account("test@test.com", None).await.unwrap();
+
+    let (_key_id, token) = db
+        .create_api_key(account_id, "Test Key", org_id)
+        .await
+        .unwrap();
+
+    // Verify token works before disabling
+    let raw_token = RawToken::new(token.expose());
+    let auth = db.validate(&raw_token).await.unwrap();
+    assert!(
+        auth.is_some(),
+        "API key should be valid before account disabled"
+    );
+
+    // Disable the account
+    db.disable_account(account_id).await.unwrap();
+
+    // API key should no longer validate
+    let auth_after = db.validate(&raw_token).await.unwrap();
+    assert!(
+        auth_after.is_none(),
+        "API key should be invalid after account is disabled"
+    );
+}

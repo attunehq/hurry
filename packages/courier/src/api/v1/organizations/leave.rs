@@ -52,6 +52,21 @@ pub async fn handle(
         }
     }
 
+    // Revoke API keys BEFORE removing the member. Removing a member without
+    // revoking their tokens is a security footgun: the member would no longer
+    // appear in the org but could still access org resources with existing tokens.
+    // If revocation fails, we abort the entire operation.
+    let keys_revoked = match db
+        .revoke_account_org_api_keys(session.account_id, org_id)
+        .await
+    {
+        Ok(count) => count,
+        Err(error) => {
+            error!(?error, "organizations.leave.revoke_keys_error");
+            return Response::Error(error.to_string());
+        }
+    };
+
     match db
         .remove_organization_member(org_id, session.account_id)
         .await
@@ -62,13 +77,16 @@ pub async fn handle(
                     Some(session.account_id),
                     Some(org_id),
                     "organization.member.left",
-                    None,
+                    Some(serde_json::json!({
+                        "api_keys_revoked": keys_revoked,
+                    })),
                 )
                 .await;
 
             info!(
                 account_id = %session.account_id,
                 org_id = %org_id,
+                keys_revoked = %keys_revoked,
                 "organizations.leave.success"
             );
             Response::Success

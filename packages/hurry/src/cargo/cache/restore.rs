@@ -35,18 +35,6 @@ pub struct Restored {
     pub files: DashSet<Key>,
 }
 
-impl Restored {
-    /// Records that an artifact was restored from cache.
-    fn record_unit(&self, unit_hash: UnitHash) {
-        self.units.insert(unit_hash);
-    }
-
-    /// Records that an object was restored from cache.
-    fn record_file(&self, key: Key) {
-        self.files.insert(key);
-    }
-}
-
 #[derive(Debug)]
 struct FileRestoreKey {
     unit_hash: UnitHash,
@@ -101,7 +89,7 @@ pub async fn restore_units(
         // restored but the large libraries did not.
         if fs::exists(
             &ws.unit_profile_dir(info)
-                .join(unit.fingerprint_json_file().await?),
+                .join(unit.fingerprint_json_file()?),
         )
         .await
         {
@@ -120,6 +108,7 @@ pub async fn restore_units(
                 pkg_name = %info.package_name,
                 "skipping unit: already fresh locally"
             );
+            debug!(?unit, "marking unit as restored after skipping");
             restored.units.insert(info.unit_hash.clone());
         }
     }
@@ -221,6 +210,7 @@ pub async fn restore_units(
     let ws = Arc::new(ws.clone());
 
     for (i, unit) in units.iter().enumerate() {
+        debug!(?unit, "queuing unit restore");
         let unit_hash = &unit.info().unit_hash;
 
         // Calculate the mtime for files to be restored. All output file mtimes
@@ -270,10 +260,19 @@ pub async fn restore_units(
         let cached_fingerprint = saved.fingerprint().as_str();
         let cached_fingerprint = serde_json::from_str::<Fingerprint>(cached_fingerprint)?;
 
-        // Handle skipped units before branching into type-specific logic.
-        // Skipped fingerprints are already correct on disk; we just need to
-        // record the mapping and touch the unit mtime to maintain ordering
-        // invariants.
+        // Handle skipped units that have been uploaded to cache.
+        //
+        // Skipped fingerprints are probably already correct on disk, because
+        // the only things that can change about fingerprints are their path
+        // field (the fingerprint exists so it was probably built locally so the
+        // path is probably right) and deps field (the unit was probably built
+        // locally and so probably expects its deps to have the right path).
+        //
+        // To keep them fresh, we just need to record the mapping from the
+        // cached fingerprint (which is the fingerprint for this unit that all
+        // the other units are expecting) to the local fingerprint (which is
+        // functionally the same as the rewritten fingerprint) and touch the
+        // unit mtime to maintain ordering invariants.
         if units_to_skip.contains(unit_hash) {
             // Read the local fingerprint from disk and record the mapping from
             // cached hash to local fingerprint. This allows dependent units to
@@ -281,9 +280,11 @@ pub async fn restore_units(
             let profile = ws.unit_profile_dir(unit.info());
             let cached_hash = cached_fingerprint.hash_u64();
 
-            let file = unit.fingerprint_json_file().await?;
+            let file = unit.fingerprint_json_file()?;
             let file = profile.join(&file);
             let json = fs::must_read_buffered_utf8(&file).await?;
+            // TODO: Maybe assert that this has the same value as a rewritten
+            // fingerprint?
             let local = serde_json::from_str::<Fingerprint>(&json)?;
             // local_hash is only ever used in the debug!() call but cannot be
             // inlined because hash_u64 calls Fingerprint::hash which has its
@@ -298,7 +299,7 @@ pub async fn restore_units(
                 "recorded fingerprint mapping for skipped unit"
             );
 
-            dep_fingerprints.insert(cached_hash, Arc::new(local));
+            dep_fingerprints.insert(cached_hash, local);
 
             if let Err(err) = unit.touch(&ws, mtime).await {
                 warn!(?unit_hash, ?err, "could not set mtime for skipped unit");
@@ -307,14 +308,10 @@ pub async fn restore_units(
             continue;
         }
 
-        // Mark the unit's restore as pending.
-        restore_progress
-            .units
-            .insert(unit_hash.clone(), DashSet::new());
-        // Write the fingerprint and queue other files to be restored. Writing
-        // fingerprints happens during this loop because fingerprint rewriting
-        // must occur in dependency order because a unit's fingerprint depends
-        // on its dependencies' fingerprints.
+        // Handle restored unit fingerprints. These are written synchronously
+        // during the loop because they need to be processed in dependency
+        // order, since a unit's fingerprint depends on its dependencies'
+        // fingerprints.
         //
         // TODO: Ideally, we would only write fingerprints _after_ all the files
         // for the unit are restored, to be maximally correct. This requires
@@ -324,6 +321,30 @@ pub async fn restore_units(
         // TODO: Maybe instead of this whole fingerprint-rewriting song and
         // dance, we should just fork and/or upstream relocatable fingerprints
         // into Cargo.
+        let info = unit.info();
+        let src_path = unit.src_path().map(|p| p.into());
+        let rewritten_fingerprint = cached_fingerprint.rewrite(src_path, &mut dep_fingerprints)?;
+        let fingerprint_hash = rewritten_fingerprint.fingerprint_hash();
+
+        // Write the rewritten fingerprint.
+        let profile_dir = ws.unit_profile_dir(info);
+        fs::write(
+            &profile_dir.join(&unit.fingerprint_hash_file()?),
+            fingerprint_hash,
+        )
+        .await?;
+        fs::write(
+            &profile_dir.join(&unit.fingerprint_json_file()?),
+            serde_json::to_vec(&rewritten_fingerprint)?,
+        )
+        .await?;
+
+        // Mark the unit's restore as pending.
+        restore_progress
+            .units
+            .insert(unit_hash.clone(), DashSet::new());
+
+        // Queue all other files to be bulk-restored from CAS.
         match (saved, unit) {
             (
                 SavedUnit::LibraryCrate(saved_library_files, _),
@@ -339,16 +360,6 @@ pub async fn restore_units(
                     num_output_files = saved_library_files.output_files.len(),
                     "restoring library crate unit"
                 );
-
-                // Restore the fingerprint directly, because fingerprint
-                // rewriting needs to occur in dependency order.
-                cargo::LibraryFiles::restore_fingerprint(
-                    &ws,
-                    &mut dep_fingerprints,
-                    cached_fingerprint,
-                    unit_plan,
-                )
-                .await?;
 
                 // Queue the output files.
                 for file in saved_library_files.output_files {
@@ -435,16 +446,6 @@ pub async fn restore_units(
                     "restoring build script compilation unit"
                 );
 
-                // Restore the fingerprint directly, because fingerprint
-                // rewriting needs to occur in dependency order.
-                cargo::BuildScriptCompiledFiles::restore_fingerprint(
-                    &ws,
-                    &mut dep_fingerprints,
-                    cached_fingerprint,
-                    unit_plan,
-                )
-                .await?;
-
                 let profile_dir = ws.unit_profile_dir(&unit_plan.info);
 
                 // Queue compiled program with hard link creation.
@@ -520,16 +521,6 @@ pub async fn restore_units(
                 SavedUnit::BuildScriptExecution(build_script_output_files, _),
                 UnitPlan::BuildScriptExecution(unit_plan),
             ) => {
-                // Restore the fingerprint directly, because fingerprint
-                // rewriting needs to occur in dependency order.
-                cargo::BuildScriptOutputFiles::restore_fingerprint(
-                    &ws,
-                    &mut dep_fingerprints,
-                    cached_fingerprint,
-                    unit_plan,
-                )
-                .await?;
-
                 let profile_dir = ws.unit_profile_dir(&unit_plan.info);
                 let out_dir = unit_plan.out_dir()?;
                 let out_dir_absolute = profile_dir.join(&out_dir);
@@ -657,7 +648,8 @@ pub async fn restore_units(
         // Mark the unit as restored. It's not _technically_ restored yet, but
         // this function will return an error later on when the workers join if
         // the restore doesn't succeed.
-        restored.record_unit(unit_hash.clone());
+        debug!(?unit, "marking unit as restored after restoring");
+        restored.units.insert(unit_hash.clone());
     }
 
     debug!("start sending files to restore workers");
@@ -760,7 +752,7 @@ async fn restore_batch(
                     .remove(&key)
                     .ok_or_eyre("unrecognized key from CAS bulk response")?;
                 for file in files {
-                    restored.record_file(file.key);
+                    restored.files.insert(file.key);
 
                     progress.add_files(1);
                     progress.add_bytes(data.len() as u64);

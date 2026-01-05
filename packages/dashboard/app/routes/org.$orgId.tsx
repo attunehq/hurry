@@ -11,7 +11,6 @@ import { Card, CardBody } from "../ui/primitives/Card";
 import { Input } from "../ui/primitives/Input";
 import { Label } from "../ui/primitives/Label";
 import { Modal } from "../ui/primitives/Modal";
-import { TabContent } from "../ui/primitives/TabContent";
 import { PageLayout } from "../ui/shell/PageLayout";
 import { useToast } from "../ui/toast/ToastProvider";
 
@@ -122,9 +121,7 @@ export default function OrgLayout() {
     >
       <OrgTabs isAdmin={canAdmin} />
 
-      <TabContent>
-        <Outlet context={{ orgId: id, role: org?.role ?? null }} />
-      </TabContent>
+      <Outlet context={{ orgId: id, role: org?.role ?? null }} />
 
       <Modal open={renameOpen} title="Rename organization" onClose={() => setRenameOpen(false)} onSubmit={rename}>
         <div className="space-y-4">
