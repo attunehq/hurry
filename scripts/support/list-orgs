@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# List organizations and their owners.
+# Run with no arguments to list all orgs, or provide a GitHub username or email to filter.
+set -euo pipefail
+
+show_usage() {
+  echo "Usage: $0 [filter]" >&2
+  echo "List organizations and their owners" >&2
+  echo "" >&2
+  echo "Arguments:" >&2
+  echo "  filter  (optional) GitHub username or email address to filter by" >&2
+  echo "" >&2
+  echo "Examples:" >&2
+  echo "  $0                    # List all orgs" >&2
+  echo "  $0 jsmith             # List orgs for GitHub user 'jsmith'" >&2
+  echo "  $0 jsmith@example.com # List orgs for email 'jsmith@example.com'" >&2
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  show_usage
+  exit 0
+fi
+
+# Check for COURIER_DATABASE_URL
+if [ -z "${COURIER_DATABASE_URL:-}" ]; then
+  echo "Error: COURIER_DATABASE_URL environment variable is not set" >&2
+  exit 1
+fi
+
+FILTER="${1:-}"
+
+# Determine filter type and build query
+# An email contains @, a GitHub username does not
+if [ -z "$FILTER" ]; then
+  # No filter - list all orgs with their admin owners
+  psql "$COURIER_DATABASE_URL" -t -A -F$'\t' <<'EOSQL' | while IFS=$'\t' read -r org_id org_name owner_email github_username; do
+SELECT
+  o.id,
+  o.name,
+  a.email,
+  COALESCE(g.github_username, '')
+FROM organization o
+JOIN organization_member om ON om.organization_id = o.id
+JOIN organization_role r ON r.id = om.role_id
+JOIN account a ON a.id = om.account_id
+LEFT JOIN github_identity g ON g.account_id = a.id
+WHERE r.name = 'admin'
+ORDER BY o.id;
+EOSQL
+    if [ -n "$github_username" ]; then
+      printf "%-6s %-30s %s (@%s)\n" "$org_id" "$org_name" "$owner_email" "$github_username"
+    else
+      printf "%-6s %-30s %s\n" "$org_id" "$org_name" "$owner_email"
+    fi
+  done
+elif [[ "$FILTER" == *@* ]]; then
+  # Filter by email
+  psql "$COURIER_DATABASE_URL" -t -A -F$'\t' \
+    -v filter_email="$FILTER" \
+    <<'EOSQL' | while IFS=$'\t' read -r org_id org_name owner_email github_username; do
+SELECT
+  o.id,
+  o.name,
+  a.email,
+  COALESCE(g.github_username, '')
+FROM organization o
+JOIN organization_member om ON om.organization_id = o.id
+JOIN organization_role r ON r.id = om.role_id
+JOIN account a ON a.id = om.account_id
+LEFT JOIN github_identity g ON g.account_id = a.id
+WHERE r.name = 'admin'
+  AND a.email = :'filter_email'
+ORDER BY o.id;
+EOSQL
+    if [ -n "$github_username" ]; then
+      printf "%-6s %-30s %s (@%s)\n" "$org_id" "$org_name" "$owner_email" "$github_username"
+    else
+      printf "%-6s %-30s %s\n" "$org_id" "$org_name" "$owner_email"
+    fi
+  done
+else
+  # Filter by GitHub username
+  psql "$COURIER_DATABASE_URL" -t -A -F$'\t' \
+    -v filter_github="$FILTER" \
+    <<'EOSQL' | while IFS=$'\t' read -r org_id org_name owner_email github_username; do
+SELECT
+  o.id,
+  o.name,
+  a.email,
+  COALESCE(g.github_username, '')
+FROM organization o
+JOIN organization_member om ON om.organization_id = o.id
+JOIN organization_role r ON r.id = om.role_id
+JOIN account a ON a.id = om.account_id
+LEFT JOIN github_identity g ON g.account_id = a.id
+WHERE r.name = 'admin'
+  AND g.github_username = :'filter_github'
+ORDER BY o.id;
+EOSQL
+    if [ -n "$github_username" ]; then
+      printf "%-6s %-30s %s (@%s)\n" "$org_id" "$org_name" "$owner_email" "$github_username"
+    else
+      printf "%-6s %-30s %s\n" "$org_id" "$org_name" "$owner_email"
+    fi
+  done
+fi
