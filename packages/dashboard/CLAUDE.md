@@ -46,8 +46,44 @@ html, body { ... }
 Some CSS features cannot be expressed as inline styles:
 - View Transitions API (`view-transition-name`)
 - Keyframe animations (`@keyframes`)
-- Pseudo-elements (`:before`, `:after`)
+- Pseudo-elements (`::before`, `::after`)
 - Pseudo-selectors (`:focus-visible`, `:hover` for complex cases)
 - CSS custom properties with complex values (e.g., gradients) that don't serialize correctly in React's style prop
 
-For these, inject scoped styles via a `<style>` tag in the component. See `Noise.tsx` for examples, or `root.tsx` for app-wide styles like `html`, `body`, and `:focus-visible`.
+For these, use React 19's `<style>` component with `href` and `precedence` props for scoped, deduplicated styles.
+
+### Scoped Styles with `useId` (React 19 Pattern)
+
+When a component needs CSS-only features, use `useId()` to scope styles to a specific element:
+
+```tsx
+import { useId } from "react";
+
+function MyComponent({ children }) {
+  const id = useId();
+
+  const styles = `
+#${id}::before {
+  content: "";
+  position: absolute;
+  /* ... */
+}
+`;
+
+  return (
+    <>
+      <style href={`MyComponent-${id}`} precedence="medium">{styles}</style>
+      <div id={id}>{children}</div>
+    </>
+  );
+}
+```
+
+**Key points:**
+- `useId()` generates a stable, hydration-safe ID (e.g., `:r0:`)
+- Use `#${id}` in CSS to scope styles to that specific element
+- `href` must be **globally unique** — React deduplicates styles by `href`, so if two different style blocks share the same `href`, only the first one is kept. Include `${id}` in the `href` to ensure uniqueness per component instance.
+- `precedence` controls cascade order: `"low"`, `"medium"`, `"high"`
+- React hoists these `<style>` tags to `<head>` automatically
+
+See `Noise.tsx` for a complete example, or `root.tsx` for root element styles (`html`, `body`, `:focus-visible`).
