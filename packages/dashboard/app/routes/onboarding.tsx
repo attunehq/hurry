@@ -6,6 +6,7 @@ import { useNavigate, useSearchParams } from "react-router";
 import { useOrgs } from "../org/OrgContext";
 import { Button } from "../ui/primitives/Button";
 import { CodeBlock } from "../ui/primitives/CodeBlock";
+import { Noise } from "../ui/primitives/Noise";
 
 type Platform = "unix" | "windows";
 
@@ -32,7 +33,7 @@ export default function OnboardingPage() {
 
   if (!token || !orgId) {
     return (
-      <div className="noise fixed inset-0 flex items-center justify-center">
+      <Noise className="fixed inset-0 flex items-center justify-center">
         <div className="w-full max-w-md px-6">
           <div className="rounded-2xl border border-border bg-surface-raised p-6 text-center shadow-glow-soft">
             <div className="text-content-muted">
@@ -43,12 +44,12 @@ export default function OnboardingPage() {
             </div>
           </div>
         </div>
-      </div>
+      </Noise>
     );
   }
 
   return (
-    <div className="noise fixed inset-0 overflow-y-auto">
+    <Noise className="fixed inset-0 overflow-y-auto">
       <div className="flex min-h-full items-center justify-center px-6 py-12">
         <div className="w-full max-w-2xl">
           {/* Brand */}
@@ -117,7 +118,7 @@ export default function OnboardingPage() {
           </div>
         </div>
       </div>
-    </div>
+    </Noise>
   );
 }
 

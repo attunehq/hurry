@@ -8,6 +8,7 @@ import type { CreateOrganizationResponse, OrganizationEntry } from "../../api/ty
 import { useApi } from "../../api/useApi";
 import { useOrgs } from "../../org/OrgContext";
 import { Button } from "../primitives/Button";
+import { Dropdown } from "../primitives/Dropdown";
 import { Input } from "../primitives/Input";
 import { Label } from "../primitives/Label";
 import { Modal } from "../primitives/Modal";
@@ -91,9 +92,9 @@ export function OrgSwitcher() {
         <ChevronDown className={clsx("h-4 w-4 transition-transform", open && "rotate-180")} />
       </button>
 
-      <div
-        data-open={open}
-        className="dropdown absolute left-0 top-full z-50 mt-1 min-w-48 rounded-xl border border-border bg-surface-overlay p-1 shadow-dropdown backdrop-blur-xl"
+      <Dropdown
+        open={open}
+        className="absolute left-0 top-full z-50 mt-1 min-w-48 rounded-xl border border-border bg-surface-overlay p-1 shadow-dropdown backdrop-blur-xl"
       >
         {sortedOrgs && sortedOrgs.length > 0 ? (
           <div className="max-h-64 overflow-y-auto">
@@ -131,7 +132,7 @@ export function OrgSwitcher() {
             New organization
           </button>
         </div>
-      </div>
+      </Dropdown>
 
       <Modal
         open={createOpen}

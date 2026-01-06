@@ -9,9 +9,16 @@ import { ToastProvider } from "./ui/toast/ToastProvider";
 import { AppShell } from "./ui/shell/AppShell";
 import "./styles.css";
 
+const rootElementStyles = `
+html, body { min-height: 100%; }
+html { background: var(--surface-base); overflow-y: scroll; }
+body { background: var(--gradient-bg); color: var(--text-secondary); }
+:focus-visible { outline: 2px solid var(--accent-bold); outline-offset: 2px; }
+`;
+
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" style={{ overflowY: "scroll" }}>
+    <html lang="en">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -19,6 +26,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <title>Hurry Console</title>
         <Meta />
         <Links />
+        <style href="root-elements" precedence="low">{rootElementStyles}</style>
       </head>
       <body>
         {children}

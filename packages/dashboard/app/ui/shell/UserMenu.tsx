@@ -4,6 +4,7 @@ import { Link } from "react-router";
 
 import { useApi } from "../../api/useApi";
 import { useUser } from "../../user/UserContext";
+import { Dropdown } from "../primitives/Dropdown";
 
 export function UserMenu() {
   const { user, loading } = useUser();
@@ -40,9 +41,9 @@ export function UserMenu() {
         <ChevronDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
-      <div
-        data-open={open}
-        className="dropdown absolute right-0 top-full z-50 mt-1 min-w-48 rounded-xl border border-border bg-surface-overlay p-1 shadow-dropdown backdrop-blur-xl"
+      <Dropdown
+        open={open}
+        className="absolute right-0 top-full z-50 mt-1 min-w-48 rounded-xl border border-border bg-surface-overlay p-1 shadow-dropdown backdrop-blur-xl"
       >
         <Link
           to="/user"
@@ -66,7 +67,7 @@ export function UserMenu() {
           <LogOut className="h-4 w-4" />
           Sign out
         </button>
-      </div>
+      </Dropdown>
     </div>
   );
 }
