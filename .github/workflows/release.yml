@@ -24,8 +24,6 @@ concurrency:
 
 env:
     CARGO_TERM_COLOR: always
-    AWS_REGION: us-west-1
-    S3_BUCKET: hurry-releases
 
 jobs:
     prepare:
@@ -229,7 +227,6 @@ jobs:
         runs-on: ubuntu-latest
         permissions:
             contents: write
-            id-token: write
         env:
             GH_TOKEN: ${{ github.token }}
 
@@ -263,22 +260,6 @@ jobs:
                     --title "${{ needs.prepare.outputs.tag }}" \
                     artifacts/*.tar.gz \
                     artifacts/checksums.txt
-
-            # Keep install scripts synced to S3 for legacy URLs
-            - name: Configure AWS credentials
-              if: ${{ !inputs.dry_run }}
-              uses: aws-actions/configure-aws-credentials@v4
-              with:
-                  role-to-assume: ${{ secrets.HURRY_RELEASE_ROLE }}
-                  aws-region: ${{ env.AWS_REGION }}
-
-            - name: Sync install scripts to S3 (legacy URL support)
-              if: ${{ !inputs.dry_run }}
-              run: |
-                  aws s3 cp scripts/install.sh "s3://${S3_BUCKET}/install.sh" \
-                    --cache-control "no-cache, must-revalidate"
-                  aws s3 cp scripts/install.ps1 "s3://${S3_BUCKET}/install.ps1" \
-                    --cache-control "no-cache, must-revalidate"
 
             - name: Write release summary
               if: ${{ !inputs.dry_run }}
