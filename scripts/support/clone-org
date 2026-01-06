@@ -200,6 +200,9 @@ if [ -z "$NEW_ORG_ID" ]; then
 fi
 
 # Generate API key for the new org
+# NOTE: The hashing logic below MUST match the application's api_key hashing implementation.
+# Currently, the application stores SHA-256(API_TOKEN) as a hex-encoded bytea in the `hash` column.
+# If the application's API key hashing algorithm or representation changes, update this script as well.
 API_TOKEN="cloned_$(openssl rand -hex 32)"
 API_HASH=$(echo -n "$API_TOKEN" | openssl dgst -sha256 -binary | xxd -p -c 256)
 
