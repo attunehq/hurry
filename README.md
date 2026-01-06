@@ -11,6 +11,7 @@ The quickest way to get started with Hurry is to use our managed build cache. To
 $ HURRY_API_TOKEN=your_token_here hurry cargo build
 ```
 
+Alternatively, you can [self-host Hurry](docs/self-hosting.md) locally or on your own infrastructure.
 
 ## Installation
 
