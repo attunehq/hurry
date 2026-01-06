@@ -18,7 +18,6 @@ use uuid::Uuid;
 use clients::Token;
 use hurry::{
     cargo::{CargoBuildArguments, CargoCache, Workspace},
-    ci::is_ci,
     cross,
     daemon::{CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse, DaemonPaths},
     progress::TransferBar,
@@ -53,21 +52,17 @@ pub struct Options {
     #[arg(long = "hurry-skip-restore", default_value_t = false)]
     skip_restore: bool,
 
-    /// Wait for all new artifacts to upload to cache to finish before exiting.
+    /// Upload artifacts asynchronously in the background instead of waiting.
     ///
-    /// When not provided, automatically decides based on environment:
-    /// - In CI, defaults to waiting.
-    /// - In local development, defaults to async upload.
-    /// - If desired, override CI behavior using `=false`.
+    /// By default, hurry waits for uploads to complete before exiting.
+    /// Use this flag to upload in the background and exit immediately after the
+    /// build.
     #[arg(
-        long = "hurry-wait-for-upload",
-        env = "HURRY_WAIT_FOR_UPLOAD",
-        num_args = 0..=1,
-        default_value = None,
-        default_missing_value = "true",
-        require_equals = true,
+        long = "hurry-async-upload",
+        env = "HURRY_ASYNC_UPLOAD",
+        default_value_t = false
     )]
-    wait_for_upload: Option<bool>,
+    async_upload: bool,
 
     /// Show help for `hurry cross build`.
     #[arg(long = "hurry-help", default_value_t = false)]
@@ -174,7 +169,7 @@ pub async fn exec(options: Options) -> Result<()> {
     // Cache the built artifacts.
     if !options.skip_backup {
         let upload_id = cache.save(units, restored).await?;
-        if WaitForUpload::from(options.wait_for_upload).should_wait() {
+        if !options.async_upload {
             let progress = TransferBar::new(unit_count, "Uploading cache");
             wait_for_upload(upload_id, &progress).await?;
         }
@@ -241,37 +236,4 @@ async fn wait_for_upload(request_id: Uuid, progress: &TransferBar) -> Result<()>
     }
 
     Ok(())
-}
-
-/// Control whether to wait for artifact uploads to complete.
-#[derive(Clone, Copy, Debug)]
-enum WaitForUpload {
-    /// Automatically decide based on environment
-    Auto,
-
-    /// Wait for uploads
-    ExplicitWait,
-
-    /// Don't wait for uploads
-    ExplicitAsync,
-}
-
-impl WaitForUpload {
-    fn should_wait(self) -> bool {
-        match self {
-            Self::ExplicitWait => true,
-            Self::ExplicitAsync => false,
-            Self::Auto => is_ci(),
-        }
-    }
-}
-
-impl From<Option<bool>> for WaitForUpload {
-    fn from(value: Option<bool>) -> Self {
-        match value {
-            None => Self::Auto,
-            Some(true) => Self::ExplicitWait,
-            Some(false) => Self::ExplicitAsync,
-        }
-    }
 }

@@ -34,7 +34,6 @@ RUN chmod +x /root/.local/bin/hurry
 # Config to connect to production Hurry.
 ARG HURRY_API_URL
 ENV HURRY_API_URL=${HURRY_API_URL:-}
-ENV HURRY_WAIT_FOR_UPLOAD=true
 
 # Enable additional debug logging for both hurry and cargo.
 # - HURRY_LOG=debug: Shows hurry's restore operations and OUT_DIR file details

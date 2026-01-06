@@ -88,7 +88,7 @@ tracing-error = "0.2.1"
 tracing-flame = "0.2.0"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 tracing-tree = { version = "0.4.0", features = ["time"] }
-url = "2.5.7"
+url = { version = "2.5.7", features = ["serde"] }
 uuid = "1.18.1"
 walkdir = "2.5.0"
 workspace_root = "0.2.0"
