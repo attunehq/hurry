@@ -176,7 +176,6 @@ get_latest_version() {
     fail "Failed to fetch latest release from $latest_url. Error: $response"
   fi
 
-  # Parse the tag_name from JSON and strip 'v' prefix
   version=$(echo "$response" | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 | sed 's/^v//')
 
   if [[ -z "$version" ]]; then
@@ -207,10 +206,7 @@ install_binary() {
   local archive_name="hurry-${platform}.tar.gz"
   local binary_name="hurry"
 
-  # Normalize version (remove 'v' prefix if present)
   version="${version#v}"
-
-  # Construct download URLs (GitHub releases use v-prefixed tags)
   local tag="v${version}"
   local download_url="${GITHUB_DOWNLOAD}/${tag}/${archive_name}"
   local checksums_url="${GITHUB_DOWNLOAD}/${tag}/checksums.txt"

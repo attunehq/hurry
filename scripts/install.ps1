@@ -70,7 +70,6 @@ function Get-LatestVersion {
 
     try {
         $response = Invoke-RestMethod -Uri $latestUrl -ErrorAction Stop
-        # Strip 'v' prefix from tag_name
         return $response.tag_name -replace '^v', ''
     }
     catch {
@@ -96,12 +95,8 @@ function Install-Binary {
         [string]$TempDir
     )
 
-    # Normalize version (remove 'v' prefix if present)
     $Version = $Version -replace '^v', ''
-
     $archiveName = "hurry-$Platform.tar.gz"
-
-    # Construct download URLs (GitHub releases use v-prefixed tags)
     $tag = "v$Version"
     $downloadUrl = "$GITHUB_DOWNLOAD/$tag/$archiveName"
     $checksumsUrl = "$GITHUB_DOWNLOAD/$tag/checksums.txt"

@@ -55,16 +55,7 @@ $env:Help="true"; irm https://hurry.build/install.ps1 | iex
 
 ### Manual
 
-Download the latest release from [GitHub Releases](https://github.com/attunehq/hurry/releases/latest), or use the command line:
-
-```shell
-# Download a specific version for your platform
-curl -sSfL https://github.com/attunehq/hurry/releases/download/v0.2.0/hurry-aarch64-apple-darwin.tar.gz -o hurry.tar.gz
-
-# Extract and install
-tar -xzf hurry.tar.gz
-sudo mv hurry-aarch64-apple-darwin/hurry /usr/local/bin/
-```
+Download the latest release for your platform from [GitHub Releases](https://github.com/attunehq/hurry/releases/latest), extract the archive, and place the `hurry` binary in your `PATH`.
 
 ## How does it work?
 
