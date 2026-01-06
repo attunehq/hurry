@@ -48,5 +48,6 @@ Some CSS features cannot be expressed as inline styles:
 - Keyframe animations (`@keyframes`)
 - Pseudo-elements (`:before`, `:after`)
 - Pseudo-selectors (`:focus-visible`, `:hover` for complex cases)
+- CSS custom properties with complex values (e.g., gradients) that don't serialize correctly in React's style prop
 
-For these, inject scoped styles via a `<style>` tag in the component. See `TabContent.tsx` and `Noise.tsx` for examples, or `root.tsx` for app-wide styles like `:focus-visible`.
+For these, inject scoped styles via a `<style>` tag in the component. See `Noise.tsx` for examples, or `root.tsx` for app-wide styles like `html`, `body`, and `:focus-visible`.

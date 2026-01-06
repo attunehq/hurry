@@ -12,7 +12,13 @@ const noiseOverlayStyle: CSSProperties = {
   opacity: "var(--noise-opacity)",
 };
 
-export function Noise({ children, className }: { children: ReactNode; className?: string }) {
+export function Noise({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
   return (
     <div className={className} style={{ position: "relative" }}>
       <div style={noiseOverlayStyle} aria-hidden="true" />
