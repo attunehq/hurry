@@ -23,7 +23,6 @@ for target in "${TARGETS[@]}"; do
     echo "First build (caching)..."
     time hurry-dev cross build \
         --hurry-courier-url http://localhost:3000 \
-        --hurry-wait-for-upload \
         -p hurry \
         --target "$target"
 
@@ -34,7 +33,6 @@ for target in "${TARGETS[@]}"; do
     echo "Second build (restoring)..."
     time hurry-dev cross build \
         --hurry-courier-url http://localhost:3000 \
-        --hurry-wait-for-upload \
         -p hurry \
         --target "$target"
 
@@ -42,7 +40,6 @@ for target in "${TARGETS[@]}"; do
     echo "Verify no rebuilds..."
     hurry-dev cross build \
         --hurry-courier-url http://localhost:3000 \
-        --hurry-wait-for-upload \
         -p hurry \
         --target "$target" 2>&1 | \
         tee /dev/tty | \
@@ -51,7 +48,6 @@ for target in "${TARGETS[@]}"; do
     # Count how many crates were rebuilt (should be 0 or very few)
     rebuild_count=$(hurry-dev cross build \
         --hurry-courier-url http://localhost:3000 \
-        --hurry-wait-for-upload \
         -p hurry \
         --target "$target" 2>&1 | \
         grep "Compiling" | wc -l)

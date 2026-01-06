@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+# Clone an organization for support/debugging purposes.
+# This creates a new org with the same CAS access and cargo cached units.
+set -euo pipefail
+
+show_usage() {
+  echo "Usage: $0 <source-org-id> <owner-user> <new-org-name>" >&2
+  echo "Clone an organization for support/debugging purposes" >&2
+  echo "" >&2
+  echo "Arguments:" >&2
+  echo "  source-org-id  Source organization ID (numeric)" >&2
+  echo "  owner-user     Owner of new organization (email or ID)" >&2
+  echo "  new-org-name   Name for the cloned organization" >&2
+  echo "" >&2
+  echo "What gets copied:" >&2
+  echo "  - CAS access records" >&2
+  echo "  - Cargo saved units" >&2
+  echo "" >&2
+  echo "What does NOT get copied:" >&2
+  echo "  - Organization members (only the new owner is added)" >&2
+  echo "  - Invitations" >&2
+  echo "  - API keys (a new one will be created)" >&2
+  echo "  - Audit logs" >&2
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  show_usage
+  exit 0
+fi
+
+# Check for COURIER_DATABASE_URL
+if [ -z "${COURIER_DATABASE_URL:-}" ]; then
+  echo "Error: COURIER_DATABASE_URL environment variable is not set" >&2
+  exit 1
+fi
+
+# Parse arguments
+if [ $# -ne 3 ]; then
+  show_usage
+  exit 1
+fi
+
+SRC_ORG_ID="$1"
+OWNER_INPUT="$2"
+NEW_ORG_NAME="$3"
+
+# Validate source org ID is numeric
+if ! [[ "$SRC_ORG_ID" =~ ^[0-9]+$ ]]; then
+  echo "Error: source-org-id must be numeric (got '$SRC_ORG_ID')" >&2
+  exit 1
+fi
+
+# Look up source organization by ID
+SRC_ORG=$(psql "$COURIER_DATABASE_URL" -t -A -F$'\t' \
+  -v src_org_id="$SRC_ORG_ID" \
+  <<'EOSQL'
+SELECT id, name FROM organization WHERE id = :src_org_id;
+EOSQL
+)
+
+if [ -z "$SRC_ORG" ]; then
+  echo "Error: Source organization with ID '$SRC_ORG_ID' not found" >&2
+  exit 1
+fi
+
+SRC_ORG_NAME=$(echo "$SRC_ORG" | cut -f2)
+
+# Look up owner account (by ID if numeric, else by email)
+if [[ "$OWNER_INPUT" =~ ^[0-9]+$ ]]; then
+  OWNER=$(psql "$COURIER_DATABASE_URL" -t -A -F$'\t' \
+    -v owner_id="$OWNER_INPUT" \
+    <<'EOSQL'
+SELECT id, email, COALESCE(name, '') FROM account WHERE id = :owner_id AND disabled_at IS NULL;
+EOSQL
+)
+else
+  OWNER=$(psql "$COURIER_DATABASE_URL" -t -A -F$'\t' \
+    -v owner_email="$OWNER_INPUT" \
+    <<'EOSQL'
+SELECT id, email, COALESCE(name, '') FROM account WHERE email = :'owner_email' AND disabled_at IS NULL;
+EOSQL
+)
+fi
+
+if [ -z "$OWNER" ]; then
+  echo "Error: Owner account '$OWNER_INPUT' not found (or is disabled)" >&2
+  exit 1
+fi
+
+OWNER_ID=$(echo "$OWNER" | cut -f1)
+OWNER_EMAIL=$(echo "$OWNER" | cut -f2)
+OWNER_NAME=$(echo "$OWNER" | cut -f3)
+
+# Get counts for display
+CAS_COUNT=$(psql "$COURIER_DATABASE_URL" -t -A \
+  -v src_org_id="$SRC_ORG_ID" \
+  <<'EOSQL'
+SELECT COUNT(*) FROM cas_access WHERE organization_id = :src_org_id;
+EOSQL
+)
+
+UNIT_COUNT=$(psql "$COURIER_DATABASE_URL" -t -A \
+  -v src_org_id="$SRC_ORG_ID" \
+  <<'EOSQL'
+SELECT COUNT(*) FROM cargo_saved_unit WHERE organization_id = :src_org_id;
+EOSQL
+)
+
+# Check if owner already has an org with the same name
+EXISTING_ORG=$(psql "$COURIER_DATABASE_URL" -t -A \
+  -v new_org_name="$NEW_ORG_NAME" \
+  -v owner_id="$OWNER_ID" \
+  <<'EOSQL'
+SELECT o.id
+FROM organization o
+JOIN organization_member om ON om.organization_id = o.id
+WHERE o.name = :'new_org_name'
+  AND om.account_id = :owner_id
+LIMIT 1;
+EOSQL
+)
+
+# Display confirmation
+echo ""
+echo "=== Organization Clone Summary ==="
+echo "Source org:    '$SRC_ORG_NAME' (id: $SRC_ORG_ID)"
+if [ -n "$OWNER_NAME" ]; then
+  echo "Owner:         '$OWNER_NAME' <$OWNER_EMAIL> (id: $OWNER_ID)"
+else
+  echo "Owner:         $OWNER_EMAIL (id: $OWNER_ID)"
+fi
+echo "New org name:  '$NEW_ORG_NAME'"
+
+if [ -n "$EXISTING_ORG" ]; then
+  echo ""
+  echo "WARNING: This user already has an org named '$NEW_ORG_NAME' (id: $EXISTING_ORG)."
+  echo "         This will still work, but may be confusing."
+fi
+
+echo ""
+echo "The following will be copied:"
+echo "  - CAS access records: $CAS_COUNT entries"
+echo "  - Cargo saved units: $UNIT_COUNT entries"
+echo ""
+echo "The following will NOT be copied:"
+echo "  - Other organization members"
+echo "  - Invitations"
+echo "  - API keys (a new one will be created)"
+echo "  - Audit logs"
+echo ""
+
+read -p "Proceed? [y/N] " CONFIRM
+if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+  echo "Aborted." >&2
+  exit 1
+fi
+
+# Execute clone in a single transaction
+NEW_ORG_ID=$(psql "$COURIER_DATABASE_URL" -t -A \
+  -v src_org_id="$SRC_ORG_ID" \
+  -v new_org_name="$NEW_ORG_NAME" \
+  -v owner_id="$OWNER_ID" \
+  <<'EOSQL'
+WITH new_org AS (
+  INSERT INTO organization (name)
+  VALUES (:'new_org_name')
+  RETURNING id
+),
+new_member AS (
+  INSERT INTO organization_member (organization_id, account_id, role_id)
+  SELECT new_org.id, :owner_id, organization_role.id
+  FROM new_org, organization_role
+  WHERE organization_role.name = 'admin'
+),
+clone_cas_access AS (
+  INSERT INTO cas_access (organization_id, cas_key_id, created_at)
+  SELECT new_org.id, cas_key_id, NOW()
+  FROM new_org, cas_access
+  WHERE cas_access.organization_id = :src_org_id
+),
+clone_cargo_units AS (
+  INSERT INTO cargo_saved_unit (organization_id, unit_hash, unit_resolved_target, linux_glibc_version, data, created_at)
+  SELECT
+    new_org.id,
+    csu.unit_hash,
+    csu.unit_resolved_target,
+    csu.linux_glibc_version,
+    csu.data,
+    NOW()
+  FROM new_org, cargo_saved_unit csu
+  WHERE csu.organization_id = :src_org_id
+)
+SELECT id FROM new_org;
+EOSQL
+)
+
+if [ -z "$NEW_ORG_ID" ]; then
+  echo "Error: Failed to create cloned organization" >&2
+  exit 1
+fi
+
+# Generate API key for the new org
+# NOTE: The hashing logic below MUST match the application's api_key hashing implementation.
+# Currently, the application stores SHA-256(API_TOKEN) as a hex-encoded bytea in the `hash` column.
+# If the application's API key hashing algorithm or representation changes, update this script as well.
+API_TOKEN="cloned_$(openssl rand -hex 32)"
+API_HASH=$(echo -n "$API_TOKEN" | openssl dgst -sha256 -binary | xxd -p -c 256)
+
+if ! psql "$COURIER_DATABASE_URL" -q \
+  -v owner_id="$OWNER_ID" \
+  -v new_org_id="$NEW_ORG_ID" \
+  -v api_hash="$API_HASH" \
+  <<'EOSQL' 2>&1 >&2
+INSERT INTO api_key (account_id, name, hash, organization_id)
+VALUES (:owner_id, 'clone-org-key', ('\x' || :'api_hash')::bytea, :new_org_id);
+EOSQL
+then
+  echo "Error: Failed to create API key" >&2
+  exit 1
+fi
+
+# Log audit event for the clone operation
+# Build JSON details - escape values for safety
+AUDIT_DETAILS=$(cat <<EOF
+{
+  "source_organization_id": $SRC_ORG_ID,
+  "source_organization_name": $(echo "$SRC_ORG_NAME" | jq -Rs .),
+  "cas_access_count": $CAS_COUNT,
+  "cargo_saved_unit_count": $UNIT_COUNT
+}
+EOF
+)
+
+if ! psql "$COURIER_DATABASE_URL" -q \
+  -v owner_id="$OWNER_ID" \
+  -v new_org_id="$NEW_ORG_ID" \
+  -v details="$AUDIT_DETAILS" \
+  <<'EOSQL' 2>&1 >&2
+INSERT INTO audit_log (account_id, organization_id, action, details)
+VALUES (:owner_id, :new_org_id, 'organization.cloned', :'details'::jsonb);
+EOSQL
+then
+  echo "Warning: Failed to create audit log entry" >&2
+  # Don't fail the whole operation for audit log failure
+fi
+
+# Report success
+echo ""
+echo "Created organization '$NEW_ORG_NAME' (id: $NEW_ORG_ID)"
+echo "  Copied $CAS_COUNT CAS access records"
+echo "  Copied $UNIT_COUNT cargo saved units"
+if [ -n "$OWNER_NAME" ]; then
+  echo "  Owner '$OWNER_NAME' added as admin"
+else
+  echo "  Owner '$OWNER_EMAIL' added as admin"
+fi
+echo ""
+echo "API Key (save this, it won't be shown again):"
+echo "  $API_TOKEN"

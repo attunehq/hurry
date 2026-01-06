@@ -151,13 +151,13 @@ Hurry acts as a drop-in replacement for cargo, supporting any cargo command:
 - `--hurry-skip-backup`: Skip backing up the cache
 - `--hurry-skip-build`: Skip the cargo build, only perform cache actions
 - `--hurry-skip-restore`: Skip restoring the cache
-- `--hurry-wait-for-upload`: Wait for all new artifacts to upload before exiting (blocks on daemon uploads)
+- `--hurry-async-upload`: Upload artifacts asynchronously in the background instead of waiting (env: `HURRY_ASYNC_UPLOAD`)
 
 **Important notes:**
-- **Hurry flags MUST come before cargo flags** due to Clap parsing: `hurry cargo build --hurry-wait-for-upload --release` ✅
-- Incorrect order will fail: `hurry cargo build --release --hurry-wait-for-upload` ❌
+- **Hurry flags MUST come before cargo flags** due to Clap parsing: `hurry cargo build --hurry-async-upload --release` ✅
+- Incorrect order will fail: `hurry cargo build --release --hurry-async-upload` ❌
 - Regular `cargo build --help` shows cargo's help, not hurry's
-- The `--hurry-wait-for-upload` flag is useful for CI/CD to ensure artifacts are fully uploaded
+- By default, hurry waits for uploads to complete; use `--hurry-async-upload` if you want background uploads
 
 ## Courier Workflow
 1. Set up environment: `cp .env.example .env` and customize as needed
