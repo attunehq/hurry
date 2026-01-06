@@ -18,49 +18,48 @@ Alternatively, you can [self-host Hurry](docs/self-hosting.md) locally or on you
 ### Unix (macOS/Linux)
 
 ```shell
-curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash
+curl -sSfL https://hurry.build/install.sh | bash
 ```
 
 You can configure certain installer options:
 
 ```shell
 # Install to a specific directory (defaults to ~/.local/bin)
-curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash -s -- -b /usr/local/bin
+curl -sSfL https://hurry.build/install.sh | bash -s -- -b /usr/local/bin
 
 # Install a specific version
-curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash -s -- -v 0.2.0
+curl -sSfL https://hurry.build/install.sh | bash -s -- -v 0.2.0
 
 # Get help
-curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash -s -- -h
+curl -sSfL https://hurry.build/install.sh | bash -s -- -h
 ```
 
 ### Windows
 
 ```powershell
-irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
+irm https://hurry.build/install.ps1 | iex
 ```
 
 You can configure certain installer options:
 
 ```powershell
 # Install a specific version
-$env:Version="0.2.0"; irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
+$env:Version="0.2.0"; irm https://hurry.build/install.ps1 | iex
 
 # Install to a custom directory (defaults to $env:LOCALAPPDATA\Programs\hurry)
-$env:BinDir="C:\Tools"; irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
+$env:BinDir="C:\Tools"; irm https://hurry.build/install.ps1 | iex
 
 # Show help
-$env:Help="true"; irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
+$env:Help="true"; irm https://hurry.build/install.ps1 | iex
 ```
 
 ### Manual
 
-```shell
-# View available versions
-curl -sSfL https://hurry-releases.s3.amazonaws.com/releases/versions.json
+Download the latest release from [GitHub Releases](https://github.com/attunehq/hurry/releases/latest), or use the command line:
 
+```shell
 # Download a specific version for your platform
-curl -sSfL https://hurry-releases.s3.amazonaws.com/releases/v0.2.0/hurry-aarch64-apple-darwin.tar.gz -o hurry.tar.gz
+curl -sSfL https://github.com/attunehq/hurry/releases/download/v0.2.0/hurry-aarch64-apple-darwin.tar.gz -o hurry.tar.gz
 
 # Extract and install
 tar -xzf hurry.tar.gz
