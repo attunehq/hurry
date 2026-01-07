@@ -122,15 +122,10 @@ impl Disk {
         // This also allows us to add new volumes at different levels in the
         // future if we need to do so for storage or other reasons.
         let hex = key.to_hex();
-        // Use get() for bounds-safe slicing. This also validates UTF-8 boundaries,
-        // so if hex ever contains non-ASCII characters, we'll get a clear panic
-        // instead of undefined behavior. hex::encode guarantees ASCII output.
-        let prefix1 = hex
-            .get(0..2)
-            .expect("hex string from Key::to_hex() should have at least 2 chars");
-        let prefix2 = hex
-            .get(2..4)
-            .expect("hex string from Key::to_hex() should have at least 4 chars");
+        // Use get() for bounds-safe slicing with graceful fallback to empty string.
+        // This avoids panics if hex is unexpectedly short or contains non-ASCII.
+        let prefix1 = hex.get(0..2).unwrap_or("");
+        let prefix2 = hex.get(2..4).unwrap_or("");
         self.root.join(prefix1).join(prefix2).join(&hex)
     }
 
