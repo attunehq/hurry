@@ -5,6 +5,7 @@ import { apiRequest, exchangeAuthCode } from "../api/client";
 import type { AcceptInvitationResponse, CreateOrgApiKeyResponse, OrganizationListResponse } from "../api/types";
 import { useSession } from "../auth/session";
 import { Button } from "../ui/primitives/Button";
+import { Noise } from "../ui/primitives/Noise";
 
 type Status = "working" | "error" | "done";
 
@@ -127,7 +128,7 @@ export default function AuthCallbackPage() {
   }, [authCode, isNewUser, inviteToken, nav, setSessionToken]);
 
   return (
-    <div className="noise fixed inset-0 flex items-center justify-center">
+    <Noise className="fixed inset-0 flex items-center justify-center">
       <div className="w-full max-w-md px-6">
         {/* Brand */}
         <div className="mb-8 flex items-center justify-center gap-3">
@@ -169,6 +170,6 @@ export default function AuthCallbackPage() {
           </div>
         </div>
       </div>
-    </div>
+    </Noise>
   );
 }

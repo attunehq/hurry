@@ -1,11 +1,13 @@
 import { ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router";
 
+import { Noise } from "../ui/primitives/Noise";
+
 export default function NotFoundPage() {
   const nav = useNavigate();
 
   return (
-    <div className="noise fixed inset-0 z-50 flex items-start justify-center bg-surface-base px-6 pt-[20vh]">
+    <Noise className="fixed inset-0 z-50 flex items-start justify-center bg-surface-base px-6 pt-[20vh]">
       <div className="w-full max-w-md rounded-2xl border border-border bg-surface-raised p-6 shadow-glow-soft backdrop-blur">
         <div className="text-sm font-semibold text-content-primary">Not found</div>
         <div className="mt-2 text-sm text-content-tertiary">
@@ -19,6 +21,6 @@ export default function NotFoundPage() {
           Go back
         </button>
       </div>
-    </div>
+    </Noise>
   );
 }
