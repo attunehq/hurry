@@ -7,7 +7,7 @@ set -euo pipefail
 # when the cache returns a unit but not all of its dependencies.
 #
 # This script:
-# 1. Clones the test project (github-rs) into a Docker container
+# 1. Clones the test project (github-rs at commit 3eeaef5b) into a Docker container
 # 2. Runs hurry cargo build with the repro/319 org's cached artifacts
 # 3. The cache returns incomplete dependency chains, triggering the bug
 #

@@ -25,7 +25,7 @@ This reproduction requires access to a pre-populated cache that exhibits the bug
 
 1. Provide API credentials for accessing the `repro/319` org (ID: 46) in Hurry production
 2. Docker with buildx support
-3. The user's test project: https://github.com/yonasBSD/github-rs (branch `chore/rust-stable`)
+3. The user's test project: https://github.com/yonasBSD/github-rs (branch `chore/rust-stable`, commit `3eeaef5b27d4167f857ab6574065250066ba300e`)
 
 ### Steps
 

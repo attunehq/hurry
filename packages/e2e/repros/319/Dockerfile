@@ -38,9 +38,9 @@ ENV HURRY_API_URL=https://app.hurry.build/
 # Enable debug logging
 ENV HURRY_LOG=debug
 
-# Clone the test project
-RUN git clone --branch chore/rust-stable --depth 1 \
-    https://github.com/yonasBSD/github-rs.git .
+# Clone the test project at the specific commit used for reproduction
+RUN git clone https://github.com/yonasBSD/github-rs.git . && \
+    git checkout 3eeaef5b27d4167f857ab6574065250066ba300e
 
 # Attempt restore and build - this triggers the fingerprint hash not found bug
 # Use --hurry-skip-backup to avoid polluting the cache state
