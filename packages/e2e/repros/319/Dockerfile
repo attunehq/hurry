@@ -44,9 +44,7 @@ RUN git clone https://github.com/yonasBSD/github-rs.git . && \
 
 # Attempt restore and build - this triggers the fingerprint hash not found bug
 # Use --hurry-skip-backup to avoid polluting the cache state
+# This step should FAIL with "dependency fingerprint hash not found" if the bug exists
 RUN --mount=type=secret,id=HURRY_API_TOKEN \
     HURRY_API_TOKEN=$(cat /run/secrets/HURRY_API_TOKEN) \
-    hurry cargo build --hurry-skip-backup --release 2>&1 || true
-
-# If the above succeeds (bug is fixed), verify the build actually works
-RUN cargo build --release
+    hurry cargo build --hurry-skip-backup --release
