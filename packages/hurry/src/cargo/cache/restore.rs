@@ -853,7 +853,7 @@ fn filter_units_with_incomplete_deps(
 ) -> (HashSet<UnitHash>, usize) {
     let mut available = saved_units
         .iter()
-        .map(|(k, _)| UnitHash::from(String::from(k.as_str())))
+        .map(|(k, _)| UnitHash::from(k.as_str()))
         .chain(units_to_skip.iter().cloned())
         .collect::<HashSet<_>>();
 
@@ -867,22 +867,21 @@ fn filter_units_with_incomplete_deps(
             continue;
         }
 
-        let missing_dep = unit.info().deps.iter().find(|&&dep_idx| {
-            let dep_unit = &units[dep_idx as usize];
-            !available.contains(&dep_unit.info().unit_hash)
-        });
+        let missing_dep = unit
+            .info()
+            .deps
+            .iter()
+            .find(|dep_hash| !available.contains(dep_hash));
 
-        if let Some(&dep_idx) = missing_dep {
-            let dep_unit = &units[dep_idx as usize];
+        if let Some(missing_dep_hash) = missing_dep {
             available.remove(unit_hash);
             filtered_hashes.insert(unit_hash.clone());
             filtered_count += 1;
 
             debug!(
-                unit_hash = %unit_hash,
+                %unit_hash,
                 package = %unit.info().package_name,
-                missing_dep_hash = %dep_unit.info().unit_hash,
-                missing_dep_package = %dep_unit.info().package_name,
+                %missing_dep_hash,
                 "filtering unit: incomplete dependency chain"
             );
         }
@@ -902,15 +901,15 @@ mod tests {
     };
     use pretty_assertions::assert_eq as pretty_assert_eq;
 
-    fn make_unit_plan(hash: &str, package: &str, deps: Vec<u32>) -> UnitPlan {
+    fn make_unit_plan(hash: &str, package: &str, deps: Vec<&str>) -> UnitPlan {
         UnitPlan::LibraryCrate(LibraryCrateUnitPlan {
             info: UnitPlanInfo {
-                unit_hash: UnitHash::from(String::from(hash)),
+                unit_hash: hash.into(),
                 package_name: String::from(package),
                 package_version: String::from("1.0.0"),
                 crate_name: String::from(package),
                 target_arch: RustcTarget::ImplicitHost,
-                deps,
+                deps: deps.into_iter().map(UnitHash::from).collect(),
             },
             src_path: AbsFilePath::try_from("/test/src/lib.rs").unwrap(),
             outputs: vec![],
@@ -943,10 +942,6 @@ mod tests {
             .build();
 
         SavedUnit::LibraryCrate(files, plan)
-    }
-
-    fn hash(s: &str) -> UnitHash {
-        UnitHash::from(String::from(s))
     }
 
     #[test]
@@ -989,12 +984,13 @@ mod tests {
 
     #[test]
     fn unit_with_dep_on_disk_passes() {
+        // A depends on B; B is on disk (skipped), A is in cache -> should pass
         let units = vec![
             make_unit_plan("B", "pkg-b", vec![]),
-            make_unit_plan("A", "pkg-a", vec![0]),
+            make_unit_plan("A", "pkg-a", vec!["B"]),
         ];
         let saved = CargoRestoreResponse::new([("A", make_saved_unit("A"))]);
-        let skip = HashSet::from([hash("B")]);
+        let skip = HashSet::from([UnitHash::from("B")]);
 
         let (filtered, count) = filter_units_with_incomplete_deps(&units, &saved, &skip);
 
@@ -1007,7 +1003,7 @@ mod tests {
         // Unit A depends on B; both in cache -> A should pass
         let units = vec![
             make_unit_plan("B", "pkg-b", vec![]),
-            make_unit_plan("A", "pkg-a", vec![0]),
+            make_unit_plan("A", "pkg-a", vec!["B"]),
         ];
         let saved =
             CargoRestoreResponse::new([("B", make_saved_unit("B")), ("A", make_saved_unit("A"))]);
@@ -1021,16 +1017,17 @@ mod tests {
 
     #[test]
     fn unit_with_missing_dep_filtered() {
+        // A depends on B; A is in cache but B is not -> A should be filtered
         let units = vec![
             make_unit_plan("B", "pkg-b", vec![]),
-            make_unit_plan("A", "pkg-a", vec![0]),
+            make_unit_plan("A", "pkg-a", vec!["B"]),
         ];
         let saved = CargoRestoreResponse::new([("A", make_saved_unit("A"))]);
         let skip = HashSet::new();
 
         let (filtered, count) = filter_units_with_incomplete_deps(&units, &saved, &skip);
 
-        pretty_assert_eq!(filtered, HashSet::from([hash("A")]));
+        pretty_assert_eq!(filtered, HashSet::from([UnitHash::from("A")]));
         pretty_assert_eq!(count, 1);
     }
 
@@ -1039,8 +1036,8 @@ mod tests {
         // A -> B -> C where C is missing; both A and B should be filtered
         let units = vec![
             make_unit_plan("C", "pkg-c", vec![]),
-            make_unit_plan("B", "pkg-b", vec![0]),
-            make_unit_plan("A", "pkg-a", vec![1]),
+            make_unit_plan("B", "pkg-b", vec!["C"]),
+            make_unit_plan("A", "pkg-a", vec!["B"]),
         ];
         let saved =
             CargoRestoreResponse::new([("A", make_saved_unit("A")), ("B", make_saved_unit("B"))]);
@@ -1048,7 +1045,10 @@ mod tests {
 
         let (filtered, count) = filter_units_with_incomplete_deps(&units, &saved, &skip);
 
-        pretty_assert_eq!(filtered, HashSet::from([hash("B"), hash("A")]));
+        pretty_assert_eq!(
+            filtered,
+            HashSet::from([UnitHash::from("B"), UnitHash::from("A")])
+        );
         pretty_assert_eq!(count, 2);
     }
 
@@ -1059,9 +1059,9 @@ mod tests {
         let units = vec![
             make_unit_plan("B", "pkg-b", vec![]),
             make_unit_plan("D", "pkg-d", vec![]),
-            make_unit_plan("A", "pkg-a", vec![0]),
-            make_unit_plan("C", "pkg-c", vec![1]),
-            make_unit_plan("E", "pkg-e", vec![3]),
+            make_unit_plan("A", "pkg-a", vec!["B"]),
+            make_unit_plan("C", "pkg-c", vec!["D"]),
+            make_unit_plan("E", "pkg-e", vec!["C"]),
         ];
         let saved = CargoRestoreResponse::new([
             ("A", make_saved_unit("A")),
@@ -1073,7 +1073,10 @@ mod tests {
 
         let (filtered, count) = filter_units_with_incomplete_deps(&units, &saved, &skip);
 
-        pretty_assert_eq!(filtered, HashSet::from([hash("C"), hash("E")]));
+        pretty_assert_eq!(
+            filtered,
+            HashSet::from([UnitHash::from("C"), UnitHash::from("E")])
+        );
         pretty_assert_eq!(count, 2);
     }
 }

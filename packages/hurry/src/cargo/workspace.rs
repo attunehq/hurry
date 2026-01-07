@@ -1,4 +1,4 @@
-use std::{fmt::Debug, time::SystemTime};
+use std::{collections::HashMap, fmt::Debug, time::SystemTime};
 
 use cargo_metadata::TargetKind;
 use color_eyre::{
@@ -359,6 +359,20 @@ impl Workspace {
     ) -> Result<Vec<UnitPlan>> {
         trace!(?build_plan, "build plan");
 
+        // Phase 1: Extract unit hashes from all invocations to build index→hash
+        // mapping. We need this mapping to resolve dep indices (which reference
+        // the original invocations array) to UnitHash values. Some invocations
+        // will be skipped (first-party, binaries, etc.) but we still need their
+        // hashes so that units depending on them can resolve their deps
+        // correctly.
+        let mut index_to_hash = HashMap::new();
+        for (idx, invocation) in build_plan.invocations.iter().enumerate() {
+            if let Some(hash) = invocation.unit_hash()? {
+                index_to_hash.insert(idx, hash);
+            }
+        }
+
+        // Phase 2: Create units with deps resolved to hashes.
         let mut units: Vec<UnitPlan> = Vec::new();
         for mut invocation in build_plan.invocations {
             trace!(?invocation, "build plan invocation");
@@ -404,7 +418,17 @@ impl Workspace {
             // the declared crate_name of the dependency. But we should be able
             // to parse out an extern_crate_name by parsing the `--extern` flags
             // in the invocation rustc arguments for known library output paths.
-            let deps = invocation.deps.into_iter().map(|d| d as u32).collect();
+
+            // Resolve dep indices to UnitHash values. Dependencies pointing to
+            // invocations we couldn't extract hashes from (e.g., unsupported
+            // target kinds) are silently dropped - they won't affect cache
+            // restoration since those units aren't cached anyway.
+            let deps = invocation
+                .deps
+                .iter()
+                .filter_map(|&dep_idx| index_to_hash.get(&dep_idx).cloned())
+                .collect::<Vec<_>>();
+
             let unit = if invocation.target_kind == [TargetKind::CustomBuild] {
                 match invocation.compile_mode {
                     CargoCompileMode::Build => {
@@ -647,6 +671,12 @@ impl From<String> for UnitHash {
     }
 }
 
+impl From<&str> for UnitHash {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
 impl From<&UnitHash> for UnitHash {
     fn from(value: &UnitHash) -> Self {
         value.clone()
@@ -714,15 +744,14 @@ pub struct UnitPlanInfo {
     /// the fingerprints in the `deps` field.
     ///
     /// [^1]: https://doc.rust-lang.org/cargo/reference/build-scripts.html#the-links-manifest-key
-    // This field is not serialized because indexes may not be valid between
-    // build plan invocations, and this value should be parsed from the build
+    // This field is not serialized because it should be parsed from the build
     // plan on every build. This does not impact correctness because the
     // dependencies of a unit already have their hash baked into the unit's
     // hash.[^1]
     //
     // [^1]: https://github.com/attunehq/cargo/blob/c24e1064277fe51ab72011e2612e556ac56addf7/src/cargo/core/compiler/build_runner/compilation_files.rs#L721-L737
     #[serde(skip)]
-    pub deps: Vec<u32>,
+    pub deps: Vec<UnitHash>,
 }
 
 impl UnitPlanInfo {
