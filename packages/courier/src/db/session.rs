@@ -75,13 +75,13 @@ impl Postgres {
             return Ok(None);
         };
 
-        // Update last_accessed_at and extend expiration (sliding window: 24 hours from
+        // Update last_accessed_at and extend expiration (sliding window: 30 days from
         // now)
         sqlx::query!(
             r#"
             UPDATE user_session
             SET last_accessed_at = NOW(),
-                expires_at = NOW() + INTERVAL '24 hours'
+                expires_at = NOW() + INTERVAL '30 days'
             WHERE id = $1
             "#,
             row.id,

@@ -13,7 +13,7 @@ pub mod exchange;
 pub mod logout;
 pub mod start;
 
-pub const SESSION_DURATION: Duration = Duration::hours(24);
+pub const SESSION_DURATION: Duration = Duration::days(30);
 pub const OAUTH_STATE_DURATION: Duration = Duration::minutes(10);
 pub const EXCHANGE_CODE_DURATION: Duration = Duration::seconds(60);
 
