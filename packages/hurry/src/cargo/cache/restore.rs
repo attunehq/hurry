@@ -24,7 +24,7 @@ use crate::{
 };
 use clients::{
     Courier,
-    courier::v1::{Key, SavedUnit, cache::CargoRestoreRequest},
+    courier::v1::{Key, SavedUnit, cache::CargoRestoreRequest, cache::CargoRestoreResponse},
 };
 
 /// Tracks items that were restored from the cache.
@@ -146,6 +146,20 @@ pub async fn restore_units(
         "cache restore response"
     );
 
+    // Filter units with incomplete dependency chains.
+    // Units whose transitive dependencies are not all available (either in
+    // cache or on disk) will be skipped, because:
+    // 1. Fingerprint rewriting would fail due to missing dep hash mappings
+    // 2. Cargo would rebuild them anyway due to transitive staleness
+    let (units_with_incomplete_deps, incomplete_deps_count) =
+        filter_units_with_incomplete_deps(units, &saved_units, &units_to_skip);
+    if incomplete_deps_count > 0 {
+        warn!(
+            incomplete_deps_count,
+            "filtered units with incomplete dependency chains"
+        );
+    }
+
     // Track restore progress.
     let restore_progress = RestoreProgress::default();
 
@@ -226,6 +240,11 @@ pub async fn restore_units(
         //
         // [^1]: https://github.com/rust-lang/cargo/blob/c24e1064277fe51ab72011e2612e556ac56addf7/src/cargo/core/compiler/fingerprint/mod.rs#L1229-L1235
         let mtime = starting_mtime + Duration::from_secs(i as u64);
+
+        if units_with_incomplete_deps.contains(unit_hash) {
+            progress.dec_length(1);
+            continue;
+        }
 
         // Load the saved file info from the response.
         let Some(saved) = saved_units.take(&unit_hash.into()) else {
@@ -793,5 +812,268 @@ fn unit_type_name(unit: &UnitPlan) -> &'static str {
         UnitPlan::LibraryCrate(_) => "LibraryCrate",
         UnitPlan::BuildScriptCompilation(_) => "BuildScriptCompilation",
         UnitPlan::BuildScriptExecution(_) => "BuildScriptExecution",
+    }
+}
+
+/// Filter units to only those with complete dependency chains.
+///
+/// When the server returns some units but not their dependencies (e.g., due to
+/// glibc incompatibility), restoring those units will fail during fingerprint
+/// rewriting because the dependency's fingerprint hash mapping is never
+/// recorded.
+///
+/// More importantly, Cargo's staleness check propagates transitively[^1]: if
+/// any transitive dependency is stale, Cargo marks all dependents as stale too
+/// and rebuilds them. So there's no benefit to restoring units with incomplete
+/// deps.
+///
+/// This function filters out units whose dependencies are not available in
+/// either:
+/// - The cache response (`saved_units`)
+/// - Already present on disk (`units_to_skip`)
+///
+/// The `units` slice must be in dependency order (dependencies before
+/// dependents). This is guaranteed by `Workspace::units()` which builds units
+/// from Cargo's build plan, which is topologically sorted because `plan.add`
+/// is called after recursively compiling all dependencies[^2].
+///
+/// Because units are in dependency order, filtering a unit cascades to its
+/// dependents automatically.
+///
+/// [^1]: https://github.com/rust-lang/cargo/blob/f2729c026922c086a4eaac29d23864fb4faeb71b/src/cargo/core/compiler/fingerprint/mod.rs#L1240-L1247
+/// [^2]: https://github.com/rust-lang/cargo/blob/0436f86288a4d9bce1c712c4eea5b05eb82682b9/src/cargo/core/compiler/mod.rs#L238-L241
+///
+/// Returns:
+/// - A set of unit hashes that should be skipped (filtered out)
+/// - The count of units filtered due to incomplete dependencies
+fn filter_units_with_incomplete_deps(
+    units: &[UnitPlan],
+    saved_units: &CargoRestoreResponse,
+    units_to_skip: &HashSet<UnitHash>,
+) -> (HashSet<UnitHash>, usize) {
+    let mut available = saved_units
+        .iter()
+        .map(|(k, _)| UnitHash::from(String::from(k.as_str())))
+        .chain(units_to_skip.iter().cloned())
+        .collect::<HashSet<_>>();
+
+    let mut filtered_hashes = HashSet::new();
+    let mut filtered_count = 0;
+
+    for unit in units {
+        let unit_hash = &unit.info().unit_hash;
+
+        if !available.contains(unit_hash) {
+            continue;
+        }
+
+        let missing_dep = unit.info().deps.iter().find(|&&dep_idx| {
+            let dep_unit = &units[dep_idx as usize];
+            !available.contains(&dep_unit.info().unit_hash)
+        });
+
+        if let Some(&dep_idx) = missing_dep {
+            let dep_unit = &units[dep_idx as usize];
+            available.remove(unit_hash);
+            filtered_hashes.insert(unit_hash.clone());
+            filtered_count += 1;
+
+            debug!(
+                unit_hash = %unit_hash,
+                package = %unit.info().package_name,
+                missing_dep_hash = %dep_unit.info().unit_hash,
+                missing_dep_package = %dep_unit.info().package_name,
+                "filtering unit: incomplete dependency chain"
+            );
+        }
+    }
+
+    (filtered_hashes, filtered_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cargo::{LibraryCrateUnitPlan, RustcTarget, UnitPlanInfo};
+    use crate::path::AbsFilePath;
+    use clients::courier::v1::{
+        Fingerprint as SavedFingerprint, Key, LibraryCrateUnitPlan as SavedLibraryCratePlan,
+        LibraryFiles, SavedUnit, UnitPlanInfo as SavedUnitPlanInfo,
+    };
+    use pretty_assertions::assert_eq as pretty_assert_eq;
+
+    fn make_unit_plan(hash: &str, package: &str, deps: Vec<u32>) -> UnitPlan {
+        UnitPlan::LibraryCrate(LibraryCrateUnitPlan {
+            info: UnitPlanInfo {
+                unit_hash: UnitHash::from(String::from(hash)),
+                package_name: String::from(package),
+                package_version: String::from("1.0.0"),
+                crate_name: String::from(package),
+                target_arch: RustcTarget::ImplicitHost,
+                deps,
+            },
+            src_path: AbsFilePath::try_from("/test/src/lib.rs").unwrap(),
+            outputs: vec![],
+        })
+    }
+
+    fn test_key(content: &[u8]) -> Key {
+        Key::from_buffer(content)
+    }
+
+    fn make_saved_unit(hash: &str) -> SavedUnit {
+        let info = SavedUnitPlanInfo::builder()
+            .unit_hash(hash)
+            .package_name("pkg")
+            .crate_name("pkg")
+            .maybe_target_arch(Some("x86_64-unknown-linux-gnu"))
+            .build();
+
+        let files = LibraryFiles::builder()
+            .output_files(vec![])
+            .fingerprint(SavedFingerprint::from(String::from("test-fingerprint")))
+            .dep_info_file(test_key(b"dep-info"))
+            .encoded_dep_info_file(test_key(b"encoded-dep-info"))
+            .build();
+
+        let plan = SavedLibraryCratePlan::builder()
+            .info(info)
+            .src_path("test.rs")
+            .outputs(vec![] as Vec<clients::courier::v1::DiskPath>)
+            .build();
+
+        SavedUnit::LibraryCrate(files, plan)
+    }
+
+    fn hash(s: &str) -> UnitHash {
+        UnitHash::from(String::from(s))
+    }
+
+    #[test]
+    fn empty_units() {
+        let units = vec![];
+        let saved = CargoRestoreResponse::default();
+        let skip = HashSet::new();
+
+        let (filtered, count) = filter_units_with_incomplete_deps(&units, &saved, &skip);
+
+        pretty_assert_eq!(filtered, HashSet::new());
+        pretty_assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn unit_with_no_deps_passes() {
+        // Unit A has no deps and is in cache -> should pass
+        let units = vec![make_unit_plan("A", "pkg-a", vec![])];
+        let saved = CargoRestoreResponse::new([("A", make_saved_unit("A"))]);
+        let skip = HashSet::new();
+
+        let (filtered, count) = filter_units_with_incomplete_deps(&units, &saved, &skip);
+
+        pretty_assert_eq!(filtered, HashSet::new());
+        pretty_assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn unit_not_in_cache_not_counted() {
+        // Unit A not in cache -> not counted in filtered (will be rebuilt anyway)
+        let units = vec![make_unit_plan("A", "pkg-a", vec![])];
+        let saved = CargoRestoreResponse::default();
+        let skip = HashSet::new();
+
+        let (filtered, count) = filter_units_with_incomplete_deps(&units, &saved, &skip);
+
+        pretty_assert_eq!(filtered, HashSet::new());
+        pretty_assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn unit_with_dep_on_disk_passes() {
+        let units = vec![
+            make_unit_plan("B", "pkg-b", vec![]),
+            make_unit_plan("A", "pkg-a", vec![0]),
+        ];
+        let saved = CargoRestoreResponse::new([("A", make_saved_unit("A"))]);
+        let skip = HashSet::from([hash("B")]);
+
+        let (filtered, count) = filter_units_with_incomplete_deps(&units, &saved, &skip);
+
+        pretty_assert_eq!(filtered, HashSet::new());
+        pretty_assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn unit_with_dep_in_cache_passes() {
+        // Unit A depends on B; both in cache -> A should pass
+        let units = vec![
+            make_unit_plan("B", "pkg-b", vec![]),
+            make_unit_plan("A", "pkg-a", vec![0]),
+        ];
+        let saved =
+            CargoRestoreResponse::new([("B", make_saved_unit("B")), ("A", make_saved_unit("A"))]);
+        let skip = HashSet::new();
+
+        let (filtered, count) = filter_units_with_incomplete_deps(&units, &saved, &skip);
+
+        pretty_assert_eq!(filtered, HashSet::new());
+        pretty_assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn unit_with_missing_dep_filtered() {
+        let units = vec![
+            make_unit_plan("B", "pkg-b", vec![]),
+            make_unit_plan("A", "pkg-a", vec![0]),
+        ];
+        let saved = CargoRestoreResponse::new([("A", make_saved_unit("A"))]);
+        let skip = HashSet::new();
+
+        let (filtered, count) = filter_units_with_incomplete_deps(&units, &saved, &skip);
+
+        pretty_assert_eq!(filtered, HashSet::from([hash("A")]));
+        pretty_assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn cascading_filter() {
+        // A -> B -> C where C is missing; both A and B should be filtered
+        let units = vec![
+            make_unit_plan("C", "pkg-c", vec![]),
+            make_unit_plan("B", "pkg-b", vec![0]),
+            make_unit_plan("A", "pkg-a", vec![1]),
+        ];
+        let saved =
+            CargoRestoreResponse::new([("A", make_saved_unit("A")), ("B", make_saved_unit("B"))]);
+        let skip = HashSet::new();
+
+        let (filtered, count) = filter_units_with_incomplete_deps(&units, &saved, &skip);
+
+        pretty_assert_eq!(filtered, HashSet::from([hash("B"), hash("A")]));
+        pretty_assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn partial_graph_with_some_deps_available() {
+        // A -> B (B available), C -> D (D missing), E -> C (C filtered, so E filtered
+        // too)
+        let units = vec![
+            make_unit_plan("B", "pkg-b", vec![]),
+            make_unit_plan("D", "pkg-d", vec![]),
+            make_unit_plan("A", "pkg-a", vec![0]),
+            make_unit_plan("C", "pkg-c", vec![1]),
+            make_unit_plan("E", "pkg-e", vec![3]),
+        ];
+        let saved = CargoRestoreResponse::new([
+            ("A", make_saved_unit("A")),
+            ("B", make_saved_unit("B")),
+            ("C", make_saved_unit("C")),
+            ("E", make_saved_unit("E")),
+        ]);
+        let skip = HashSet::new();
+
+        let (filtered, count) = filter_units_with_incomplete_deps(&units, &saved, &skip);
+
+        pretty_assert_eq!(filtered, HashSet::from([hash("C"), hash("E")]));
+        pretty_assert_eq!(count, 2);
     }
 }
