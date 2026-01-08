@@ -744,7 +744,8 @@ pub struct UnitPlanInfo {
     /// the fingerprints in the `deps` field.
     ///
     /// [^1]: https://doc.rust-lang.org/cargo/reference/build-scripts.html#the-links-manifest-key
-    // This field is not serialized because it should be parsed from the build
+    // This field is not serialized because indexes may not be valid between
+    // build plan invocations, and this value should be parsed from the build
     // plan on every build. This does not impact correctness because the
     // dependencies of a unit already have their hash baked into the unit's
     // hash.[^1]

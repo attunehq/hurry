@@ -49,6 +49,9 @@ impl BuildPlanInvocation {
     ///
     /// This is used to build an index→hash mapping before creating units, so
     /// that dep indices can be resolved to UnitHash values.
+    // TODO: Unify with the similar hash extraction logic in
+    // `Workspace::units_from_build_plan()` which parses hashes from the same
+    // paths/filenames when constructing UnitPlan objects.
     pub fn unit_hash(&self) -> Result<Option<UnitHash>> {
         if self.target_kind == [TargetKind::CustomBuild] {
             match self.compile_mode {

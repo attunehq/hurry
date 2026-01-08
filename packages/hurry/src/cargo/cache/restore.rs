@@ -151,6 +151,9 @@ pub async fn restore_units(
     // cache or on disk) will be skipped, because:
     // 1. Fingerprint rewriting would fail due to missing dep hash mappings
     // 2. Cargo would rebuild them anyway due to transitive staleness
+    // TODO: Consider fusing this filtering into the main restore loop (along
+    // with units_to_skip) to make the elementwise nature of the computation
+    // clearer and improve locality.
     let (units_with_incomplete_deps, incomplete_deps_count) =
         filter_units_with_incomplete_deps(units, &saved_units, &units_to_skip);
     if incomplete_deps_count > 0 {
