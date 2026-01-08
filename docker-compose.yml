@@ -4,6 +4,10 @@ services:
         build:
             context: .
             dockerfile: ./docker/courier/Dockerfile
+            args:
+                HURRY_API_URL: ${HURRY_API_URL:-}
+            secrets:
+                - HURRY_API_TOKEN
         ports:
             - "3000:3000"
         volumes:
@@ -51,6 +55,10 @@ services:
         build:
             context: .
             dockerfile: ./docker/courier/Dockerfile
+            args:
+                HURRY_API_URL: ${HURRY_API_URL:-}
+            secrets:
+                - HURRY_API_TOKEN
         environment:
             - COURIER_DATABASE_URL=postgres://courier:courier@postgres:5432/courier
         command: ["migrate"]
@@ -63,3 +71,7 @@ services:
 
 networks:
     dev:
+
+secrets:
+    HURRY_API_TOKEN:
+        environment: HURRY_API_TOKEN

@@ -1,7 +1,5 @@
 # Workflows that run on pull requests. These are primarily CI checks for
 # linting, formatting, testing, etc.
-#
-# TODO: Swap to hurry for caching!
 name: PR
 
 on:
@@ -42,6 +40,7 @@ jobs:
             - name: Install Rust
               run: rustup show
             - uses: actions/checkout@v4
+            # TODO: Replace Swatinem with hurry when hurry supports `cargo clippy`
             - uses: Swatinem/rust-cache@v2
               with:
                   shared-key: clippy
@@ -75,12 +74,17 @@ jobs:
                   tool: nextest,sqlx-cli
                   checksum: true
             - uses: actions/checkout@v4
+            # TODO: Replace Swatinem with hurry when hurry supports `cargo nextest`
+            # Swatinem caches the test compilation; hurry-dev is needed because
+            # tests invoke hurry-dev binary to validate behavior.
             - uses: Swatinem/rust-cache@v2
               with:
                   shared-key: test
             - run: cargo sqlx migrate run --source packages/courier/schema/migrations/ --database-url $COURIER_DATABASE_URL
             - name: Setup hurry-dev
               uses: ./.github/actions/hurry-dev
+              with:
+                  hurry-api-token: ${{ secrets.HURRY_API_TOKEN }}
             - run: cargo nextest run -p hurry -p courier
 
     build:
@@ -91,14 +95,15 @@ jobs:
             - name: Install Rust
               run: rustup show
             - uses: actions/checkout@v4
-            - uses: Swatinem/rust-cache@v2
-              with:
-                  shared-key: build
+            - uses: ./.github/actions/hurry-install
             - name: Setup hurry-dev
               uses: ./.github/actions/hurry-dev
-            - run: cargo build -p hurry -p courier --verbose
+              with:
+                  hurry-api-token: ${{ secrets.HURRY_API_TOKEN }}
+            - run: hurry cargo build -p hurry -p courier --verbose
               env:
                   SQLX_OFFLINE: true
+                  HURRY_API_TOKEN: ${{ secrets.HURRY_API_TOKEN }}
 
     hurry-rust:
         name: Build with Hurry and check cache restores
@@ -113,6 +118,8 @@ jobs:
             - uses: actions/checkout@v4
             - name: Setup hurry-dev
               uses: ./.github/actions/hurry-dev
+              with:
+                  hurry-api-token: ${{ secrets.HURRY_API_TOKEN }}
 
             - name: Populate cache if needed
               env:

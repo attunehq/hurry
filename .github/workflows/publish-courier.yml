@@ -82,8 +82,6 @@ jobs:
             - name: Login to Amazon ECR
               uses: aws-actions/amazon-ecr-login@v2
 
-            # Use GHA cache instead of ECR registry cache because the ECR repository
-            # has tag immutability enabled, which prevents overwriting cache tags.
             - name: Build and push
               uses: docker/build-push-action@v6
               with:
@@ -92,8 +90,8 @@ jobs:
                   platforms: ${{ matrix.platform }}
                   push: true
                   tags: ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ needs.prepare.outputs.tag }}-${{ matrix.arch }}
-                  cache-from: type=gha,scope=${{ matrix.arch }}
-                  cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+                  secrets: |
+                      HURRY_API_TOKEN=${{ secrets.HURRY_API_TOKEN }}
 
     manifest:
         name: Create multi-arch manifest

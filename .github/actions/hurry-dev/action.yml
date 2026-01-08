@@ -1,17 +1,17 @@
-# hurry-dev is the local development version of hurry, installed from the current
-# repository state rather than from a release. This allows CI tests to run against
-# the version being tested without conflicting with any production hurry installation.
+# hurry-dev is the local development version of hurry, built from the currently
+# checked out source. This allows CI tests to run against the version being tested
+# without conflicting with any production hurry installation.
 #
-# TODO: swap to using hurry to cache itself!
+# Uses production hurry to cache its own build. After this action runs, both
+# `hurry` (production release) and `hurry-dev` (built from source) will be in PATH.
 
 name: hurry-dev
 description: Install and use hurry-dev (local development version)
 
 inputs:
-    cache-key:
-        description: "Cache key when building hurry"
-        required: false
-        default: "build-hurry-dev"
+    hurry-api-token:
+        description: "Hurry API token for caching"
+        required: true
 
 runs:
     using: composite
@@ -53,16 +53,16 @@ runs:
               rustup toolchain install stable
               rustup show
 
-        - name: Setup Rust cache
+        - name: Install production hurry
           if: steps.check-path.outputs.found != 'true' && steps.check-download.outputs.found != 'true'
-          uses: Swatinem/rust-cache@v2
-          with:
-              shared-key: ${{ inputs.cache-key }}
+          uses: ./.github/actions/hurry-install
 
         - name: Build hurry binary
           if: steps.check-path.outputs.found != 'true' && steps.check-download.outputs.found != 'true'
           shell: bash
-          run: cargo build --release --package hurry --verbose
+          env:
+              HURRY_API_TOKEN: ${{ inputs.hurry-api-token }}
+          run: hurry cargo build --release --package hurry --verbose
 
         - name: Copy built binary to /tmp/hurry
           if: steps.check-path.outputs.found != 'true' && steps.check-download.outputs.found != 'true'

@@ -18,6 +18,10 @@ services:
         build:
             context: .
             dockerfile: ./docker/courier/Dockerfile
+            args:
+                HURRY_API_URL: ${HURRY_API_URL:-}
+            secrets:
+                - HURRY_API_TOKEN
         environment:
             COURIER_DATABASE_URL: postgres://courier:courier@postgres:5432/courier
         command: ["migrate"]
@@ -40,6 +44,10 @@ services:
         build:
             context: .
             dockerfile: ./docker/courier/Dockerfile
+            args:
+                HURRY_API_URL: ${HURRY_API_URL:-}
+            secrets:
+                - HURRY_API_TOKEN
         ports:
             - "3000"  # Random host port mapped to container port 3000
         environment:
@@ -75,6 +83,10 @@ services:
         build:
             context: .
             dockerfile: ./docker/hurry/Dockerfile
+            args:
+                HURRY_API_URL: ${HURRY_API_URL:-}
+            secrets:
+                - HURRY_API_TOKEN
         depends_on:
             courier:
                 condition: service_healthy
@@ -84,7 +96,15 @@ services:
         build:
             context: .
             dockerfile: ./docker/hurry/Dockerfile
+            args:
+                HURRY_API_URL: ${HURRY_API_URL:-}
+            secrets:
+                - HURRY_API_TOKEN
         depends_on:
             courier:
                 condition: service_healthy
         command: ["sleep", "infinity"]
+
+secrets:
+    HURRY_API_TOKEN:
+        environment: HURRY_API_TOKEN

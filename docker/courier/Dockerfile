@@ -1,4 +1,16 @@
-# TODO: Swap to hurry for caching!
+# syntax=docker/dockerfile:1.4
+#
+# Build the courier server with hurry caching.
+#
+# To build locally:
+#   docker build -t courier -f docker/courier/Dockerfile \
+#     --secret id=HURRY_API_TOKEN \
+#     --build-arg HURRY_API_URL="$HURRY_API_URL" .
+#
+# To verify hurry caching works (force full rebuild, hurry should restore from remote):
+#   docker build --no-cache -t courier -f docker/courier/Dockerfile \
+#     --secret id=HURRY_API_TOKEN \
+#     --build-arg HURRY_API_URL="$HURRY_API_URL" .
 
 # Stage 1: Build the console (React SPA)
 FROM node:20-alpine AS console-builder
@@ -8,19 +20,23 @@ RUN npm ci
 COPY packages/dashboard/ ./
 RUN npm run build
 
-# Stage 2: Prepare Rust dependencies
-FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
+# Stage 2: Build courier with hurry caching
+FROM rust:1 AS builder
 WORKDIR /courier
 
-FROM chef AS planner
-COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
+# Install hurry (ADD fetches versions.json to bust cache when new version is released)
+ADD https://hurry-releases.s3.amazonaws.com/releases/versions.json /tmp/hurry-versions.json
+RUN curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash
 
-FROM chef AS builder
-COPY --from=planner /courier/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
+# Hurry config (HURRY_API_TOKEN passed via --secret to avoid leaking into image layers)
+ARG HURRY_API_URL
+ENV HURRY_API_URL=${HURRY_API_URL:-}
+ENV HURRY_WAIT_FOR_UPLOAD=true
+
 COPY . .
-RUN cargo build --release --bin courier
+RUN --mount=type=secret,id=HURRY_API_TOKEN \
+    HURRY_API_TOKEN=$(cat /run/secrets/HURRY_API_TOKEN) \
+    ~/.local/bin/hurry cargo build --release --bin courier
 
 # Stage 3: Runtime
 FROM debian:bookworm-slim AS runtime

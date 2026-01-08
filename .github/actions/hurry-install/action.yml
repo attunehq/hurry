@@ -1,0 +1,14 @@
+# Install production hurry from S3 releases.
+# Use this action to get hurry caching in CI workflows.
+
+name: hurry-install
+description: Install production hurry binary
+
+runs:
+    using: composite
+    steps:
+        - name: Install hurry
+          shell: bash
+          run: |
+              curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash
+              echo "$HOME/.local/bin" >> $GITHUB_PATH

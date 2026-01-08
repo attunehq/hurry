@@ -39,6 +39,8 @@ jobs:
                   rustup toolchain install stable
                   rustup show
             - uses: ./.github/actions/hurry-dev
+              with:
+                  hurry-api-token: ${{ secrets.HURRY_API_TOKEN }}
             - name: Clean target directory from hurry-dev build
               run: cargo clean
             - id: build
