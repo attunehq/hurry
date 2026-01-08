@@ -4,9 +4,9 @@ set -euo pipefail
 # hurry installer script
 #
 # Usage:
-#   curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash
-#   curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash -s -- -b /usr/local/bin
-#   curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash -s -- -v 1.0.0
+#   curl -sSfL https://hurry.build/install.sh | bash
+#   curl -sSfL https://hurry.build/install.sh | bash -s -- -b /usr/local/bin
+#   curl -sSfL https://hurry.build/install.sh | bash -s -- -v 1.0.0
 #
 # Options:
 #   -v, --version    Specify a version (default: latest)
@@ -19,9 +19,10 @@ RED='\033[0;31m'
 YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
-# S3 bucket configuration
-S3_BUCKET="hurry-releases"
-S3_BASE_URL="https://${S3_BUCKET}.s3.amazonaws.com/releases"
+# GitHub repository configuration
+REPO="attunehq/hurry"
+GITHUB_API="https://api.github.com/repos/${REPO}/releases"
+GITHUB_DOWNLOAD="https://github.com/${REPO}/releases/download"
 
 # Fail with an error message
 fail() {
@@ -138,7 +139,7 @@ parse_args() {
       -h|--help)
         echo "hurry installer"
         echo
-        echo "Usage: curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash [args]"
+        echo "Usage: curl -sSfL https://hurry.build/install.sh | bash [args]"
         echo
         echo "Options:"
         echo "  -v, --version    Specify a version (default: latest)"
@@ -148,13 +149,13 @@ parse_args() {
         echo
         echo "Examples:"
         echo "  # Install latest version"
-        echo "  curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash"
+        echo "  curl -sSfL https://hurry.build/install.sh | bash"
         echo
         echo "  # Install specific version"
-        echo "  curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash -s -- -v 1.0.0"
+        echo "  curl -sSfL https://hurry.build/install.sh | bash -s -- -v 1.0.0"
         echo
         echo "  # Install to custom directory"
-        echo "  curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash -s -- -b /usr/local/bin"
+        echo "  curl -sSfL https://hurry.build/install.sh | bash -s -- -b /usr/local/bin"
         exit 0
         ;;
       *)
@@ -164,22 +165,21 @@ parse_args() {
   done
 }
 
-# Get the latest version number from versions.json
+# Get the latest version number from GitHub Releases API
 get_latest_version() {
-  local versions_url="${S3_BASE_URL}/versions.json"
+  local latest_url="${GITHUB_API}/latest"
   local version
   local response
 
-  # Try to fetch versions.json
-  if ! response=$(curl -sSfL "$versions_url" 2>&1); then
-    fail "Failed to download from $versions_url. Error: $response"
+  # Try to fetch latest release info from GitHub API
+  if ! response=$(curl -sSfL "$latest_url" 2>&1); then
+    fail "Failed to fetch latest release from $latest_url. Error: $response"
   fi
 
-  # Parse the latest version from JSON
-  version=$(echo "$response" | grep -o '"latest": *"[^"]*"' | cut -d'"' -f4)
+  version=$(echo "$response" | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 | sed 's/^v//')
 
   if [[ -z "$version" ]]; then
-    fail "Could not parse version from versions.json. Response: $response"
+    fail "Could not parse version from GitHub API response. Response: $response"
   fi
 
   echo "$version"
@@ -206,19 +206,10 @@ install_binary() {
   local archive_name="hurry-${platform}.tar.gz"
   local binary_name="hurry"
 
-  # Normalize version (remove 'v' prefix if present)
   version="${version#v}"
-
-  # Construct download URLs
-  local version_path
-  if [[ "$version" == "latest" ]]; then
-    version_path="latest"
-  else
-    version_path="v${version}"
-  fi
-
-  local download_url="${S3_BASE_URL}/${version_path}/${archive_name}"
-  local checksums_url="${S3_BASE_URL}/${version_path}/checksums.txt"
+  local tag="v${version}"
+  local download_url="${GITHUB_DOWNLOAD}/${tag}/${archive_name}"
+  local checksums_url="${GITHUB_DOWNLOAD}/${tag}/checksums.txt"
 
   # Create temporary directory
   local workdir="$tmp_dir/hurry-install-$$"

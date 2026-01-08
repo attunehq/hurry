@@ -1,9 +1,10 @@
-# Build and publish hurry releases to S3.
+# Build and publish hurry releases to GitHub Releases.
 #
 # Triggered on version tags (v*). Builds binaries for all supported platforms
-# in parallel on native runners, then uploads to S3.
+# in parallel on native runners, then creates a draft GitHub Release.
 #
-# This workflow replicates the logic from scripts/release.sh for CI.
+# The release is created as a draft so it can be reviewed and published
+# manually when ready (e.g., during a maintenance window).
 name: Release
 
 on:
@@ -13,7 +14,7 @@ on:
     workflow_dispatch:
         inputs:
             dry_run:
-                description: "Dry run (skip S3 upload)"
+                description: "Dry run (skip release creation)"
                 type: boolean
                 default: false
 
@@ -23,8 +24,6 @@ concurrency:
 
 env:
     CARGO_TERM_COLOR: always
-    AWS_REGION: us-west-1
-    BUCKET: hurry-releases
 
 jobs:
     prepare:
@@ -115,7 +114,7 @@ jobs:
             - name: Install hurry
               if: ${{ !matrix.cross }}
               shell: bash
-              run: curl -sSfL https://hurry-releases.s3.amazonaws.com/install.sh | bash
+              run: curl -sSfL https://hurry.build/install.sh | bash
 
             - name: Install cargo-cross
               if: matrix.cross
@@ -227,8 +226,9 @@ jobs:
         needs: [prepare, build]
         runs-on: ubuntu-latest
         permissions:
-            contents: read
-            id-token: write
+            contents: write
+        env:
+            GH_TOKEN: ${{ github.token }}
 
         steps:
             - uses: actions/checkout@v4
@@ -250,135 +250,37 @@ jobs:
                   echo "Generated checksums:"
                   cat checksums.txt
 
-            - name: Configure AWS credentials
-              if: ${{ !inputs.dry_run }}
-              uses: aws-actions/configure-aws-credentials@v4
-              with:
-                  role-to-assume: ${{ secrets.HURRY_RELEASE_ROLE }}
-                  aws-region: ${{ env.AWS_REGION }}
-
-            - name: Upload versioned release to S3
+            - name: Create draft GitHub release
               if: ${{ !inputs.dry_run }}
               run: |
-                  TAG="${{ needs.prepare.outputs.tag }}"
-                  echo "Uploading to s3://${BUCKET}/releases/${TAG}/"
-
-                  aws s3 sync artifacts/ "s3://${BUCKET}/releases/${TAG}/" \
-                    --exclude "*" \
-                    --include "*.tar.gz" \
-                    --include "checksums.txt" \
-                    --cache-control "public, max-age=31536000, immutable"
-
-            - name: Update latest pointer (stable releases only)
-              if: ${{ !inputs.dry_run && needs.prepare.outputs.prerelease == 'false' }}
-              run: |
-                  echo "Updating latest release pointer"
-
-                  aws s3 sync artifacts/ "s3://${BUCKET}/releases/latest/" \
-                    --exclude "*" \
-                    --include "*.tar.gz" \
-                    --include "checksums.txt" \
-                    --cache-control "no-cache, must-revalidate"
-
-            - name: Update versions.json
-              if: ${{ !inputs.dry_run }}
-              run: |
-                  VERSION="${{ needs.prepare.outputs.version }}"
-                  TAG="${{ needs.prepare.outputs.tag }}"
-                  PRERELEASE="${{ needs.prepare.outputs.prerelease }}"
-                  PUBLISHED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-
-                  # Download existing versions.json (fail if S3 error other than file not existing)
-                  if ! aws s3 cp "s3://${BUCKET}/releases/versions.json" versions.json 2>&1; then
-                      # Check if it's a 404 (file doesn't exist yet) vs actual error
-                      if aws s3api head-object --bucket "${BUCKET}" --key "releases/versions.json" 2>&1 | grep -q "Not Found"; then
-                          echo "versions.json doesn't exist yet, creating new one"
-                          echo '{"latest": "", "versions": []}' > versions.json
-                      else
-                          echo "::error::Failed to download versions.json from S3"
-                          exit 1
-                      fi
-                  fi
-
-                  # Build platforms array dynamically from artifacts
-                  PLATFORMS=$(ls artifacts/*.tar.gz | xargs -n1 basename | sed 's/^hurry-//' | sed 's/\.tar\.gz$//' | jq -R -s -c 'split("\n") | map(select(length > 0))')
-
-                  # Update versions.json
-                  jq --arg version "$VERSION" \
-                     --arg prerelease "$PRERELEASE" \
-                     --arg published_at "$PUBLISHED_AT" \
-                     --argjson platforms "$PLATFORMS" \
-                     '
-                     .versions |= ([{
-                         version: $version,
-                         prerelease: ($prerelease == "true"),
-                         published_at: $published_at,
-                         platforms: $platforms
-                     }] + .) |
-                     if ($prerelease == "false") then
-                         .latest = $version
-                     else
-                         .
-                     end
-                     ' versions.json > versions.json.tmp
-                  mv versions.json.tmp versions.json
-
-                  # Upload updated versions.json
-                  aws s3 cp versions.json "s3://${BUCKET}/releases/versions.json" \
-                    --cache-control "no-cache, must-revalidate"
-
-            - name: Generate changelog
-              if: ${{ !inputs.dry_run && needs.prepare.outputs.prerelease == 'false' }}
-              run: |
-                  git fetch --tags
-                  if ! ./scripts/release.sh --generate-changelog > CHANGELOG.md; then
-                      echo "::error::Failed to generate changelog"
-                      exit 1
-                  fi
-                  if [[ ! -s CHANGELOG.md ]]; then
-                      echo "::error::Changelog generation produced empty file"
-                      exit 1
-                  fi
-
-            - name: Upload changelog
-              if: ${{ !inputs.dry_run && needs.prepare.outputs.prerelease == 'false' }}
-              run: |
-                  aws s3 cp CHANGELOG.md "s3://${BUCKET}/releases/CHANGELOG.md" \
-                    --cache-control "no-cache, must-revalidate"
-
-            - name: Upload install script
-              if: ${{ !inputs.dry_run }}
-              run: |
-                  aws s3 cp scripts/install.sh "s3://${BUCKET}/install.sh" \
-                    --cache-control "no-cache, must-revalidate"
+                  gh release create ${{ needs.prepare.outputs.tag }} \
+                    --draft \
+                    --generate-notes \
+                    ${{ needs.prepare.outputs.prerelease == 'true' && '--prerelease' || '--latest' }} \
+                    --title "${{ needs.prepare.outputs.tag }}" \
+                    artifacts/*.tar.gz \
+                    artifacts/checksums.txt
 
             - name: Write release summary
               if: ${{ !inputs.dry_run }}
               run: |
                   TAG="${{ needs.prepare.outputs.tag }}"
-                  VERSION="${{ needs.prepare.outputs.version }}"
 
-                  echo "## Release $TAG" >> $GITHUB_STEP_SUMMARY
+                  echo "## Draft Release Created: $TAG" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
-                  echo "### Install" >> $GITHUB_STEP_SUMMARY
+                  echo "A draft release has been created with auto-generated release notes." >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
-                  echo '```bash' >> $GITHUB_STEP_SUMMARY
-                  echo "curl -sSfL https://${BUCKET}.s3.amazonaws.com/install.sh | bash" >> $GITHUB_STEP_SUMMARY
+                  echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                  echo "1. [Review the draft release](https://github.com/${{ github.repository }}/releases)" >> $GITHUB_STEP_SUMMARY
+                  echo "2. Edit release notes if needed" >> $GITHUB_STEP_SUMMARY
+                  echo "3. **Publish when ready** (e.g., during maintenance window)" >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                  echo "### Checksums" >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
                   echo '```' >> $GITHUB_STEP_SUMMARY
-                  echo "" >> $GITHUB_STEP_SUMMARY
-                  echo "### Downloads" >> $GITHUB_STEP_SUMMARY
-                  echo "" >> $GITHUB_STEP_SUMMARY
-                  echo "| Platform | Link |" >> $GITHUB_STEP_SUMMARY
-                  echo "| -------- | ---- |" >> $GITHUB_STEP_SUMMARY
-                  for archive in artifacts/*.tar.gz; do
-                    target=$(basename "$archive" .tar.gz | sed 's/^hurry-//')
-                    echo "| $target | [hurry-${target}.tar.gz](https://${BUCKET}.s3.amazonaws.com/releases/${TAG}/hurry-${target}.tar.gz) |" >> $GITHUB_STEP_SUMMARY
-                  done
-                  echo "" >> $GITHUB_STEP_SUMMARY
-                  echo "### Verification" >> $GITHUB_STEP_SUMMARY
-                  echo "" >> $GITHUB_STEP_SUMMARY
-                  echo "- [checksums.txt](https://${BUCKET}.s3.amazonaws.com/releases/${TAG}/checksums.txt)" >> $GITHUB_STEP_SUMMARY
-                  echo "- [versions.json](https://${BUCKET}.s3.amazonaws.com/releases/versions.json)" >> $GITHUB_STEP_SUMMARY
+                  cat artifacts/checksums.txt >> $GITHUB_STEP_SUMMARY
+                  echo '```' >> $GITHUB_STEP_SUMMARY
 
             - name: Write dry run summary
               if: ${{ inputs.dry_run }}
@@ -388,7 +290,7 @@ jobs:
                   echo "## Dry Run - $TAG" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
                   echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
-                  echo "> No uploads performed. This was a dry run." >> $GITHUB_STEP_SUMMARY
+                  echo "> No release created. This was a dry run." >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
                   echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
