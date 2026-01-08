@@ -1,0 +1,14 @@
+version: 1
+
+rules:
+  - name: block-git-amend
+    description: Block git commit --amend commands
+    message: |
+      Don't use `git commit --amend`. Create a new commit instead.
+      Amending rewrites history and can cause issues for other collaborators.
+    on:
+      - hook: PreToolUse
+        tool: Bash
+        command:
+          - kind: Regex
+            pattern: "^git\\s+commit.*--amend"

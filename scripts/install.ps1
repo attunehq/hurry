@@ -2,9 +2,9 @@
 # hurry installer script for Windows (PowerShell)
 #
 # Usage:
-#   irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
-#   $env:Version="1.0.0"; irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
-#   $env:BinDir="C:\Tools"; irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
+#   irm https://hurry.build/install.ps1 | iex
+#   $env:Version="1.0.0"; irm https://hurry.build/install.ps1 | iex
+#   $env:BinDir="C:\Tools"; irm https://hurry.build/install.ps1 | iex
 #
 # Options (set via environment variables or script parameters):
 #   Version      Specify a version (default: latest)
@@ -17,9 +17,10 @@ param(
     [switch]$Help = ($env:Help -eq "true")
 )
 
-# S3 bucket configuration
-$S3_BUCKET = "hurry-releases"
-$S3_BASE_URL = "https://$S3_BUCKET.s3.amazonaws.com/releases"
+# GitHub repository configuration
+$REPO = "attunehq/hurry"
+$GITHUB_API = "https://api.github.com/repos/$REPO/releases"
+$GITHUB_DOWNLOAD = "https://github.com/$REPO/releases/download"
 
 function Write-Info {
     param([string]$Message)
@@ -42,9 +43,9 @@ function Show-Help {
 hurry installer for Windows
 
 Usage:
-  irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
-  `$env:Version="1.0.0"; irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
-  `$env:BinDir="C:\Tools"; irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
+  irm https://hurry.build/install.ps1 | iex
+  `$env:Version="1.0.0"; irm https://hurry.build/install.ps1 | iex
+  `$env:BinDir="C:\Tools"; irm https://hurry.build/install.ps1 | iex
 
 Options (set via environment variables):
   Version      Specify a version (default: latest)
@@ -53,26 +54,26 @@ Options (set via environment variables):
 
 Examples:
   # Install latest version
-  irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
+  irm https://hurry.build/install.ps1 | iex
 
   # Install specific version
-  `$env:Version="1.0.0"; irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
+  `$env:Version="1.0.0"; irm https://hurry.build/install.ps1 | iex
 
   # Install to custom directory
-  `$env:BinDir="C:\Tools"; irm https://hurry-releases.s3.amazonaws.com/install.ps1 | iex
+  `$env:BinDir="C:\Tools"; irm https://hurry.build/install.ps1 | iex
 "@
     exit 0
 }
 
 function Get-LatestVersion {
-    $versionsUrl = "$S3_BASE_URL/versions.json"
+    $latestUrl = "$GITHUB_API/latest"
 
     try {
-        $response = Invoke-RestMethod -Uri $versionsUrl -ErrorAction Stop
-        return $response.latest
+        $response = Invoke-RestMethod -Uri $latestUrl -ErrorAction Stop
+        return $response.tag_name -replace '^v', ''
     }
     catch {
-        Write-Error-Message "Failed to download from $versionsUrl. Error: $_"
+        Write-Error-Message "Failed to fetch latest release from $latestUrl. Error: $_"
     }
 }
 
@@ -94,21 +95,11 @@ function Install-Binary {
         [string]$TempDir
     )
 
-    # Normalize version (remove 'v' prefix if present)
     $Version = $Version -replace '^v', ''
-
     $archiveName = "hurry-$Platform.tar.gz"
-
-    # Determine version path
-    if ($Version -eq "latest") {
-        $versionPath = "latest"
-    }
-    else {
-        $versionPath = "v$Version"
-    }
-
-    $downloadUrl = "$S3_BASE_URL/$versionPath/$archiveName"
-    $checksumsUrl = "$S3_BASE_URL/$versionPath/checksums.txt"
+    $tag = "v$Version"
+    $downloadUrl = "$GITHUB_DOWNLOAD/$tag/$archiveName"
+    $checksumsUrl = "$GITHUB_DOWNLOAD/$tag/checksums.txt"
 
     Write-Info "Downloading hurry $Version for $Platform..."
 
