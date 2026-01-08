@@ -10,5 +10,6 @@ pub mod cross;
 pub mod daemon;
 pub mod ext;
 pub mod fs;
+pub mod gcp_cas;
 pub mod path;
 pub mod progress;

@@ -5,10 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use color_eyre::{
-    Result,
-    eyre::{OptionExt as _, bail},
-};
+use color_eyre::{Result, eyre::bail};
 use derive_more::Debug;
 use rustc_stable_hash::StableSipHasher128;
 use serde::{Deserialize, Serialize, de, ser};
@@ -218,7 +215,13 @@ impl Fingerprint {
             );
             dep.fingerprint = dep_fingerprints
                 .get(&old_dep_fingerprint)
-                .ok_or_eyre("dependency fingerprint hash not found")?
+                .ok_or_else(|| {
+                    let available_keys: Vec<_> = dep_fingerprints.keys().collect();
+                    color_eyre::eyre::eyre!(
+                        "dependency fingerprint hash not found: looking for {old_dep_fingerprint}, dep name: {}, available keys: {available_keys:?}",
+                        dep.name
+                    )
+                })?
                 .clone();
         }
         debug!("rewrite fingerprint deps: done");
