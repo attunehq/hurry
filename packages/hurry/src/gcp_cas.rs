@@ -11,7 +11,7 @@ use clients::courier::v1::{Key, SavedUnit, cache::CargoRestoreResponse};
 use cloud_storage::Client;
 use color_eyre::{Result, eyre::Context};
 use derive_more::{Debug, Display};
-use futures::Stream;
+use futures::{Stream, StreamExt as _};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, trace, warn};
 
@@ -319,6 +319,8 @@ impl GcpCas {
     }
 
     /// Restore multiple units, filtering by glibc version if specified.
+    ///
+    /// Fetches unit metadata in parallel for better performance.
     #[instrument(name = "GcpCas::restore_units", skip(self, unit_hashes))]
     pub async fn restore_units(
         &self,
@@ -330,15 +332,31 @@ impl GcpCas {
             .transpose()
             .context("parse host glibc version")?;
 
-        let mut units = HashMap::new();
-        let unit_hashes: Vec<_> = unit_hashes.into_iter().collect();
+        let unit_hashes: Vec<String> = unit_hashes
+            .into_iter()
+            .map(|h| h.as_ref().to_string())
+            .collect();
         let requested_count = unit_hashes.len();
 
-        for unit_hash in unit_hashes {
-            let unit_hash = unit_hash.as_ref();
-            trace!(unit_hash, "fetching unit from GCS");
+        // Fetch unit metadata in parallel with bounded concurrency
+        const CONCURRENT_FETCHES: usize = 64;
 
-            match self.get_unit(unit_hash).await {
+        let fetch_results: Vec<_> = futures::stream::iter(unit_hashes)
+            .map(|unit_hash| {
+                let cas = self.clone();
+                async move {
+                    trace!(unit_hash, "fetching unit from GCS");
+                    (unit_hash.clone(), cas.get_unit(&unit_hash).await)
+                }
+            })
+            .buffer_unordered(CONCURRENT_FETCHES)
+            .collect()
+            .await;
+
+        // Process results and filter by glibc version
+        let mut units = HashMap::new();
+        for (unit_hash, result) in fetch_results {
+            match result {
                 Ok(Some(stored)) => {
                     // Filter by glibc version if both are specified
                     if let (Some(host), Some(unit_glibc)) = (&host_glibc, &stored.linux_glibc_version) {
