@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE user_session\n            SET last_accessed_at = NOW(),\n                expires_at = NOW() + INTERVAL '30 days'\n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2c0a4855f74f1099059daecfef4a52aa143f355230c40973e1bb36b3c6593358"
+}
