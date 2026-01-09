@@ -4,28 +4,20 @@
 //! - `docs/DESIGN.md`
 //! - `docs/development/cargo.md`
 
-use std::time::Duration;
-
-use clap::Args;
 use color_eyre::{
-    Result, Section as _, SectionExt as _,
-    eyre::{Context, OptionExt as _, bail, eyre},
+    Result, Section as _,
+    eyre::{Context, eyre},
 };
-use derive_more::Debug;
-use tracing::{debug, info, instrument, trace, warn};
-use url::Url;
-use uuid::Uuid;
+use tracing::{debug, info, instrument};
 
-use clients::Token;
 use hurry::{
     cargo::{self, CargoBuildArguments, CargoCache, Workspace},
-    daemon::{CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse, DaemonPaths},
     progress::TransferBar,
 };
 
+use crate::cmd::{HurryBuildOptions, wait_for_upload};
+
 /// Options for `cargo build`.
-//
-// Hurry options are prefixed with `hurry-` to disambiguate from `cargo` args.
 //
 // TODO: When we implemented passthrough support for subcommands, we hid the `hurry` help
 // documentation in favor of showing users Cargo's documentation; this was done in order to make it
@@ -33,88 +25,30 @@ use hurry::{
 // confusing as teams onboard or as our set of options grows. We probably want to implement a custom
 // help function that extracts the current help output from `cargo` and then blends it with `hurry`
 // specific help so that users get both sets of options.
-#[derive(Clone, Args, Debug)]
-#[command(disable_help_flag = true)]
+#[derive(Clone, clap::Args, derive_more::Debug)]
 pub struct Options {
-    /// Base URL for the Hurry API.
-    #[arg(
-        long = "hurry-api-url",
-        env = "HURRY_API_URL",
-        default_value = "https://app.hurry.build"
-    )]
-    #[debug("{api_url}")]
-    api_url: Url,
-
-    /// Authentication token for the Hurry API.
-    // Note: this field is not _actually_ optional for `hurry` to operate; we're just telling clap
-    // that it is so that if the user runs with the `-h` or `--help` arguments we can not require
-    // the token in that case.
-    #[arg(long = "hurry-api-token", env = "HURRY_API_TOKEN")]
-    api_token: Option<Token>,
-
-    /// Skip backing up the cache.
-    #[arg(long = "hurry-skip-backup", default_value_t = false)]
-    skip_backup: bool,
-
-    /// Skip the Cargo build, only performing the cache actions.
-    #[arg(long = "hurry-skip-build", default_value_t = false)]
-    skip_build: bool,
-
-    /// Skip restoring the cache.
-    #[arg(long = "hurry-skip-restore", default_value_t = false)]
-    skip_restore: bool,
-
-    /// Upload artifacts asynchronously in the background instead of waiting.
-    ///
-    /// By default, hurry waits for uploads to complete before exiting.
-    /// Use this flag to upload in the background and exit immediately after the
-    /// build.
-    #[arg(
-        long = "hurry-async-upload",
-        env = "HURRY_ASYNC_UPLOAD",
-        default_value_t = false
-    )]
-    async_upload: bool,
-
-    /// Show help for `hurry cargo build`.
-    #[arg(long = "hurry-help", default_value_t = false)]
-    pub help: bool,
-
-    /// These arguments are passed directly to `cargo build` as provided.
-    #[arg(
-        num_args = ..,
-        trailing_var_arg = true,
-        allow_hyphen_values = true,
-        value_name = "ARGS",
-    )]
-    argv: Vec<String>,
+    #[clap(flatten)]
+    pub hurry: HurryBuildOptions,
 }
 
 impl Options {
     /// Parse the cargo build arguments.
     #[instrument(name = "Options::parsed_args")]
     pub fn parsed_args(&self) -> CargoBuildArguments {
-        CargoBuildArguments::from_iter(&self.argv)
-    }
-
-    /// Check if help is requested in the arguments.
-    pub fn is_help_request(&self) -> bool {
-        self.argv
-            .iter()
-            .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+        CargoBuildArguments::from_iter(&self.hurry.argv)
     }
 }
 
 #[instrument]
 pub async fn exec(options: Options) -> Result<()> {
     // If help is requested, passthrough directly to cargo to show cargo's help
-    if options.is_help_request() {
-        return cargo::invoke("build", &options.argv).await;
+    if options.hurry.is_help_request() {
+        return cargo::invoke("build", &options.hurry.argv).await;
     }
 
     // We make the API token required here; if we make it required in the actual
     // clap state then we aren't able to support e.g. `cargo build -h` passthrough.
-    let Some(token) = &options.api_token else {
+    let Some(token) = &options.hurry.api_token else {
         return Err(eyre!("Hurry API authentication token is required"))
             .suggestion("Set the `HURRY_API_TOKEN` environment variable")
             .suggestion("Provide it with the `--hurry-api-token` argument");
@@ -142,13 +76,13 @@ pub async fn exec(options: Options) -> Result<()> {
         .context("calculating expected units")?;
 
     // Initialize cache.
-    let cache = CargoCache::open(options.api_url, token.clone(), workspace)
+    let cache = CargoCache::open(options.hurry.api_url, token.clone(), workspace)
         .await
         .context("opening cache")?;
 
     // Restore artifacts.
     let unit_count = units.len() as u64;
-    let restored = if !options.skip_restore {
+    let restored = if !options.hurry.skip_restore {
         let progress = TransferBar::new(unit_count, "Restoring cache");
         cache.restore(&units, &progress).await?
     } else {
@@ -156,7 +90,7 @@ pub async fn exec(options: Options) -> Result<()> {
     };
 
     // Run the build.
-    if !options.skip_build {
+    if !options.hurry.skip_build {
         info!("Building target directory");
 
         // There are two integration points here that we specifically do _not_
@@ -222,7 +156,7 @@ pub async fn exec(options: Options) -> Result<()> {
         // processes, and use that to determine invocation and OUT_DIR from argv
         // and environment variables?
 
-        cargo::invoke("build", &options.argv)
+        cargo::invoke("build", &options.hurry.argv)
             .await
             .context("build with cargo")?;
 
@@ -233,71 +167,11 @@ pub async fn exec(options: Options) -> Result<()> {
     }
 
     // Cache the built artifacts.
-    if !options.skip_backup {
+    if !options.hurry.skip_backup {
         let upload_id = cache.save(units, restored).await?;
-        if !options.async_upload {
+        if !options.hurry.async_upload {
             let progress = TransferBar::new(unit_count, "Uploading cache");
             wait_for_upload(upload_id, &progress).await?;
-        }
-    }
-
-    Ok(())
-}
-
-#[instrument]
-async fn wait_for_upload(request_id: Uuid, progress: &TransferBar) -> Result<()> {
-    let paths = DaemonPaths::initialize().await?;
-    let Some(daemon) = paths.daemon_running().await? else {
-        bail!("daemon is not running");
-    };
-
-    let client = reqwest::Client::default();
-    let endpoint = format!("http://{}/api/v0/cargo/status", daemon.url);
-    let request = CargoUploadStatusRequest { request_id };
-    let mut interval = tokio::time::interval(Duration::from_secs(1));
-
-    let mut last_uploaded_artifacts = 0u64;
-    let mut last_uploaded_files = 0u64;
-    let mut last_uploaded_bytes = 0u64;
-    let mut last_total_artifacts = 0u64;
-    loop {
-        interval.tick().await;
-        trace!(?request, "submitting upload status request");
-        let response = client
-            .post(&endpoint)
-            .json(&request)
-            .send()
-            .await
-            .with_context(|| format!("send upload status request to daemon at: {endpoint}"))
-            .with_section(|| format!("{daemon:?}").header("Daemon context:"))?;
-        trace!(?response, "got upload status response");
-        let response = response.json::<CargoUploadStatusResponse>().await?;
-        trace!(?response, "parsed upload status response");
-        let status = response.status.ok_or_eyre("no upload status")?;
-        match status {
-            CargoUploadStatus::Complete => break,
-            CargoUploadStatus::InProgress(save_progress) => {
-                progress.add_bytes(
-                    save_progress
-                        .uploaded_bytes
-                        .saturating_sub(last_uploaded_bytes),
-                );
-                last_uploaded_bytes = save_progress.uploaded_bytes;
-                progress.add_files(
-                    save_progress
-                        .uploaded_files
-                        .saturating_sub(last_uploaded_files),
-                );
-                last_uploaded_files = save_progress.uploaded_files;
-                progress.inc(
-                    save_progress
-                        .uploaded_units
-                        .saturating_sub(last_uploaded_artifacts),
-                );
-                last_uploaded_artifacts = save_progress.uploaded_units;
-                progress.dec_length(last_total_artifacts.saturating_sub(save_progress.total_units));
-                last_total_artifacts = save_progress.total_units;
-            }
         }
     }
 
