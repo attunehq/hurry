@@ -4,22 +4,20 @@
 //! - `docs/DESIGN.md`
 //! - `docs/development/cargo.md`
 
-use std::time::Duration;
-
 use clap::Args;
 use color_eyre::{
-    Result, Section as _, SectionExt as _,
-    eyre::{Context, OptionExt as _, bail, eyre},
+    Result, Section as _,
+    eyre::{Context, eyre},
 };
 use derive_more::Debug;
-use tracing::{debug, info, instrument, trace, warn};
-use uuid::Uuid;
+use tracing::{debug, info, instrument};
 
 use hurry::{
-    cargo::{self, CargoBuildArguments, CargoCache, Workspace},
-    daemon::{CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse, DaemonPaths},
+    cargo::{self, CargoCache, Workspace},
     progress::TransferBar,
 };
+
+use super::super::{BuildOptions, wait_for_upload};
 
 /// Options for `cargo build`.
 //
@@ -34,45 +32,21 @@ use hurry::{
 #[derive(Clone, Args, Debug)]
 #[command(disable_help_flag = true)]
 pub struct Options {
-    /// Shared Hurry options.
+    /// Shared build options.
     #[clap(flatten)]
-    pub hurry: super::super::HurryOptions,
-
-    /// These arguments are passed directly to `cargo build` as provided.
-    #[arg(
-        num_args = ..,
-        trailing_var_arg = true,
-        allow_hyphen_values = true,
-        value_name = "ARGS",
-    )]
-    argv: Vec<String>,
-}
-
-impl Options {
-    /// Parse the cargo build arguments.
-    #[instrument(name = "Options::parsed_args")]
-    pub fn parsed_args(&self) -> CargoBuildArguments {
-        CargoBuildArguments::from_iter(&self.argv)
-    }
-
-    /// Check if help is requested in the arguments.
-    pub fn is_help_request(&self) -> bool {
-        self.argv
-            .iter()
-            .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
-    }
+    pub build: BuildOptions,
 }
 
 #[instrument]
 pub async fn exec(options: Options) -> Result<()> {
     // If help is requested, passthrough directly to cargo to show cargo's help
-    if options.is_help_request() {
-        return cargo::invoke("build", &options.argv).await;
+    if options.build.is_help_request() {
+        return cargo::invoke("build", &options.build.argv).await;
     }
 
     // We make the API token required here; if we make it required in the actual
     // clap state then we aren't able to support e.g. `cargo build -h` passthrough.
-    let Some(token) = &options.hurry.api_token else {
+    let Some(token) = &options.build.hurry.api_token else {
         return Err(eyre!("Hurry API authentication token is required"))
             .suggestion("Set the `HURRY_API_TOKEN` environment variable")
             .suggestion("Provide it with the `--hurry-api-token` argument");
@@ -81,7 +55,7 @@ pub async fn exec(options: Options) -> Result<()> {
     info!("Starting");
 
     // Parse and validate cargo build arguments.
-    let args = options.parsed_args();
+    let args = options.build.parsed_args();
     debug!(?args, "parsed cargo build arguments");
 
     // Open workspace.
@@ -100,13 +74,17 @@ pub async fn exec(options: Options) -> Result<()> {
         .context("calculating expected units")?;
 
     // Initialize cache.
-    let cache = CargoCache::open(options.hurry.api_url, token.clone(), workspace)
-        .await
-        .context("opening cache")?;
+    let cache = CargoCache::open(
+        options.build.hurry.api_url.clone(),
+        token.clone(),
+        workspace,
+    )
+    .await
+    .context("opening cache")?;
 
     // Restore artifacts.
     let unit_count = units.len() as u64;
-    let restored = if !options.hurry.skip_restore {
+    let restored = if !options.build.hurry.skip_restore {
         let progress = TransferBar::new(unit_count, "Restoring cache");
         cache.restore(&units, &progress).await?
     } else {
@@ -114,7 +92,7 @@ pub async fn exec(options: Options) -> Result<()> {
     };
 
     // Run the build.
-    if !options.hurry.skip_build {
+    if !options.build.hurry.skip_build {
         info!("Building target directory");
 
         // There are two integration points here that we specifically do _not_
@@ -180,7 +158,7 @@ pub async fn exec(options: Options) -> Result<()> {
         // processes, and use that to determine invocation and OUT_DIR from argv
         // and environment variables?
 
-        cargo::invoke("build", &options.argv)
+        cargo::invoke("build", &options.build.argv)
             .await
             .context("build with cargo")?;
 
@@ -191,71 +169,11 @@ pub async fn exec(options: Options) -> Result<()> {
     }
 
     // Cache the built artifacts.
-    if !options.hurry.skip_backup {
+    if !options.build.hurry.skip_backup {
         let upload_id = cache.save(units, restored).await?;
-        if !options.hurry.async_upload {
+        if !options.build.hurry.async_upload {
             let progress = TransferBar::new(unit_count, "Uploading cache");
             wait_for_upload(upload_id, &progress).await?;
-        }
-    }
-
-    Ok(())
-}
-
-#[instrument]
-async fn wait_for_upload(request_id: Uuid, progress: &TransferBar) -> Result<()> {
-    let paths = DaemonPaths::initialize().await?;
-    let Some(daemon) = paths.daemon_running().await? else {
-        bail!("daemon is not running");
-    };
-
-    let client = reqwest::Client::default();
-    let endpoint = format!("http://{}/api/v0/cargo/status", daemon.url);
-    let request = CargoUploadStatusRequest { request_id };
-    let mut interval = tokio::time::interval(Duration::from_secs(1));
-
-    let mut last_uploaded_artifacts = 0u64;
-    let mut last_uploaded_files = 0u64;
-    let mut last_uploaded_bytes = 0u64;
-    let mut last_total_artifacts = 0u64;
-    loop {
-        interval.tick().await;
-        trace!(?request, "submitting upload status request");
-        let response = client
-            .post(&endpoint)
-            .json(&request)
-            .send()
-            .await
-            .with_context(|| format!("send upload status request to daemon at: {endpoint}"))
-            .with_section(|| format!("{daemon:?}").header("Daemon context:"))?;
-        trace!(?response, "got upload status response");
-        let response = response.json::<CargoUploadStatusResponse>().await?;
-        trace!(?response, "parsed upload status response");
-        let status = response.status.ok_or_eyre("no upload status")?;
-        match status {
-            CargoUploadStatus::Complete => break,
-            CargoUploadStatus::InProgress(save_progress) => {
-                progress.add_bytes(
-                    save_progress
-                        .uploaded_bytes
-                        .saturating_sub(last_uploaded_bytes),
-                );
-                last_uploaded_bytes = save_progress.uploaded_bytes;
-                progress.add_files(
-                    save_progress
-                        .uploaded_files
-                        .saturating_sub(last_uploaded_files),
-                );
-                last_uploaded_files = save_progress.uploaded_files;
-                progress.inc(
-                    save_progress
-                        .uploaded_units
-                        .saturating_sub(last_uploaded_artifacts),
-                );
-                last_uploaded_artifacts = save_progress.uploaded_units;
-                progress.dec_length(last_total_artifacts.saturating_sub(save_progress.total_units));
-                last_total_artifacts = save_progress.total_units;
-            }
         }
     }
 

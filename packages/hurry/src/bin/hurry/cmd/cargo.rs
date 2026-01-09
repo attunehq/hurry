@@ -58,7 +58,7 @@ pub async fn exec(arguments: Vec<String>) -> Result<()> {
     match command.as_str() {
         "build" => {
             let opts: CommandOptions<build::Options> = CommandOptions::parse(&arguments)?;
-            if opts.inner.hurry.help {
+            if opts.inner.build.hurry.help {
                 // Help flag handling happens here because `build --help` passes
                 // through to `cargo build --help`, and we need the `Command`
                 // struct in order to print the generated help text.
