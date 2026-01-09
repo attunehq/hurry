@@ -10,12 +10,9 @@ use color_eyre::{
     Result, Section as _, SectionExt as _,
     eyre::{Context, OptionExt as _, bail, eyre},
 };
-use derive_more::Debug;
 use tracing::{debug, info, instrument, trace, warn};
-use url::Url;
 use uuid::Uuid;
 
-use clients::Token;
 use hurry::{
     cargo::{CargoBuildArguments, CargoCache, Workspace},
     cross,
@@ -23,50 +20,14 @@ use hurry::{
     progress::TransferBar,
 };
 
+use crate::cmd::HurryBuildOptions;
+
 /// Options for `cross build`.
 #[derive(Clone, clap::Args, Debug)]
 #[command(disable_help_flag = true)]
 pub struct Options {
-    /// Base URL for the Hurry API.
-    #[arg(
-        long = "hurry-api-url",
-        env = "HURRY_API_URL",
-        default_value = "https://app.hurry.build"
-    )]
-    #[debug("{api_url}")]
-    api_url: Url,
-
-    /// Authentication token for the Hurry API.
-    #[arg(long = "hurry-api-token", env = "HURRY_API_TOKEN")]
-    api_token: Option<Token>,
-
-    /// Skip backing up the cache.
-    #[arg(long = "hurry-skip-backup", default_value_t = false)]
-    skip_backup: bool,
-
-    /// Skip the cross build, only performing the cache actions.
-    #[arg(long = "hurry-skip-build", default_value_t = false)]
-    skip_build: bool,
-
-    /// Skip restoring the cache.
-    #[arg(long = "hurry-skip-restore", default_value_t = false)]
-    skip_restore: bool,
-
-    /// Upload artifacts asynchronously in the background instead of waiting.
-    ///
-    /// By default, hurry waits for uploads to complete before exiting.
-    /// Use this flag to upload in the background and exit immediately after the
-    /// build.
-    #[arg(
-        long = "hurry-async-upload",
-        env = "HURRY_ASYNC_UPLOAD",
-        default_value_t = false
-    )]
-    async_upload: bool,
-
-    /// Show help for `hurry cross build`.
-    #[arg(long = "hurry-help", default_value_t = false)]
-    pub help: bool,
+    #[clap(flatten)]
+    pub hurry: HurryBuildOptions,
 
     /// These arguments are passed directly to `cross build` as provided.
     #[arg(
@@ -105,7 +66,7 @@ pub async fn exec(options: Options) -> Result<()> {
 
     // We make the API token required here; if we make it required in the actual
     // clap state then we aren't able to support e.g. `cross build -h` passthrough.
-    let Some(token) = &options.api_token else {
+    let Some(token) = &options.hurry.api_token else {
         return Err(eyre!("Hurry API authentication token is required"))
             .suggestion("Set the `HURRY_API_TOKEN` environment variable")
             .suggestion("Provide it with the `--hurry-api-token` argument");
@@ -144,13 +105,13 @@ pub async fn exec(options: Options) -> Result<()> {
     };
 
     // Initialize cache.
-    let cache = CargoCache::open(options.api_url, token.clone(), workspace)
+    let cache = CargoCache::open(options.hurry.api_url, token.clone(), workspace)
         .await
         .context("opening cache")?;
 
     // Restore artifacts.
     let unit_count = units.len() as u64;
-    let restored = if !options.skip_restore {
+    let restored = if !options.hurry.skip_restore {
         let progress = TransferBar::new(unit_count, "Restoring cache");
         cache.restore(&units, &progress).await?
     } else {
@@ -158,7 +119,7 @@ pub async fn exec(options: Options) -> Result<()> {
     };
 
     // Run the cross build.
-    if !options.skip_build {
+    if !options.hurry.skip_build {
         println!("[hurry] Building with Cross");
 
         cross::invoke("build", &options.argv)
@@ -167,9 +128,9 @@ pub async fn exec(options: Options) -> Result<()> {
     }
 
     // Cache the built artifacts.
-    if !options.skip_backup {
+    if !options.hurry.skip_backup {
         let upload_id = cache.save(units, restored).await?;
-        if !options.async_upload {
+        if !options.hurry.async_upload {
             let progress = TransferBar::new(unit_count, "Uploading cache");
             wait_for_upload(upload_id, &progress).await?;
         }
