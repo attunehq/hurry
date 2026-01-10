@@ -1,15 +1,12 @@
 //! Rename organization endpoint.
 
 use aerosol::axum::Dep;
-use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
+use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde::Deserialize;
 use serde_json::json;
 use tracing::{error, info, warn};
 
-use crate::{
-    auth::{ApiError, OrgId, SessionContext},
-    db::Postgres,
-};
+use crate::{auth::SessionTokenAdmin, db::Postgres};
 
 #[derive(Debug, Deserialize)]
 pub struct RenameOrganizationRequest {
@@ -18,34 +15,36 @@ pub struct RenameOrganizationRequest {
 }
 
 /// Rename an organization. Only admins can perform this action.
-#[tracing::instrument(skip(db, session))]
+///
+/// This handler uses `SessionTokenAdmin` as an extractor, which means:
+/// - The session token is validated before the handler runs
+/// - Admin privileges are verified before the handler runs
+/// - The handler is NEVER called if the user is not an admin
+#[tracing::instrument(skip(db, admin))]
 pub async fn handle(
     Dep(db): Dep<Postgres>,
-    session: SessionContext,
-    Path(org_id): Path<i64>,
+    admin: SessionTokenAdmin,
     Json(request): Json<RenameOrganizationRequest>,
-) -> Result<Response, ApiError> {
-    let org_id = OrgId::from_i64(org_id);
+) -> Response {
+    let org_id = admin.org_id();
+    let account_id = admin.account_id();
 
     // Validate name is not empty
     let name = request.name.trim();
     if name.is_empty() {
         warn!(
-            account_id = %session.account_id,
+            account_id = %account_id,
             org_id = %org_id,
             "organizations.rename.empty_name"
         );
-        return Ok(Response::EmptyName);
+        return Response::EmptyName;
     }
-
-    // Verify admin access using strongly typed role check
-    let admin = session.try_admin(&db, org_id).await?;
 
     match db.rename_organization(org_id, name).await {
         Ok(true) => {
             let _ = db
                 .log_audit_event(
-                    Some(admin.account_id),
+                    Some(account_id),
                     Some(org_id),
                     "organization.renamed",
                     Some(json!({
@@ -59,12 +58,12 @@ pub async fn handle(
                 new_name = %name,
                 "organizations.rename.success"
             );
-            Ok(Response::Success)
+            Response::Success
         }
-        Ok(false) => Ok(Response::NotFound),
+        Ok(false) => Response::NotFound,
         Err(error) => {
             error!(?error, "organizations.rename.error");
-            Ok(Response::Error(error.to_string()))
+            Response::Error(error.to_string())
         }
     }
 }
