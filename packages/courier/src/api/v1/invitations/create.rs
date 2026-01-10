@@ -5,10 +5,10 @@ use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::{
-    auth::{OrgId, OrgRole, SessionContext},
+    auth::{ApiError, OrgId, OrgRole, SessionContext},
     crypto::generate_invitation_token,
     db::Postgres,
 };
@@ -40,44 +40,23 @@ pub async fn handle(
     session: SessionContext,
     Path(org_id): Path<i64>,
     Json(request): Json<CreateInvitationRequest>,
-) -> Response {
+) -> Result<Response, ApiError> {
     let org_id = OrgId::from_i64(org_id);
 
-    match db.get_member_role(org_id, session.account_id).await {
-        Ok(Some(role)) if role.is_admin() => {}
-        Ok(Some(_)) => {
-            warn!(
-                account_id = %session.account_id,
-                org_id = %org_id,
-                "invitations.create.not_admin"
-            );
-            return Response::Forbidden;
-        }
-        Ok(None) => {
-            warn!(
-                account_id = %session.account_id,
-                org_id = %org_id,
-                "invitations.create.not_member"
-            );
-            return Response::Forbidden;
-        }
-        Err(err) => {
-            error!(?err, "invitations.create.role_check_error");
-            return Response::Error(err.to_string());
-        }
-    }
+    // Verify admin access using strongly typed role check
+    let admin = session.try_admin(&db, org_id).await?;
 
     let now = OffsetDateTime::now_utc();
     if let Some(exp) = request.expires_at
         && exp <= now
     {
-        return Response::ExpiresAtInThePast;
+        return Ok(Response::ExpiresAtInThePast);
     }
 
     if let Some(max) = request.max_uses
         && max < 1
     {
-        return Response::MaxUsesLessThanOne;
+        return Ok(Response::MaxUsesLessThanOne);
     }
 
     let long_lived = request
@@ -91,7 +70,7 @@ pub async fn handle(
             org_id,
             &token,
             request.role,
-            session.account_id,
+            admin.account_id,
             request.expires_at,
             request.max_uses,
         )
@@ -100,13 +79,13 @@ pub async fn handle(
         Ok(id) => id,
         Err(err) => {
             error!(?err, "invitations.create.error");
-            return Response::Error(err.to_string());
+            return Ok(Response::Error(err.to_string()));
         }
     };
 
     let _ = db
         .log_audit_event(
-            Some(session.account_id),
+            Some(admin.account_id),
             Some(org_id),
             "invitation.created",
             Some(json!({
@@ -124,13 +103,13 @@ pub async fn handle(
         "invitations.create.success"
     );
 
-    Response::Created(CreateInvitationResponseBody {
+    Ok(Response::Created(CreateInvitationResponseBody {
         id: invitation_id.as_i64(),
         token,
         role: request.role,
         expires_at: request.expires_at,
         max_uses: request.max_uses,
-    })
+    }))
 }
 
 #[derive(Debug, Serialize)]
@@ -157,7 +136,6 @@ pub enum Response {
     Created(CreateInvitationResponseBody),
     ExpiresAtInThePast,
     MaxUsesLessThanOne,
-    Forbidden,
     Error(String),
 }
 
@@ -170,9 +148,6 @@ impl IntoResponse for Response {
             }
             Response::MaxUsesLessThanOne => {
                 (StatusCode::BAD_REQUEST, "max_uses must be at least 1").into_response()
-            }
-            Response::Forbidden => {
-                (StatusCode::FORBIDDEN, "Only admins can create invitations").into_response()
             }
             Response::Error(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
         }

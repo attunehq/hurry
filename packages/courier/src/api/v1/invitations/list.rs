@@ -5,10 +5,10 @@ use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
 use serde::Serialize;
 use tap::Pipe;
 use time::OffsetDateTime;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::{
-    auth::{OrgId, OrgRole, SessionContext},
+    auth::{ApiError, OrgId, OrgRole, SessionContext},
     db::Postgres,
 };
 
@@ -50,32 +50,11 @@ pub async fn handle(
     Dep(db): Dep<Postgres>,
     session: SessionContext,
     Path(org_id): Path<i64>,
-) -> Response {
+) -> Result<Response, ApiError> {
     let org_id = OrgId::from_i64(org_id);
 
-    match db.get_member_role(org_id, session.account_id).await {
-        Ok(Some(role)) if role.is_admin() => {}
-        Ok(Some(_)) => {
-            warn!(
-                account_id = %session.account_id,
-                org_id = %org_id,
-                "invitations.list.not_admin"
-            );
-            return Response::Forbidden;
-        }
-        Ok(None) => {
-            warn!(
-                account_id = %session.account_id,
-                org_id = %org_id,
-                "invitations.list.not_member"
-            );
-            return Response::Forbidden;
-        }
-        Err(err) => {
-            error!(?err, "invitations.list.role_check_error");
-            return Response::Error(err.to_string());
-        }
-    }
+    // Verify admin access using strongly typed role check
+    let _admin = session.try_admin(&db, org_id).await?;
 
     match db.list_invitations(org_id).await {
         Ok(invitations) => {
@@ -84,7 +63,7 @@ pub async fn handle(
                 count = invitations.len(),
                 "invitations.list.success"
             );
-            invitations
+            Ok(invitations
                 .into_iter()
                 .map(|inv| InvitationEntry {
                     id: inv.id.as_i64(),
@@ -97,11 +76,11 @@ pub async fn handle(
                 })
                 .collect::<Vec<_>>()
                 .pipe(|invitations| InvitationListResponse { invitations })
-                .pipe(Response::Success)
+                .pipe(Response::Success))
         }
         Err(error) => {
             error!(?error, "invitations.list.error");
-            Response::Error(error.to_string())
+            Ok(Response::Error(error.to_string()))
         }
     }
 }
@@ -109,7 +88,6 @@ pub async fn handle(
 #[derive(Debug)]
 pub enum Response {
     Success(InvitationListResponse),
-    Forbidden,
     Error(String),
 }
 
@@ -117,9 +95,6 @@ impl IntoResponse for Response {
     fn into_response(self) -> axum::response::Response {
         match self {
             Response::Success(list) => (StatusCode::OK, Json(list)).into_response(),
-            Response::Forbidden => {
-                (StatusCode::FORBIDDEN, "Only admins can view invitations").into_response()
-            }
             Response::Error(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
         }
     }

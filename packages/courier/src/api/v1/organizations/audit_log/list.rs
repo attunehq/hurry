@@ -5,10 +5,10 @@ use axum::{Json, extract::Path, extract::Query, http::StatusCode, response::Into
 use serde::{Deserialize, Serialize};
 use tap::Pipe;
 use time::OffsetDateTime;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::{
-    auth::{OrgId, OrgRole, SessionContext},
+    auth::{ApiError, OrgId, SessionContext},
     db::{Postgres, audit::AuditLogCursor},
 };
 
@@ -78,33 +78,11 @@ pub async fn handle(
     session: SessionContext,
     Path(org_id): Path<i64>,
     Query(params): Query<ListParams>,
-) -> Response {
+) -> Result<Response, ApiError> {
     let org_id = OrgId::from_i64(org_id);
 
-    // Only admins can view the audit log
-    match db.get_member_role(org_id, session.account_id).await {
-        Ok(Some(OrgRole::Admin)) => {}
-        Ok(Some(OrgRole::Member)) => {
-            warn!(
-                account_id = %session.account_id,
-                org_id = %org_id,
-                "organizations.audit_log.list.not_admin"
-            );
-            return Response::Forbidden;
-        }
-        Ok(None) => {
-            warn!(
-                account_id = %session.account_id,
-                org_id = %org_id,
-                "organizations.audit_log.list.not_member"
-            );
-            return Response::Forbidden;
-        }
-        Err(error) => {
-            error!(?error, "organizations.audit_log.list.role_check_error");
-            return Response::Error(error.to_string());
-        }
-    }
+    // Verify admin access using strongly typed role check
+    let _admin = session.try_admin(&db, org_id).await?;
 
     // Clamp limit to reasonable range, fetch one extra to check has_more
     let limit = params.limit.clamp(1, 100);
@@ -119,7 +97,7 @@ pub async fn handle(
         Ok(entries) => entries,
         Err(error) => {
             error!(?error, "organizations.audit_log.list.error");
-            return Response::Error(error.to_string());
+            return Ok(Response::Error(error.to_string()));
         }
     };
 
@@ -133,7 +111,7 @@ pub async fn handle(
         "organizations.audit_log.list.success"
     );
 
-    entries
+    Ok(entries
         .into_iter()
         .map(|entry| AuditLogEntry {
             id: entry.id,
@@ -146,13 +124,12 @@ pub async fn handle(
         })
         .collect::<Vec<_>>()
         .pipe(|entries| AuditLogListResponse { entries, has_more })
-        .pipe(Response::Success)
+        .pipe(Response::Success))
 }
 
 #[derive(Debug)]
 pub enum Response {
     Success(AuditLogListResponse),
-    Forbidden,
     Error(String),
 }
 
@@ -160,11 +137,6 @@ impl IntoResponse for Response {
     fn into_response(self) -> axum::response::Response {
         match self {
             Response::Success(list) => (StatusCode::OK, Json(list)).into_response(),
-            Response::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "You must be an admin of this organization to view the audit log",
-            )
-                .into_response(),
             Response::Error(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
         }
     }

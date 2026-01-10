@@ -402,3 +402,461 @@ impl FromRequestParts<api::State> for SessionContext {
         }
     }
 }
+
+/// Centralized API error type for consistent error responses.
+///
+/// This enum provides a unified way to handle common API errors across all
+/// handlers, reducing duplication and ensuring consistent HTTP responses.
+#[derive(Debug)]
+pub enum ApiError {
+    /// The user is not authorized to perform this action.
+    Forbidden(&'static str),
+
+    /// The requested resource was not found.
+    NotFound(&'static str),
+
+    /// The request was malformed or invalid.
+    BadRequest(&'static str),
+
+    /// An internal server error occurred.
+    Internal(String),
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApiError::Forbidden(msg) => write!(f, "Forbidden: {}", msg),
+            ApiError::NotFound(msg) => write!(f, "Not found: {}", msg),
+            ApiError::BadRequest(msg) => write!(f, "Bad request: {}", msg),
+            ApiError::Internal(msg) => write!(f, "Internal error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+impl axum::response::IntoResponse for ApiError {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg).into_response(),
+            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+            ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+        }
+    }
+}
+
+/// A session token with verified admin role for a specific organization.
+///
+/// This is an Axum extractor that validates the session token AND verifies
+/// admin privileges before the handler runs. The handler is never called
+/// if validation fails.
+///
+/// For session-based auth, the org_id must be provided separately (from URL
+/// path) since sessions are account-scoped, not org-scoped.
+#[derive(Clone, Debug)]
+pub struct SessionTokenAdmin {
+    /// The underlying session context.
+    pub session: SessionContext,
+
+    /// The account ID of the authenticated admin.
+    pub account_id: AccountId,
+
+    /// The organization ID where the user has admin privileges.
+    pub org_id: OrgId,
+}
+
+/// A session token with verified membership for a specific organization.
+///
+/// This is an Axum extractor that validates the session token AND verifies
+/// membership before the handler runs. The handler is never called if
+/// validation fails.
+///
+/// For session-based auth, the org_id must be provided separately (from URL
+/// path) since sessions are account-scoped, not org-scoped.
+#[derive(Clone, Debug)]
+pub struct SessionTokenMember {
+    /// The underlying session context.
+    pub session: SessionContext,
+
+    /// The account ID of the authenticated member.
+    pub account_id: AccountId,
+
+    /// The organization ID where the user has membership.
+    pub org_id: OrgId,
+
+    /// The user's role in the organization.
+    pub role: OrgRole,
+}
+
+impl SessionTokenAdmin {
+    /// Get the organization ID.
+    pub fn org_id(&self) -> OrgId {
+        self.org_id
+    }
+
+    /// Get the account ID.
+    pub fn account_id(&self) -> AccountId {
+        self.account_id
+    }
+}
+
+impl SessionTokenMember {
+    /// Get the organization ID.
+    pub fn org_id(&self) -> OrgId {
+        self.org_id
+    }
+
+    /// Get the account ID.
+    pub fn account_id(&self) -> AccountId {
+        self.account_id
+    }
+
+    /// Check if this member has admin privileges.
+    pub fn is_admin(&self) -> bool {
+        self.role.is_admin()
+    }
+}
+
+/// Admin can be converted to Member since all admins are also members.
+impl From<SessionTokenAdmin> for SessionTokenMember {
+    fn from(admin: SessionTokenAdmin) -> Self {
+        SessionTokenMember {
+            session: admin.session,
+            account_id: admin.account_id,
+            org_id: admin.org_id,
+            role: OrgRole::Admin,
+        }
+    }
+}
+
+/// Path parameter for extracting org_id from URL.
+#[derive(Debug, Deserialize)]
+struct OrgIdPath {
+    org_id: i64,
+}
+
+impl FromRequestParts<api::State> for SessionTokenAdmin {
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &api::State,
+    ) -> Result<Self, Self::Rejection> {
+        // First, extract the base SessionContext
+        let session = SessionContext::from_request_parts(parts, state).await?;
+
+        // Extract org_id from path
+        let axum::extract::Path(OrgIdPath { org_id }) =
+            axum::extract::Path::<OrgIdPath>::from_request_parts(parts, state)
+                .await
+                .map_err(|_| (StatusCode::BAD_REQUEST, "Missing org_id path parameter"))?;
+        let org_id = OrgId::from_i64(org_id);
+
+        // Get database connection
+        let Dep(db) = Dep::<db::Postgres>::from_request_parts(parts, state)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Database connection error",
+                )
+            })?;
+
+        // Verify admin role
+        match db.get_member_role(org_id, session.account_id).await {
+            Ok(Some(role)) if role.is_admin() => Ok(SessionTokenAdmin {
+                account_id: session.account_id,
+                org_id,
+                session,
+            }),
+            Ok(Some(_)) => Err((StatusCode::FORBIDDEN, "Admin access required")),
+            Ok(None) => Err((StatusCode::FORBIDDEN, "Not a member of this organization")),
+            Err(e) => {
+                tracing::error!(?e, "Failed to check member role");
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Database error during authorization",
+                ))
+            }
+        }
+    }
+}
+
+impl FromRequestParts<api::State> for SessionTokenMember {
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &api::State,
+    ) -> Result<Self, Self::Rejection> {
+        // First, extract the base SessionContext
+        let session = SessionContext::from_request_parts(parts, state).await?;
+
+        // Extract org_id from path
+        let axum::extract::Path(OrgIdPath { org_id }) =
+            axum::extract::Path::<OrgIdPath>::from_request_parts(parts, state)
+                .await
+                .map_err(|_| (StatusCode::BAD_REQUEST, "Missing org_id path parameter"))?;
+        let org_id = OrgId::from_i64(org_id);
+
+        // Get database connection
+        let Dep(db) = Dep::<db::Postgres>::from_request_parts(parts, state)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Database connection error",
+                )
+            })?;
+
+        // Verify membership
+        match db.get_member_role(org_id, session.account_id).await {
+            Ok(Some(role)) => Ok(SessionTokenMember {
+                account_id: session.account_id,
+                org_id,
+                role,
+                session,
+            }),
+            Ok(None) => Err((StatusCode::FORBIDDEN, "Not a member of this organization")),
+            Err(e) => {
+                tracing::error!(?e, "Failed to check member role");
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Database error during authorization",
+                ))
+            }
+        }
+    }
+}
+
+/// An API key with verified admin role for the organization.
+///
+/// This is an Axum extractor that validates the API key AND verifies
+/// admin privileges before the handler runs. The handler is never called
+/// if validation fails.
+///
+/// API keys are already scoped to an organization, so the org_id is
+/// embedded in the token.
+#[derive(Clone, Debug)]
+pub struct ApiKeyAdmin {
+    /// The underlying authenticated token.
+    pub token: AuthenticatedToken,
+
+    /// The account ID of the authenticated admin.
+    pub account_id: AccountId,
+
+    /// The organization ID where the user has admin privileges.
+    pub org_id: OrgId,
+}
+
+/// An API key with verified membership for the organization.
+///
+/// This is an Axum extractor that validates the API key AND verifies
+/// membership before the handler runs. The handler is never called if
+/// validation fails.
+///
+/// API keys are already scoped to an organization, so the org_id is
+/// embedded in the token.
+#[derive(Clone, Debug)]
+pub struct ApiKeyMember {
+    /// The underlying authenticated token.
+    pub token: AuthenticatedToken,
+
+    /// The account ID of the authenticated member.
+    pub account_id: AccountId,
+
+    /// The organization ID where the user has membership.
+    pub org_id: OrgId,
+
+    /// The user's role in the organization.
+    pub role: OrgRole,
+}
+
+impl ApiKeyAdmin {
+    /// Get the organization ID.
+    pub fn org_id(&self) -> OrgId {
+        self.org_id
+    }
+
+    /// Get the account ID.
+    pub fn account_id(&self) -> AccountId {
+        self.account_id
+    }
+}
+
+impl ApiKeyMember {
+    /// Get the organization ID.
+    pub fn org_id(&self) -> OrgId {
+        self.org_id
+    }
+
+    /// Get the account ID.
+    pub fn account_id(&self) -> AccountId {
+        self.account_id
+    }
+
+    /// Check if this member has admin privileges.
+    pub fn is_admin(&self) -> bool {
+        self.role.is_admin()
+    }
+}
+
+/// Admin can be converted to Member since all admins are also members.
+impl From<ApiKeyAdmin> for ApiKeyMember {
+    fn from(admin: ApiKeyAdmin) -> Self {
+        ApiKeyMember {
+            token: admin.token,
+            account_id: admin.account_id,
+            org_id: admin.org_id,
+            role: OrgRole::Admin,
+        }
+    }
+}
+
+impl FromRequestParts<api::State> for ApiKeyAdmin {
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &api::State,
+    ) -> Result<Self, Self::Rejection> {
+        // First, extract the base AuthenticatedToken
+        let token = AuthenticatedToken::from_request_parts(parts, state).await?;
+
+        // Get database connection
+        let Dep(db) = Dep::<db::Postgres>::from_request_parts(parts, state)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Database connection error",
+                )
+            })?;
+
+        // Verify admin role
+        match db.get_member_role(token.org_id, token.account_id).await {
+            Ok(Some(role)) if role.is_admin() => Ok(ApiKeyAdmin {
+                account_id: token.account_id,
+                org_id: token.org_id,
+                token,
+            }),
+            Ok(Some(_)) => Err((StatusCode::FORBIDDEN, "Admin access required")),
+            Ok(None) => Err((StatusCode::FORBIDDEN, "Not a member of this organization")),
+            Err(e) => {
+                tracing::error!(?e, "Failed to check member role");
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Database error during authorization",
+                ))
+            }
+        }
+    }
+}
+
+impl FromRequestParts<api::State> for ApiKeyMember {
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &api::State,
+    ) -> Result<Self, Self::Rejection> {
+        // First, extract the base AuthenticatedToken
+        let token = AuthenticatedToken::from_request_parts(parts, state).await?;
+
+        // Get database connection
+        let Dep(db) = Dep::<db::Postgres>::from_request_parts(parts, state)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Database connection error",
+                )
+            })?;
+
+        // Verify membership
+        match db.get_member_role(token.org_id, token.account_id).await {
+            Ok(Some(role)) => Ok(ApiKeyMember {
+                account_id: token.account_id,
+                org_id: token.org_id,
+                role,
+                token,
+            }),
+            Ok(None) => Err((StatusCode::FORBIDDEN, "Not a member of this organization")),
+            Err(e) => {
+                tracing::error!(?e, "Failed to check member role");
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Database error during authorization",
+                ))
+            }
+        }
+    }
+}
+
+/// Legacy type aliases for backward compatibility during migration.
+/// These will be removed once all handlers are updated.
+pub type SessionAdmin = SessionTokenAdmin;
+pub type SessionMember = SessionTokenMember;
+
+impl SessionContext {
+    /// Verify that the user has admin privileges in the specified organization.
+    ///
+    /// Returns a [`SessionTokenAdmin`] if the user is an admin, or an
+    /// [`ApiError`] if they are not authorized.
+    ///
+    /// # Deprecated
+    ///
+    /// Prefer using `SessionTokenAdmin` as an extractor directly in handler
+    /// signatures. This method is provided for backward compatibility
+    /// during migration.
+    pub async fn try_admin(
+        &self,
+        db: &db::Postgres,
+        org_id: OrgId,
+    ) -> Result<SessionTokenAdmin, ApiError> {
+        match db.get_member_role(org_id, self.account_id).await {
+            Ok(Some(role)) if role.is_admin() => Ok(SessionTokenAdmin {
+                session: self.clone(),
+                account_id: self.account_id,
+                org_id,
+            }),
+            Ok(Some(_)) => Err(ApiError::Forbidden("Admin access required")),
+            Ok(None) => Err(ApiError::Forbidden("Not a member of this organization")),
+            Err(e) => {
+                tracing::error!(?e, "Failed to check member role");
+                Err(ApiError::Internal(e.to_string()))
+            }
+        }
+    }
+
+    /// Verify that the user is a member of the specified organization.
+    ///
+    /// Returns a [`SessionTokenMember`] if the user is a member (with any
+    /// role), or an [`ApiError`] if they are not authorized.
+    ///
+    /// # Deprecated
+    ///
+    /// Prefer using `SessionTokenMember` as an extractor directly in handler
+    /// signatures. This method is provided for backward compatibility
+    /// during migration.
+    pub async fn try_member(
+        &self,
+        db: &db::Postgres,
+        org_id: OrgId,
+    ) -> Result<SessionTokenMember, ApiError> {
+        match db.get_member_role(org_id, self.account_id).await {
+            Ok(Some(role)) => Ok(SessionTokenMember {
+                session: self.clone(),
+                account_id: self.account_id,
+                org_id,
+                role,
+            }),
+            Ok(None) => Err(ApiError::Forbidden("Not a member of this organization")),
+            Err(e) => {
+                tracing::error!(?e, "Failed to check member role");
+                Err(ApiError::Internal(e.to_string()))
+            }
+        }
+    }
+}

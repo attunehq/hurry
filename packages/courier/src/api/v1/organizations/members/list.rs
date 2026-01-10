@@ -5,10 +5,10 @@ use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
 use serde::Serialize;
 use tap::Pipe;
 use time::OffsetDateTime;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::{
-    auth::{OrgId, OrgRole, SessionContext},
+    auth::{ApiError, OrgId, OrgRole, SessionContext},
     db::Postgres,
 };
 
@@ -47,24 +47,11 @@ pub async fn handle(
     Dep(db): Dep<Postgres>,
     session: SessionContext,
     Path(org_id): Path<i64>,
-) -> Response {
+) -> Result<Response, ApiError> {
     let org_id = OrgId::from_i64(org_id);
 
-    match db.get_member_role(org_id, session.account_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            warn!(
-                account_id = %session.account_id,
-                org_id = %org_id,
-                "organizations.list_members.not_member"
-            );
-            return Response::Forbidden;
-        }
-        Err(error) => {
-            error!(?error, "organizations.list_members.role_check_error");
-            return Response::Error(error.to_string());
-        }
-    }
+    // Verify membership using strongly typed role check
+    let _member = session.try_member(&db, org_id).await?;
 
     match db.list_organization_members(org_id).await {
         Ok(members) => {
@@ -73,7 +60,7 @@ pub async fn handle(
                 count = members.len(),
                 "organizations.list_members.success"
             );
-            members
+            Ok(members
                 .into_iter()
                 .map(|m| MemberEntry {
                     account_id: m.account_id.as_i64(),
@@ -85,11 +72,11 @@ pub async fn handle(
                 })
                 .collect::<Vec<_>>()
                 .pipe(|members| MemberListResponse { members })
-                .pipe(Response::Success)
+                .pipe(Response::Success))
         }
         Err(error) => {
             error!(?error, "organizations.list_members.error");
-            Response::Error(error.to_string())
+            Ok(Response::Error(error.to_string()))
         }
     }
 }
@@ -97,7 +84,6 @@ pub async fn handle(
 #[derive(Debug)]
 pub enum Response {
     Success(MemberListResponse),
-    Forbidden,
     Error(String),
 }
 
@@ -105,11 +91,6 @@ impl IntoResponse for Response {
     fn into_response(self) -> axum::response::Response {
         match self {
             Response::Success(list) => (StatusCode::OK, Json(list)).into_response(),
-            Response::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "You must be a member of this organization to view members",
-            )
-                .into_response(),
             Response::Error(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
         }
     }

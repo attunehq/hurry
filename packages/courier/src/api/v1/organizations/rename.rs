@@ -1,15 +1,12 @@
 //! Rename organization endpoint.
 
 use aerosol::axum::Dep;
-use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
+use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde::Deserialize;
 use serde_json::json;
 use tracing::{error, info, warn};
 
-use crate::{
-    auth::{OrgId, SessionContext},
-    db::Postgres,
-};
+use crate::{auth::SessionTokenAdmin, db::Postgres};
 
 #[derive(Debug, Deserialize)]
 pub struct RenameOrganizationRequest {
@@ -18,56 +15,36 @@ pub struct RenameOrganizationRequest {
 }
 
 /// Rename an organization. Only admins can perform this action.
-#[tracing::instrument(skip(db, session))]
+///
+/// This handler uses `SessionTokenAdmin` as an extractor, which means:
+/// - The session token is validated before the handler runs
+/// - Admin privileges are verified before the handler runs
+/// - The handler is NEVER called if the user is not an admin
+#[tracing::instrument(skip(db, admin))]
 pub async fn handle(
     Dep(db): Dep<Postgres>,
-    session: SessionContext,
-    Path(org_id): Path<i64>,
+    admin: SessionTokenAdmin,
     Json(request): Json<RenameOrganizationRequest>,
 ) -> Response {
-    let org_id = OrgId::from_i64(org_id);
+    let org_id = admin.org_id();
+    let account_id = admin.account_id();
 
     // Validate name is not empty
     let name = request.name.trim();
     if name.is_empty() {
         warn!(
-            account_id = %session.account_id,
+            account_id = %account_id,
             org_id = %org_id,
             "organizations.rename.empty_name"
         );
         return Response::EmptyName;
     }
 
-    // Check that the user is an admin of the organization
-    match db.get_member_role(org_id, session.account_id).await {
-        Ok(Some(role)) if role.is_admin() => {}
-        Ok(Some(_)) => {
-            warn!(
-                account_id = %session.account_id,
-                org_id = %org_id,
-                "organizations.rename.not_admin"
-            );
-            return Response::Forbidden;
-        }
-        Ok(None) => {
-            warn!(
-                account_id = %session.account_id,
-                org_id = %org_id,
-                "organizations.rename.not_member"
-            );
-            return Response::Forbidden;
-        }
-        Err(error) => {
-            error!(?error, "organizations.rename.role_check_error");
-            return Response::Error(error.to_string());
-        }
-    }
-
     match db.rename_organization(org_id, name).await {
         Ok(true) => {
             let _ = db
                 .log_audit_event(
-                    Some(session.account_id),
+                    Some(account_id),
                     Some(org_id),
                     "organization.renamed",
                     Some(json!({
@@ -95,7 +72,6 @@ pub async fn handle(
 pub enum Response {
     Success,
     EmptyName,
-    Forbidden,
     NotFound,
     Error(String),
 }
@@ -107,11 +83,6 @@ impl IntoResponse for Response {
             Response::EmptyName => {
                 (StatusCode::BAD_REQUEST, "Organization name cannot be empty").into_response()
             }
-            Response::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "Only admins can rename the organization",
-            )
-                .into_response(),
             Response::NotFound => (StatusCode::NOT_FOUND, "Organization not found").into_response(),
             Response::Error(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
         }

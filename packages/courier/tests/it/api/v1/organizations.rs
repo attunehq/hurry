@@ -1062,3 +1062,107 @@ async fn revoked_bot_api_key_not_in_list(pool: PgPool) -> Result<()> {
 
     Ok(())
 }
+
+// ============================================================================
+// Rename Organization Tests (Strongly Typed Role System)
+// ============================================================================
+// These tests verify the strongly typed role system implementation for the
+// rename endpoint, which uses `session.try_admin()` to enforce admin access
+// at compile time.
+
+#[derive(Debug, Serialize)]
+struct RenameOrganizationRequest {
+    name: String,
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn rename_organization_as_admin_succeeds(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}"))?;
+
+    // Alice is an admin of Acme, so she should be able to rename it
+    let response = reqwest::Client::new()
+        .patch(url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .json(&RenameOrganizationRequest {
+            name: String::from("Acme Renamed"),
+        })
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn rename_organization_as_member_forbidden(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}"))?;
+
+    // Bob is a member (not admin) of Acme, so he should get 403 Forbidden
+    let response = reqwest::Client::new()
+        .patch(url)
+        .bearer_auth(fixture.auth.session_bob().expose())
+        .json(&RenameOrganizationRequest {
+            name: String::from("Bob's Rename Attempt"),
+        })
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn rename_organization_as_non_member_forbidden(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}"))?;
+
+    // Charlie is not a member of Acme, so he should get 403 Forbidden
+    let response = reqwest::Client::new()
+        .patch(url)
+        .bearer_auth(fixture.auth.session_charlie().expose())
+        .json(&RenameOrganizationRequest {
+            name: String::from("Charlie's Rename Attempt"),
+        })
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "courier::db::Postgres::MIGRATOR")]
+async fn rename_organization_empty_name_fails(pool: PgPool) -> Result<()> {
+    let fixture = TestFixture::spawn(pool).await?;
+    let org_id = fixture.auth.org_acme().as_i64();
+    let url = fixture
+        .base_url
+        .join(&format!("api/v1/organizations/{org_id}"))?;
+
+    // Even as admin, empty name should fail with 400 Bad Request
+    let response = reqwest::Client::new()
+        .patch(url)
+        .bearer_auth(fixture.auth.session_alice().expose())
+        .json(&RenameOrganizationRequest {
+            name: String::from("   "),
+        })
+        .send()
+        .await?;
+
+    pretty_assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    Ok(())
+}

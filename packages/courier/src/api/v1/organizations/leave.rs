@@ -5,7 +5,7 @@ use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 use tracing::{error, info, warn};
 
 use crate::{
-    auth::{OrgId, SessionContext},
+    auth::{ApiError, OrgId, SessionContext},
     db::Postgres,
 };
 
@@ -18,9 +18,12 @@ pub async fn handle(
 ) -> Response {
     let org_id = OrgId::from_i64(org_id);
 
-    let role = match db.get_member_role(org_id, session.account_id).await {
-        Ok(Some(role)) => role,
-        Ok(None) => {
+    // Verify membership using strongly typed role check
+    // For the leave endpoint, we return NotFound instead of Forbidden for
+    // non-members to avoid leaking information about organization existence
+    let member = match session.try_member(&db, org_id).await {
+        Ok(member) => member,
+        Err(ApiError::Forbidden(_)) => {
             warn!(
                 account_id = %session.account_id,
                 org_id = %org_id,
@@ -28,17 +31,21 @@ pub async fn handle(
             );
             return Response::NotFound;
         }
-        Err(error) => {
-            error!(?error, "organizations.leave.role_check_error");
-            return Response::Error(error.to_string());
+        Err(ApiError::Internal(msg)) => {
+            error!("organizations.leave.role_check_error: {}", msg);
+            return Response::Error(msg);
+        }
+        Err(e) => {
+            error!("organizations.leave.unexpected_error: {}", e);
+            return Response::Error(e.to_string());
         }
     };
 
-    if role.is_admin() {
-        match db.is_last_admin(org_id, session.account_id).await {
+    if member.role.is_admin() {
+        match db.is_last_admin(org_id, member.account_id).await {
             Ok(true) => {
                 warn!(
-                    account_id = %session.account_id,
+                    account_id = %member.account_id,
                     org_id = %org_id,
                     "organizations.leave.last_admin"
                 );
@@ -57,7 +64,7 @@ pub async fn handle(
     // appear in the org but could still access org resources with existing tokens.
     // If revocation fails, we abort the entire operation.
     let keys_revoked = match db
-        .revoke_account_org_api_keys(session.account_id, org_id)
+        .revoke_account_org_api_keys(member.account_id, org_id)
         .await
     {
         Ok(count) => count,
@@ -68,13 +75,13 @@ pub async fn handle(
     };
 
     match db
-        .remove_organization_member(org_id, session.account_id)
+        .remove_organization_member(org_id, member.account_id)
         .await
     {
         Ok(true) => {
             let _ = db
                 .log_audit_event(
-                    Some(session.account_id),
+                    Some(member.account_id),
                     Some(org_id),
                     "organization.member.left",
                     Some(serde_json::json!({
@@ -84,7 +91,7 @@ pub async fn handle(
                 .await;
 
             info!(
-                account_id = %session.account_id,
+                account_id = %member.account_id,
                 org_id = %org_id,
                 keys_revoked = %keys_revoked,
                 "organizations.leave.success"

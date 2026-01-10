@@ -3,10 +3,10 @@
 use aerosol::axum::Dep;
 use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 use serde_json::json;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::{
-    auth::{InvitationId, OrgId, SessionContext},
+    auth::{ApiError, InvitationId, OrgId, SessionContext},
     db::Postgres,
 };
 
@@ -16,39 +16,18 @@ pub async fn handle(
     Dep(db): Dep<Postgres>,
     session: SessionContext,
     Path((org_id, invitation_id)): Path<(i64, i64)>,
-) -> Response {
+) -> Result<Response, ApiError> {
     let org_id = OrgId::from_i64(org_id);
     let invitation_id = InvitationId::from_i64(invitation_id);
 
-    match db.get_member_role(org_id, session.account_id).await {
-        Ok(Some(role)) if role.is_admin() => {}
-        Ok(Some(_)) => {
-            warn!(
-                account_id = %session.account_id,
-                org_id = %org_id,
-                "invitations.revoke.not_admin"
-            );
-            return Response::Forbidden;
-        }
-        Ok(None) => {
-            warn!(
-                account_id = %session.account_id,
-                org_id = %org_id,
-                "invitations.revoke.not_member"
-            );
-            return Response::Forbidden;
-        }
-        Err(err) => {
-            error!(?err, "invitations.revoke.role_check_error");
-            return Response::Error(err.to_string());
-        }
-    }
+    // Verify admin access using strongly typed role check
+    let admin = session.try_admin(&db, org_id).await?;
 
     match db.revoke_invitation(invitation_id).await {
         Ok(true) => {
             let _ = db
                 .log_audit_event(
-                    Some(session.account_id),
+                    Some(admin.account_id),
                     Some(org_id),
                     "invitation.revoked",
                     Some(json!({
@@ -62,12 +41,12 @@ pub async fn handle(
                 invitation_id = %invitation_id,
                 "invitations.revoke.success"
             );
-            Response::Success
+            Ok(Response::Success)
         }
-        Ok(false) => Response::NotFound,
+        Ok(false) => Ok(Response::NotFound),
         Err(error) => {
             error!(?error, "invitations.revoke.error");
-            Response::Error(error.to_string())
+            Ok(Response::Error(error.to_string()))
         }
     }
 }
@@ -75,7 +54,6 @@ pub async fn handle(
 #[derive(Debug)]
 pub enum Response {
     Success,
-    Forbidden,
     NotFound,
     Error(String),
 }
@@ -84,9 +62,6 @@ impl IntoResponse for Response {
     fn into_response(self) -> axum::response::Response {
         match self {
             Response::Success => StatusCode::NO_CONTENT.into_response(),
-            Response::Forbidden => {
-                (StatusCode::FORBIDDEN, "Only admins can revoke invitations").into_response()
-            }
             Response::NotFound => (
                 StatusCode::NOT_FOUND,
                 "Invitation not found or already revoked",

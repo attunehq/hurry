@@ -5,10 +5,10 @@ use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::{
-    auth::{OrgId, SessionContext},
+    auth::{ApiError, OrgId, SessionContext},
     db::Postgres,
 };
 
@@ -41,35 +41,22 @@ pub async fn handle(
     session: SessionContext,
     Path(org_id): Path<i64>,
     Json(request): Json<CreateOrgApiKeyRequest>,
-) -> Response {
+) -> Result<Response, ApiError> {
     let org_id = OrgId::from_i64(org_id);
 
-    match db.get_member_role(org_id, session.account_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            warn!(
-                account_id = %session.account_id,
-                org_id = %org_id,
-                "organizations.api_keys.create.not_member"
-            );
-            return Response::Forbidden;
-        }
-        Err(error) => {
-            error!(?error, "organizations.api_keys.create.role_check_error");
-            return Response::Error(error.to_string());
-        }
-    }
+    // Verify membership using strongly typed role check
+    let member = session.try_member(&db, org_id).await?;
 
     let name = request.name.trim();
     if name.is_empty() {
-        return Response::EmptyName;
+        return Ok(Response::EmptyName);
     }
 
-    match db.create_api_key(session.account_id, name, org_id).await {
+    match db.create_api_key(member.account_id, name, org_id).await {
         Ok((key_id, token)) => {
             let _ = db
                 .log_audit_event(
-                    Some(session.account_id),
+                    Some(member.account_id),
                     Some(org_id),
                     "api_key.created",
                     Some(json!({
@@ -81,32 +68,34 @@ pub async fn handle(
                 .await;
 
             info!(
-                account_id = %session.account_id,
+                account_id = %member.account_id,
                 org_id = %org_id,
                 key_id = %key_id,
                 "organizations.api_keys.create.success"
             );
 
             match db.get_api_key(key_id).await {
-                Ok(Some(key)) => Response::Created(CreateOrgApiKeyResponse {
+                Ok(Some(key)) => Ok(Response::Created(CreateOrgApiKeyResponse {
                     id: key.id.as_i64(),
                     name: key.name,
                     token: token.expose().to_string(),
                     created_at: key.created_at,
-                }),
+                })),
                 Ok(None) => {
                     error!(key_id = %key_id, "organizations.api_keys.create.not_found_after_create");
-                    Response::Error(String::from("Key not found after creation"))
+                    Ok(Response::Error(String::from(
+                        "Key not found after creation",
+                    )))
                 }
                 Err(error) => {
                     error!(?error, "organizations.api_keys.create.fetch_error");
-                    Response::Error(error.to_string())
+                    Ok(Response::Error(error.to_string()))
                 }
             }
         }
         Err(error) => {
             error!(?error, "organizations.api_keys.create.error");
-            Response::Error(error.to_string())
+            Ok(Response::Error(error.to_string()))
         }
     }
 }
@@ -115,7 +104,6 @@ pub async fn handle(
 pub enum Response {
     Created(CreateOrgApiKeyResponse),
     EmptyName,
-    Forbidden,
     Error(String),
 }
 
@@ -126,11 +114,6 @@ impl IntoResponse for Response {
             Response::EmptyName => {
                 (StatusCode::BAD_REQUEST, "API key name cannot be empty").into_response()
             }
-            Response::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "You must be a member of this organization to create API keys",
-            )
-                .into_response(),
             Response::Error(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
         }
     }
