@@ -72,6 +72,7 @@ Hurry is currently in alpha, and there are many rough edges. Some current known 
 - No build acceleration support for first-party packages.
 - Limited, experimental support for build scripts that link against native libraries.
 - Hardcoded paths (e.g. in stack traces or panics) may use the path where the cached unit was compiled instead of the path where the unit is being built.
+- Hurry currently supports Rust 1.92 and earlier. Rust 1.93 removed an unstable Cargo feature (`--build-plan`) that Hurry relies on.
 
 We are currently working on resolving all of these limitations. If any of them are a blocker for your team's adoption of Hurry, please [reach out to us](mailto:team@attunehq.com) and we can help prioritize your rollout.
 
@@ -79,15 +80,15 @@ We are currently working on resolving all of these limitations. If any of them a
 
 Like Cargo, Hurry supports a wide range of platforms using a _target tier policy_. The supported platforms are:
 
-| Platform | Architecture | Target Triple |
-|----------|--------------|---------------|
-| macOS | x86_64 (Intel) | `x86_64-apple-darwin` |
-| macOS | ARM64 (Apple Silicon) | `aarch64-apple-darwin` |
-| Linux | x86_64 (glibc) | `x86_64-unknown-linux-gnu` |
-| Linux | ARM64 (glibc) | `aarch64-unknown-linux-gnu` |
-| Linux | x86_64 (musl) | `x86_64-unknown-linux-musl` |
-| Linux | ARM64 (musl) | `aarch64-unknown-linux-musl` |
-| Windows | x86_64 | `x86_64-pc-windows-gnu` |
+| Platform | Architecture          | Target Triple                |
+| -------- | --------------------- | ---------------------------- |
+| macOS    | x86_64 (Intel)        | `x86_64-apple-darwin`        |
+| macOS    | ARM64 (Apple Silicon) | `aarch64-apple-darwin`       |
+| Linux    | x86_64 (glibc)        | `x86_64-unknown-linux-gnu`   |
+| Linux    | ARM64 (glibc)         | `aarch64-unknown-linux-gnu`  |
+| Linux    | x86_64 (musl)         | `x86_64-unknown-linux-musl`  |
+| Linux    | ARM64 (musl)          | `aarch64-unknown-linux-musl` |
+| Windows  | x86_64                | `x86_64-pc-windows-gnu`      |
 
 ### Tier 1 support
 
