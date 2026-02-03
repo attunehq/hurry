@@ -8,6 +8,120 @@ use std::time::{Duration, Instant};
 use derive_more::{Debug, Display};
 use indicatif::{HumanDuration, ProgressBar, ProgressStyle};
 
+/// A spinner for indeterminate operations.
+///
+/// - In interactive terminals, displays a spinning indicator.
+/// - In non-interactive environments, emits log lines every 5 seconds.
+#[derive(Clone, Debug, Display)]
+#[display("{}", self.inner)]
+#[debug("{}", self.inner)]
+pub struct Spinner {
+    inner: Arc<SpinnerInner>,
+}
+
+impl Spinner {
+    /// Creates a new spinner with the given message.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            inner: Arc::new(SpinnerInner::new(message)),
+        }
+    }
+}
+
+struct SpinnerInner {
+    progress: ProgressBar,
+    start: Instant,
+    message: String,
+    handle: Option<JoinHandle<()>>,
+    signal: Option<Arc<StopSignal>>,
+}
+
+impl SpinnerInner {
+    fn new(message: impl Into<String>) -> Self {
+        let message = message.into();
+        let progress = ProgressBar::new_spinner();
+        let style = ProgressStyle::default_spinner()
+            .template("{spinner:.cyan} [{elapsed_precise}] {msg}")
+            .expect("invalid spinner template")
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
+        progress.set_style(style);
+        progress.set_message(message.clone());
+        progress.enable_steady_tick(Duration::from_millis(100));
+
+        let start = Instant::now();
+
+        if is_interactive() {
+            Self {
+                progress,
+                start,
+                message,
+                handle: None,
+                signal: None,
+            }
+        } else {
+            let signal = StopSignal::new();
+            let handle = thread::spawn({
+                let progress = progress.clone();
+                let message = message.clone();
+                let signal = signal.clone();
+                move || {
+                    println!("[0s] {message}");
+                    loop {
+                        if signal.wait_timeout(Duration::from_secs(5)) {
+                            break;
+                        }
+                        if progress.is_finished() {
+                            break;
+                        }
+                        let elapsed = HumanDuration(progress.elapsed());
+                        println!("[{elapsed}] {message}");
+                    }
+                }
+            });
+            Self {
+                progress,
+                start,
+                message,
+                handle: Some(handle),
+                signal: Some(signal),
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for SpinnerInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self}")
+    }
+}
+
+impl std::fmt::Display for SpinnerInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let elapsed = self.start.elapsed();
+        write!(f, "[{elapsed:?}] {}", self.message)
+    }
+}
+
+impl Drop for SpinnerInner {
+    fn drop(&mut self) {
+        let elapsed = HumanDuration(self.start.elapsed());
+        let message = format!("{} (done in {elapsed})", self.message);
+
+        if is_interactive() {
+            self.progress.finish_with_message(message);
+        } else {
+            println!("[{elapsed}] {message}");
+        }
+
+        if let Some(signal) = &self.signal {
+            signal.stop();
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 /// A progress bar wrapper that emits periodic updates.
 ///
 /// - In interactive terminals, displays a normal progress bar.
