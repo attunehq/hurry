@@ -64,6 +64,8 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 walkdir = { workspace = true }
+cloud-storage = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 async-walkdir = { workspace = true }

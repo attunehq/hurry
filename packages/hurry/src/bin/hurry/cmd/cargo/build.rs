@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use clients::Token;
 use hurry::{
-    cargo::{self, CargoBuildArguments, CargoCache, Workspace},
+    cargo::{self, CargoBuildArguments, CargoCache, GcpCargoCache, Workspace},
     daemon::{CargoUploadStatus, CargoUploadStatusRequest, CargoUploadStatusResponse, DaemonPaths},
     progress::TransferBar,
 };
@@ -36,6 +36,15 @@ use hurry::{
 #[derive(Clone, Args, Debug)]
 #[command(disable_help_flag = true)]
 pub struct Options {
+    /// GCP Cloud Storage bucket for caching (bypasses Hurry API server).
+    ///
+    /// When set, artifacts are stored directly in the specified GCS bucket
+    /// instead of using the Hurry API server. Authentication uses the standard
+    /// GCP authentication chain (GOOGLE_APPLICATION_CREDENTIALS, gcloud CLI, or
+    /// GCE metadata service).
+    #[arg(long = "hurry-gcp-bucket", env = "HURRY_GCP_BUCKET")]
+    gcp_bucket: Option<String>,
+
     /// Base URL for the Hurry API.
     #[arg(
         long = "hurry-api-url",
@@ -112,12 +121,18 @@ pub async fn exec(options: Options) -> Result<()> {
         return cargo::invoke("build", &options.argv).await;
     }
 
+    // GCP bucket mode takes precedence over API mode
+    if let Some(bucket) = options.gcp_bucket.clone() {
+        return exec_gcp(options, bucket).await;
+    }
+
     // We make the API token required here; if we make it required in the actual
     // clap state then we aren't able to support e.g. `cargo build -h` passthrough.
     let Some(token) = &options.api_token else {
         return Err(eyre!("Hurry API authentication token is required"))
             .suggestion("Set the `HURRY_API_TOKEN` environment variable")
-            .suggestion("Provide it with the `--hurry-api-token` argument");
+            .suggestion("Provide it with the `--hurry-api-token` argument")
+            .suggestion("Or set `HURRY_GCP_BUCKET` to use GCS directly without an API server");
     };
 
     info!("Starting");
@@ -299,6 +314,61 @@ async fn wait_for_upload(request_id: Uuid, progress: &TransferBar) -> Result<()>
                 last_total_artifacts = save_progress.total_units;
             }
         }
+    }
+
+    Ok(())
+}
+
+/// Execute the build using GCP Cloud Storage for caching.
+///
+/// This mode bypasses the Hurry API server and stores cache artifacts directly
+/// in a GCS bucket. Authentication uses the standard GCP authentication chain.
+#[instrument]
+async fn exec_gcp(options: Options, bucket: String) -> Result<()> {
+    info!(bucket = %bucket, "Starting with GCS bucket cache");
+
+    // Parse and validate cargo build arguments.
+    let args = options.parsed_args();
+    debug!(?args, "parsed cargo build arguments");
+
+    // Open workspace.
+    let workspace = Workspace::from_argv(&args)
+        .await
+        .context("opening workspace")?;
+    debug!(?workspace, "opened workspace");
+
+    // Compute expected unit plans.
+    let units = workspace
+        .units(&args)
+        .await
+        .context("calculating expected units")?;
+
+    // Initialize GCP cache.
+    let cache = GcpCargoCache::open(bucket, workspace)
+        .await
+        .context("opening GCS cache")?;
+
+    // Restore artifacts.
+    let unit_count = units.len() as u64;
+    let restored = if !options.skip_restore {
+        let progress = TransferBar::new(unit_count, "Restoring cache (GCS)");
+        cache.restore(&units, &progress).await?
+    } else {
+        Default::default()
+    };
+
+    // Run the build.
+    if !options.skip_build {
+        info!("Building target directory");
+        cargo::invoke("build", &options.argv)
+            .await
+            .context("build with cargo")?;
+    }
+
+    // Cache the built artifacts (synchronous upload for GCS mode).
+    if !options.skip_backup {
+        let progress = TransferBar::new(unit_count, "Uploading cache (GCS)");
+        cache.save(units, restored, &progress).await?;
     }
 
     Ok(())

@@ -20,6 +20,7 @@ mod cache;
 mod dep_info;
 mod fingerprint;
 mod glibc;
+pub mod gcp_cache;
 mod path;
 mod profile;
 mod rustc;
@@ -31,6 +32,7 @@ pub use build_args::{CargoBuildArgument, CargoBuildArguments, ColorWhen, Message
 pub use build_plan::{BuildPlan, BuildPlanInvocation};
 pub use build_script::BuildScriptOutput;
 pub use cache::{CargoCache, Restored, SaveProgress, SavedFile, save_units};
+pub use gcp_cache::GcpCargoCache;
 pub use dep_info::{DepInfo, DepInfoLine};
 pub use fingerprint::Fingerprint;
 pub use glibc::host_glibc_version;

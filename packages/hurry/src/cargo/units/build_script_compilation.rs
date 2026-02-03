@@ -1,10 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 
 use clients::courier::v1 as courier;
-use color_eyre::{
-    Result,
-    eyre::{self, OptionExt as _},
-};
+use color_eyre::{Result, eyre};
 use derive_more::Debug;
 use serde::{Deserialize, Serialize};
 use tap::Pipe as _;
@@ -40,10 +37,18 @@ impl BuildScriptCompilationUnitPlan {
         let src_path_filename = self
             .src_path
             .file_name_str_lossy()
-            .ok_or_eyre("build script source path has no name")?;
+            .ok_or_else(|| eyre::eyre!(
+                "build script source path has no name: {} (package: {})",
+                self.src_path,
+                self.info.package_name
+            ))?;
         Ok(src_path_filename
             .strip_suffix(".rs")
-            .ok_or_eyre("build script source path has no `.rs` extension")?
+            .ok_or_else(|| eyre::eyre!(
+                "build script source path has no `.rs` extension: {} (package: {})",
+                self.src_path,
+                self.info.package_name
+            ))?
             .to_string())
     }
 

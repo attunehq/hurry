@@ -220,6 +220,10 @@ impl RustcArguments {
     }
 
     /// The path to the source file being compiled.
+    ///
+    /// Returns the first positional argument that ends with `.rs`.
+    /// This filters out any non-source files that might appear as positional
+    /// arguments in some cargo/rustc configurations.
     pub fn src_path(&self) -> &str {
         let positional_arguments = self
             .0
@@ -229,14 +233,21 @@ impl RustcArguments {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        debug_assert_eq!(
-            positional_arguments.len(),
-            1,
-            "expected one rustc positional argument"
+
+        // First, try to find a .rs file (the expected case)
+        if let Some(rs_file) = positional_arguments.iter().find(|p| p.ends_with(".rs")) {
+            return rs_file;
+        }
+
+        // Fallback: return the first positional argument for error reporting
+        // This will produce a more helpful error message downstream
+        debug_assert!(
+            !positional_arguments.is_empty(),
+            "expected at least one rustc positional argument"
         );
         positional_arguments
             .first()
-            .expect("rustc arguments should have one positional argument")
+            .expect("rustc arguments should have at least one positional argument")
     }
 
     /// Find the `-C extra-filename` flag value if specified.
